@@ -27,6 +27,7 @@ export type MemorySummarizer = (
 	prompt: string,
 	signal: AbortSignal,
 	observe: MemoryCompactionObserver,
+	projectId?: string,
 ) => Promise<string>;
 export function emptyMemorySummary(): ProjectMemorySummary {
 	return { count: 0, recent: [], compaction: { state: "idle", pending: 0 } };
@@ -347,11 +348,16 @@ export class ProjectMemoryService {
 			timer = setTimeout(() => controller.abort(), 60_000);
 			timer.unref();
 			const text = await Promise.race([
-				this.summarize!(nap.prompt, controller.signal, async (attempt) => {
-					if (controller.signal.aborted || !trace || trace.status !== "running") return;
-					if (attempt.number >= 1 && attempt.number <= 3) trace.attempts[attempt.number - 1] = attempt;
-					await saveTrace();
-				}),
+				this.summarize!(
+					nap.prompt,
+					controller.signal,
+					async (attempt) => {
+						if (controller.signal.aborted || !trace || trace.status !== "running") return;
+						if (attempt.number >= 1 && attempt.number <= 3) trace.attempts[attempt.number - 1] = attempt;
+						await saveTrace();
+					},
+					projectId,
+				),
 				aborted,
 			]);
 			if (this.stopped || controller.signal.aborted) return;

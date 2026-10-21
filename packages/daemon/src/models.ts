@@ -25,6 +25,7 @@ import type {
 	ModelScopePatternResolution,
 	ModelScopeUpdateResponse,
 } from "@pilot/protocol";
+import type { BackgroundAttribution, BackgroundCapture, CompletionRuntime } from "./background-usage.ts";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { compactControlNode } from "./control-compaction.ts";
 import type { ControlJob } from "./control-memory-disk.ts";
@@ -57,6 +58,20 @@ export const TASK_START_REFERENCE_MODELS = ["claude-opus-5-5", "gpt-6.1-sol"] as
 
 export class ModelCatalog {
 	private runtime?: Promise<ModelRuntime>;
+	private backgroundUsage?: BackgroundCapture;
+	setBackgroundUsage(usage: BackgroundCapture): void {
+		this.backgroundUsage = usage;
+	}
+	async closeBackgroundUsage(): Promise<void> {
+		await this.backgroundUsage?.close?.();
+	}
+	private background(
+		runtime: CompletionRuntime,
+		purpose: "title" | "classification" | "triage" | "memory" | "compaction",
+		attribution?: BackgroundAttribution,
+	): CompletionRuntime {
+		return this.backgroundUsage?.runtime(runtime, purpose, attribution) ?? runtime;
+	}
 	/** Signature of the model definitions the runtime last loaded. */
 	private runtimeModels?: string;
 	private availability?: Availability;
@@ -76,12 +91,17 @@ export class ModelCatalog {
 	}
 
 	/** A separate, tool-free completion. Scoped thinking suffixes never apply to titles. */
-	async generateTitle(cwd: string, message: string, signal?: AbortSignal): Promise<string | undefined> {
+	async generateTitle(
+		cwd: string,
+		message: string,
+		signal?: AbortSignal,
+		attribution?: BackgroundAttribution,
+	): Promise<string | undefined> {
 		const runtime = await this.getRuntime();
 		signal?.throwIfAborted();
 		const { models } = await this.scoped(cwd, signal);
 		return generateChatTitle(
-			runtime,
+			this.background(runtime, "title", attribution),
 			models.map(({ model }) => model),
 			message,
 			signal,
@@ -94,8 +114,9 @@ export class ModelCatalog {
 		text: string,
 		signal: AbortSignal,
 		context?: SlackClassifierContext,
+		attribution?: BackgroundAttribution,
 	): Promise<SlackClassification> {
-		return (await this.prepareSlackClassifier(cwd, signal, context))(text);
+		return (await this.prepareSlackClassifier(cwd, signal, context, attribution))(text);
 	}
 
 	/** Resolve once per poll before reserving a thread, so missing auth/scope never poisons the cache. */
@@ -103,6 +124,7 @@ export class ModelCatalog {
 		cwd: string,
 		signal: AbortSignal,
 		context: SlackClassifierContext = { labels: [], corrections: [] },
+		attribution?: BackgroundAttribution,
 	): Promise<(text: string) => Promise<SlackClassification>> {
 		const runtime = await this.getRuntime();
 		const { models } = await this.scoped(cwd, signal);
@@ -117,7 +139,7 @@ export class ModelCatalog {
 		if (!model) throw new SlackModelUnavailable();
 		return async (text) => {
 			signal.throwIfAborted();
-			const result = await runtime.completeSimple(
+			const result = await this.background(runtime, "classification", attribution).completeSimple(
 				model,
 				{
 					systemPrompt:
@@ -181,12 +203,13 @@ export class ModelCatalog {
 		prompt: string,
 		schema: Record<string, unknown>,
 		signal: AbortSignal,
+		attribution?: BackgroundAttribution,
 	): Promise<string> {
 		const runtime = await this.getRuntime();
 		const { models } = await this.scoped(cwd, signal);
 		const model = cheapestTitleModel(models.map(({ model }) => model));
 		if (!model) throw new Error("No authenticated triage model in scope");
-		const result = await runtime.completeSimple(
+		const result = await this.background(runtime, "triage", attribution).completeSimple(
 			model,
 			{
 				systemPrompt:
@@ -214,14 +237,19 @@ export class ModelCatalog {
 	}
 
 	/** Background compaction uses one explicit authenticated model and only a validated submission tool. */
-	async summarizeMemory(prompt: string, signal: AbortSignal, observe?: MemoryCompactionObserver): Promise<string> {
+	async summarizeMemory(
+		prompt: string,
+		signal: AbortSignal,
+		observe?: MemoryCompactionObserver,
+		attribution?: BackgroundAttribution,
+	): Promise<string> {
 		const runtime = await this.getRuntime();
 		const model = (await this.available(signal)).find(
 			(model) => model.provider === "openai-codex" && model.id === "gpt-6-luna",
 		);
 		signal.throwIfAborted();
 		if (!model) throw new Error("Memory compaction requires authenticated openai-codex/gpt-6-luna");
-		return compactMemory(runtime, model, prompt, signal, observe);
+		return compactMemory(this.background(runtime, "memory", attribution), model, prompt, signal, observe);
 	}
 	/** Same authenticated scope and provider as the turn; never fall back across providers. */
 	async compactControl(
@@ -237,7 +265,7 @@ export class ModelCatalog {
 		const model = cheapestTitleModel(models.map(({ model }) => model).filter((model) => model.provider === provider));
 		signal.throwIfAborted();
 		if (!model) throw new Error(`No authenticated control compaction model in scope for ${provider}`);
-		return compactControlNode(runtime, model, tools, job, lines, signal);
+		return compactControlNode(this.background(runtime, "compaction"), model, tools, job, lines, signal);
 	}
 
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */

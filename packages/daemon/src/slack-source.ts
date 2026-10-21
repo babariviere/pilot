@@ -213,8 +213,13 @@ export function createSlackPoller(
 					searchText = thread.messages.map((reply) => reply.text).join("\n\n");
 					classifierContext ??= await classifierContextFor(store, context);
 					classify ??= models.prepareSlackClassifier
-						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
-						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);
+						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext, {
+								projectId: context.project.id,
+							})
+						: (text) =>
+								models.classifySlack(context.project.path, text, context.signal, classifierContext, {
+									projectId: context.project.id,
+								});
 					context.signal.throwIfAborted();
 					const reservation = await store.reserveSlack(
 						page.channel,
@@ -407,7 +412,11 @@ export function createSlackAdder(
 			try {
 				const classifierContext = await classifierContextFor(store, context);
 				const classified = models.prepareSlackClassifier
-					? await (await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext))(
+					? await (
+							await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext, {
+								projectId: context.project.id,
+							})
+						)(
 							thread.messages
 								.map((reply) => reply.text)
 								.join("\n\n")
@@ -421,6 +430,7 @@ export function createSlackAdder(
 								.slice(0, 12_000),
 							context.signal,
 							classifierContext,
+							{ projectId: context.project.id },
 						);
 				result = parseSlackClassification(JSON.stringify(classified), classifierContext.labels);
 			} catch (error) {

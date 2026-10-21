@@ -211,6 +211,10 @@ export interface SessionMissionBridge {
 	/** The chat's mission, its status and this member's coordinator role. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
+	/** Canonical home identity only; execution-host aliases are not mission attribution. */
+	usageAttribution?(
+		sessionId: string,
+	): NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
 	/** The archive generation lets a later explicit chat restore win, including across daemon restarts. */
 	missionArchivedAt?(missionId: string): number | undefined;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
@@ -306,6 +310,7 @@ export interface SessionManagerOptions {
 	kernelRestartBackoffMs?: number;
 	/** Shared with the HTTP API so model lists, model changes and titles reuse one runtime and cache. */
 	models?: ModelCatalog;
+	usageHistory?: UsageHistoryStore;
 	/** Immutable identity returned by agent-local diagnostic reads. */
 	diagnosticHost?: OperationHost;
 	/** Fixed roots and in-memory tail used by the diagnostics specialist log catalogue. */
@@ -1766,7 +1771,7 @@ export class SessionManager {
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
 		this.aiUsage = new AIUsageLedger(home);
-		this.usageHistory = new UsageHistoryStore(home);
+		this.usageHistory = options.usageHistory ?? new UsageHistoryStore(home);
 		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
 		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.nativeDiagnostics.setEnabled(options.telemetry?.localDiagnostics ?? true);
@@ -5149,11 +5154,13 @@ export class SessionManager {
 							waitForAssistant = true;
 							return undefined;
 						}
-						return (this.factories.title ?? this.modelCatalog.generateTitle.bind(this.modelCatalog))(
-							pending.cwd,
-							context,
-							signal,
-						);
+						return this.factories.title
+							? this.factories.title(pending.cwd, context, signal)
+							: this.modelCatalog.generateTitle(pending.cwd, context, signal, {
+									chatId: meta.id,
+									projectId: meta.projectId,
+									mission: this.missions?.usageAttribution?.(meta.id),
+								});
 					})(),
 					cancelled,
 				]);
@@ -7146,6 +7153,7 @@ export class SessionManager {
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
+		await this.modelCatalog.closeBackgroundUsage?.();
 		await this.usageHistory.close();
 		await this.lifecycle.close();
 	}

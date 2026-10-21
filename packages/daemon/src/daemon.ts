@@ -8,6 +8,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
+import { BackgroundUsage } from "./background-usage.ts";
 import { loadConfig } from "./config.ts";
 import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
@@ -56,6 +57,7 @@ import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 import { untrackedStats } from "./untracked-stats.ts";
+import { UsageHistoryStore } from "./usage-history.ts";
 import { WatchLifecycle } from "./watch-lifecycle.ts";
 import { LinearWatchSource } from "./watch-linear.ts";
 import { MissionWatchSource } from "./watch-missions.ts";
@@ -104,10 +106,13 @@ await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refres
 });
 if (controlHosts.legacyAllowed())
 	tracking.linearObserved = (projectId, items, activeIds) => linearWatches.tracked(projectId, items, activeIds);
+const usageHistory = new UsageHistoryStore(config.home);
+const backgroundUsage = new BackgroundUsage(config.home, usageHistory);
+void backgroundUsage.ready();
 tracking.triage = new TriageGroomer(
 	projects,
 	trackedItems,
-	workerTriage(config.agentDir),
+	workerTriage(config.agentDir, backgroundUsage),
 	Date.now,
 	tracking.jobDiagnostics,
 );
@@ -118,15 +123,16 @@ const mcpStatus = new McpStatusService({
 	watchDir: config.agentDir ?? getAgentDir(),
 });
 mcpStatus.start();
-tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(config.agentDir)));
+tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(config.agentDir, backgroundUsage)));
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
+models.setBackgroundUsage(backgroundUsage);
 tracking.register("slack", createSlackPoller(trackedItems, models));
 tracking.slackAdder = createSlackAdder(trackedItems, models);
 tracking.startPolling("slack");
 const memory = new ProjectMemoryService(
 	config.home,
-	(prompt, signal, observe) => models.summarizeMemory(prompt, signal, observe),
+	(prompt, signal, observe, projectId) => models.summarizeMemory(prompt, signal, observe, { projectId }),
 	30_000,
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 );
@@ -168,6 +174,7 @@ const sessions = new SessionManager(
 		idleParkMs: config.idleParkMs,
 		workspaceRetentionMs: config.workspaceRetentionMs,
 		models,
+		usageHistory,
 		credentials,
 		diagnosticHost: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 		diagnosticLogs: {

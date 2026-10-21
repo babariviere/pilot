@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TriageGuide } from "@pilot/protocol";
 import { type BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
+import type { BackgroundAttribution, BackgroundUsage } from "./background-usage.ts";
 import type { ProjectStore } from "./projects.ts";
 import { CASE_SCHEMA, parseCases } from "./slack-cases.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
@@ -33,15 +34,20 @@ export type TriageComplete = (
 	prompt: string,
 	schema: Record<string, unknown>,
 	signal: AbortSignal,
+	attribution?: BackgroundAttribution,
 ) => Promise<string>;
 /** One bounded worker per run. Deadline and cancellation terminate SDK/network work as well as computation. */
-export function workerTriage(agentDir?: string): TriageComplete {
-	return (cwd, prompt, schema, signal) =>
-		new Promise((resolve, reject) => {
+export function workerTriage(
+	agentDir?: string,
+	usage?: BackgroundUsage,
+	createWorker = (workerData: Record<string, unknown>) =>
+		new Worker(new URL("./triage-model-worker.ts", import.meta.url), { workerData }),
+): TriageComplete {
+	return async (cwd, prompt, schema, signal, attribution) => {
+		const observe = await usage?.begin("triage", attribution);
+		return new Promise<string>((resolve, reject) => {
 			signal.throwIfAborted();
-			const worker = new Worker(new URL("./triage-model-worker.ts", import.meta.url), {
-				workerData: { agentDir, cwd, prompt, schema },
-			});
+			const worker = createWorker({ agentDir, cwd, prompt, schema, captureUsage: !!observe });
 			let settled = false;
 			const finish = (error?: Error, text?: string) => {
 				if (settled) return;
@@ -55,14 +61,23 @@ export function workerTriage(agentDir?: string): TriageComplete {
 			const abort = () => finish(new Error("Triage cancelled"));
 			const timer = setTimeout(() => finish(new Error("Triage timed out")), 90_000);
 			signal.addEventListener("abort", abort, { once: true });
-			worker.once("message", (result) =>
-				finish(result.error ? new Error("Triage model failed") : undefined, result.text),
-			);
+			worker.on("message", (result) => {
+				if (result.usage) {
+					void observe?.(result.usage)
+						.catch(() => undefined)
+						.finally(() => {
+							if (!settled) worker.postMessage({ usageAck: true });
+						});
+					return;
+				}
+				finish(result.error ? new Error("Triage model failed") : undefined, result.text);
+			});
 			worker.once("error", (error) => finish(error));
 			worker.once("exit", (code) => {
 				if (code) finish(new Error("Triage worker exited"));
 			});
 		});
+	};
 }
 
 /** Coalesced correction-only grooming. One global run, three new examples or one day, hourly failure backoff. */
@@ -212,7 +227,9 @@ export class TriageGroomer {
 				};
 			}
 			if (token) this.diagnostics?.stage(token, "classification");
-			const raw = await this.complete(project.path, prompt, schema, this.controller.signal);
+			const raw = await this.complete(project.path, prompt, schema, this.controller.signal, {
+				projectId: project.id,
+			});
 			if (token) this.diagnostics?.progress(token);
 			if (Buffer.byteLength(raw) > 100_000) throw new Error("Invalid grooming output");
 			const output = JSON.parse(raw);
