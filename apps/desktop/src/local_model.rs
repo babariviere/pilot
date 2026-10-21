@@ -1,5 +1,5 @@
 //! Bounded, content-private projection of the current Local wire contract.
-//! Only this background-owned reducer sees wire JSON. No permission or send model.
+//! Background-owned wire JSON reduction and conservative ordinary-chat eligibility.
 use crate::model::Message;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -16,6 +16,18 @@ pub(crate) struct Chat {
     pub(crate) title: String,
     pub(crate) state: String,
     pub(crate) archived: bool,
+    pub(crate) local_draft: bool,
+    pub(crate) writable: bool,
+    pub(crate) busy: bool,
+    pub(crate) cwd: String,
+}
+pub(crate) fn interactive_local(value: &Value) -> bool {
+    value["control"] != true
+        && value["role"].is_null()
+        && value["diagnosticHost"].is_null()
+        && value["archivedAt"].is_null()
+        && value["continuedTo"].is_null()
+        && (value["mode"].is_null() || matches!(value["mode"].as_str(), Some("ask" | "build")))
 }
 
 pub(crate) fn chat(value: &Value) -> Option<Chat> {
@@ -28,6 +40,11 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         title: bounded(value["title"].as_str().unwrap_or("Untitled chat"), 240),
         state: bounded(value["state"].as_str().unwrap_or("unknown"), 40),
         archived: value["archivedAt"].is_number(),
+        local_draft: false,
+        writable: interactive_local(value),
+        busy: value["working"] == true
+            || matches!(value["state"].as_str(), Some("working" | "starting")),
+        cwd: bounded(value["cwd"].as_str().unwrap_or(""), 4096),
     })
 }
 
@@ -57,6 +74,7 @@ pub(crate) struct LiveTranscript {
     pub(crate) cursor: Option<u64>,
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
+    pub(crate) queued: usize,
     active_head: Option<u64>,
     saved_history: Option<SavedHistory>,
     pub(crate) limited: bool,
@@ -217,6 +235,10 @@ impl LiveTranscript {
                 self.finish_snapshot();
             }
             "entry_appended" => self.entry(&event["entry"], None),
+            "queue_update" => {
+                self.queued = event["items"].as_array().map_or(0, Vec::len)
+                    + event["automatic"].as_array().map_or(0, Vec::len);
+            }
             "message_start" => self.set_live(event["message"].clone()),
             "message_update" => {
                 if let Some(live) = &mut self.live

@@ -50,7 +50,7 @@ fn main() {
         ["--fixture", "fence"] => Some(fence_fixture()),
         ["--help"] => {
             println!(
-                "Pilot Next.\n--local: readonly Local chats (existing loopback API, no API authentication).\nHello identity is pinned before subscriptions. No sends or read-status writes.\nNo args: synthetic fixture, memory-only local echo, no network.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to exit."
+                "Pilot Next.\n--local: Local chats, explicit create/send/Stop and private durable drafts.\nExisting loopback API, no request authentication. Full hello identity is pinned.\nNo approvals, archive or read-status writes. --local-check stays read-only.\nNo args: synthetic fixture, memory-only local echo, no network or disk state.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to save and exit."
             );
             return;
         }
@@ -86,7 +86,7 @@ fn main() {
                 cx,
                 |window, cx| {
                     window.set_window_title(if local {
-                        "Pilot Next · Local readonly"
+                        "Pilot Next · Local"
                     } else {
                         "Pilot Next · synthetic fixture"
                     });

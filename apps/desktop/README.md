@@ -3,20 +3,19 @@
 ## Source checkpoint status
 
 This is an experimental draft source checkpoint, not a merge-ready replacement.
-The synthetic fixture, input/selection fixes and bounded Local read viewer are
-implemented and verified. Local chat creation, sending, durable drafts and Stop
-are the next in-progress slice and are **not implemented at this revision**.
+The synthetic fixture, input/selection fixes, bounded Local viewer and explicit
+Local create/send/Stop with private durable drafts are implemented.
 Tool presentation, interface parity and native visual artifacts are subsequent
 work. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
 Experimental Rust desktop, kept separate from the production Swift app.
-`pilot-desktop --local` browses real Local chats using the existing loopback
-read API. The default launch remains a network-free synthetic transcript and
-memory-only local-echo composer. Neither mode writes canonical chats, drafts,
-preferences or read status. No service installation, updater or default switch.
+`pilot-desktop --local` uses the existing loopback API. Its user-driven write
+controls can create chats, send messages and Stop. The default launch remains a
+network-free synthetic transcript and memory-only local-echo composer, without
+disk state. No read-status/preferences writes, service installation, updater or default switch.
 
-## Read real Local chats
+## Use real Local chats
 
 ```sh
 cd apps/desktop
@@ -33,18 +32,56 @@ It reads `PILOT_PORT` (default 4319), and the existing `daemon-id` and
 replace them. Only 127.0.0.1 is accepted; no arbitrary host/URL, proxies,
 redirects, cookies, Origin, GitHub capability token or remote endpoint registry.
 
-**Security boundary:** the current daemon does not authenticate Local read
+**Security boundary:** the current daemon does not authenticate Local
 requests. Loopback + Origin rejection and identity pinning are not cryptographic
 authentication. Protocol/full Local identity is checked before every socket and
 history read, including reconnects. An identity/protocol mismatch fences all
 subscriptions. Existing daemon chat-open semantics can refresh PR status and
 perform ordinary internal subscription housekeeping. No backend change is made.
 
-The transport can issue only GET /api/hello, GET /api/sessions/:id/history,
-and control/chat WS handshakes. It sends no application WS messages. No focus,
-sends, creates, edits, approvals, archive, mark-read or other mutation routes.
-The live composer/action controls do not exist; mutation handlers also refuse
-live-mode calls. Use Swift for all actual operations.
+The read transport issues only allowlisted hello/history/WS requests and sends
+no application WS messages. A separate worker supports GET of the selected
+chat, POST /api/operations/receipt, POST /api/operations and the selected chat's
+Stop route. There are no legacy send/create fallbacks, focus, approvals, edits,
+archive or mark-read routes. Retained Control, specialist, archived and continued
+chats are readonly. The daemon remains the permission and execution authority.
+
+### Messages and private drafts
+
+New chat requires an explicit absolute Local folder and Ask/Build choice (Ask
+by default). It never inherits another agent's isolated working copy. Enter or
+Send submits; Shift-Enter inserts a newline. Marked text cannot submit. Follow-up
+queues behind current work; unchecking it selects the existing steer delivery
+mode. Sending does not force the reader down the transcript. Stop is available
+for a working chat or its queued input; withdrawn text is saved separately, never
+merged into newer typing. Copy or explicitly remove that recovery text.
+
+Drafts survive navigation/restart, independently of Swift. A single-owner private
+0700 directory contains 0600 state/lock files at macOS `~/Library/Application
+Support/Pilot Next`, or Linux `${XDG_STATE_HOME:-~/.local/state}/pilot-next`.
+No Swift state is imported. Normal window close and Cmd/Ctrl-Q wait for flushing.
+Wait for “Draft saved privately” before forced termination; unsaved edits and
+native Dock/system-quit behavior are not covered by that durability claim.
+
+An immutable operation ID, fixed new-chat target, full Local identity, producer
+sequence and exact payload/hash are fsynced before delivery. Lost replies remain
+Unknown, not rejected. Check receipt is read reconciliation; explicit Retry uses
+the **same** envelope. Pending is never reposted. Startup never automatically
+delivers anything. Local receipt adoption clears only the matching revision and
+does not retire backend receipts. Late replies cannot clear newer input, reopen
+the wrong selected draft or create another chat. Stop has no receipt/idempotency
+contract: it is sent once, never retried automatically, and uncertainty requires
+explicit local acknowledgement before another action.
+
+Limits: 128 private drafts, 32 pending intents, 32 KiB editable messages, eight
+recovery texts (each up to 4 MiB), 16 MiB snapshot. Saved empty chat records retire
+only after UI adoption; blank new-chat drafts are reused. Snapshot writes are
+atomic, off-UI, coalesced after 250 ms, and forced before user actions/normal exit.
+Corrupt/missing initialized state, wrong identity, unsafe ownership and write
+failures fail closed, not to an empty replacement. The private directory admits
+at most 64 files/64 MiB, with up to one additional 16 MiB atomic-write temporary.
+Large full snapshots still amplify disk I/O; bounds do not establish performance
+parity. See [interaction evidence](evidence/local-interaction.md).
 
 Search the virtualized chat list, optionally include archives, open by click or
 Return. Earlier loads up to 24 entries. Latest resumes following; reading above
@@ -58,7 +95,7 @@ unsupported content have honest placeholders. This is not full Swift parity.
 
 ## Limits and lifecycle
 
-A private single-thread async runtime owns decoding/reduction and network I/O.
+A private single-thread async runtime owns read decoding/reduction and network I/O.
 At most one control socket, one selected chat socket and one history request;
 4 queued UI commands, 2 queued wire frames, 1 coalesced full UI projection.
 Only complete projections are coalesced, never deltas; UI delivery is capped at
@@ -115,7 +152,8 @@ socket connection, and selects `WindowingModes::WAYLAND`. No X11 or XWayland
 fallback. An inherited `WAYLAND_SOCKET`-only launch is not supported in this proof.
 Linux prerequisites/linkage and real Wayland operation have not been verified here.
 
-Close the window or use Cmd/Ctrl-Q to exit. There is no reopen/recovery/draft store.
+Close the window or use Cmd/Ctrl-Q to flush Local drafts and exit. The synthetic
+fixture remains memory-only. This is not an installer or production lifecycle shell.
 
 ## Synthetic fixture mode
 
@@ -218,8 +256,9 @@ directories. Neither is a repeated cold-build/second-worktree benchmark.
 
 ## Known gaps and next review
 
-This is not full Swift parity. Only the explicit read-only Local slice above
-is connected; sending and all other migration slices remain out of scope.
+This is not full Swift parity. Only the explicit Local interaction slice above
+is connected. Tool presentation, interface/dither parity and native non-shader
+visual artifacts remain subsequent work.
 
 - The fixture now opts into message-local selection retention through its
   pinned source patch. Actual selection/copy survives unmount/remount, prepend
@@ -246,6 +285,7 @@ is connected; sending and all other migration slices remain out of scope.
   reduced motion, matched Swift runtime/build measurements and repeated cache
   A/B trials remain separate from this offscreen proof.
 
-**Review point:** inspect the read-only viewer and its evidence before approving
-live writes, packaging, defaults or Swift removal. A successful build or an
+**Review point:** inspect the implementation and synthetic evidence before using
+real write controls. No automated real mutation smoke was run. Packaging,
+defaults and Swift removal remain unapproved. A successful build or an
 attractive screenshot does not establish runtime improvement or full parity.
