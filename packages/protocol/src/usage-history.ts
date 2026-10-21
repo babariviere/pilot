@@ -69,6 +69,7 @@ export interface UsageHistoryQuery {
 	limit?: number;
 	/** Opaque keyset token, invalid after erasure. */
 	after?: string;
+	filters?: UsageQueryFilters;
 }
 
 export interface UsageHistoryPage {
@@ -78,3 +79,91 @@ export interface UsageHistoryPage {
 }
 
 export type UsageHistoryWriteResult = "stored" | "duplicate" | "stale" | "conflict" | "rejected";
+
+/** Exact observed identifiers. Mission home/lineage is never the execution host or an alias. */
+export interface UsageQueryFilters {
+	projectId?: string;
+	chatId?: string;
+	mission?: { homeId: string; lineageId: string; missionId: string };
+	purpose?: UsageObservation["purpose"];
+	physicalModel?: { provider: string; model: string };
+	virtualModel?: { provider: string; model: string };
+	virtualRevision?: string;
+	/** Drill into explicit unknown/unattributed groups without treating absence as a wildcard. */
+	missing?: Array<"project" | "mission" | "chat" | "physicalModel" | "virtualPolicy" | "virtualRevision">;
+}
+
+export type UsageDimension = "project" | "mission" | "chat" | "purpose" | "physicalModel" | "virtualPolicy" | "scope";
+export interface UsageAnalyticsQuery {
+	version: 1;
+	from: number;
+	to: number;
+	filters?: UsageQueryFilters;
+	view: "summary" | "breakdown" | "buckets";
+	dimension?: UsageDimension;
+	bucketMs?: 3600000 | 86400000;
+	limit?: number;
+	after?: string;
+}
+/** value is a known subtotal, not a claim that missing evidence was zero. Overflow omits value. */
+export interface UsageMetric {
+	value?: number;
+	known: number;
+	unknown: number;
+	/** Present numeric subtotals explicitly reported as incomplete. Subset of known. */
+	partial: number;
+	overflow: boolean;
+}
+export interface UsageAggregate {
+	records: number;
+	committed: number;
+	partial: number;
+	legacy: number;
+	unpriced: number;
+	partialPriced: number;
+	pricingVersions: number;
+	/** Enables honest same/mixed-version estimates across hosts without an unbounded revision list. */
+	pricingRevision?: string;
+	metrics: Record<
+		| "input"
+		| "output"
+		| "cacheRead"
+		| "cacheWrite"
+		| "reasoning"
+		| "estimatedUsdMicros"
+		| "billedUsdMicros"
+		| "requests"
+		| "providerAttempts"
+		| "retries"
+		| "durationMs",
+		UsageMetric
+	>;
+}
+export interface UsageAnalyticsResult {
+	version: 1;
+	queriedAt: number;
+	status: UsageHistoryStatus;
+	/** Only dated requests. Never add reconciliation checkpoints to this. */
+	total: UsageAggregate;
+	/** Retained checkpoints, independent of chart dates. Metrics carry coverage counts ONLY, never sums. */
+	reconciliation: UsageAggregate;
+	/** Sparse UTC buckets or exact JSON tuple keys, including null for unknown attribution. */
+	groups: Array<{ key: string; aggregate: UsageAggregate }>;
+	next?: string;
+	truncated: boolean;
+	coverage: "partial";
+}
+
+/** Read-only native projection; no daemon relays, connection attempts or accounting replication. */
+export interface UsageHostProjection {
+	host: { hostId: string; daemonId: string; lineageId: string };
+	state: "fresh" | "disconnected" | "unsupported" | "unavailable" | "alias" | "limited";
+	result?: UsageAnalyticsResult;
+}
+
+export interface UsageConnectedProjection {
+	hosts: UsageHostProjection[];
+	omittedHosts: number;
+	queriedAt: number;
+	coverage: "partial";
+}

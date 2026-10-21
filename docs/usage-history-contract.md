@@ -132,6 +132,10 @@ Queries use indexed completion time and keyset paging, at most **100 records / 5
 returns raw bounded pages, not an unbounded in-memory read or all-history scan; the query layer bounds aggregation,
 cancellation and scope filters separately. No read opens a kernel, parses history, calls a provider or polls hosts.
 Retention may make “All” mean retained history only. Coverage/status accompanies all results.
+The [versioned query API and native-client handoff](usage-queries.md) specify aggregate coverage, checkpoint
+reconciliation, group keys and paging. The first dashboard pass is **Local only**; devbox collection and
+cross-host aggregation are deferred, not release prerequisites. Queries reduce indexed retained
+evidence inside the existing storage worker, not by hydrating the ledger in the daemon or UI.
 
 Local accounting identifiers are outside diagnostics reads and automatic repair evidence. Do not attach raw rows
 to logs, exceptions, artifacts or remote telemetry. Existing explicit telemetry allowlists remain unchanged and

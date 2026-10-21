@@ -1,0 +1,27 @@
+{
+	"version": 1,
+	"from": 1792443601000,
+	"to": 1792530001001,
+	"view": "breakdown",
+	"dimension": "virtualPolicy",
+	"filters": {
+		"projectId": "33333333-3333-4333-8333-333333333333",
+		"chatId": "44444444-4444-4444-8444-444444444444",
+		"mission": {
+			"homeId": "66666666-6666-4666-8666-666666666666",
+			"lineageId": "77777777-7777-4777-8777-777777777777",
+			"missionId": "88888888-8888-4888-8888-888888888888"
+		},
+		"purpose": "agent",
+		"physicalModel": {
+			"provider": "example",
+			"model": "example-model-1"
+		},
+		"virtualModel": {
+			"provider": "pi-virtual",
+			"model": "observed-selection"
+		},
+		"virtualRevision": "observed-v1"
+	},
+	"limit": 10
+}

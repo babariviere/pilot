@@ -23,6 +23,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 		if (method === "status") value = disk.status();
 		else if (method === "put") value = disk.put(args.row, args.now);
 		else if (method === "page") value = disk.page(args.query, args.now);
+		else if (method === "analytics") value = disk.analytics(args.query, args.now);
 		else if (method === "erase") value = disk.erase(args.chatId, args.now);
 		else if (method === "expire") {
 			disk.expire(args.now);

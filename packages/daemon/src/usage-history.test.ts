@@ -270,6 +270,10 @@ test("corrupt oversized row payload is rejected before materializing JSON on rea
 	try {
 		const input = row(f.disk);
 		f.disk.put(input, NOW);
+		// The covering index rejects malformed JSON. Drop it only to simulate externally
+		// corrupted/pre-index storage and exercise the bounded page reader.
+		assert.throws(() => f.disk.db.prepare("UPDATE usage_rows SET data=?").run("x".repeat(100000)));
+		f.disk.db.exec("DROP INDEX usage_query_v1");
 		f.disk.db.prepare("UPDATE usage_rows SET data=?").run("x".repeat(100000));
 		assert.throws(() => f.disk.page(QUERY, NOW), /row unavailable/);
 	} finally {
@@ -391,17 +395,22 @@ test("worker queue is bounded, maintenance coalesces and close drains while refu
 	}
 });
 
-test("worker fault and rejected message cloning release the shutdown drain", async () => {
+test("worker fault and rejected message cloning release the shutdown drain", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "usage-drain-"));
 	const store = new UsageHistoryStore(home, () => NOW);
 	try {
 		const status = await store.status();
-		await assert.rejects(store.page({ ...QUERY, from: (() => 0) as unknown as number }), /Invalid usage message/);
+		await assert.rejects(store.page({ ...QUERY, from: (() => 0) as unknown as number }), /Invalid usage value/);
+		const worker = (store as unknown as { worker: import("node:worker_threads").Worker }).worker;
+		const failedClone = t.mock.method(worker, "postMessage", () => {
+			throw new Error("synthetic clone failure");
+		});
+		await assert.rejects(store.status(), /Invalid usage message/);
+		failedClone.mock.restore();
 		const calls = Array.from({ length: 10 }, (_, i) =>
 			store.put({ ...fixture.rows[0]!, generation: status.generation, operationId: `drain:${i}` }),
 		);
 		const settled = Promise.allSettled(calls);
-		const worker = (store as unknown as { worker: import("node:worker_threads").Worker }).worker;
 		const closing = store.close();
 		await worker.terminate();
 		await settled;

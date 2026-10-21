@@ -1,9 +1,18 @@
 /** Worker-only: bounded local accounting materialization, never opened by UI/diagnostic reads. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { UsageHistoryPage, UsageHistoryQuery, UsageHistoryStatus, UsageHistoryWriteResult } from "@pilot/protocol";
+import type {
+	UsageAggregate,
+	UsageAnalyticsQuery,
+	UsageAnalyticsResult,
+	UsageHistoryPage,
+	UsageHistoryQuery,
+	UsageHistoryStatus,
+	UsageHistoryWriteResult,
+	UsageQueryFilters,
+} from "@pilot/protocol";
 import {
 	parseUsageObservation,
 	readUsageObservation,
@@ -13,9 +22,127 @@ import {
 	USAGE_MAX_ROWS,
 	USAGE_RETENTION_MS,
 	USAGE_ROW_BYTES,
+	usageAnalyticsQuery,
+	usageFilters,
 	usageIdentifier,
 	usageUUID,
 } from "./usage-history-validation.ts";
+
+const METRICS = {
+	input: "tokens.input",
+	output: "tokens.output",
+	cacheRead: "tokens.cacheRead",
+	cacheWrite: "tokens.cacheWrite",
+	reasoning: "tokens.reasoning",
+	estimatedUsdMicros: "cost.estimatedUsdMicros",
+	billedUsdMicros: "cost.billedUsdMicros",
+	requests: "requests",
+	providerAttempts: "providerAttempts",
+	retries: "retries",
+	durationMs: "durationMs",
+} as const;
+// Time index bounds the candidate set; the store independently caps it at 50,000 rows. SQL reduces
+// numeric JSON directly inside the worker. Neither the daemon nor UI materializes the ledger.
+const FILTER_SQL = `
+ AND (? IS NULL OR lower(json_extract(data,'$.attribution.projectId'))=?)
+ AND (? IS NULL OR lower(chat)=?)
+ AND (? IS NULL OR lower(json_extract(data,'$.attribution.mission.homeId'))=?)
+ AND (? IS NULL OR lower(json_extract(data,'$.attribution.mission.lineageId'))=?)
+ AND (? IS NULL OR lower(json_extract(data,'$.attribution.mission.missionId'))=?)
+ AND (? IS NULL OR json_extract(data,'$.purpose')=?)
+ AND (? IS NULL OR json_extract(data,'$.physicalModel.provider')=?)
+ AND (? IS NULL OR json_extract(data,'$.physicalModel.model')=?)
+ AND (? IS NULL OR json_extract(data,'$.virtualModel.provider')=?)
+ AND (? IS NULL OR json_extract(data,'$.virtualModel.model')=?)
+ AND (? IS NULL OR json_extract(data,'$.virtualRevision')=?)
+ AND (?=0 OR json_extract(data,'$.attribution.projectId') IS NULL)
+ AND (?=0 OR json_extract(data,'$.attribution.mission.homeId') IS NULL)
+ AND (?=0 OR chat IS NULL)
+ AND (?=0 OR json_extract(data,'$.physicalModel.provider') IS NULL)
+ AND (?=0 OR json_extract(data,'$.virtualModel.provider') IS NULL)
+ AND (?=0 OR json_extract(data,'$.virtualRevision') IS NULL)`;
+function filterArgs(f: UsageQueryFilters): Array<string | number | null> {
+	return [
+		...[
+			f.projectId,
+			f.chatId,
+			f.mission?.homeId,
+			f.mission?.lineageId,
+			f.mission?.missionId,
+			f.purpose,
+			f.physicalModel?.provider,
+			f.physicalModel?.model,
+			f.virtualModel?.provider,
+			f.virtualModel?.model,
+			f.virtualRevision,
+		].flatMap((v) => [v ?? null, v ?? null]),
+		...["project", "mission", "chat", "physicalModel", "virtualPolicy", "virtualRevision"].map((k) =>
+			f.missing?.includes(k as NonNullable<UsageQueryFilters["missing"]>[number]) ? 1 : 0,
+		),
+	];
+}
+const AGGREGATE_SQL = `COUNT(*) AS records,
+ COALESCE(SUM(json_extract(data,'$.coverage')='committed'),0) AS committed,
+ COALESCE(SUM(json_extract(data,'$.coverage')='partial'),0) AS partial,
+ COALESCE(SUM(json_extract(data,'$.coverage')='legacy'),0) AS legacy,
+ COALESCE(SUM(json_extract(data,'$.cost.estimatedUsdMicros') IS NULL),0) AS unpriced,
+ COALESCE(SUM(json_extract(data,'$.cost.estimateStatus')='partial_catalog_estimate'),0) AS partialPriced,
+ COUNT(DISTINCT json_extract(data,'$.cost.pricingRevision')) AS pricingVersions,
+ MIN(json_extract(data,'$.cost.pricingRevision')) AS pricingRevision,
+ ${Object.entries(METRICS)
+		.map(
+			([key, path]) => `COUNT(json_extract(data,'$.${path}')) AS ${key}Known,
+ TOTAL(json_extract(data,'$.${path}')) AS ${key}Value,
+ COALESCE(SUM(${key === "reasoning" ? "json_extract(data,'$.tokens.reasoningStatus')='partial'" : key === "estimatedUsdMicros" ? "json_extract(data,'$.cost.estimateStatus')='partial_catalog_estimate'" : "0"}),0) AS ${key}Partial`,
+		)
+		.join(",")}`;
+const FACT_EXPRESSIONS = [...new Set([...AGGREGATE_SQL.matchAll(/json_extract\(data,'[^']+'\)/g)].map((m) => m[0]))];
+const FACTS_SQL = FACT_EXPRESSIONS.map((expression, i) => `${expression} AS v${i}`).join(",");
+const REDUCE_FACTS_SQL = AGGREGATE_SQL.replace(
+	/json_extract\(data,'[^']+'\)/g,
+	(expression) => `v${FACT_EXPRESSIONS.indexOf(expression)}`,
+);
+const GROUP_SQL = `CASE ?
+ WHEN 'project' THEN json_quote(lower(json_extract(data,'$.attribution.projectId')))
+ WHEN 'chat' THEN json_quote(lower(chat))
+ WHEN 'mission' THEN CASE WHEN json_extract(data,'$.attribution.mission.homeId') IS NULL THEN 'null' ELSE json_array(
+ lower(json_extract(data,'$.attribution.mission.homeId')), lower(json_extract(data,'$.attribution.mission.lineageId')), lower(json_extract(data,'$.attribution.mission.missionId'))) END
+ WHEN 'purpose' THEN json_quote(json_extract(data,'$.purpose'))
+ WHEN 'physicalModel' THEN CASE WHEN json_extract(data,'$.physicalModel.provider') IS NULL THEN 'null' ELSE json_array(json_extract(data,'$.physicalModel.provider'),json_extract(data,'$.physicalModel.model')) END
+ WHEN 'virtualPolicy' THEN CASE WHEN json_extract(data,'$.virtualModel.provider') IS NULL THEN 'null' ELSE json_array(json_extract(data,'$.virtualModel.provider'),json_extract(data,'$.virtualModel.model'),json_extract(data,'$.virtualRevision')) END
+ WHEN 'scope' THEN json_quote(scope)
+ ELSE printf('%016d',CAST(completed / ? AS INTEGER) * ?) END`;
+// A covering expression index avoids reparsing ledger JSON for every aggregate. The expressions
+// come exclusively from the three fixed SQL constants above, never client input. This is an
+// optional, backwards-compatible v1 index, not a new ledger or runtime/storage ownership change.
+const QUERY_INDEX_SQL = `CREATE INDEX IF NOT EXISTS usage_query_v1 ON usage_rows(kind,completed,age,chat,scope,
+ ${[...new Set([...`${AGGREGATE_SQL} ${FILTER_SQL} ${GROUP_SQL}`.matchAll(/json_extract\(data,'[^']+'\)/g)].map((m) => m[0]))].join(",")})`;
+function aggregate(r: Record<string, unknown>, checkpoint = false): UsageAggregate {
+	const result = Object.fromEntries(
+		["records", "committed", "partial", "legacy", "unpriced", "partialPriced", "pricingVersions"].map((k) => [
+			k,
+			Number(r[k]),
+		]),
+	) as unknown as UsageAggregate;
+	if (result.pricingVersions === 1) result.pricingRevision = String(r.pricingRevision);
+	result.metrics = {} as UsageAggregate["metrics"];
+	for (const key of Object.keys(METRICS) as Array<keyof typeof METRICS>) {
+		const known = Number(r[`${key}Known`]);
+		const value = Number(r[`${key}Value`]);
+		const overflow = !checkpoint && known > 0 && !safeUsageInteger(value);
+		result.metrics[key] = {
+			...(known && !checkpoint && !overflow ? { value } : {}),
+			known,
+			unknown: result.records - known,
+			partial: Number(r[`${key}Partial`]),
+			overflow,
+		};
+	}
+	return result;
+}
+function queryKey(query: unknown): string {
+	return createHash("sha256").update(JSON.stringify(query)).digest("hex");
+}
 
 interface Meta {
 	generation: string;
@@ -32,6 +159,7 @@ export class UsageHistoryDisk {
 	readonly db: DatabaseSync;
 	readonly maxRows: number;
 	private readonly statements = new Map<string, StatementSync>();
+	private readonly queryIndex: "usage_time" | "usage_query_v1";
 	constructor(file: string, now: number, limits: { maxRows?: number; maxBytes?: number } = {}) {
 		this.maxRows = Math.min(USAGE_MAX_ROWS, Math.max(1, limits.maxRows ?? USAGE_MAX_ROWS));
 		const maxBytes = Math.min(USAGE_MAX_BYTES, Math.max(65536, limits.maxBytes ?? USAGE_MAX_BYTES));
@@ -81,6 +209,16 @@ export class UsageHistoryDisk {
 				});
 			this.status(); // Verify required metadata, fail closed on malformed state.
 			this.expire(now);
+			try {
+				db.exec(QUERY_INDEX_SQL);
+			} catch (error) {
+				// An older store near its byte cap must remain readable/writable under the original
+				// bounds. A full optional index rolls back atomically; never evict data or raise the cap.
+				if ((error as { errcode?: number }).errcode !== 13) throw error; // SQLITE_FULL
+			}
+			this.queryIndex = db.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='usage_query_v1'").get()
+				? "usage_query_v1"
+				: "usage_time";
 		} catch {
 			db.close();
 			throw new Error("Usage database unavailable");
@@ -102,7 +240,7 @@ export class UsageHistoryDisk {
 	private prepare(sql: string): StatementSync {
 		let statement = this.statements.get(sql);
 		if (!statement) {
-			if (this.statements.size >= 16) throw new Error("Usage statement capacity exceeded");
+			if (this.statements.size >= 20) throw new Error("Usage statement capacity exceeded");
 			statement = this.db.prepare(sql);
 			this.statements.set(sql, statement);
 		}
@@ -225,6 +363,8 @@ export class UsageHistoryDisk {
 			(query.limit !== undefined && (!safeUsageInteger(query.limit) || query.limit < 1 || query.limit > 100))
 		)
 			throw new Error("Invalid usage query");
+		const filters = usageFilters(query.filters);
+		const filterKey = queryKey(filters);
 		const m = this.meta();
 		let time = -1,
 			source = "",
@@ -235,17 +375,18 @@ export class UsageHistoryDisk {
 				const c = JSON.parse(Buffer.from(query.after, "base64url").toString("utf8"));
 				if (
 					!Array.isArray(c) ||
-					c.length !== 7 ||
+					c.length !== 8 ||
 					c[0] !== m.generation ||
 					c[1] !== query.kind ||
 					c[2] !== query.from ||
 					c[3] !== query.to ||
+					c[7] !== filterKey ||
 					!safeUsageInteger(c[4]) ||
 					!usageUUID(c[5]) ||
 					!usageIdentifier(c[6])
 				)
 					throw new Error();
-				[time, source, operation] = c.slice(4);
+				[time, source, operation] = c.slice(4, 7);
 			} catch {
 				throw new Error("Invalid usage cursor");
 			}
@@ -257,7 +398,7 @@ export class UsageHistoryDisk {
 		const rows = this.prepare(`SELECT completed, source, operation,
 		 CASE WHEN length(CAST(data AS BLOB))<=${USAGE_ROW_BYTES} THEN data ELSE NULL END AS data
 		 FROM usage_rows INDEXED BY usage_time
-		 WHERE kind=? AND completed>=? AND completed<? AND (completed,source,operation)>(?,?,?) AND age>=?
+			 WHERE kind=? AND completed>=? AND completed<? AND (completed,source,operation)>(?,?,?) AND age>=? ${FILTER_SQL}
 		 ORDER BY completed,source,operation LIMIT ?`).all(
 			query.kind,
 			from,
@@ -266,6 +407,7 @@ export class UsageHistoryDisk {
 			source,
 			operation,
 			Math.max(m.floor, now - USAGE_RETENTION_MS),
+			...filterArgs(filters),
 			limit + 1,
 		);
 		const hasMore = rows.length > limit;
@@ -288,12 +430,85 @@ export class UsageHistoryDisk {
 								last.completed,
 								last.source,
 								last.operation,
+								filterKey,
 							]),
 						).toString("base64url"),
 					}
 				: {}),
-			status: this.status(),
+			status: { ...this.status(), retentionFloor: Math.max(m.floor, now - USAGE_RETENTION_MS) },
 		};
+	}
+
+	analytics(value: UsageAnalyticsQuery, now: number): UsageAnalyticsResult {
+		const q = usageAnalyticsQuery(value);
+		if (!safeUsageInteger(now)) throw new Error("Invalid usage clock");
+		const m = this.meta();
+		const signature = queryKey([q.version, q.from, q.to, q.filters, q.view, q.dimension ?? null, q.bucketMs ?? null]);
+		let after = "";
+		if (q.after !== undefined) {
+			try {
+				const c = JSON.parse(Buffer.from(q.after, "base64url").toString("utf8"));
+				if (
+					!Array.isArray(c) ||
+					c.length !== 3 ||
+					c[0] !== m.generation ||
+					c[1] !== signature ||
+					typeof c[2] !== "string" ||
+					c[2].length > 512
+				)
+					throw new Error();
+				after = c[2];
+			} catch {
+				throw new Error("Invalid usage cursor");
+			}
+		}
+		const floor = Math.max(m.floor, now - USAGE_RETENTION_MS);
+		const args = filterArgs(q.filters!);
+		const where = `FROM usage_rows INDEXED BY ${this.queryIndex} WHERE kind=? AND completed>=? AND completed<? AND age>=? ${FILTER_SQL}`;
+		const readTotal = (kind: string, from: number, to: number) =>
+			aggregate(
+				this.prepare(`SELECT ${AGGREGATE_SQL} ${where}`).get(kind, from, to, floor, ...args)!,
+				kind === "checkpoint",
+			);
+		const total = readTotal("request", q.from, q.to);
+		const reconciliation = readTotal("checkpoint", 0, Number.MAX_SAFE_INTEGER);
+		const limit = q.limit ?? 100;
+		const rows =
+			q.view === "summary"
+				? []
+				: // LIMIT prevents flattening: SQLite streams scalar index facts into the grouping
+					// sorter instead of carrying/reparsing raw ledger JSON for every aggregate field.
+					this.prepare(`SELECT key, ${REDUCE_FACTS_SQL} FROM (SELECT ${GROUP_SQL} AS key, ${FACTS_SQL} ${where} LIMIT ${USAGE_MAX_ROWS})
+		 GROUP BY key HAVING key>? ORDER BY key LIMIT ?`).all(
+						q.dimension ?? "buckets",
+						q.bucketMs ?? 1,
+						q.bucketMs ?? 1,
+						"request",
+						q.from,
+						q.to,
+						floor,
+						...args,
+						after,
+						limit + 1,
+					);
+		const truncated = rows.length > limit;
+		if (truncated) rows.pop();
+		const last = rows.at(-1);
+		const result: UsageAnalyticsResult = {
+			version: 1,
+			queriedAt: now,
+			status: { ...this.status(), retentionFloor: floor },
+			total,
+			reconciliation,
+			groups: rows.map((r) => ({ key: String(r.key), aggregate: aggregate(r) })),
+			coverage: "partial",
+			truncated,
+			...(truncated && last
+				? { next: Buffer.from(JSON.stringify([m.generation, signature, last.key])).toString("base64url") }
+				: {}),
+		};
+		if (Buffer.byteLength(JSON.stringify(result)) > 512 * 1024) throw new Error("Usage response limit exceeded");
+		return result;
 	}
 
 	/** Rotation globally fences in-flight reporters, without an unbounded tombstone inventory. */

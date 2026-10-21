@@ -58,6 +58,8 @@ import type {
 	TerminalSocketMessage,
 	UnbindPullRequestRequest,
 	UpdateMissionRequest,
+	UsageAnalyticsQuery,
+	UsageHistoryQuery,
 } from "@pilot/protocol";
 import { nodeTelemetry, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -105,6 +107,8 @@ import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
+import { UsageQueryCapacityError } from "./usage-history.ts";
+import { usageAnalyticsQuery } from "./usage-history-validation.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -535,6 +539,31 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "usage-history") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET" || parts.length !== 3 || !["query", "page"].includes(parts[2]!))
+				throw new HttpError(404, "Not found");
+			if (!hello?.lineageId || hello.capabilities.usageQueries !== 1)
+				throw new ServiceUnavailable("Usage queries unsupported");
+			if (
+				url.searchParams.get("daemonId") !== hello.daemonId ||
+				url.searchParams.get("lineageId") !== hello.lineageId
+			)
+				throw new HttpError(409, "Host identity changed");
+			const raw = url.searchParams.get("query");
+			if (!raw || Buffer.byteLength(raw) > 4096) throw new HttpError(400, "Invalid usage query");
+			let query: UsageAnalyticsQuery | UsageHistoryQuery;
+			try {
+				query = JSON.parse(raw);
+			} catch {
+				throw new HttpError(400, "Invalid usage query");
+			}
+			if (parts[2] === "query") {
+				const canonical = usageAnalyticsQuery(query);
+				return json(res, 200, await sessions.usageHistory.analytics(canonical));
+			}
+			return json(res, 200, await sessions.usageHistory.page(query as UsageHistoryQuery));
+		}
 		if (control && (await controlHostRoute(control.hosts, req, res))) return;
 		if (parts[1] === "github-import") {
 			res.setHeader("cache-control", "no-store");
@@ -1878,15 +1907,17 @@ export function createDaemonServer(
 		};
 		run().catch((error: unknown) => {
 			const status =
-				error instanceof HttpError || error instanceof SetupError
-					? error.status
-					: error instanceof ServiceUnavailable
-						? 503
-						: error instanceof NotFound
-							? 404
-							: error instanceof Conflict
-								? 409
-								: 400;
+				error instanceof UsageQueryCapacityError
+					? 429
+					: error instanceof HttpError || error instanceof SetupError
+						? error.status
+						: error instanceof ServiceUnavailable
+							? 503
+							: error instanceof NotFound
+								? 404
+								: error instanceof Conflict
+									? 409
+									: 400;
 			const message =
 				((req.url ?? "").startsWith("/api/setup") || (req.url ?? "").startsWith("/api/github-import")) &&
 				!(error instanceof SetupError || error instanceof HttpError)
