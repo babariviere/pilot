@@ -1,8 +1,6 @@
 //! Real renderer, production view, no visible window. Not smoothness evidence.
 use gpui_kit::{
-    AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
-    assets::Assets,
-    px, size,
+    AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, px, size,
     test::{TestQueryExt, TestWindowExt},
 };
 use pilot_desktop::{LocalViewer, TranscriptView};
@@ -12,11 +10,12 @@ fn main() {
     let large = std::env::var_os("PILOT_NEXT_LARGE_RENDER").is_some();
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
-        Arc::new(Assets),
+        Arc::new(pilot_desktop::ChromeAssets),
         gpui_kit::platform::current_headless_renderer,
     );
     cx.update(|cx| {
         gpui_kit::init(cx);
+        pilot_desktop::init_appearance(cx);
         TranscriptView::bind_keys(cx);
     });
     let (handle, view) = cx

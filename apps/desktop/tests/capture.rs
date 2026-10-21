@@ -1,6 +1,6 @@
 //! Opt-in private real-chat pixels. No mutation client, draft store or visible window.
 use gpui_kit::{
-    AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, assets::Assets, px, size,
+    AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, px, size,
     test::TestWindowExt,
 };
 use pilot_desktop::{LocalOptions, LocalViewer, read_local_capture};
@@ -43,10 +43,13 @@ fn main() {
     });
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
-        Arc::new(Assets),
+        Arc::new(pilot_desktop::ChromeAssets),
         gpui_kit::platform::current_headless_renderer,
     );
-    cx.update(gpui_kit::init);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        pilot_desktop::init_appearance(cx);
+    });
     let (handle, view) = cx
         .update(|cx| {
             gpui_kit::open_window(

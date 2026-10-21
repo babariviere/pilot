@@ -1,6 +1,7 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 use crate::{
     LocalOptions, TranscriptView,
+    appearance::{self, Corner},
     chat_editor::{ChatEditor, EditorEvent},
     delivery_store::Store,
     interaction::{Interaction, WriteCommand},
@@ -9,24 +10,36 @@ use crate::{
     model::Message,
 };
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, Window,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
+    Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, IndexPath, Sizable, StyledExt,
-        button::Button,
+        ActiveTheme, Disableable, IconName, IndexPath, Sizable, StyledExt,
+        button::{Button, ButtonVariants},
         checkbox::Checkbox,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
     },
     div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::{sync::Arc, time::Duration};
 
+gpui_kit::actions!(desktop, [FocusChats]);
+#[derive(Clone, Copy)]
+pub enum PreviewState {
+    Conversation,
+    Empty,
+    Loading,
+    Unavailable,
+}
 struct ChatList {
     all: Arc<Vec<Chat>>,
     filtered: Vec<usize>,
     query: String,
     archived: bool,
     selected: Option<IndexPath>,
+    opened: Option<String>,
+    loaded: bool,
 }
 impl ChatList {
     fn filter(&mut self) {
@@ -58,13 +71,29 @@ impl ListDelegate for ChatList {
         let chat = self.at(ix)?;
         Some(
             ListItem::new(SharedString::from(chat.id.clone()))
-                .selected(self.selected == Some(ix))
+                .confirmed(self.opened.as_ref() == Some(&chat.id))
                 .child(
                     div()
                         .v_flex()
+                        .relative()
+                        .overflow_hidden()
+                        .rounded_md()
+                        .px_2()
+                        .py_1()
+                        .bg(if self.opened.as_ref() == Some(&chat.id) {
+                            appearance::selected(cx)
+                        } else {
+                            cx.theme().transparent
+                        })
                         .min_w_0()
                         .w_full()
                         .gap_1()
+                        .when(chat.busy, |this| {
+                            this.child(appearance::corner(Corner::Working, cx))
+                        })
+                        .when(!chat.busy && chat.state == "failed", |this| {
+                            this.child(appearance::corner(Corner::Failed, cx))
+                        })
                         .child(
                             div()
                                 .truncate()
@@ -111,7 +140,13 @@ impl ListDelegate for ChatList {
             .p_4()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child("No matching chats.")
+            .child(if !self.loaded {
+                "Loading chats…"
+            } else if self.all.is_empty() {
+                "No Local chats yet."
+            } else {
+                "No matching chats."
+            })
     }
 }
 
@@ -131,9 +166,13 @@ pub struct LocalViewer {
     nav_chats: Arc<Vec<Chat>>,
     nav_drafts: Vec<(String, String)>,
     refreshing: bool,
+    details_open: bool,
 }
 
 impl LocalViewer {
+    pub fn bind_keys(cx: &mut App) {
+        cx.bind_keys([KeyBinding::new("secondary-f", FocusChats, None)]);
+    }
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options);
@@ -219,6 +258,8 @@ impl LocalViewer {
         view.chats.update(cx, |list, cx| {
             let delegate = list.delegate_mut();
             delegate.all = view.state.chats.clone();
+            delegate.opened = view.selected.clone();
+            delegate.loaded = true;
             delegate.filter();
             list.set_selected_index(Some(IndexPath::new(0)), window, cx);
             cx.notify();
@@ -241,6 +282,58 @@ impl LocalViewer {
     /// Offscreen harness readiness, not a render-time gate.
     pub fn text_parsers_ready(&self, cx: &App) -> bool {
         self.transcript.read(cx).text_parsers_ready(cx)
+    }
+    /// Fixed synthetic states, no daemon/private draft store or mutation capability.
+    pub fn preview(state: PreviewState, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut view = Self::synthetic(window, cx);
+        let mut chats = view.state.chats.as_ref().clone();
+        chats.push(Chat {
+            id: "synthetic-failed".into(),
+            title: "Review a failed check with a long title that stays on one line".into(),
+            state: "failed".into(),
+            archived: false,
+            local_draft: false,
+            writable: false,
+            busy: false,
+            cwd: String::new(),
+        });
+        view.state.chats = Arc::new(chats);
+        let mut rows = vec![Message::live(
+            1000,
+            "You · entry 1".into(),
+            "Keep the interface calm and the changes easy to review.".into(),
+        )];
+        rows.extend(crate::tool_presentation::fixture_work());
+        rows.push(Message::live(1001,"assistant · entry 2".into(),"## A smaller, quieter interface\n\nThe navigation stays compact while the conversation has room to breathe.\n\n| Check | Result |\n|:--|:--|\n| Keyboard | Preserved |\n| Private drafts | Unchanged |\n\nNo backend actions are available in this synthetic scene.".into()));
+        match state {
+            PreviewState::Empty => {
+                view.selected = None;
+                view.state.chats = Arc::new(Vec::new());
+                view.title = "Local chats".into();
+                rows.clear();
+            }
+            PreviewState::Loading => {
+                view.state.loaded = false;
+                view.state.status = "Connecting to Local…".into();
+                view.state.chat_status = "Loading history…".into();
+                rows.clear();
+            }
+            PreviewState::Unavailable => {
+                view.state.status =
+                    "Local connection unavailable. Last loaded data is retained.".into();
+                view.state.chat_status = "Disconnected".into();
+            }
+            PreviewState::Conversation => {}
+        }
+        view.transcript
+            .update(cx, |view, cx| view.replace_readonly(rows, true, cx));
+        if view.selected.is_some() {
+            view.editor.update(cx, |editor, cx| {
+                editor.select("chat:synthetic".into(), false, true, window, cx)
+            });
+        }
+        view.rebuild_nav(window, cx);
+        view
     }
     /// Same production view, frozen read-only input, no writer/draft store or live transport.
     pub fn captured(
@@ -279,6 +372,8 @@ impl LocalViewer {
                     query: String::new(),
                     archived: false,
                     selected: None,
+                    opened: None,
+                    loaded: false,
                 },
                 window,
                 cx,
@@ -349,6 +444,7 @@ impl LocalViewer {
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
             refreshing: false,
+            details_open: false,
         }
     }
 
@@ -385,6 +481,7 @@ impl LocalViewer {
         self.state.page_busy = false;
         self.state.chat_status = "Loading chat…".into();
         self.state.queued = 0;
+        self.rebuild_nav(window, cx);
         self.transcript
             .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
         cx.notify();
@@ -428,6 +525,10 @@ impl LocalViewer {
         self.refreshing = false;
         self.generation += 1;
         self.selected = None;
+        self.chats.update(cx, |list, cx| {
+            list.delegate_mut().opened = None;
+            cx.notify();
+        });
         self.state.cursor = None;
         self.state.chat_status.clear();
         self.state.queued = 0;
@@ -471,7 +572,11 @@ impl LocalViewer {
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let drafts = self.editor.read(cx).new_drafts();
-        if Arc::ptr_eq(&self.nav_chats, &self.state.chats) && drafts == self.nav_drafts {
+        if Arc::ptr_eq(&self.nav_chats, &self.state.chats)
+            && drafts == self.nav_drafts
+            && self.chats.read(cx).delegate().opened == self.selected
+            && self.chats.read(cx).delegate().loaded == self.state.list_loaded
+        {
             return;
         }
         self.nav_chats = self.state.chats.clone();
@@ -498,6 +603,8 @@ impl LocalViewer {
                 .map(|c| c.id.clone());
             let delegate = list.delegate_mut();
             delegate.all = Arc::new(all);
+            delegate.opened = self.selected.clone();
+            delegate.loaded = self.state.list_loaded;
             delegate.filter();
             let selected = selected
                 .and_then(|id| {
@@ -514,234 +621,133 @@ impl LocalViewer {
 }
 
 impl Render for LocalViewer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let archived = self.chats.read(cx).delegate().archived;
         let count = self.chats.read(cx).delegate().filtered.len();
-        let footer = if self.state.limited {
-            "Bounded history window. Refresh latest to load newer committed messages; full history stays available in Swift."
+        let sidebar_width = px(if window.viewport_size().width < px(800.) {
+            184.
         } else {
-            "Images and links are disabled. Some structured content remains a placeholder. Swift stays available."
+            232.
+        });
+        let healthy = self.state.status.starts_with("Connected")
+            || self.state.status.starts_with("Synthetic")
+            || self.state.status.starts_with("Read-only captured");
+        let cwd = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
+        let footer = if self.state.limited {
+            "Bounded history window. Refresh latest for newer messages. Full history remains available in Swift."
+        } else {
+            "Images and links are disabled. Some structured content remains unsupported. Swift remains available."
         };
-        div()
-            .h_flex()
-            .items_stretch()
-            .size_full()
-            .min_w_0()
-            .bg(cx.theme().background)
-            .text_color(cx.theme().foreground)
-            .on_action(
-                cx.listener(|view, _: &crate::transcript_view::Quit, _, cx| {
-                    if view
-                        .editor
-                        .update(cx, |editor, cx| editor.request_close(cx))
-                    {
-                        cx.quit();
-                    }
-                    cx.stop_propagation();
-                }),
-            )
-            .on_action(cx.listener(
-                |view, _: &crate::transcript_view::FocusComposer, window, cx| {
-                    view.editor
-                        .update(cx, |editor, cx| editor.focus(window, cx))
-                },
-            ))
+        div().id("desktop-root").test_support().h_flex().items_stretch().size_full().min_w_0()
+            .bg(cx.theme().background).text_color(cx.theme().foreground)
+            .on_action(cx.listener(|view,_:&crate::transcript_view::Quit,_,cx|{
+                if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
+                view.editor.update(cx,|editor,cx|editor.focus(window,cx));
+            }))
+            .on_action(cx.listener(|view,_:&FocusChats,window,cx|view.chats.update(cx,|list,cx|list.focus(window,cx))))
             .child(
-                div()
-                    .v_flex()
-                    .w_72()
-                    .min_w_64()
-                    .max_w_80()
-                    .h_full()
-                    .border_r_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .v_flex()
-                            .p_4()
-                            .gap_2()
-                            .child(div().font_semibold().child("Pilot Next"))
-                            .child(
-                                Button::new("new-local-chat")
-                                    .small()
-                                    .label("New chat")
-                                    .disabled(!self.editor.read(cx).ready())
-                                    .on_click(
-                                        cx.listener(|view, _, window, cx| {
-                                            view.new_chat(window, cx)
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(format!(
-                                        "Local · {count} chats (up to 1,000)"
-                                    ))),
-                            )
-                            .child(
-                                Checkbox::new("archives")
-                                    .label("Include archived")
-                                    .checked(archived)
-                                    .on_change(cx.listener(|view, checked, _, cx| {
-                                        view.chats.update(cx, |list, cx| {
-                                            let delegate = list.delegate_mut();
-                                            delegate.archived = *checked;
-                                            delegate.filter();
-                                            cx.notify();
-                                        });
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_h_0()
-                            .child(List::new(&self.chats).search_placeholder("Find a chat…")),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .p_4()
-                            .gap_2()
-                            .border_t_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(self.state.status.clone())),
-                            )
-                            .child(
-                                Button::new("reconnect")
-                                    .small()
-                                    .label("Reconnect")
-                                    .on_click(cx.listener(|view, _, _, _| {
-                                        if let Some(client) = &view.client {
-                                            client.command(Command::Reconnect);
-                                        }
-                                    })),
-                            ),
-                    ),
+                div().id("chat-sidebar").test_support().v_flex().w(sidebar_width).min_w(sidebar_width).max_w(sidebar_width).h_full()
+                    .bg(cx.theme().sidebar).border_r_1().border_color(cx.theme().border)
+                    .child(div().v_flex().p_3().gap_2()
+                        .child(div().h_flex().items_center().justify_between().gap_1()
+                            .child(div().text_sm().font_semibold().child("Pilot Next"))
+                            .child(Button::new("new-local-chat").ghost().small().icon(IconName::Plus).label("New chat")
+                                .disabled(!self.editor.read(cx).ready()).on_click(cx.listener(|view,_,window,cx|view.new_chat(window,cx)))))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(SharedString::from(format!("{count} Local chats"))))
+                        .child(Checkbox::new("archives").label("Include archived").checked(archived)
+                            .on_change(cx.listener(|view,checked,_,cx|{
+                                view.chats.update(cx,|list,cx|{let d=list.delegate_mut();d.archived = *checked;d.filter();cx.notify();});
+                            }))))
+                    .child(div().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+                    .children((!healthy).then(||div().v_flex().p_3().gap_2().border_t_1().border_color(cx.theme().border)
+                        .child(div().text_xs().text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
+                        .child(Button::new("reconnect").ghost().small().label("Reconnect").disabled(self.client.is_none())
+                            .on_click(cx.listener(|view,_,_,_|{if let Some(client)=&view.client{client.command(Command::Reconnect);}})))))
             )
             .child(
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .h_full()
-                    .child(
-                        div()
-                            .v_flex()
-                            .p_4()
-                            .gap_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                div()
-                                    .font_semibold()
-                                    .truncate()
-                                    .child(SharedString::from(self.title.clone())),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .truncate()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(
-                                        self.selected
-                                            .as_ref()
-                                            .and_then(|id| {
-                                                self.state.chats.iter().find(|chat| &chat.id == id)
-                                            })
-                                            .map(|chat| chat.cwd.clone())
-                                            .unwrap_or_default(),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("earlier")
-                                            .small()
-                                            .label("Earlier (+24)")
-                                            .disabled(
-                                                self.state.cursor.is_none() || self.state.page_busy,
-                                            )
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                if let (Some(client), Some(before)) =
-                                                    (&view.client, view.state.cursor)
-                                                    && client.command(Command::Earlier {
-                                                        before,
-                                                        generation: view.generation,
-                                                    })
-                                                {
-                                                    view.state.page_busy = true;
-                                                    cx.notify();
-                                                }
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("latest")
-                                            .small()
-                                            .label(if self.refreshing {
-                                                "Retry latest"
-                                            } else if self.state.limited {
-                                                "Refresh latest"
-                                            } else {
-                                                "Latest"
-                                            })
-                                            .on_click(
-                                                cx.listener(|view, _, _, cx| view.latest(cx)),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(SharedString::from(format!(
-                                                "{} · {} queued",
-                                                self.state.chat_status, self.state.queued
-                                            ))),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .flex_1()
-                            .min_h_0()
-                            .min_w_0()
-                            .child(self.transcript.clone()),
-                    )
-                    .child(self.editor.clone())
-                    .child(
-                        div()
-                            .p_4()
-                            .border_t_1()
-                            .border_color(cx.theme().border)
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(format!(
-                                "{footer} {}",
-                                if self.state.omitted > 0 {
-                                    "Some structured entries are shown as placeholders."
-                                } else {
-                                    ""
-                                }
-                            ))),
-                    ),
+                div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                    .child(div().v_flex().px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
+                        .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
+                        .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
+                        .child(div().h_flex().items_center().gap_2().min_w_0()
+                            .child(Button::new("earlier").ghost().small().label("Earlier").disabled(self.state.cursor.is_none()||self.state.page_busy)
+                                .on_click(cx.listener(|view,_,_,cx|{
+                                    if let(Some(client),Some(before))=(&view.client,view.state.cursor)
+                                        &&client.command(Command::Earlier{before,generation:view.generation}){view.state.page_busy=true;cx.notify();}
+                                })))
+                            .child(Button::new("latest").ghost().small().label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
+                                .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
+                            .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(format!("{}{}",self.state.chat_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
+                    .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(760.)).mx_auto()
+                        .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
+                        .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
+                            .child(div().font_semibold().child("Choose a chat"))
+                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
+                        .when(self.selected.is_some(),|this|this.child(self.transcript.clone())))
+                    .child(div().w_full().max_w(px(760.)).mx_auto().child(self.editor.clone()))
+                    .child(div().v_flex().px_3().py_1().gap_1().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground)
+                        .child(Button::new("view-details").ghost().small().self_start().label(if self.details_open{"Hide details"}else{"Details"})
+                            .on_click(cx.listener(|view,_,_,cx|{view.details_open = !view.details_open;cx.notify();})))
+                        .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
+                        .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
             )
     }
 }
-
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
     use gpui_kit::{TestAppContext, WindowOptions};
+    #[gpui_kit::test]
+    fn compact_chrome_keeps_open_chat_and_keyboard_search_separate(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+            LocalViewer::bind_keys(cx);
+        });
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| LocalViewer::preview(PreviewState::Conversation, window, cx))
+                },
+            )
+            .unwrap()
+        });
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("view-details", cx);
+            assert!(view.read(cx).details_open);
+            window.press("secondary-f", cx);
+            window.input("review", cx);
+        })
+        .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(400));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let view = view.read(cx);
+            assert_eq!(view.selected.as_deref(), Some("synthetic"));
+            let nav = view.chats.read(cx).delegate();
+            assert_eq!(nav.opened, view.selected);
+            assert_eq!(nav.query, "review");
+            assert!(!nav.filtered.is_empty());
+            assert!(view.writer.is_none());
+        });
+    }
     #[gpui_kit::test]
     fn refresh_retains_old_window_allows_retry_fences_late_results_and_clears_on_navigation(
         cx: &mut TestAppContext,

@@ -50,6 +50,19 @@ impl Message {
     pub(crate) fn label(&self) -> &str {
         &self.label
     }
+    pub(crate) fn display_label(&self) -> &str {
+        let label = self
+            .label
+            .rsplit_once(" · entry ")
+            .filter(|(_, id)| id.parse::<u64>().is_ok())
+            .map(|(label, _)| label)
+            .unwrap_or(&self.label);
+        if label == "assistant" {
+            "Assistant"
+        } else {
+            label
+        }
+    }
     pub(crate) fn source(&self) -> &str {
         &self.source
     }
@@ -291,6 +304,27 @@ fn history_message(ix: usize) -> Message {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn display_author_keeps_structured_origin_and_removes_only_the_final_debug_suffix() {
+        let row = super::Message::live(
+            1,
+            "Automatic input (Agent · entry planning) · entry 20".into(),
+            "synthetic".into(),
+        );
+        assert_eq!(
+            row.display_label(),
+            "Automatic input (Agent · entry planning)"
+        );
+        assert_eq!(
+            super::Message::live(2, "assistant · entry 21".into(), String::new()).display_label(),
+            "Assistant"
+        );
+        assert_eq!(
+            super::Message::live(3, "Origin · entry planning".into(), String::new())
+                .display_label(),
+            "Origin · entry planning"
+        );
+    }
     use super::*;
 
     #[test]

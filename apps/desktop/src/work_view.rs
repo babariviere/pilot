@@ -270,7 +270,7 @@ impl Render for WorkView {
         let open = self.open();
         let choice = self.choices.borrow().choice(&self.data);
         let all = choice.is_some_and(|(_, all)| all);
-        let limited = self.data.active && choice.is_none() && !all && self.children.len() > 4;
+        let limited = choice.is_none() && !all && self.children.len() > 4;
         let start = if limited { self.children.len() - 4 } else { 0 };
         let mut root = div().v_flex().gap_2().w_full().min_w_0().child(
             disclosure(
