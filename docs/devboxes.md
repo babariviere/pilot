@@ -20,15 +20,27 @@ only target Local. The local app/daemon separation is unchanged.
 
 ## Compatibility boundary
 
-The native app restores saved metadata without opening SSH, checking remote runtimes or starting
-replication. The production daemon does not construct the live shared-context service or expose its
-sharing and remote Control transport endpoints. A small read-only `RetiredDevboxes` adapter retains
+The native app's `ClientDirectory` owns one live Local connection and separate read-only legacy
+snapshots. There is no remote endpoint registry. Model settings use one `LocalModelScope` scheduler;
+old remote model decisions are inert persisted data, not synchronization participants.
+
+SSH tunnels/bootstrap, remote update delivery, cross-host couriers, sharing/replication engines,
+remote Control executors/contracts, native remote RPCs and their executable fixtures have been removed.
+The daemon has no sharing, delegation, remote Control or runtime-update routes. A small read-only `RetiredDevboxes` adapter retains
 legacy ownership records and rejects delegated admission, preventing old work from being recovered
 or reinterpreted as ordinary Local work. Canonical Local missions and memory continue normally.
 
-Host-qualified protocol/cache formats, offline readers and historical transport fixtures are retained.
+Old pending sharing/Control operations are excluded from startup recovery. An explicit attempt to
+resubmit one is rejected before changing its receipt. Retired updater records and Control role policy
+are read only to preserve safety fences; unresolved ownership is never automatically cleared.
+
+Host-qualified cache formats, provenance, offline readers and preservation tests are retained.
 The Linux headless daemon and packaging remain development capabilities, not a supported macOS remote
 execution workflow. Earlier transport/setup design documents describe historical behavior only.
+
+`MissionReplica` is the Local mission store's off-event-loop SQLite disk writer, not cross-host
+replication. It remains, as does the local memory append journal (historically named `shared.sqlite`).
+Removing those would weaken Local durability rather than remove devbox support.
 
 This retirement does not promise a remote-history export/import or data migration feature. No remote
 machine is contacted during retirement, and no user data or credentials are erased.

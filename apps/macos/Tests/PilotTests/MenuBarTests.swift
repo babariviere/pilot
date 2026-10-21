@@ -120,7 +120,7 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
 @Test @MainActor func reactiveMenuSnapshotsNeverReintroduceExecutorControlOrItsCounts() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let hosts = HostClients(operationDirectory: directory)
+    let hosts = ClientDirectory(operationDirectory: directory)
     let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "menu-control-\(UUID())")!, hosts: hosts)
     let local = HostRef(hostId: "local", daemonId: "mac", lineageId: "mac-lineage")
     let box = HostRef(hostId: "box", daemonId: "executor", lineageId: "executor-lineage")
@@ -131,9 +131,9 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     // Match the client's canonical list order, including the ID tie-breaker for equal timestamps.
     let localSessions = [localControl, localChat].sorted(by: SessionSummary.listPrecedes)
     app.client.loadFixture(projects: [], sessions: localSessions)
-    try app.registerLocal(local); try hosts.install(app.client, host: local)
+    try app.registerLocal(local); try loadClientFixture(app.client, host: local, into: hosts)
     let client = PilotClient(); client.loadFixture(projects: [], sessions: [control, ordinary])
-    try hosts.install(client, host: box)
+    try loadClientFixture(client, host: box, into: hosts)
     app.daemon.markRunningForSnapshot()
     let menu = MenuBarModel(model: app, updater: AppUpdater())
     let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)

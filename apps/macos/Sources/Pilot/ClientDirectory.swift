@@ -10,33 +10,27 @@ enum HostedHistoryAvailability: Equatable {
     }
 }
 
-/// Unified navigation/data facade. Each endpoint keeps its own caches, subscriptions and sockets.
-/// Callers hold qualified refs, never select a process-wide "current server".
+/// One live Local client plus read-only legacy history. Qualified refs fence cached remote data
+/// from Local mutations; there is no remote endpoint registry or connection selection.
 @MainActor
-final class HostClients: ObservableObject {
+final class ClientDirectory: ObservableObject {
     private var checkoutObservation: AnyCancellable?
     private let checkoutDirectory: URL
-    private(set) lazy var projectCheckouts: ProjectCheckoutModel = {
+    private(set) lazy var projectCheckouts: LegacyCheckoutCatalog = {
         let file = checkoutDirectory.appendingPathComponent("project-checkouts.json")
-        let model = ProjectCheckoutModel(store: RepositoryAssociationStore(file: file)) { [weak self] ref in
-            guard let self else { throw HostRoutingError.disconnected }
-            return try await self.perform(ref, kind: .project) { try await $0.projectOrigin($1).identity }
-        }
+        let model = LegacyCheckoutCatalog(store: RepositoryAssociationStore(file: file))
         checkoutObservation = model.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         return model
     }()
 
     private func refreshProjectCheckouts() {
-        projectCheckouts.update(projects, available: available,
-            generations: entries.mapValues { $0.client.connectionGeneration })
+        projectCheckouts.update(projects)
     }
     var onOperationDeliveryChanged: ((DurableOperation, OperationDelivery) -> Void)?
-    var onRemoteSessionsChanged: ((HostRef, [SessionSummary], Bool) -> Void)?
     @Published private(set) var sessions: [Hosted<SessionSummary>] = []
     @Published private(set) var projects: [Hosted<Project>] = []
     @Published private(set) var missions: [Hosted<Mission>] = []
     @Published private(set) var available: Set<HostRef> = []
-    @Published private(set) var connectionStates: [HostRef: SSHTunnelState] = [:]
     @Published private(set) var offlineHosts: [HostRef: OfflineHostSnapshot] = [:]
     @Published private(set) var persistenceError: String?
     /// Receipts remain here until the owning composer adopts them durably. Unknown is not rejection.
@@ -48,7 +42,7 @@ final class HostClients: ObservableObject {
     // A presentation client may be offline, but is never redirected to another host.
     private var presentationClients: [HostRef: PilotClient] = [:]
     func presentationClient(_ host: HostRef) -> PilotClient {
-        if let client = entries[host]?.client { return client }
+        if let client = entry(host)?.client { return client }
         if let client = presentationClients[host] { return client }
         let client = PilotClient()
         try? client.bind(host)
@@ -65,9 +59,10 @@ final class HostClients: ObservableObject {
         let token: HostConnectionToken
         var observations: [AnyCancellable]
     }
-    private var entries: [HostRef: Entry] = [:]
+    private var local: Entry?
+    private func entry(_ host: HostRef) -> Entry? { local?.token.host == host ? local : nil }
     private var diagnosticReads: [String: Task<Void, Never>] = [:]
-    private let readNativeCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
+    private let readNativeCapability: @MainActor (HostRef) async throws -> String
     @MainActor private final class TerminalRegistration {
         let ref: HostResourceRef
         let intent: WorkspaceTerminalIntent
@@ -83,6 +78,7 @@ final class HostClients: ObservableObject {
     /// Retain intent, not a tunnel URL. Replacement verified clients reattach the same shell/key.
     func attachTerminal(_ ref: HostResourceRef, restart: Bool = false,
                         attachment: PilotClient.TerminalAttachment) throws {
+        guard entry(ref.host) != nil else { throw HostRoutingError.disconnected }
         guard ref.kind == .session, terminalRegistrations[ref] != nil || terminalRegistrations.count < 16 else {
             throw HostRoutingError.invalidReference
         }
@@ -95,27 +91,27 @@ final class HostClients: ObservableObject {
     private func attachTerminalRegistration(_ registration: TerminalRegistration) {
         registration.detach()
         let ref = registration.ref
-        guard let entry = entries[ref.host] else { registration.attachment.onStatus(.disconnected); return }
+        guard let entry = entry(ref.host) else { registration.attachment.onStatus(.disconnected); return }
         registration.client = entry.client
         let token = entry.token
         var attachment = registration.attachment
         attachment.onData = { [weak self, weak registration] data in
-            guard let self, let registration, self.entries[ref.host]?.token == token,
+            guard let self, let registration, self.entry(ref.host)?.token == token,
                   self.terminalRegistrations[ref] === registration else { return }
             registration.attachment.onData(data)
         }
         attachment.onExit = { [weak self, weak registration] code in
-            guard let self, let registration, self.entries[ref.host]?.token == token,
+            guard let self, let registration, self.entry(ref.host)?.token == token,
                   self.terminalRegistrations[ref] === registration else { return }
             registration.attachment.onExit(code)
         }
         attachment.onReplay = { [weak self, weak registration] in
-            guard let self, let registration, self.entries[ref.host]?.token == token,
+            guard let self, let registration, self.entry(ref.host)?.token == token,
                   self.terminalRegistrations[ref] === registration else { return }
             registration.attachment.onReplay()
         }
         attachment.onStatus = { [weak self, weak registration] status in
-            guard let self, let registration, self.entries[ref.host]?.token == token,
+            guard let self, let registration, self.entry(ref.host)?.token == token,
                   self.terminalRegistrations[ref] === registration else { return }
             registration.attachment.onStatus(status)
         }
@@ -147,29 +143,27 @@ final class HostClients: ObservableObject {
         terminalRegistrations[ref]?.client?.terminalReadPaused(ref.localId, paused)
     }
     /// One owner for live lifecycle fan-out and Settings. Construction performs no I/O.
-    let scopedModels: ScopedModelsSync
-    private var endpointGenerations: [HostRef: UUID] = [:]
-    private let readScopedModelCapability: @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String
+    let scopedModels: LocalModelScope
+    private var endpointGeneration: UUID?
+    private let readScopedModelCapability: @MainActor (HostRef) async throws -> String
     private var scopedModelsStarted = false
-    private var offlineStore: OfflineHostStore?
+    private var offlineRestoreStarted = false
     private var offlineReady = false
-    private var saveTask: Task<Void, Never>?
-    private var saveRevision: UInt64 = 0
-    private var reconciliationTasks: [HostRef: Task<Void, Never>] = [:]
-    private var reconciliationGenerations: [HostRef: UUID] = [:]
+    private var reconciliationTask: Task<Void, Never>?
+    private var reconciliationGeneration: UUID?
     private var shuttingDown = false
 
     init(operationDirectory: URL? = nil,
          scopedModelsStore: ScopedModelsStore? = nil,
-         readScopedModelCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
-             try await GitHubNativeAccess.read(host: $0, configuration: $1)
+         readScopedModelCapability: @escaping @MainActor (HostRef) async throws -> String = {
+             try await GitHubNativeAccess.read(host: $0)
          },
-         readNativeCapability: @escaping @MainActor (HostRef, SSHConnectionConfiguration?) async throws -> String = {
-             try await GitHubNativeAccess.read(host: $0, configuration: $1)
+         readNativeCapability: @escaping @MainActor (HostRef) async throws -> String = {
+             try await GitHubNativeAccess.read(host: $0)
          }) {
         self.readScopedModelCapability = readScopedModelCapability
         self.readNativeCapability = readNativeCapability
-        scopedModels = ScopedModelsSync(store: scopedModelsStore ?? ScopedModelsStore(directory:
+        scopedModels = LocalModelScope(store: scopedModelsStore ?? ScopedModelsStore(directory:
             operationDirectory?.appendingPathComponent("scoped-models", isDirectory: true) ??
                 FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("Pilot/ScopedModels", isDirectory: true)))
@@ -181,16 +175,20 @@ final class HostClients: ObservableObject {
     }
 
     /// Startup reads local metadata only. No SSH, mutation replay, outcome notifications or failover.
+    func restoreLegacySnapshot(_ snapshot: OfflineHostSnapshot) {
+        guard snapshot.host != localHost, offlineHosts[snapshot.host] != nil || offlineHosts.count < 32 else { return }
+        offlineHosts[snapshot.host] = snapshot
+        if let presentation = presentationClients[snapshot.host] { presentation.restoreOfflinePresentation(snapshot); presentation.disconnect() }
+        replaceSummaries(snapshot.host, sessions: snapshot.sessions, projects: snapshot.projects, missions: snapshot.missions)
+    }
+
     func restoreOffline(from store: OfflineHostStore) async throws {
-        guard offlineStore == nil else { return }
-        offlineStore = store
+        guard !offlineRestoreStarted else { return }
+        offlineRestoreStarted = true
         do {
             let snapshots = try await store.load()
-            for snapshot in snapshots where entries[snapshot.host] == nil {
-                offlineHosts[snapshot.host] = snapshot
-                connectionStates[snapshot.host] = .disconnected
-                replaceSummaries(snapshot.host, sessions: snapshot.sessions, projects: snapshot.projects,
-                                 missions: snapshot.missions)
+            for snapshot in snapshots where entry(snapshot.host) == nil {
+                restoreLegacySnapshot(snapshot)
             }
             for operation in try await operations.pending() {
                 pendingOperations[operation.operationId] = operation
@@ -209,53 +207,29 @@ final class HostClients: ObservableObject {
 
     private func refreshScopedModelEndpoints() {
         guard scopedModelsStarted, !shuttingDown else { return }
-        scopedModels.update(entries.filter { $0.key.hostId == "local" && $0.value.client.connected }.mapValues { entry in
-            let client = entry.client, host = entry.token.host
+        guard let entry = local, entry.client.connected else { scopedModels.update(nil); return }
+        let host = entry.token.host
+        scopedModels.update({
+            let client = entry.client
             let token = HostConnectionToken(host: host, generation: client.connectionGeneration)
             return ScopedModelsTransport(client: client, token: token, validate: { [weak self, weak client] in
-                guard let self, let client, !self.shuttingDown, self.entries[host]?.client === client,
+                guard let self, let client, !self.shuttingDown, self.entry(host)?.client === client,
                       client.hostIdentity == host else { throw HostRoutingError.staleGeneration }
                 try self.validate(token)
             }, capability: { [weak self] in
                 guard let self else { throw HostRoutingError.disconnected }
                 try self.validate(token)
-                let configuration = self.offlineHosts[host]?.configuration
-                guard host.hostId == "local" || configuration != nil else { throw HostRoutingError.invalidReference }
-                let value = try await self.readScopedModelCapability(host, configuration)
+                let value = try await self.readScopedModelCapability(host)
                 try self.validate(token)
                 return value
             }).endpoint()
-        })
+        }())
     }
 
     func historyAvailability(_ ref: HostResourceRef, cached: Bool) -> HostedHistoryAvailability {
         available.contains(ref.host) ? .online : cached ? .cached : .requiresReconnect
     }
 
-    private func scheduleSave() {
-        guard !shuttingDown, offlineStore != nil else { return }
-        saveTask?.cancel()
-        saveTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(500)); try await self?.flushOffline() }
-            catch {}
-        }
-    }
-
-    func flushOffline() async throws {
-        saveTask?.cancel(); saveTask = nil
-        // Quit may race the initial actor read. Never flush a not-yet-restored empty partition.
-        guard offlineReady, let offlineStore else { return }
-        // Actor scheduling need not be FIFO. An older in-flight save cannot replace the quit flush.
-        saveRevision += 1
-        let revision = saveRevision
-        do {
-            try await offlineStore.save(Array(offlineHosts.values), revision: revision)
-            if saveRevision == revision { persistenceError = nil }
-        } catch {
-            if saveRevision == revision { persistenceError = "Could not save offline host metadata." }
-            throw error
-        }
-    }
     @MainActor private final class Subscription {
         let ref: HostResourceRef
         let listener: ([JSONValue]) -> Void
@@ -285,7 +259,7 @@ final class HostClients: ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if details { self.pendingDetails.remove(host) } else { self.pendingRefresh.remove(host) }
-            guard !self.shuttingDown, let entry = self.entries[host] else { return }
+            guard !self.shuttingDown, let entry = self.entry(host) else { return }
             if details { self.refreshDetails(host, token: entry.token) }
             else { self.refresh(host, token: entry.token) }
         }
@@ -360,7 +334,7 @@ final class HostClients: ObservableObject {
     private func submitOperation(_ operation: DurableOperation, client: PilotClient) async throws -> OperationDelivery {
         guard operation.kind == "repair-create" else { return try await client.operation(operation, lookup: false) }
         let fence = try token(for: operation.destination)
-        let capability = try await readNativeCapability(operation.destination, offlineHosts[operation.destination]?.configuration)
+        let capability = try await readNativeCapability(operation.destination)
         try validate(fence)
         return try await client.operation(operation, lookup: false, nativeCapability: capability)
     }
@@ -414,7 +388,7 @@ final class HostClients: ObservableObject {
         let client = try endpoint(host), fence = try token(for: host)
         let session = try await client.createdSession(operation.targetId)
         try validate(fence)
-        guard session.id == operation.targetId, let entry = entries[host] else { throw HostRoutingError.invalidReference }
+        guard session.id == operation.targetId, let entry = entry(host) else { throw HostRoutingError.invalidReference }
         // Publish synchronously before navigation, not on the next coalesced list refresh.
         refresh(host, token: entry.token)
     }
@@ -437,22 +411,6 @@ final class HostClients: ObservableObject {
                 try validate(fence)
             }
         }
-    }
-
-    /// No offline stop queue. An ambiguous response stays requested across relaunch; neither an
-    /// idle snapshot nor loss of contact acknowledges cancellation, releases a grant or allows failover.
-    func requestStop(_ ref: HostResourceRef) async throws -> String? {
-        let client = try endpoint(ref, kind: .session)
-        let fence = try token(for: ref.host)
-        guard offlineHosts[ref.host] != nil else { throw HostRoutingError.invalidReference }
-        offlineHosts[ref.host]?.stopRequests[ref.localId] = .requested
-        try await flushOffline()
-        try validate(fence)
-        let draft = try await client.stop(ref.localId)
-        try validate(fence)
-        offlineHosts[ref.host]?.stopRequests[ref.localId] = .acknowledged
-        try await flushOffline()
-        return draft
     }
 
     func deliverAttached<Request: Codable & Sendable>(host: HostRef, kind: String, targetId: String?,
@@ -484,7 +442,7 @@ final class HostClients: ObservableObject {
         let client = try endpoint(host), fence = try token(for: host)
         let project = try await client.importedProject(id)
         try validate(fence)
-        guard project.id == id, let entry = entries[host] else { throw HostRoutingError.invalidReference }
+        guard project.id == id, let entry = entry(host) else { throw HostRoutingError.invalidReference }
         refresh(host, token: entry.token)
         return Hosted(ref: HostResourceRef(host: host, kind: .project, localId: id), value: project)
     }
@@ -498,16 +456,13 @@ final class HostClients: ObservableObject {
     }
 
     func install(_ client: PilotClient, host: HostRef) throws {
-        guard !shuttingDown,
-              !offlineHosts.keys.contains(where: { $0.hostId == host.hostId && $0 != host }) else {
+        guard host.hostId == "local", !shuttingDown,
+              local == nil || local?.token.host == host else {
             throw HostRoutingError.identityChanged
         }
         try client.bind(host)
         presentationClients[host] = client
-        if host.hostId != "local" {
-            client.onSessionsChanged = { [weak self] values, snapshot in self?.onRemoteSessionsChanged?(host, values, snapshot) }
-        }
-        if entries[host]?.client === client { return }
+        if entry(host)?.client === client { return }
         removeConnection(host)
         let token = HostConnectionToken(host: host)
         var entry = Entry(client: client, token: token, observations: [])
@@ -524,10 +479,10 @@ final class HostClients: ObservableObject {
         entry.observations.append(Publishers.CombineLatest3(
             client.$hasProjectSnapshot, client.$hasSessionSnapshot, client.$hasMissionSnapshot
         ).sink { [weak self] _ in self?.enqueueRefresh(host) })
-        entries[host] = entry
+        local = entry
         client.onDiagnosticRead = { [weak self, weak client] dispatch in
-            guard let self, let client, self.entries[host]?.token == token,
-                  self.entries[host]?.client === client, client.connected, !self.shuttingDown else { return }
+            guard let self, let client, self.entry(host)?.token == token,
+                  self.entry(host)?.client === client, client.connected, !self.shuttingDown else { return }
             self.routeDiagnosticRead(dispatch, source: host, token: token)
         }
         for registration in terminalRegistrations.values where registration.ref.host == host {
@@ -547,15 +502,11 @@ final class HostClients: ObservableObject {
     func disconnectAll() async {
         shuttingDown = true
         scopedModels.stop()
-        saveTask?.cancel()
-        await saveTask?.value
-        saveTask = nil
-        for task in reconciliationTasks.values { task.cancel() }
+        reconciliationTask?.cancel()
         for task in diagnosticReads.values { task.cancel() }
-        for task in reconciliationTasks.values { await task.value }
+        await reconciliationTask?.value
         for task in diagnosticReads.values { await task.value }
         await scopedModels.stopAndWait()
-        await projectCheckouts.stop()
     }
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
@@ -564,18 +515,18 @@ final class HostClients: ObservableObject {
         for registration in terminalRegistrations.values where registration.ref.host == host {
             registration.detach(); registration.attachment.onStatus(.disconnected)
         }
-        reconciliationTasks.removeValue(forKey: host)?.cancel()
-        reconciliationGenerations[host] = nil
+        reconciliationTask?.cancel(); reconciliationTask = nil
+        reconciliationGeneration = nil
         for subscription in subscriptions.values where subscription.ref.host == host { subscription.detach() }
-        let removed = entries.removeValue(forKey: host)
+        let removed = entry(host)
+        if removed != nil { local = nil }
         removed?.client.onDiagnosticRead = nil
         for key in diagnosticReads.keys.filter({ $0.hasPrefix(hostKey(host) + ":") }) {
             diagnosticReads.removeValue(forKey: key)?.cancel()
         }
-        removed?.client.onSharedContextsChanged = nil
         removed?.client.disconnect()
         if let removed { presentationClients[host] = removed.client }
-        endpointGenerations[host] = nil
+        endpointGeneration = nil
         available.remove(host)
         refreshScopedModelEndpoints()
     }
@@ -586,151 +537,13 @@ final class HostClients: ObservableObject {
     }
 
     func endpoint(_ host: HostRef) throws -> PilotClient {
-        guard let entry = entries[host], entry.client.connected else { throw HostRoutingError.disconnected }
+        guard let entry = entry(host), entry.client.connected else { throw HostRoutingError.disconnected }
         return entry.client
     }
 
     func token(for host: HostRef) throws -> HostConnectionToken {
         let client = try endpoint(host)
         return HostConnectionToken(host: host, generation: client.connectionGeneration)
-    }
-
-    /// First dashboard pass is Local only. No implicit all-host selection or devbox reads.
-    func localUsage(_ query: UsageAnalyticsQuery) async throws -> UsageConnectedProjection {
-        let local = entries.keys.filter { $0.hostId == "local" }
-        guard !local.isEmpty else { throw HostRoutingError.disconnected }
-        guard local.count == 1 else { throw HostRoutingError.identityChanged }
-        return try await usageProjection(query, on: Set(local))
-    }
-
-    /// Deferred read-only helper, NOT the dashboard's active path. Targets must be explicit;
-    /// no all-connected-host default, connects, worker starts, persistence or failover.
-    func usageProjection(_ query: UsageAnalyticsQuery, on selectedHosts: Set<HostRef>) async throws -> UsageConnectedProjection {
-        let online = Set(entries.filter { $0.value.client.connected }.keys)
-        let known = Set(entries.keys).union(offlineHosts.keys).union(presentationClients.keys)
-        guard selectedHosts.isSubset(of: known) else { throw HostRoutingError.invalidReference }
-        let plan = UsageProjectionPlan(hosts: Array(selectedHosts), connected: online)
-        var values = plan.hosts
-        for start in stride(from: 0, to: values.count, by: 4) {
-            try Task.checkCancellation()
-            let batch = Array(values[start..<min(start + 4, values.count)].enumerated())
-            await withTaskGroup(of: (Int, UsageHostProjection).self) { group in
-                for (offset, value) in batch where value.state == "fresh" {
-                    group.addTask { (start + offset, await self.readUsageProjection(query, host: value.host)) }
-                }
-                for await (index, value) in group { values[index] = value }
-            }
-        }
-        try Task.checkCancellation()
-        return UsageConnectedProjection(hosts: values, omittedHosts: plan.omittedHosts,
-                                        queriedAt: Date().timeIntervalSince1970 * 1000)
-    }
-
-    private func readUsageProjection(_ query: UsageAnalyticsQuery, host: HostRef) async -> UsageHostProjection {
-        do {
-            try Task.checkCancellation()
-            let client = try endpoint(host), fence = try token(for: host)
-            let hello = try await client.hello()
-            try validate(fence)
-            try host.validate(hello)
-            guard hello.capabilities.usageQueries == 1 else { return UsageHostProjection(host: host, state: "unsupported") }
-            let result = try await client.usageAnalytics(query, host: host)
-            try validate(fence)
-            return UsageHostProjection(host: host, state: "fresh", result: result)
-        } catch let error as ClientError where error.status == 429 {
-            return UsageHostProjection(host: host, state: "limited")
-        } catch {
-            return UsageHostProjection(host: host, state: (try? endpoint(host)) == nil ? "disconnected" : "unavailable")
-        }
-    }
-
-    func usagePage(_ query: UsageHistoryQuery, on host: HostRef) async throws -> UsageHistoryPage {
-        let client = try endpoint(host), fence = try token(for: host)
-        let hello = try await client.hello()
-        try validate(fence)
-        try host.validate(hello)
-        guard hello.capabilities.usageQueries == 1 else { throw HostRoutingError.incompatible }
-        let page = try await client.usagePage(query, host: host)
-        try validate(fence)
-        return page
-    }
-
-    // Shared pages always retain the chosen host and enrollment. They never read an
-    // execution project's unrelated local memory or switch to another reachable daemon.
-    func sharedContexts(on host: HostRef) async throws -> [SharedContextSummary] {
-        let client = try endpoint(host), fence = try token(for: host)
-        let result = try await client.sharedContexts()
-        try validate(fence)
-        guard result.allSatisfy({ $0.binding.peers.contains(OperationHost(host)) }) else {
-            throw HostRoutingError.identityChanged
-        }
-        return result
-    }
-
-    func sharedMission(_ binding: SharedContextBinding, on host: HostRef, missionId: String) async throws -> SharedMissionRead {
-        try await withSharedBinding(binding, on: host) { try await $0.sharedMission(binding, missionId: missionId) }
-    }
-
-    func sharedMissionVersions(_ binding: SharedContextBinding, on host: HostRef, missionId: String,
-                               after: Int = 0, limit: Int = 128, sequence: Int? = nil) async throws -> SharedMissionVersions {
-        try await withSharedBinding(binding, on: host) {
-            try await $0.sharedMissionVersions(binding, missionId: missionId, after: after, limit: limit, sequence: sequence)
-        }
-    }
-
-    func sharedMissionConflicts(_ binding: SharedContextBinding, on host: HostRef) async throws -> [SharedMissionProposal] {
-        try await withSharedBinding(binding, on: host) { try await $0.sharedMissionConflicts(binding) }
-    }
-
-    func sharedMemoryWake(_ binding: SharedContextBinding, on host: HostRef, lines: Int = 96) async throws -> SharedMemoryRead {
-        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryWake(binding, lines: lines) }
-    }
-
-    func sharedMemoryRecall(_ binding: SharedContextBinding, on host: HostRef,
-                            regex: String, lines: Int = 96) async throws -> SharedMemoryRead {
-        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryRecall(binding, regex: regex, lines: lines) }
-    }
-
-    func sharedMemoryZoom(_ binding: SharedContextBinding, on host: HostRef, range: MemoryRange) async throws -> SharedMemoryRead {
-        try await withSharedBinding(binding, on: host) { try await $0.sharedMemoryZoom(binding, range: range) }
-    }
-
-    func sharedMemoryTree(_ binding: SharedContextBinding, on host: HostRef, range: MemoryRange? = nil,
-                          depth: Int = 2, reveal: [Int] = []) async throws -> SharedMemoryTreeRead {
-        try await withSharedBinding(binding, on: host) {
-            try await $0.sharedMemoryTree(binding, range: range, depth: depth, reveal: reveal)
-        }
-    }
-
-    private func withSharedBinding<Value>(_ binding: SharedContextBinding, on host: HostRef,
-                                          _ operation: (PilotClient) async throws -> Value) async throws -> Value {
-        guard binding.peers.contains(OperationHost(host)) else { throw HostRoutingError.identityChanged }
-        let client = try endpoint(host), fence = try token(for: host)
-        let result = try await operation(client)
-        try validate(fence)
-        return result
-    }
-
-    /// Setup belongs to a verified host, not a project/chat or the global Local client.
-    func runtimeUpdate(_ id: String? = nil, on host: HostRef) async throws -> RuntimeUpdateStatus? {
-        let client = try endpoint(host), token = try token(for: host)
-        let value = try await client.runtimeUpdate(id)
-        try validate(token)
-        return value
-    }
-
-    func cancelRuntimeUpdate(_ id: String, on host: HostRef) async throws -> RuntimeUpdateCancellation {
-        let client = try endpoint(host), token = try token(for: host)
-        let value = try await client.cancelRuntimeUpdate(id)
-        try validate(token)
-        return value
-    }
-
-    func setupReadiness(on host: HostRef) async throws -> SetupReadiness {
-        let client = try endpoint(host), token = try token(for: host)
-        let value = try await client.setupReadiness()
-        try validate(token)
-        return value
     }
 
     private func routeDiagnosticRead(_ dispatch: DiagnosticReadDispatch, source: HostRef, token: HostConnectionToken) {
@@ -743,7 +556,7 @@ final class HostClients: ObservableObject {
             let result: JSONValue
             do {
                 if dispatch.request.action == "hosts" {
-                    let known = Set(offlineHosts.keys).union(entries.keys)
+                    let known = Set(offlineHosts.keys).union(local.map { [$0.token.host] } ?? [])
                     let rows = try known.sorted { self.hostKey($0) < self.hostKey($1) }.prefix(32).map { host in
                         let value = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(host))
                         return JSONValue.object(["host": value,
@@ -754,10 +567,10 @@ final class HostClients: ObservableObject {
                                       "coverage": .string("user_trusted_linked_hosts_only")])
                 } else {
                     guard let destination = dispatch.request.host,
-                          entries[destination] != nil || offlineHosts[destination] != nil else {
+                          entry(destination) != nil || offlineHosts[destination] != nil else {
                         throw HostRoutingError.invalidReference
                     }
-                    guard entries[destination] != nil, available.contains(destination) else {
+                    guard entry(destination) != nil, available.contains(destination) else {
                         throw HostRoutingError.disconnected
                     }
                     let response: DiagnosticContextResponse = try await githubRequest(on: destination,
@@ -773,8 +586,8 @@ final class HostClients: ObservableObject {
                 else { reason = "read_failed" }
                 result = .object(["status": .string("unavailable"), "reason": .string(reason)])
             }
-            guard !Task.isCancelled, !shuttingDown, entries[source]?.token == token,
-                  entries[source]?.client.connected == true else { return }
+            guard !Task.isCancelled, !shuttingDown, entry(source)?.token == token,
+                  entry(source)?.client.connected == true else { return }
             struct Reply: Encodable { let id: String; let result: JSONValue }
             struct Accepted: Decodable { let accepted: Bool }
             let _: Accepted? = try? await githubRequest(on: source, path: "api/diagnostics/read-response",
@@ -790,53 +603,12 @@ final class HostClients: ObservableObject {
     func githubRequest<Body: Encodable, Response: Decodable>(on host: HostRef, path: String = "api/setup/github",
                                                             body: Body?, method: String = "POST") async throws -> Response {
         let client = try endpoint(host), fence = try token(for: host)
-        let configuration = offlineHosts[host]?.configuration
-        guard configuration != nil || host.hostId == "local" else { throw HostRoutingError.invalidReference }
-        let capability = try await readNativeCapability(host, configuration)
+        let capability = try await readNativeCapability(host)
         try validate(fence)
         let value: Response = try await client.githubRequest(path, capability: capability, body: body, method: method)
         try validate(fence)
         return value
     }
-
-    func setupRuns(on host: HostRef) async throws -> [HostedSetupRun] {
-        let client = try endpoint(host), token = try token(for: host)
-        let values = try await client.setupRuns()
-        try validate(token)
-        return values.map { HostedSetupRun(host: host, run: $0) }
-    }
-
-    func startSetup(on host: HostRef, request: SetupStartRequest) async throws -> HostedSetupRun {
-        let client = try endpoint(host), token = try token(for: host)
-        let run = try await client.startSetup(request)
-        try validate(token)
-        return HostedSetupRun(host: host, run: run)
-    }
-
-    func cancelSetup(_ value: HostedSetupRun) async throws -> HostedSetupRun {
-        let client = try endpoint(value.host), token = try token(for: value.host)
-        let run = try await client.cancelSetup(value.run.id)
-        try validate(token)
-        return HostedSetupRun(host: value.host, run: run)
-    }
-
-    func logoutSetupProvider(_ provider: String, on host: HostRef) async throws -> SetupCredentialStatus {
-        let client = try endpoint(host), token = try token(for: host)
-        let value = try await client.logoutSetupProvider(provider)
-        try validate(token)
-        return value
-    }
-
-    func attachSetup(_ value: HostedSetupRun, receive: @escaping (SetupServerMessage) -> Void) throws -> SetupTerminalConnection {
-        let client = try endpoint(value.host), token = try token(for: value.host)
-        return try client.attachSetup(value.run.id) { [weak self] message in
-            guard let self else { return }
-            do { try self.validate(token) } catch { return }
-            receive(message)
-        }
-    }
-
-    func detachSetup(_ value: HostedSetupRun) { entries[value.host]?.client.detachSetup(value.run.id) }
 
     func validate(_ token: HostConnectionToken) throws {
         let client = try endpoint(token.host)
@@ -865,6 +637,7 @@ final class HostClients: ObservableObject {
 
     func subscribe(_ session: HostResourceRef, trace: PilotTraceCarrier? = nil,
                    listener: @escaping ([JSONValue]) -> Void) throws -> () -> Void {
+        guard entry(session.host) != nil else { throw HostRoutingError.disconnected }
         guard session.kind == .session, subscriptions.count < 256 else { throw HostRoutingError.invalidReference }
         let id = UUID()
         let subscription = Subscription(ref: session, trace: trace, listener: listener)
@@ -875,7 +648,7 @@ final class HostClients: ObservableObject {
 
     private func attach(_ subscription: Subscription) {
         subscription.detach()
-        guard let entry = entries[subscription.ref.host] else { return }
+        guard let entry = entry(subscription.ref.host) else { return }
         let endpointToken = entry.token
         subscription.client = entry.client
         let trace = subscription.trace
@@ -883,7 +656,7 @@ final class HostClients: ObservableObject {
         subscription.token = entry.client.subscribe(
             subscription.ref.localId, trace: trace
         ) { [weak self, weak subscription] events in
-            guard let self, let subscription, self.entries[subscription.ref.host]?.token == endpointToken else { return }
+            guard let self, let subscription, self.entry(subscription.ref.host)?.token == endpointToken else { return }
             subscription.listener(events)
         }
     }
@@ -894,13 +667,13 @@ final class HostClients: ObservableObject {
             throw HostRoutingError.invalidReference
         }
         retained[ref, default: 0] += 1
-        if let client = entries[ref.host]?.client { retainOnEndpoint(ref, client: client) }
+        if let client = entry(ref.host)?.client { retainOnEndpoint(ref, client: client) }
         var released = false
         return { [weak self] in
             guard !released, let self, let count = self.retained[ref] else { return }
             released = true
             if count == 1 { self.retained[ref] = nil } else { self.retained[ref] = count - 1 }
-            if let client = self.entries[ref.host]?.client {
+            if let client = self.entry(ref.host)?.client {
                 if ref.kind == .project { client.releaseDashboard(ref.localId) }
                 else { client.releaseMission(ref.localId) }
             }
@@ -913,7 +686,7 @@ final class HostClients: ObservableObject {
     }
 
     private func refreshDetails(_ host: HostRef, token: HostConnectionToken) {
-        guard let entry = entries[host], entry.token == token else { return }
+        guard let entry = entry(host), entry.token == token else { return }
         for (id, value) in entry.client.projectDashboards {
             let key = HostResourceRef(host: host, kind: .project, localId: id)
             if dashboards[key] == nil, dashboards.count >= 32 {
@@ -941,37 +714,31 @@ final class HostClients: ObservableObject {
 
     private func refresh(_ host: HostRef, token: HostConnectionToken) {
         defer { refreshProjectCheckouts() }
-        guard let entry = entries[host], entry.token == token else { return }
+        guard let entry = entry(host), entry.token == token else { return }
         let sharedGeneration = entry.client.connected ? entry.client.connectionGeneration : nil
-        if endpointGenerations[host] != sharedGeneration {
-            endpointGenerations[host] = sharedGeneration
+        if endpointGeneration != sharedGeneration {
+            endpointGeneration = sharedGeneration
             refreshScopedModelEndpoints()
         }
         if entry.client.connected {
             available.insert(host)
             let generation = entry.client.connectionGeneration
-            if offlineReady, !shuttingDown, reconciliationGenerations[host] != generation {
-                reconciliationTasks[host]?.cancel()
-                reconciliationGenerations[host] = generation
-                reconciliationTasks[host] = Task { [weak self] in try? await self?.reconcileOperations(host) }
+            if offlineReady, !shuttingDown, reconciliationGeneration != generation {
+                reconciliationTask?.cancel()
+                reconciliationGeneration = generation
+                reconciliationTask = Task { [weak self] in try? await self?.reconcileOperations(host) }
             }
         } else {
             available.remove(host)
-            if entry.client.connectionError != nil { connectionStates[host] = .failed(.rejectedHello) }
-            reconciliationTasks.removeValue(forKey: host)?.cancel()
-            reconciliationGenerations[host] = nil
+            reconciliationTask?.cancel(); reconciliationTask = nil
+            reconciliationGeneration = nil
         }
         // A temporary empty endpoint before its first authoritative list must not erase offline data.
         guard entry.client.connected, entry.client.hasProjectSnapshot, entry.client.hasSessionSnapshot,
               entry.client.hasMissionSnapshot else { return }
         replaceSummaries(host, sessions: entry.client.sessions, projects: entry.client.projects,
                          missions: entry.client.missions)
-        if let previous = offlineHosts[host] {
-            offlineHosts[host] = OfflineHostSnapshot(host: host, configuration: previous.configuration,
-                receivedAt: Date(), sessions: entry.client.sessions, projects: entry.client.projects,
-                missions: entry.client.missions, stopRequests: previous.stopRequests)
-            scheduleSave()
-        }
+
     }
 
     private func replaceSummaries(_ host: HostRef, sessions values: [SessionSummary], projects projectValues: [Project],

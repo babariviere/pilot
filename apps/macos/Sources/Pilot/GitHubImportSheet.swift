@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 struct GitHubImportSheet: View {
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let localHost: HostRef?
     var initialURL = ""
     var initialHost: HostRef?
@@ -22,13 +22,13 @@ struct GitHubImportSheet: View {
 @MainActor
 struct GitHubImportContent: View {
     let host: HostRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let selected: (Hosted<Project>) -> Void
     @StateObject private var model: GitHubImportModel
     @State private var setup = false
     @State private var choosingFolder = false
     @State private var confirming: GitHubImportOperation?
-    init(host: HostRef, hosts: HostClients, initialURL: String, model: GitHubImportModel? = nil,
+    init(host: HostRef, hosts: ClientDirectory, initialURL: String, model: GitHubImportModel? = nil,
          selected: @escaping (Hosted<Project>) -> Void) {
         self.host = host; self.hosts = hosts; self.selected = selected
         precondition(model == nil || model?.host == host)
@@ -142,7 +142,7 @@ struct GitHubReuseSheet: View {
 @MainActor
 private struct GitHubDestinationChooser: View {
     let host: HostRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let selected: (String) -> Void
     @State private var path = ""
     @State private var page: RepositoryDirectoryPage?

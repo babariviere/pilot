@@ -4,10 +4,10 @@ import SwiftUI
 /// UI-only historical access. Never constructs ChatView, a composer, an inspector or a live feed.
 struct RetainedConversationHistoryView: View {
     let reference: HostResourceRef
-    @ObservedObject private var hosts: HostClients
+    @ObservedObject private var hosts: ClientDirectory
     @StateObject private var state: RetainedConversationHistoryModel
 
-    init(reference: HostResourceRef, hosts: HostClients) {
+    init(reference: HostResourceRef, hosts: ClientDirectory) {
         self.reference = reference; self.hosts = hosts
         _state = StateObject(wrappedValue: RetainedConversationHistoryModel(source: RetainedConversationReader(reference: reference, hosts: hosts)))
     }

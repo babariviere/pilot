@@ -7,7 +7,44 @@ import Testing
 private let retiredLocal = HostRef(hostId: "local", daemonId: "mac", lineageId: "mac-history")
 private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "linux-history")
 
-@MainActor private func retiredApp(_ directory: URL, hosts: HostClients) throws -> AppModel {
+@Test @MainActor func localDirectoryRejectsRemoteEndpointsWithoutCallingThem() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    var capabilities = 0
+    let clients = ClientDirectory(operationDirectory: directory, readNativeCapability: { _ in
+        capabilities += 1
+        return "must-not-be-read"
+    })
+    do {
+        let previousLocal = HostRef(hostId: "local", daemonId: "older", lineageId: "older")
+        clients.restoreLegacySnapshot(OfflineHostSnapshot(host: previousLocal,
+            configuration: try LegacyDevboxAddress(alias: "old-local")))
+        let live = PilotClient(); live.loadFixture(projects: [], sessions: [])
+        try clients.install(live, host: retiredLocal)
+        let remote = PilotClient()
+        remote.loadFixture(projects: [], sessions: [])
+        #expect(throws: HostRoutingError.identityChanged) { try clients.install(remote, host: retiredBox) }
+        #expect(throws: HostRoutingError.identityChanged) { try clients.install(remote, host: previousLocal) }
+        #expect(clients.available == [retiredLocal])
+        var invoked = false
+        for host in [retiredBox, previousLocal] {
+            do {
+                let ref = HostResourceRef(host: host, kind: .session, localId: "same")
+                _ = try await clients.perform(ref, kind: .session) { _, _ in invoked = true }
+                Issue.record("A historical endpoint was admitted")
+            } catch { #expect(error as? HostRoutingError == .disconnected) }
+        }
+        #expect(!invoked && capabilities == 0)
+        #expect(try clients.endpoint(retiredLocal) === live)
+        await clients.disconnectAll()
+        try? FileManager.default.removeItem(at: directory)
+    } catch {
+        await clients.disconnectAll()
+        try? FileManager.default.removeItem(at: directory)
+        throw error
+    }
+}
+
+@MainActor private func retiredApp(_ directory: URL, hosts: ClientDirectory) throws -> AppModel {
     let client = PilotClient()
     client.loadFixture(projects: [], sessions: [])
     let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: UUID().uuidString)!,
@@ -18,12 +55,12 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 
 @Test @MainActor func retiredDevboxesKeepSettingsLocalAndCachedHistoryReadOnly() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let hosts = HostClients(operationDirectory: directory)
+    let hosts = ClientDirectory(operationDirectory: directory)
     do {
         let store = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
         let chat = SessionSummary(id: "old", title: "Saved remote chat", cwd: "/remote", createdAt: 1, updatedAt: 2, state: "working")
         try await store.save([OfflineHostSnapshot(host: retiredBox,
-            configuration: SSHConnectionConfiguration(alias: "old-box"), sessions: [chat])])
+            configuration: LegacyDevboxAddress(alias: "old-box"), sessions: [chat])])
         try await hosts.restoreOffline(from: store)
         let ref = HostResourceRef(host: retiredBox, kind: .session, localId: chat.id)
         #expect(!SettingsTab.general.map(\.title).contains("Devboxes"))
@@ -44,12 +81,12 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 
 @Test @MainActor func retiredOfflineRestoreKeepsLegacyBytesAndUnknownOutboxWithoutNetwork() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+    let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
     do {
         let cache = directory.appendingPathComponent("hosts")
         let store = OfflineHostStore(directory: cache)
         try await store.save([OfflineHostSnapshot(host: retiredBox,
-            configuration: SSHConnectionConfiguration(alias: "old-box"), stopRequests: ["old": .requested])])
+            configuration: LegacyDevboxAddress(alias: "old-box"), stopRequests: ["old": .requested])])
         let before = try Data(contentsOf: cache.appendingPathComponent("hosts.json"))
         let outbox = OperationOutbox(directory: directory.appendingPathComponent("operations"))
         let operation = try await outbox.reserve(kind: "chat-create", targetId: nil,
@@ -76,7 +113,7 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 
 @Test @MainActor func retiredLocalDraftParksUnsubmittedRemoteTextWithoutRetargeting() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+    let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
     do {
         let app = try retiredApp(directory, hosts: hosts)
         app.newSessionForm.executionHost = retiredBox
@@ -120,7 +157,7 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 
 @Test @MainActor func retiredRemoteProjectsCannotStartOrImportChats() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let hosts = HostClients(operationDirectory: directory)
+    let hosts = ClientDirectory(operationDirectory: directory)
     do {
         let app = try retiredApp(directory, hosts: hosts)
         app.newSessionForm.message = "Keep Local text"
@@ -143,7 +180,7 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 
 @Test @MainActor func retiredCorruptOfflineMetadataCannotBlockLocalOrReplaceSavedFiles() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+    let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
     do {
         let cache = directory.appendingPathComponent("hosts")
         try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)

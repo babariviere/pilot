@@ -81,7 +81,7 @@ test("native mission fixtures are real production HTTP/service payloads, not a s
 		new ModelCatalog(directory),
 		terminals,
 	];
-	args[20] = sources;
+	args[19] = sources;
 	const server = createDaemonServer(...args);
 	t.after(async () => {
 		await new Promise<void>((resolve) => server.close(() => resolve()));

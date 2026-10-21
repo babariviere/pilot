@@ -68,7 +68,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         PreviousHistoryHTTP.reset()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
         let ref = HostResourceRef(host: box, kind: .session, localId: "same")
         let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: ref, hosts: hosts))
@@ -86,7 +86,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         PreviousHistoryHTTP.reset()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         let defaults = UserDefaults(suiteName: "previous-control-\(UUID())")!
         let app = AppModel(projectFolderDefaults: defaults, hosts: hosts)
         app.client.loadFixture(projects: [], sessions: [try previousSession()])
@@ -130,7 +130,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         let store = OfflineHostStore(directory: directory.appendingPathComponent("offline"))
         let original = try previousSession()
         let ordinary = try previousSession("ordinary", control: false, title: "Control")
-        try await store.save([OfflineHostSnapshot(host: box, configuration: SSHConnectionConfiguration(alias: "fixture"),
+        try await store.save([OfflineHostSnapshot(host: box, configuration: LegacyDevboxAddress(alias: "fixture"),
             sessions: [original, ordinary])])
         let disk = try await store.load()
         let sanitized = try #require(disk.first { $0.host == box })
@@ -138,7 +138,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         #expect(sanitized.sessions.first { $0.id == ordinary.id }?.control == false)
         #expect(sanitized.sessions.first { $0.id == ordinary.id }?.title == "Control")
         #expect(original.control == true && ordinary.control == false)
-        let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+        let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
         try await hosts.restoreOffline(from: store)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
         app.client.loadFixture(projects: [], sessions: [original])
@@ -169,7 +169,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         PreviousHistoryHTTP.reset()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         try hosts.install(previousClient("box", sessions: [previousSession()]), host: box)
         let model = RetainedConversationHistoryModel(source: RetainedConversationReader(reference: .init(host: box, kind: .session, localId: "same"), hosts: hosts))
         await model.load()
@@ -197,7 +197,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         PreviousHistoryHTTP.reset()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         let session = try previousSession()
         let client = previousClient("box", sessions: [session])
         try hosts.install(client, host: box)
@@ -233,7 +233,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
         defer { try? FileManager.default.removeItem(at: directory) }
         let id = "d9edf76b-4f75-4abb-a09f-e313fc05ae39"
         let session = try previousSession(id)
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "previous-control-\(UUID())")!, hosts: hosts)
         app.client.loadFixture(projects: [], sessions: [session])
         try app.registerLocal(local); try hosts.install(app.client, host: local)
@@ -257,7 +257,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
             for control in [false, true] {
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 defer { try? FileManager.default.removeItem(at: directory) }
-                let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+                let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
                 let reference = HostResourceRef(host: box, kind: .session, localId: "same")
                 let session = try previousSession(control: control, title: "Control")
                 let client = previousClient("box", sessions: [session])
@@ -291,7 +291,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
     @Test @MainActor func navigationHistoryDoesNotRediscoverRemoteControl() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: "retained-control-\(UUID())")!, hosts: hosts)
         try app.registerLocal(local)
         let reference = HostResourceRef(host: box, kind: .session, localId: "same")
@@ -308,7 +308,7 @@ private func previousSession(_ id: String = "same", control: Bool = true, title:
     @Test @MainActor func explicitQualifiedAccessCancelsSavedSelectionCleanupBeforeLateInventory() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"))
+        let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
         let reference = HostResourceRef(host: box, kind: .session, localId: "same")
         let store = DraftStore(directory: directory.appendingPathComponent("drafts"))
         _ = try store.load()

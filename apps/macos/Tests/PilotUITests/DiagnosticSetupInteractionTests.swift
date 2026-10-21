@@ -130,7 +130,7 @@ private struct DiagnosticSetupFixtureRoot: View {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defaults = try #require(UserDefaults(suiteName: suite))
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         app = AppModel(projectFolderDefaults: defaults, client: client, hosts: hosts)
         client.loadFixture(projects: [], sessions: [source])
         client.fixtureModels = ModelList(models: [ModelOption(id: "fixture/diagnostic", provider: "fixture",

@@ -20,6 +20,7 @@ import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { GitHubImportService } from "./github-import.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
+import { legacyRuntimeUpdateFrozen } from "./legacy-runtime-update.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
 import { daemonLogTail } from "./logging.ts";
@@ -35,7 +36,6 @@ import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { RetiredDevboxes } from "./retired-devboxes.ts";
-import { RuntimeMaintenance } from "./runtime-maintenance.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
@@ -180,8 +180,7 @@ telemetry.onChange((settings) => {
 	sessions.configureTelemetry(telemetry.kernelSettings(), settings.aiUsageBudget);
 	tracking.setDiagnosticsEnabled(settings.localDiagnostics);
 });
-const maintenance = process.platform === "linux" ? new RuntimeMaintenance(config.home, hello, sessions) : undefined;
-await maintenance?.load();
+const legacyUpdateFrozen = process.platform === "linux" && (await legacyRuntimeUpdateFrozen(config.home));
 sessions.setProjectMemory(memory);
 sessions.setMcpStatus(mcpStatus);
 sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
@@ -249,7 +248,7 @@ await connectivity.start();
 power?.onNetworkPath((path) => connectivity.setPath(path));
 // Recover global sleep overrides before any interrupted agent can reopen.
 await power?.start();
-await sessions.load(maintenance?.frozen);
+await sessions.load(legacyUpdateFrozen);
 for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
@@ -264,7 +263,7 @@ tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId
 	}
 });
 power?.refresh();
-if (!maintenance?.frozen) {
+if (!legacyUpdateFrozen) {
 	missionService.notices.start();
 	missionService.compaction.start();
 }
@@ -289,12 +288,8 @@ const schedules = new ScheduleService(scheduleStore, {
 });
 await schedules.load();
 sessions.setScheduledMessages(schedules);
-if (!maintenance?.frozen) schedules.start();
-maintenance?.onOpen(() => {
-	missionService.notices.start();
-	missionService.compaction.start();
-	schedules.start();
-});
+if (!legacyUpdateFrozen) schedules.start();
+
 // Environment setup stays off until its user-facing parts ship (hello.capabilities.environmentSetup).
 const environment = hello.capabilities.environmentSetup
 	? await (async () => {
@@ -327,8 +322,7 @@ const server = createDaemonServer(
 	mcpStatus,
 	hello,
 	setup,
-	undefined, // Remote sharing routes are retired; retained records are not an active transport.
-	maintenance,
+	legacyUpdateFrozen,
 	undefined,
 	telemetry,
 	githubSetup,
@@ -346,7 +340,6 @@ async function stop(): Promise<void> {
 	stopping = true;
 	console.log("pilotd: pausing sessions");
 	watchdog.stop();
-	maintenance?.close();
 	server.close();
 	await schedules.stop();
 	await connectivity.stop();

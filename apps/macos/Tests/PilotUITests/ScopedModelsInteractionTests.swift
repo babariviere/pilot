@@ -13,14 +13,14 @@ func scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick() asyn
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
     let host = HostRef(hostId: "local", daemonId: "native-fixture", lineageId: "native-history")
-    let store = ScopedModelsStore(directory: directory), sync = ScopedModelsSync(store: store)
+    let store = ScopedModelsStore(directory: directory), sync = LocalModelScope(store: store)
     defer { sync.stop() }
     let token = HostConnectionToken(host: host)
     var patterns: [String]? = []
     var hash = "observed-empty-array"
     var writes: [ScopedModelsSelection] = []
     var release: CheckedContinuation<Void, Never>?
-    sync.update([host: .init(token: token, read: {
+    sync.update(.init(token: token, read: {
         ScopedModelsObservation(baseline: .init(patterns: patterns, hash: hash))
     }, write: { selection, expected in
         let saved = try await store.load()
@@ -29,7 +29,7 @@ func scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick() asyn
         writes.append(selection)
         await withCheckedContinuation { release = $0 }
         patterns = selection.patterns; hash = "readback-null"
-    }, isCurrent: { true })])
+    }, isCurrent: { true }))
     await sync.start()
     try await nativeScopeWait { sync.observations[host] != nil && sync.checking.isEmpty }
     let editor = ScopedModelsEditor()
@@ -161,10 +161,10 @@ func scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback() async
     defer { try? FileManager.default.removeItem(at: directory) }
     var acquisitions = 0
     let host = HostRef(hostId: "local", daemonId: "native-http", lineageId: "native-http-lineage")
-    let hosts = HostClients(operationDirectory: directory.appendingPathComponent("operations"),
+    let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"),
         scopedModelsStore: ScopedModelsStore(directory: directory.appendingPathComponent("models")),
-        readScopedModelCapability: { target, configuration in
-            #expect(target == host && configuration == nil)
+        readScopedModelCapability: { target in
+            #expect(target == host)
             acquisitions += 1
             return "synthetic-native-only"
         })

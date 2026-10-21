@@ -8,9 +8,6 @@ final class NewSessionForm: ObservableObject {
     @Published var executionHost: HostRef? { didSet { onDraftChanged?() } }
     @Published var pendingOperationId: String? { didSet { onDraftChanged?() } }
     @Published var checkingStart = false
-    @Published var checkoutChoice: CheckoutChoice?
-    @Published var checkoutValidation: UUID?
-    var checkoutValidationTask: Task<Void, Never>?
     var startCheckId: UUID?
     @Published var startRecoveryMessage: String?
     let branches = BranchSelectorState()
@@ -87,7 +84,7 @@ final class NewSessionForm: ObservableObject {
         let destinationReady = mission.map { project?.id == $0.projectId }
             ?? trackedItem.map { project?.id == $0.projectId }
             ?? (project != nil || !folder.isEmpty)
-        return !busy && checkoutValidation == nil && destinationReady && sourceReady
+        return !busy && destinationReady && sourceReady
             && (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.items.isEmpty)
     }
 
@@ -158,7 +155,7 @@ enum ComposerTab: Hashable {
 struct HostedChatStartNotice: View {
     @EnvironmentObject private var app: AppModel
     let operation: DurableOperation
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     @ObservedObject var form: NewSessionForm
     let retryOriginal: () -> Void
 
@@ -234,7 +231,7 @@ struct HomeView: View {
 struct TaskComposer: View {
     @EnvironmentObject private var app: AppModel
     @EndpointClient private var localClient
-    @ObservedObject private var hosts: HostClients
+    @ObservedObject private var hosts: ClientDirectory
     @State private var choosingRepository = false
     @State private var retryingCreate: DurableOperation?
     @Environment(\.pilotFonts) private var fonts
@@ -249,7 +246,7 @@ struct TaskComposer: View {
     @State private var scheduleAtTime = 0
 
     @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil,
-                    hosts: HostClients? = nil) {
+                    hosts: ClientDirectory? = nil) {
         let form = form ?? NewSessionForm()
         _form = StateObject(wrappedValue: form)
         _branches = StateObject(wrappedValue: branches ?? form.branches)
@@ -468,7 +465,7 @@ struct TaskComposer: View {
     }
 
     private var canStart: Bool {
-        form.checkoutChoice == nil && !choosingRepository && pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
+        !choosingRepository && pendingCreate == nil && form.pendingOperationId == nil && !form.checkingStart && form.canStart(in: project, branches: branches)
             && !remote
     }
 

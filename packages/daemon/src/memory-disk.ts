@@ -25,24 +25,18 @@ import type {
 	MemoryView,
 	OperationHost,
 	ProjectMemorySummary,
-	SharedMemoryChangePage,
-	SharedMemoryCheckpointManifest,
-	SharedMemoryCheckpointPage,
-	SharedMemoryCommitOutcome,
-	SharedMemoryMutation,
 } from "@pilot/protocol";
 import type { MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
-import {
-	checkMemoryExport,
-	checkMutation,
-	digestMemory,
-	MEMORY_PAGE_BYTES,
-	MEMORY_PAGE_LIMIT,
-	memoryFingerprint,
-	memoryId,
-	rawMemoryEntry,
-} from "./shared-memory-common.ts";
+import { memoryFingerprint, memoryId, rawMemoryEntry } from "./memory-records.ts";
+
+interface LocalNoteCommit {
+	operationId: string;
+	state: "committed";
+	sequence: number;
+	entry: MemoryEntry;
+}
+
 export const RECORD_BYTES = 2048;
 /** Summaries this size or smaller are written from their notes, so the browsing tree lists the notes under them. */
 export const TREE_LEAF_GROUP = 16;
@@ -324,7 +318,7 @@ export class MemoryDisk {
 			// Stable ids, not positions, so a later log merge keeps the reference.
 			...(replaces.length ? { replaces: replaces.map((i: number) => get<MemoryEntry>(this.log, i).id) } : {}),
 		};
-		// Local writes use the same prepared/append/finalize path and sequence as shared writes.
+		// Persist the local append intent before touching the fixed-width log.
 		const operationId = randomUUID();
 		this.prepare(operationId, JSON.stringify({ local: entry }), entry);
 		return this.finish(operationId, entry).entry!;
@@ -346,7 +340,7 @@ export class MemoryDisk {
 		).run(operation, payload, JSON.stringify(entry), entry.index);
 		this.fault?.("prepared");
 	}
-	private finish(operationId: string, entry: MemoryEntry): SharedMemoryCommitOutcome {
+	private finish(operationId: string, entry: MemoryEntry): LocalNoteCommit {
 		const index = this.ids.get(entry.id);
 		if (index === undefined) this.appendEntry(entry);
 		else if (
@@ -355,7 +349,7 @@ export class MemoryDisk {
 			throw new Error("Prepared memory identity does not match durable append");
 		else fsyncSync(this.log);
 		this.fault?.("appended");
-		const outcome: SharedMemoryCommitOutcome = { operationId, state: "committed", sequence: entry.index + 1, entry };
+		const outcome: LocalNoteCommit = { operationId, state: "committed", sequence: entry.index + 1, entry };
 		this.journal!.prepare("UPDATE mutations SET outcome=? WHERE operation=?").run(
 			JSON.stringify(outcome),
 			operationId,
@@ -373,167 +367,6 @@ export class MemoryDisk {
 		);
 		rows.sort((a, b) => Number(a.idx) - Number(b.idx));
 		for (const row of rows) this.finish(row.operation as string, JSON.parse(row.entry as string));
-	}
-	commitSharedNote(mutation: SharedMemoryMutation): SharedMemoryCommitOutcome {
-		memoryId(mutation?.operationId);
-		this.recoverMutations();
-		const payload = JSON.stringify(mutation);
-		if (Buffer.byteLength(payload) > 12 * 1024) throw new Error("Memory mutation too large");
-		const existing = this.journal!.prepare("SELECT payload, outcome FROM mutations WHERE operation=?").get(
-			mutation.operationId,
-		);
-		if (existing) {
-			if (existing.payload !== payload)
-				return {
-					operationId: mutation.operationId,
-					state: "conflict",
-					sequence: this.count,
-					reason: "Operation identity reused with different payload",
-				};
-			const outcome = JSON.parse(existing.outcome as string) as SharedMemoryCommitOutcome;
-			if (
-				outcome.state === "committed" &&
-				(!outcome.entry || this.ids.get(outcome.entry.id) !== outcome.entry.index)
-			)
-				throw new Error("Canonical memory outcome does not match durable log");
-			return outcome;
-		}
-		const reject = (
-			state: "conflict" | "already-present" | "rejected",
-			reason: string,
-			entry?: MemoryEntry,
-		): SharedMemoryCommitOutcome => {
-			const outcome: SharedMemoryCommitOutcome = {
-				operationId: mutation.operationId,
-				state,
-				sequence: this.count,
-				reason,
-				...(entry ? { entry: rawMemoryEntry(entry) } : {}),
-			};
-			this.journal!.prepare("INSERT INTO mutations (operation, payload, entry, outcome) VALUES (?, ?, NULL, ?)").run(
-				mutation.operationId,
-				payload,
-				JSON.stringify(outcome),
-			);
-			return outcome;
-		};
-		try {
-			checkMutation(mutation);
-		} catch (error) {
-			return reject("rejected", error instanceof Error ? error.message : "Invalid memory mutation");
-		}
-		if (this.ids.has(mutation.noteId)) return reject("conflict", "Note identity already exists");
-		for (const ref of mutation.replaces) {
-			const index = this.ids.get(ref.id),
-				replacement = index === undefined ? undefined : this.replacedBy.get(index);
-			if (
-				index === undefined ||
-				(replacement === undefined ? null : get<MemoryEntry>(this.log, replacement).id) !==
-					ref.expectedReplacementId
-			)
-				return reject("conflict", "Correction target changed or is missing");
-			// A new correction cannot silently supersede a correction of this target.
-			if (replacement !== undefined) return reject("conflict", "Correct the current live replacement instead");
-		}
-		const replaced = new Set(mutation.replaces.map((r) => r.id));
-		const duplicate = this.texts
-			.get(fingerprint(mutation.text))
-			?.find((i) => !this.replacedBy.has(i) && !replaced.has(get<MemoryEntry>(this.log, i).id));
-		if (duplicate !== undefined)
-			return reject("already-present", "Normalized note already present", this.entry(duplicate));
-		const entry: MemoryEntry = {
-			index: this.count,
-			id: mutation.noteId,
-			deviceId: this.deviceId,
-			at: Date.now(),
-			sessionId: mutation.origin.sessionId,
-			text: checkLine(mutation.text),
-			sharedOrigin: mutation.origin,
-			...(replaced.size ? { replaces: [...replaced] } : {}),
-		};
-		try {
-			encode(entry);
-		} catch {
-			return reject("rejected", "Memory record too large");
-		}
-		this.prepare(mutation.operationId, payload, entry);
-		return this.finish(mutation.operationId, entry);
-	}
-	private *rawEntries(count = this.count): IterableIterator<MemoryEntry> {
-		for (let i = 0; i < count; i++) {
-			const entry = rawMemoryEntry(get<MemoryEntry>(this.log, i));
-			checkMemoryExport(entry.text);
-			yield entry;
-		}
-	}
-	beginCheckpoint(): SharedMemoryCheckpointManifest {
-		this.recoverMutations();
-		const latest = this.journal!.prepare("SELECT manifest FROM checkpoints ORDER BY rowid DESC LIMIT 1").get();
-		if (latest) {
-			const previous = JSON.parse(latest.manifest as string) as SharedMemoryCheckpointManifest;
-			if (previous.count === this.count) return previous;
-		}
-		const digest = digestMemory(this.rawEntries());
-		const manifest = {
-			checkpointId: digest,
-			sequence: this.count,
-			count: this.count,
-			digest,
-		};
-		this.journal!.prepare("INSERT OR IGNORE INTO checkpoints VALUES (?, ?)").run(
-			manifest.checkpointId,
-			JSON.stringify(manifest),
-		);
-		// Restartable transfer caches, never operation receipts or accepted execution ownership.
-		this.journal!.exec(
-			"DELETE FROM checkpoints WHERE id NOT IN (SELECT id FROM checkpoints ORDER BY rowid DESC LIMIT 128)",
-		);
-		return manifest;
-	}
-	checkpointPage(checkpointId: string, cursor: number): SharedMemoryCheckpointPage {
-		const row = this.journal!.prepare("SELECT manifest FROM checkpoints WHERE id=?").get(checkpointId);
-		if (!row) throw new Error("Unknown memory checkpoint");
-		const manifest = JSON.parse(row.manifest as string) as SharedMemoryCheckpointManifest;
-		if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > manifest.count)
-			throw new Error("Invalid checkpoint cursor");
-		const entries: MemoryEntry[] = [];
-		let bytes = 512,
-			next = cursor;
-		while (next < manifest.count && entries.length < MEMORY_PAGE_LIMIT) {
-			const entry = rawMemoryEntry(get<MemoryEntry>(this.log, next)),
-				size = Buffer.byteLength(JSON.stringify(entry));
-			checkMemoryExport(entry.text);
-			if (bytes + size > MEMORY_PAGE_BYTES) break;
-			entries.push(entry);
-			bytes += size;
-			next++;
-		}
-		return { checkpointId, cursor, entries, ...(next < manifest.count ? { next } : {}) };
-	}
-	changes(after: number, limit = MEMORY_PAGE_LIMIT): SharedMemoryChangePage {
-		this.recoverMutations();
-		if (
-			!Number.isSafeInteger(after) ||
-			after < 0 ||
-			!Number.isSafeInteger(limit) ||
-			limit < 1 ||
-			limit > MEMORY_PAGE_LIMIT
-		)
-			throw new Error("Invalid memory changes cursor or limit");
-		if (after > this.count) return { after, head: this.count, changes: [], checkpointRequired: true };
-		const changes: SharedMemoryChangePage["changes"] = [];
-		let bytes = 512,
-			next = after;
-		while (next < this.count && changes.length < limit) {
-			const change = { sequence: next + 1, entry: rawMemoryEntry(get<MemoryEntry>(this.log, next)) },
-				size = Buffer.byteLength(JSON.stringify(change));
-			checkMemoryExport(change.entry.text);
-			if (bytes + size > MEMORY_PAGE_BYTES) break;
-			changes.push(change);
-			bytes += size;
-			next++;
-		}
-		return { after, head: this.count, changes, ...(next < this.count ? { next } : {}) };
 	}
 	private built(lo: number, hi: number): boolean {
 		const size = hi - lo;

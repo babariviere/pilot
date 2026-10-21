@@ -11,7 +11,7 @@ struct SessionSidebar: View {
     @Environment(\.hostViewContext) private var hostContext
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
-    @ObservedObject private var hosts: HostClients
+    @ObservedObject private var hosts: ClientDirectory
     @ObservedObject private var missionRegistry: MissionRegistry
     @StateObject private var folderEditor = ProjectFolderEditorState()
 

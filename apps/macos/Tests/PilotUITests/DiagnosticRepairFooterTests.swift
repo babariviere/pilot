@@ -176,8 +176,8 @@ private struct FooterChat: View {
         suite = "DiagnosticRepairFooterTests.\(UUID().uuidString)"
         defaults = try #require(UserDefaults(suiteName: suite))
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let hosts = HostClients(operationDirectory: directory,
-            readScopedModelCapability: { _, _ in "fixture" }, readNativeCapability: { _, _ in "fixture" })
+        let hosts = ClientDirectory(operationDirectory: directory,
+            readScopedModelCapability: { _ in "fixture" }, readNativeCapability: { _ in "fixture" })
         model = AppModel(projectFolderDefaults: defaults, client: client, hosts: hosts)
         let host = HostRef(hostId: "local", daemonId: UUID().uuidString, lineageId: UUID().uuidString)
         let id = UUID().uuidString.lowercased()

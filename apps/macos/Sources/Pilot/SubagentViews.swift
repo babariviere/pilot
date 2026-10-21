@@ -12,7 +12,7 @@ final class SubagentFeed: ObservableObject {
     @Published private(set) var error: String?
     let key: SubagentKey
     private var client: PilotClient
-    private var hosted: (HostResourceRef, HostClients)?
+    private var hosted: (HostResourceRef, ClientDirectory)?
     private var hostObservation: AnyCancellable?
     private var token: UUID?
     private var processor = TranscriptProcessor()
@@ -30,7 +30,7 @@ final class SubagentFeed: ObservableObject {
         self.client = client
     }
 
-    convenience init(ref: HostResourceRef, name: String, hosts: HostClients) {
+    convenience init(ref: HostResourceRef, name: String, hosts: ClientDirectory) {
         self.init(key: SubagentKey(sessionId: ref.localId, name: name), client: hosts.presentationClient(ref.host))
         hosted = (ref, hosts)
         hostObservation = hosts.objectWillChange.sink { [weak self] _ in
@@ -141,7 +141,7 @@ final class SubagentFeeds {
         return feed
     }
 
-    func feed(ref: HostResourceRef, name: String, hosts: HostClients) -> SubagentFeed {
+    func feed(ref: HostResourceRef, name: String, hosts: ClientDirectory) -> SubagentFeed {
         let cacheKey = ref.storageKey + ":" + Data(name.utf8).base64EncodedString()
         if let feed = feeds[cacheKey] { return feed }
         let feed = SubagentFeed(ref: ref, name: name, hosts: hosts)

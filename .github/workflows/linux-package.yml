@@ -39,17 +39,14 @@ jobs:
             -e PILOT_RELEASE_COMMIT="$commit" \
             quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \
             bash /source/scripts/linux/bundle-runtime.sh /output
-      - name: Validate relocated production package on host libraries and real SSH user-service lifecycle
+      - name: Validate relocated production package on host libraries
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y openssh-server dbus-user-session bubblewrap
-          # Disposable runner only. Match the isolation lane's executable-scoped userns grant.
-          if command -v apparmor_parser >/dev/null && grep -q Y /sys/module/apparmor/parameters/enabled; then
-            printf '%s\n' 'abi <abi/4.0>,' \
-              'profile pilot-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
-              | sudo apparmor_parser -r
-          fi
-          bash scripts/linux/verify-service.sh "$RUNNER_TEMP/linux-package/Pilot-linux-x64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/linux-relocated"
+          tar -xzf "$RUNNER_TEMP/linux-package/Pilot-linux-x64.tar.gz" -C "$RUNNER_TEMP/linux-relocated"
+          root="$RUNNER_TEMP/linux-relocated/runtime"
+          test -x "$root/node/bin/node"
+          test -f "$root/check-runtime.mjs"
+          "$root/node/bin/node" "$root/check-runtime.mjs"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-name }}

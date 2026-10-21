@@ -37,7 +37,6 @@ def inspect_archive(archive, commit, app_version, env):
     for key, variable in (
         ("PilotUpdateRepository", "PILOT_UPDATE_REPOSITORY"),
         ("SUPublicEDKey", "SPARKLE_PUBLIC_KEY"),
-        ("PilotLinuxRuntimePublicKey", "LINUX_RUNTIME_PUBLIC_KEY"),
     ):
         if not env.get(variable) or info.get(key) != env[variable]:
             raise ValueError(f"Production app does not match {variable}")

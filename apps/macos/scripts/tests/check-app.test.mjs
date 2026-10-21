@@ -80,19 +80,13 @@ exit ${exitCode}
 		mkdirSync(join(resources, resource), { recursive: true });
 		writeFileSync(join(resources, resource, "fixture"), "bundled resource\n");
 	}
-	const coreBundle = join(contents, "Resources/PilotMac_PilotCore.bundle");
-	const coreResources = layout === "flat" ? coreBundle : join(coreBundle, "Contents/Resources");
-	mkdirSync(coreResources, { recursive: true });
-	const sshHelper = join(coreResources, "LinuxSSHBootstrap.py");
-	writeFileSync(sshHelper, "# bundled SSH helper\n");
 	if (missing) {
 		const path =
 			missing === "Pilot" ? executable :
 			missing === "PilotPower" ? powerHelper :
 			missing === "PilotVisuals" ? visuals :
 			missing === "bundle" ? bundle :
-			missing === "coreBundle" ? coreBundle :
-			missing === "sshHelper" ? sshHelper : join(resources, missing);
+			join(resources, missing);
 		rmSync(path, { recursive: true });
 	}
 	if (sign && missing !== "Pilot") {
@@ -147,7 +141,7 @@ for (const layout of ["flat", "macOS"]) {
 	});
 }
 
-for (const missing of ["Pilot", "PilotPower", "PilotVisuals", "bundle", "Ghostty", "terminfo", "coreBundle", "sshHelper"]) {
+for (const missing of ["Pilot", "PilotPower", "PilotVisuals", "bundle", "Ghostty", "terminfo"]) {
 	test(`rejects missing ${missing}`, macOS, (t) => {
 		const { log, scratch, run } = fixture(t, { missing });
 		const result = run();

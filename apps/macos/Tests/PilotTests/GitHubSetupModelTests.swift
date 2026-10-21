@@ -43,15 +43,3 @@ private func githubStatus(_ phase: String = "key_ready", account: String = "octo
     model.detach(); receive?.resume(returning: value); await task.value
     #expect(model.status == nil)
 }
-
-@Test func githubNativeCapabilityMustMatchPinnedIdentityAndSSHRetainsHostChecks() throws {
-    let token = String(repeating: "a", count: 64)
-    let data = Data("{\"daemonId\":\"d\",\"lineageId\":\"l\",\"token\":\"\(token)\"}".utf8)
-    #expect(try GitHubNativeAccess.validate(data, host: githubHost) == token)
-    #expect(throws: (any Error).self) { try GitHubNativeAccess.validate(data, host: HostRef(hostId: "other", daemonId: "wrong", lineageId: "l")) }
-    let args = GitHubNativeAccess.arguments(configuration: try SSHConnectionConfiguration(alias: "fixture"))
-    for value in ["StrictHostKeyChecking=yes", "ForwardAgent=no", "BatchMode=yes", "ClearAllForwardings=yes"] { #expect(args.contains(value)) }
-    #expect(!args.contains("-N"))
-    #expect(args.suffix(2).first == "fixture")
-    #expect(!args.last!.contains(token))
-}

@@ -25,7 +25,7 @@ let package = Package(
     ],
     targets: [
         /// Protocol models and the transcript reducer. No UI, so it is unit-testable.
-        .target(name: "PilotCore", path: "Sources/PilotCore", resources: [.copy("Resources/LinuxSSHBootstrap.py")]),
+        .target(name: "PilotCore", path: "Sources/PilotCore"),
         .target(
             name: "PilotTelemetry",
             dependencies: [

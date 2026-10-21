@@ -73,8 +73,6 @@ test("environment routes stay off unless the service is enabled", async (t) => {
 			undefined,
 			undefined,
 			undefined,
-			undefined,
-			undefined,
 			service,
 		),
 	);

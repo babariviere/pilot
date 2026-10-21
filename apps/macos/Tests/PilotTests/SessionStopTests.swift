@@ -40,6 +40,7 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
     let app = AppModel(client: stopClient("local"))
     let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
     try app.registerLocal(local)
+    try app.hosts.install(app.client, host: local)
     let ref = HostResourceRef(host: local, kind: .session, localId: "same")
     let composer = app.composer(for: "same")
     composer.draft = "newer draft"
@@ -55,52 +56,30 @@ func localStopNormalizesQualifiedRowsAndRestoresWithdrawnMessages(qualified: Boo
     #expect(try app.composer(for: ref) === composer)
 }
 
-@Test(.timeLimit(.minutes(2))) @MainActor func remoteStopKeepsCollidingLocalChatAndDraftUntouched() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let app = AppModel(client: stopClient("local"), hosts: HostClients(operationDirectory: directory.appendingPathComponent("operations")))
-    let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
-    let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
-    try app.registerLocal(local)
-    let legacyInventory = OfflineHostStore(directory: directory)
-    try await legacyInventory.save([OfflineHostSnapshot(host: remote, configuration: SSHConnectionConfiguration(alias: "fixture-box"))])
-    try await app.hosts.restoreOffline(from: legacyInventory)
-    try app.hosts.install(stopClient("remote"), host: remote)
-    let ref = HostResourceRef(host: remote, kind: .session, localId: "same")
-    let remoteComposer = try app.composer(for: ref)
-    remoteComposer.draft = "remote draft"
-    app.composer(for: "same").draft = "local draft"
-
-    let stop = try #require(app.stopSession(ref.storageKey))
-    await stop.value
-    #expect(app.sessionActionError == nil)
-    #expect(remoteComposer.draft == "remote withdrawn\n\nremote draft")
-    #expect(app.composer(for: "same").draft == "local draft")
-    #expect(app.hosts.offlineHosts[remote]?.stopRequests["same"] == .acknowledged)
-    #expect(app.client.session("same")?.state == "working")
-}
-
 @Test(.timeLimit(.minutes(2)), arguments: ["box", "local"]) @MainActor
 func unavailableStopNeverFallsBackToCurrentLocalHost(hostId: String) async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }
-    let app = AppModel(client: stopClient("local"), hosts: HostClients(operationDirectory: directory))
+    let app = AppModel(client: stopClient("local"), hosts: ClientDirectory(operationDirectory: directory))
     try app.registerLocal(HostRef(hostId: "local", daemonId: "a", lineageId: "1"))
+    let local = try #require(app.localHost)
+    try app.hosts.install(app.client, host: local)
     // Also cover an old Local installation whose pinned identity no longer matches.
     let unavailable = HostRef(hostId: hostId, daemonId: "other", lineageId: "other")
     let ref = HostResourceRef(host: unavailable, kind: .session, localId: "same")
     // A disconnected target retains its admitted inventory. A completely unknown
     // target is rejected by canMutateSession before any asynchronous Stop dispatch.
-    try app.hosts.install(stopClient("remote"), host: unavailable)
+    try loadClientFixture(stopClient("remote"), host: unavailable, into: app.hosts)
     await app.hosts.disconnect(unavailable)
     try #require(app.hosts.sessions.contains { $0.ref == ref })
     #expect(!app.hosts.available.contains(unavailable))
+    #expect(app.hosts.localHost == app.localHost)
+    #expect(app.hosts.available.contains(local))
     let composer = try app.composer(for: ref)
     composer.draft = "unavailable draft"
     app.composer(for: "same").draft = "local draft"
-    let stop = try #require(app.stopSession(ref.storageKey))
-    await stop.value
-    #expect(app.sessionActionError?.contains("Disconnected") == true)
+    #expect(app.stopSession(ref.storageKey) == nil)
+    #expect(app.sessionActionError == nil)
     #expect(composer.draft == "unavailable draft")
     #expect(app.composer(for: "same").draft == "local draft")
     #expect(app.pendingSessionActions.isEmpty)

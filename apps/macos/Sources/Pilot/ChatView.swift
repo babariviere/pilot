@@ -73,7 +73,7 @@ final class SessionFeed: ObservableObject {
         status = TranscriptStatus(initialPresentation)
     }
 
-    init(ref: HostResourceRef, hosts: HostClients, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
+    init(ref: HostResourceRef, hosts: ClientDirectory, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         sessionId = ref.localId
         client = nil
         hostedContext = HostViewContext(host: ref.host, hosts: hosts)
@@ -342,7 +342,7 @@ struct ChatView: View {
     static var bodyEvaluations = 0
 
     private let context: HostViewContext?
-    @ObservedObject private var hosts: HostClients
+    @ObservedObject private var hosts: ClientDirectory
     @EndpointClient private var endpoint
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil, context: HostViewContext? = nil,
@@ -726,15 +726,8 @@ struct ChatView: View {
     }
 
     private func stop() {
-        guard let context, context.host != model.localHost else { model.stopSession(session.id); return }
-        Task {
-            do {
-                if let withdrawn = try await context.hosts.requestStop(context.ref(.session, session.id)), !withdrawn.isEmpty {
-                    composer.draft = [composer.draft, withdrawn].filter { !$0.isEmpty }.joined(separator: "\n\n")
-                    try model.persistDrafts()
-                }
-            } catch { composer.error = "Stop requested. Not yet confirmed. " + error.localizedDescription }
-        }
+        guard context == nil || context?.host == model.localHost else { return }
+        model.stopSession(session.id)
     }
 
     /// "Working…" stays above the composer for the whole run, including while text streams

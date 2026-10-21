@@ -7,7 +7,7 @@ import Testing
 
 @Test @MainActor func terminalOpeningReopeningAndRestartingAcquireKeyboardFocus() async throws {
     _ = NSApplication.shared
-    let hosts = HostClients()
+    let hosts = ClientDirectory()
     let host = HostRef(hostId: "local", daemonId: "focus", lineageId: "test")
     let client = PilotClient()
     client.loadFixture(projects: [], sessions: [])

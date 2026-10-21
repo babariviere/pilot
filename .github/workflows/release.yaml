@@ -88,7 +88,6 @@ jobs:
       BUNDLE_RUNTIME: '1'
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
       SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
       # Sparkle build versions must keep increasing. The release.yml workflow ended near run 1,100 with an
       # offset of 10,000, so release.yaml starts above it. Raise this again if the workflow is renamed.
       BUNDLE_VERSION_OFFSET: '20000'
@@ -105,7 +104,6 @@ jobs:
       - name: Configure production bundle
         run: |
           test -n "$SPARKLE_PUBLIC_KEY" || { echo '::error::Configure SPARKLE_PUBLIC_KEY before building production packages.'; exit 1; }
-          test -n "$LINUX_RUNTIME_PUBLIC_KEY" || { echo '::error::Configure LINUX_RUNTIME_PUBLIC_KEY before building production packages.'; exit 1; }
           echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
       - name: Verify toolchain and architecture
         id: swift-toolchain
@@ -174,7 +172,6 @@ jobs:
     env:
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
       SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-      LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
       RELEASE_TAG: ${{ needs.target.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
@@ -214,11 +211,6 @@ jobs:
         run: |
           if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
             echo '::error::Configure SPARKLE_PUBLIC_KEY repository variable and SPARKLE_PRIVATE_KEY secret with apps/macos/scripts/setup-updates.sh before publishing.'
-            exit 1
-          fi
-          # The app pins this key to authenticate Linux runtimes it installs over SSH.
-          if [ -z "$LINUX_RUNTIME_PUBLIC_KEY" ]; then
-            echo '::error::Configure the LINUX_RUNTIME_PUBLIC_KEY repository variable (see scripts/linux/README.md) before publishing.'
             exit 1
           fi
       - uses: actions/download-artifact@v4

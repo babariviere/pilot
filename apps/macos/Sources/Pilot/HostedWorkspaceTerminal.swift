@@ -5,7 +5,7 @@ import SwiftUI
 struct HostedWorkspaceTerminal: View {
     let session: Hosted<SessionSummary>
     @ObservedObject var store: TerminalStore
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     var body: some View {
         if session.value.supportsChanges {
             TerminalPane(store: store, session: session.value, ref: session.ref, hosts: hosts)

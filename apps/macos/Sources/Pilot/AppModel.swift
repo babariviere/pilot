@@ -37,7 +37,7 @@ final class AppModel: ObservableObject {
     let daemon = DaemonController()
     let client: PilotClient
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
-    let hosts: HostClients
+    let hosts: ClientDirectory
     private var featureUsageSyncTask: Task<Void, Never>?
     let missionRegistry = MissionRegistry()
     @Published private(set) var localHost: HostRef?
@@ -238,8 +238,8 @@ final class AppModel: ObservableObject {
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil,
-         client: PilotClient? = nil, hosts: HostClients? = nil) {
-        self.hosts = hosts ?? HostClients()
+         client: PilotClient? = nil, hosts: ClientDirectory? = nil) {
+        self.hosts = hosts ?? ClientDirectory()
         self.client = client ?? PilotClient()
         self.projectFolderDefaults = projectFolderDefaults
         diagnosticRepairDismissals = projectFolderDefaults.dictionary(forKey: "pilot.diagnosticRepairDismissals.v1")
@@ -500,67 +500,34 @@ final class AppModel: ObservableObject {
     /// Host changes never retarget an uncertain start. Park its entire newer draft and restore
     /// the chosen destination independently, in the same private draft file and image lifetime.
     @discardableResult
-    func chooseNewChatHost(_ host: HostRef, independent: Bool = false, sourceProject: Project? = nil) -> Bool {
+    func chooseNewChatHost(_ host: HostRef, independent: Bool = false) -> Bool {
         let form = newSessionForm
         guard host == localHost else { return false }
         guard independent ? !form.busy : form.canChooseExecutionHost,
               let previous = form.executionHost ?? localHost, previous != host else { return false }
-        let pending = form.pendingOperationId != nil || pendingChatCreate(on: previous) != nil
-        let source = sourceProject ?? draftProjectId.flatMap { hosts.presentationClient(previous).project($0) }
-        let sourceRef = source.map { HostResourceRef(host: previous, kind: .project, localId: $0.id) }
-        let ordinary = !pending && parkedTaskDrafts.isEmpty && pendingChatCreate(on: host) == nil
-        let intentionalFolder = !form.folder.isEmpty
-        form.checkoutValidationTask?.cancel()
-        form.checkoutValidation = nil
-        form.checkoutChoice = nil
-        if independent || pending || !parkedTaskDrafts.isEmpty || pendingChatCreate(on: host) != nil {
-            let original = ParkedTaskDraft(value: taskDraftSnapshot(), attachments: form.attachments)
-            let oldParked = parkedTaskDrafts
-            var next = parkedTaskDrafts
-            let destination = next.removeValue(forKey: host)
-            guard next.count < 32 else {
-                form.error = "Too many retained chat drafts. Your current draft and pending starts have been kept."
-                return false
-            }
-            next[previous] = original
-            // No debounced writer may capture an intermediate host/pointer combination.
+        let original = ParkedTaskDraft(value: taskDraftSnapshot(), attachments: form.attachments)
+        let oldParked = parkedTaskDrafts
+        var next = parkedTaskDrafts
+        let destination = next.removeValue(forKey: host)
+        guard next.count < 32 else {
+            form.error = "Too many retained chat drafts. Your current draft and pending starts have been kept."
+            return false
+        }
+        next[previous] = original
+        // No debounced writer may capture an intermediate host/pointer combination.
+        restoringDrafts = true
+        parkedTaskDrafts = next
+        restoreTaskDraft(destination?.value ?? StoredTaskDraft(executionHost: host),
+                         attachments: destination?.attachments ?? ImageAttachments())
+        restoringDrafts = false
+        do { try persistDrafts() }
+        catch {
             restoringDrafts = true
-            parkedTaskDrafts = next
-            restoreTaskDraft(destination?.value ?? StoredTaskDraft(executionHost: host),
-                             attachments: destination?.attachments ?? ImageAttachments())
+            parkedTaskDrafts = oldParked
+            restoreTaskDraft(original.value, attachments: original.attachments)
             restoringDrafts = false
-            do { try persistDrafts() }
-            catch {
-                restoringDrafts = true
-                parkedTaskDrafts = oldParked
-                restoreTaskDraft(original.value, attachments: original.attachments)
-                restoringDrafts = false
-                form.error = error.localizedDescription
-                return false
-            }
-        } else {
-            // Preserve the ordinary nonpending host-picker behavior, including text/images/mode.
-            restoringDrafts = true
-            form.invalidatePendingSubmission()
-            form.executionHost = host
-            form.folder = ""; form.workspace = nil; form.pendingBaseBranch = nil
-            form.branches.restoreSelection(scope: nil, branch: nil)
-            form.model = ""
-            draftProjectId = nil
-            draftMessage = nil; draftBaseBranch = nil; draftCwd = nil; draftWorkspace = nil
-            restoringDrafts = false
-            if ordinary, !intentionalFolder, let sourceRef {
-                if let mapped = hosts.projectCheckouts.mapped(sourceRef, on: host) {
-                    draftProjectId = mapped.value.id
-                    verifyMappedCheckout(source: sourceRef, target: mapped)
-                }
-                else {
-                    draftProjectId = ""
-                    form.checkoutChoice = CheckoutChoice(source: sourceRef, host: host, revision: form.revision, projectId: "")
-                }
-            }
-            if ordinary, intentionalFolder { draftProjectId = "" }
-            saveDrafts()
+            form.error = error.localizedDescription
+            return false
         }
         form.models = ModelList(models: [])
         form.error = hosts.available.contains(host) ? nil : "Disconnected. Reconnect to start a chat here."
@@ -622,15 +589,7 @@ final class AppModel: ObservableObject {
                   case let .receipt(receipt) = delivery, receipt.state != .pending else { return }
             Task { try? await self.acknowledgeAdopted(operation, receipt: receipt) }
         }
-        hosts.onRemoteSessionsChanged = { [weak self] host, sessions, snapshot in
-            guard let self else { return }
-            self.recoverDiagnosticRepairArchives(on: host)
-            let store = self.attention(on: host)
-            for notice in store.observe(sessions.filter { !$0.isRetainedHistory }, snapshot: snapshot) {
-                guard sessions.first(where: { $0.id == notice.sessionId })?.isArchived != true else { continue }
-                self.notifier.deliver(notice, reference: HostResourceRef(host: host, kind: .session, localId: notice.sessionId))
-            }
-        }
+
         client.onConnected = { [weak self] in
             guard let self, self.client.hostIdentity?.hostId == "local" else { return }
             Task { await self.refreshNativeTelemetry() }
@@ -1183,7 +1142,7 @@ final class AppModel: ObservableObject {
             selectedMissionId = nil
             selectedProjectId = nil
         case let .session(id):
-            guard canMutateSession(id) else { apply(.home); return }
+            guard canRestoreSessionSelection(id) else { apply(.home); return }
             showingArchive = false
             selectedSessionId = id
         case let .mission(id):
@@ -1283,17 +1242,6 @@ final class AppModel: ObservableObject {
                 sessionActionError = HostRoutingError.invalidReference.localizedDescription
                 return nil
             }
-            if ref.host != localHost {
-                return Task {
-                    do {
-                        if let restored = try await hosts.requestStop(ref), !restored.isEmpty {
-                            let composer = try composer(for: ref)
-                            composer.draft = [restored, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
-                            try persistDrafts()
-                        }
-                    } catch { sessionActionError = "Stop requested. Not yet confirmed. " + error.localizedDescription }
-                }
-            }
             // Qualified Local rows and legacy bare IDs must share the API ID and pending guard.
             sessionId = ref.localId
         } else { sessionId = id }
@@ -1318,18 +1266,10 @@ final class AppModel: ObservableObject {
         guard !RetainedConversation.isHistory(session, reference: context?.ref(.session, session.id), localHost: localHost) else { return }
         guard session.status == .failed, !session.isArchived else { return }
         if let context, context.host != localHost {
-            guard context.available else { sessionActionError = "Disconnected. Reconnect before retrying."; return }
-            if session.canRetryStartup == true {
-                Task {
-                    do { try await context.perform(.session, session.id) { client, id in try await client.retryStartup(id) } }
-                    catch { sessionActionError = error.localizedDescription }
-                }
-            } else {
-                navigate(.session, id: session.id, context: context)
-                pendingRetry = RetryRequest(sessionId: context.ref(.session, session.id).storageKey, requestedAt: Date())
-            }
+            sessionActionError = "Disconnected. Remote history is read-only."
             return
         }
+
         if session.canRetryStartup == true {
             Task {
                 do { try await client.retryStartup(session.id) }
@@ -1592,7 +1532,7 @@ extension AppModel {
     private func canRestoreNavigation(_ location: NavigationLocation) -> Bool {
         if let scope = location.scope, !navigationResourceExists(scope, kind: .project) { return false }
         switch location.selection {
-        case let .session(id): return canMutateSession(id) && navigationResourceExists(id, kind: .session)
+        case let .session(id): return canRestoreSessionSelection(id) && navigationResourceExists(id, kind: .session)
         case let .mission(id): return navigationResourceExists(id, kind: .mission)
         case let .project(id): return navigationResourceExists(id, kind: .project)
         case .home, .inbox, .archive: return true

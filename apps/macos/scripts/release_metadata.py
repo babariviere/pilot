@@ -92,8 +92,7 @@ def write_plist(source, destination, repo_path, release=False, env=None, app_ver
         info["PilotUpdateRepository"] = repository(env["PILOT_UPDATE_REPOSITORY"])
     if env.get("SPARKLE_PUBLIC_KEY"):
         info["SUPublicEDKey"] = base64_bytes(env["SPARKLE_PUBLIC_KEY"], 32)
-    if env.get("LINUX_RUNTIME_PUBLIC_KEY"):
-        info["PilotLinuxRuntimePublicKey"] = base64_bytes(env["LINUX_RUNTIME_PUBLIC_KEY"], 32)
+    info.pop("PilotLinuxRuntimePublicKey", None)
     if env.get("BUNDLE_VERSION"):
         info["CFBundleVersion"] = version(env["BUNDLE_VERSION"])
     with open(destination, "wb") as handle:

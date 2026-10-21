@@ -47,7 +47,7 @@ enum HostMcpAction: Equatable { case check, signIn, signInAgain, cancel(startedA
 }
 
 extension HostMcpActions {
-    convenience init(host: HostRef, hosts: HostClients) {
+    convenience init(host: HostRef, hosts: ClientDirectory) {
         self.init(host: host) { [weak hosts] in
             guard let hosts else { throw HostRoutingError.disconnected }
             let client = try hosts.endpoint(host), token = try hosts.token(for: host)

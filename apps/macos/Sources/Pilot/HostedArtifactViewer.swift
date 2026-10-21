@@ -5,7 +5,7 @@ import SwiftUI
 /// Existing transcript cards remain local-only until their owning surface supplies qualified refs.
 struct HostedArtifactViewer: View {
     let reference: HostedArtifactReference
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     @Environment(\.dismiss) private var dismiss
     @StateObject private var state = ArtifactViewState()
     @StateObject private var render = ArtifactRenderState()

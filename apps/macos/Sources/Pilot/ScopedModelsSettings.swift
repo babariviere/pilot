@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 @MainActor struct ScopedModelsSettings: View {
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let localHost: HostRef?
 
     var body: some View {

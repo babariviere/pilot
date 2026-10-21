@@ -2,10 +2,10 @@ import PilotCore
 import SwiftUI
 
 struct HostMcpConnections: View {
-    let hosts: HostClients
+    let hosts: ClientDirectory
     let localHost: HostRef?
     @StateObject private var roster: HostMcpRoster
-    init(hosts: HostClients, localHost: HostRef?) {
+    init(hosts: ClientDirectory, localHost: HostRef?) {
         self.hosts = hosts; self.localHost = localHost
         _roster = StateObject(wrappedValue: HostMcpRoster(hosts: hosts, local: localHost))
     }
@@ -31,7 +31,7 @@ struct HostMcpConnectionSection: View {
     @State private var expanded: Bool
     @State private var showAll = false
 
-    init(host: HostRef, name: String, available: Bool, hosts: HostClients, client: PilotClient) {
+    init(host: HostRef, name: String, available: Bool, hosts: ClientDirectory, client: PilotClient) {
         self.host = host; self.name = name; self.available = available
         _store = ObservedObject(wrappedValue: client.mcp)
         _actions = StateObject(wrappedValue: HostMcpActions(host: host, hosts: hosts))

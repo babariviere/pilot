@@ -7,7 +7,7 @@ struct GitHubSetupActions {
     var available: (HostRef) -> Bool
     var status: (HostRef) async throws -> GitHubSetupStatus
     var act: (HostRef, GitHubSetupAction) async throws -> GitHubSetupStatus
-    static func live(_ hosts: HostClients) -> Self {
+    static func live(_ hosts: ClientDirectory) -> Self {
         Self(available: { hosts.available.contains($0) }, status: {
             try await hosts.githubRequest(on: $0, body: Optional<GitHubSetupAction>.none, method: "GET")
         }, act: { try await hosts.githubRequest(on: $0, body: $1) })
@@ -58,12 +58,12 @@ final class GitHubSetupModel: ObservableObject {
 @MainActor
 struct GitHubSetupSection: View {
     let host: HostRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     @StateObject private var model: GitHubSetupModel
     @State private var approval: GitHubSetupStatus?
     @State private var revoking = false
     @Environment(\.openURL) private var openURL
-    init(host: HostRef, hosts: HostClients) {
+    init(host: HostRef, hosts: ClientDirectory) {
         self.host = host; self.hosts = hosts
         _model = StateObject(wrappedValue: GitHubSetupModel(host: host, actions: .live(hosts)))
     }

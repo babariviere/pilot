@@ -4,7 +4,7 @@ import SwiftUI
 /// Recovery is visible and user-driven. Reconnect reads receipts, never sends another message.
 struct OperationDeliveryNotice: View {
     let ref: HostResourceRef
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     let adopt: (DurableOperation) async throws -> Void
     var excludes: (DurableOperation) -> Bool = { _ in false }
     @State private var busy = false

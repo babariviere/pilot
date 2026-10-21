@@ -43,7 +43,6 @@ private final class RepairArchiveHTTP: URLProtocol {
 
 @Suite(.serialized) struct DiagnosticRepairArchiveTests {
     private let local = HostRef(hostId: "local", daemonId: "mac", lineageId: "one")
-    private let remote = HostRef(hostId: "box", daemonId: "linux", lineageId: "two")
 
     @MainActor private func fixture(_ directory: URL, host: HostRef, operation: DurableOperation,
                                    archived: Bool = false, specialist: Bool = true) throws -> AppModel {
@@ -62,12 +61,12 @@ private final class RepairArchiveHTTP: URLProtocol {
             ])
             return client
         }
-        let hosts = HostClients(operationDirectory: directory)
+        let hosts = ClientDirectory(operationDirectory: directory)
         let app = AppModel(projectFolderDefaults: UserDefaults(suiteName: UUID().uuidString)!,
             client: client(local), hosts: hosts)
         try app.registerLocal(local)
         try hosts.install(app.client, host: local)
-        if host != local { try hosts.install(client(host), host: host) }
+        guard host == local else { throw HostRoutingError.disconnected }
         return app
     }
 
@@ -89,7 +88,7 @@ private final class RepairArchiveHTTP: URLProtocol {
     }
 
     @Test(.timeLimit(.minutes(1))) @MainActor func acceptedRepairArchivesOnlyQualifiedOriginAndKeepsHistory() async throws {
-        for host in [local, remote] {
+        for host in [local] {
             RepairArchiveHTTP.reset()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -115,9 +114,9 @@ private final class RepairArchiveHTTP: URLProtocol {
         RepairArchiveHTTP.reset(failures: 1)
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let op = try await operation(directory, host: remote)
-        let ref = HostResourceRef(host: remote, kind: .session, localId: "origin")
-        let app = try fixture(directory, host: remote, operation: op)
+        let op = try await operation(directory, host: local)
+        let ref = HostResourceRef(host: local, kind: .session, localId: "origin")
+        let app = try fixture(directory, host: local, operation: op)
         await #expect(throws: ClientError.self) {
             _ = try await app.finishDiagnosticRepairStart(op, delivery: .receipt(receipt(op)), reference: ref)
         }
@@ -125,7 +124,7 @@ private final class RepairArchiveHTTP: URLProtocol {
         let pending = try await OperationOutbox(directory: directory).pending()
         #expect(pending == [op])
         // Reopen with no proposal/binding in the current origin summary. Only the original receipt matters.
-        let reopened = try fixture(directory, host: remote, operation: op)
+        let reopened = try fixture(directory, host: local, operation: op)
         let recovered = try #require(pending.first)
         _ = try await reopened.finishDiagnosticRepairStart(recovered, delivery: .receipt(receipt(recovered)), reference: ref)
         #expect(try await OperationOutbox(directory: directory).pending().isEmpty)
@@ -137,9 +136,9 @@ private final class RepairArchiveHTTP: URLProtocol {
             RepairArchiveHTTP.reset()
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             defer { try? FileManager.default.removeItem(at: directory) }
-            let op = try await operation(directory, host: remote, disclosed: mode == "legacy" ? nil : true)
-            let app = try fixture(directory, host: remote, operation: op, archived: mode == "manual", specialist: mode != "wrong_role")
-            let ref = HostResourceRef(host: mode == "wrong_host" ? local : remote, kind: .session, localId: "origin")
+            let op = try await operation(directory, host: local, disclosed: mode == "legacy" ? nil : true)
+            let app = try fixture(directory, host: local, operation: op, archived: mode == "manual", specialist: mode != "wrong_role")
+            let ref = HostResourceRef(host: mode == "wrong_host" ? HostRef(hostId: "box", daemonId: "other", lineageId: "other") : local, kind: .session, localId: "origin")
             let delivery: OperationDelivery = mode == "unknown" ? .unknown : .receipt(try receipt(op,
                 state: ["pending", "rejected"].contains(mode) ? mode : "accepted", sessionId: mode == "wrong_result" ? "other" : nil))
             if ["legacy", "manual"].contains(mode) {

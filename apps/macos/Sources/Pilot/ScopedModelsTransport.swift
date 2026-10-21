@@ -8,7 +8,7 @@ import PilotCore
     let validate: () throws -> Void
     let capability: () async throws -> String
 
-    func endpoint() -> ScopedModelsSync.Endpoint {
+    func endpoint() -> LocalModelScope.Endpoint {
         .init(token: token, read: { try await read() }, write: { try await write($0, expectedHash: $1) },
               isCurrent: { (try? validate()) != nil })
     }

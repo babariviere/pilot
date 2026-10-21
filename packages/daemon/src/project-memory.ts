@@ -8,19 +8,10 @@ import type {
 	MemoryView,
 	OperationHost,
 	ProjectMemorySummary,
-	SharedMemoryChangePage,
-	SharedMemoryCheckpointManifest,
-	SharedMemoryCheckpointPage,
-	SharedMemoryCommitOutcome,
-	SharedMemoryMutation,
-	SharedMemoryProposal,
-	SharedMemoryRead,
-	SharedMemoryReplicaState,
 } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
 import type { MemoryTreeOptions } from "./memory-disk.ts";
-import { checkBindingKey } from "./shared-memory-common.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
 export type MemorySummarizer = (
@@ -153,93 +144,6 @@ export class ProjectMemoryService {
 		const entry = await this.rpc<MemoryEntry>(projectId, "note", { text, sessionId, replaces });
 		this.schedule(projectId);
 		return entry;
-	}
-	async commitSharedNote(projectId: string, mutation: SharedMemoryMutation): Promise<SharedMemoryCommitOutcome> {
-		const outcome = await this.rpc<SharedMemoryCommitOutcome>(projectId, "commitSharedNote", { mutation });
-		this.schedule(projectId);
-		return outcome;
-	}
-	beginCheckpoint(projectId: string): Promise<SharedMemoryCheckpointManifest> {
-		return this.rpc(projectId, "beginCheckpoint");
-	}
-	checkpointPage(projectId: string, checkpointId: string, cursor: number): Promise<SharedMemoryCheckpointPage> {
-		return this.rpc(projectId, "checkpointPage", { checkpointId, cursor });
-	}
-	changes(projectId: string, after: number, limit?: number): Promise<SharedMemoryChangePage> {
-		return this.rpc(projectId, "changes", { after, limit });
-	}
-	stageReplica(
-		bindingKey: string,
-		manifest: SharedMemoryCheckpointManifest,
-		page: SharedMemoryCheckpointPage,
-	): Promise<void> {
-		return this.rpc(bindingKey, "replica.stage", { manifest, page });
-	}
-	activateReplica(bindingKey: string, manifestId: string): Promise<void> {
-		return this.rpc(bindingKey, "replica.activate", { manifestId });
-	}
-	applyReplicaChanges(bindingKey: string, batch: SharedMemoryChangePage): Promise<SharedMemoryReplicaState> {
-		return this.rpc(bindingKey, "replica.changes", { batch });
-	}
-	queueReplicaProposal(bindingKey: string, mutation: SharedMemoryMutation): Promise<SharedMemoryProposal> {
-		return this.rpc(bindingKey, "replica.queue", { mutation });
-	}
-	replicaProposals(bindingKey: string): Promise<SharedMemoryProposal[]> {
-		return this.rpc(bindingKey, "replica.proposals");
-	}
-	applyProposalOutcome(bindingKey: string, outcome: SharedMemoryCommitOutcome): Promise<void> {
-		return this.rpc(bindingKey, "replica.outcome", { outcome });
-	}
-	replicaState(bindingKey: string): Promise<SharedMemoryReplicaState> {
-		return this.rpc(bindingKey, "replica.state");
-	}
-	replicaTree(bindingKey: string, args: MemoryTreeOptions): Promise<import("@pilot/protocol").SharedMemoryTreeRead> {
-		return this.rpc(bindingKey, "replica.tree", { args });
-	}
-	async replicaRead(
-		bindingKey: string,
-		action: "wake" | "recall" | "zoom",
-		args: Record<string, unknown>,
-	): Promise<SharedMemoryRead> {
-		if (action !== "recall") return this.rpc(bindingKey, "replica.read", { action, args });
-		checkBindingKey(bindingKey);
-		const regex = args.regex,
-			lines = args.lines ?? 96;
-		if (
-			typeof regex !== "string" ||
-			regex.length > 512 ||
-			!Number.isInteger(lines) ||
-			Number(lines) < 1 ||
-			Number(lines) > 256
-		)
-			throw new Error("Invalid recall regex or line limit");
-		new RegExp(regex, "i");
-		if (this.recalls.size >= 2) throw new ServiceUnavailable("Memory search busy, retry shortly");
-		await this.replicaState(bindingKey); // Ensure the database exists before opening the isolated reader.
-		if (this.stopped) throw new ServiceUnavailable("Memory service stopped");
-		if (this.recalls.size >= 2) throw new ServiceUnavailable("Memory search busy, retry shortly");
-		return new Promise((resolve, reject) => {
-			const worker = new Worker(new URL("./memory-worker.ts", import.meta.url), {
-				workerData: {
-					replicaRecall: { path: join(this.root, "shared-replicas", `${bindingKey}.sqlite`), regex, lines },
-				},
-			});
-			const finish = (error?: Error, value?: SharedMemoryRead) => {
-				if (!this.recalls.delete(worker)) return;
-				clearTimeout(timer);
-				void worker.terminate();
-				if (error) reject(error);
-				else resolve(value!);
-			};
-			this.recalls.set(worker, (error) => finish(error));
-			const timer = setTimeout(
-				() => finish(new Error("Memory search exceeded its 5-second limit; narrow the regex")),
-				5_000,
-			);
-			worker.on("message", (reply) => finish(reply.error ? new Error(reply.error) : undefined, reply.value));
-			worker.on("error", (error) => finish(error));
-			worker.on("exit", (code) => finish(new Error(`Memory search exited (${code})`)));
-		});
 	}
 	wake(projectId: string, lines = 96): Promise<MemoryView> {
 		return this.rpc(projectId, "wake", { lines });

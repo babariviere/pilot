@@ -16,12 +16,12 @@ import PilotCore
         }
     }
     @Published private(set) var rows: [Row] = []
-    private let hosts: HostClients
+    private let hosts: ClientDirectory
     private var local: HostRef?
     private var available: Set<HostRef>
     private var subscriptions: Set<AnyCancellable> = []
 
-    init(hosts: HostClients, local: HostRef?) {
+    init(hosts: ClientDirectory, local: HostRef?) {
         self.hosts = hosts; self.local = local; available = hosts.available
         hosts.$available.sink { [weak self] value in self?.available = value; self?.refresh() }.store(in: &subscriptions)
     }

@@ -47,7 +47,7 @@ rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules
 (cd "$stage/runtime"; node packages/daemon/scripts/build-usage-worker.mjs build packages/daemon/src)
 cp "$repo/scripts/linux/"{service.mjs,check-runtime.mjs} "$stage/runtime/"
 mkdir -p "$stage/runtime/scripts/linux"
-cp "$repo/scripts/linux/"{update.mjs,service.mjs,release-manifest.mjs} "$stage/runtime/scripts/linux/"
+cp "$repo/scripts/linux/"{service.mjs,release-manifest.mjs} "$stage/runtime/scripts/linux/"
 printf '%s\n' '#!/bin/sh' 'root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)' 'exec "$root/node/bin/node" "$root/service.mjs" "$@"' > "$stage/runtime/bin/pilot-runtime"
 chmod 755 "$stage/runtime/bin/"* "$stage/runtime/node/bin/node"
 python3 "$repo/scripts/linux/runtime-metadata.py" prepare "$stage/runtime"

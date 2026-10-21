@@ -4,7 +4,7 @@ import SwiftUI
 struct SessionFileViewer: View {
     let session: HostResourceRef
     let path: String
-    @ObservedObject var hosts: HostClients
+    @ObservedObject var hosts: ClientDirectory
     @State private var content: SessionFileContent?
     @State private var error: String?
 

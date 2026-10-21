@@ -2,7 +2,7 @@ import Combine
 import Foundation
 import PilotCore
 
-/// Native presentation projection. The eventual adapter maps the sole protocol owner's DTOs here.
+/// Presentation of pi’s Local model settings, not a distributed model registry.
 /// These are not encoded or used as an alternate HTTP contract.
 struct ScopedModelsObservation: Sendable {
     struct Candidate: Identifiable, Equatable, Sendable {
@@ -21,7 +21,7 @@ struct ScopedModelsObservation: Sendable {
     var writable = true
 }
 
-@MainActor final class ScopedModelsSync: ObservableObject {
+@MainActor final class LocalModelScope: ObservableObject {
     struct Endpoint {
         let token: HostConnectionToken
         let read: () async throws -> ScopedModelsObservation
@@ -42,14 +42,14 @@ struct ScopedModelsObservation: Sendable {
     @Published private(set) var checking: Set<HostRef> = []
     @Published private(set) var problem: String?
     private let store: ScopedModelsStore
-    private var endpoints: [HostRef: Endpoint] = [:]
-    private var tasks: [HostRef: Task<Void, Never>] = [:]
-    private var pending: Set<HostRef> = []
+    private var endpoint: Endpoint?
+    private var task: Task<Void, Never>?
+    private var pending = false
     private var ready = false
     private var loading = false
     private var stopped = false
     private var startup: Task<Void, Never>?
-    var isIdle: Bool { pending.isEmpty && tasks.isEmpty && !loading && startup == nil }
+    var isIdle: Bool { !pending && task == nil && !loading && startup == nil }
 
     init(store: ScopedModelsStore) { self.store = store }
 
@@ -62,22 +62,20 @@ struct ScopedModelsObservation: Sendable {
             guard !stopped else { return }
             publish(saved)
             ready = true
-            pending.formUnion(endpoints.keys)
+            pending = endpoint != nil
             drain()
         } catch { storageFailed() }
     }
 
-    /// Verified connection changes only, not streaming session/catalog updates or a timer.
-    func update(_ values: [HostRef: Endpoint]) {
+    /// Only the Local daemon can be admitted. A replacement waits for any cancelled read/write to unwind.
+    func update(_ value: Endpoint?) {
         guard !stopped else { return }
-        let changed = Set(values.keys.filter { endpoints[$0]?.token != values[$0]?.token })
-        for host in endpoints.keys where values[host]?.token != endpoints[host]?.token {
-            tasks[host]?.cancel()
-            observations[host] = nil
-        }
-        endpoints = values
-        pending.formIntersection(values.keys)
-        pending.formUnion(changed)
+        let value = value?.token.host.hostId == "local" ? value : nil
+        guard endpoint?.token != value?.token else { return }
+        task?.cancel()
+        observations = [:]
+        endpoint = value
+        pending = value != nil
         if ready { drain() }
         else if startup == nil {
             startup = Task { [weak self] in
@@ -88,15 +86,15 @@ struct ScopedModelsObservation: Sendable {
         }
     }
 
-    func refresh(_ host: HostRef) { pending.insert(host); drain() }
+    func refresh() { pending = endpoint != nil; drain() }
 
-    /// The editor supplies only first-contact baselines that were actually shown to the user.
-    func save(_ selection: ScopedModelsSelection, joining: [HostRef: ScopedModelsBaseline]) async {
+    func save(_ selection: ScopedModelsSelection, on host: HostRef, baseline: ScopedModelsBaseline? = nil) async {
+        guard host.hostId == "local" else { return }
         do {
             try selection.validate()
             problem = nil
-            publish(try await store.update { try $0.save(selection, joining: joining) })
-            pending.formUnion(endpoints.keys)
+            publish(try await store.update { try $0.save(selection, on: host, baseline: baseline) })
+            pending = endpoint != nil
             drain()
         } catch ScopedModelsFailure.invalidSelection {
             problem = "Choose All, or 1–256 literal patterns of at most 256 UTF-8 bytes each."
@@ -104,7 +102,7 @@ struct ScopedModelsObservation: Sendable {
     }
 
     func review(_ host: HostRef) -> Consent? {
-        guard let desired = state.desired, let endpoint = endpoints[host], endpoint.isCurrent(),
+        guard let desired = state.desired, let endpoint, endpoint.token.host == host, endpoint.isCurrent(),
               let observation = observations[host] else { return nil }
         return Consent(host: host, baseline: observation.baseline, revision: state.revision,
                        desired: desired, token: endpoint.token)
@@ -113,7 +111,7 @@ struct ScopedModelsObservation: Sendable {
     func isCurrent(_ consent: Consent) -> Bool {
         !stopped && state.revision == consent.revision && state.desired == consent.desired &&
             observations[consent.host]?.baseline == consent.baseline &&
-            endpoints[consent.host]?.token == consent.token && endpoints[consent.host]?.isCurrent() == true
+            endpoint?.token == consent.token && endpoint?.isCurrent() == true
     }
 
     func join(_ consent: Consent) async {
@@ -124,39 +122,40 @@ struct ScopedModelsObservation: Sendable {
                 guard $0.revision == consent.revision else { throw ScopedModelsFailure.stale }
                 try $0.join(consent.host, baseline: consent.baseline)
             })
-            refresh(consent.host)
+            refresh()
         } catch ScopedModelsFailure.stale {
         } catch { storageFailed() }
     }
 
     func leave(_ host: HostRef) async {
-        do { publish(try await store.update { $0.leave(host) }); pending.remove(host) }
+        guard host.hostId == "local" else { return }
+        do { publish(try await store.update { $0.leave(host) }); pending = false }
         catch { storageFailed() }
     }
 
-    func useEverywhere(_ consent: Consent) async {
+    func useCurrent(_ consent: Consent) async {
         guard isCurrent(consent) else { return }
         // A new intent, NOT permission to rebase other hosts' established CAS baselines.
         do {
             publish(try await store.update {
                 guard $0.revision == consent.revision else { throw ScopedModelsFailure.stale }
-                try $0.save(consent.baseline.selection, joining: [:])
+                try $0.save(consent.baseline.selection, on: consent.host)
             })
-            pending.formUnion(endpoints.keys)
+            pending = endpoint != nil
             drain()
         } catch ScopedModelsFailure.stale {
         } catch { storageFailed() }
     }
 
     func stop() {
-        stopped = true; pending.removeAll(); endpoints.removeAll()
-        for task in tasks.values { task.cancel() }
+        stopped = true; pending = false; endpoint = nil
+        task?.cancel()
     }
 
     func stopAndWait() async {
         stop()
         await startup?.value
-        for task in tasks.values { await task.value }
+        await task?.value
         await store.settled()
     }
 
@@ -170,29 +169,20 @@ struct ScopedModelsObservation: Sendable {
     }
 
     private func current(_ endpoint: Endpoint) -> Bool {
-        !stopped && !Task.isCancelled && endpoints[endpoint.token.host]?.token == endpoint.token && endpoint.isCurrent()
+        !stopped && !Task.isCancelled && self.endpoint?.token == endpoint.token && endpoint.isCurrent()
     }
 
     private func drain() {
-        guard ready, !stopped else { return }
-        // Local gets the first attempt. Its failure does not block independent devbox outcomes.
-        if tasks.keys.contains(where: { $0.hostId == "local" }) { return }
-        let ordered = pending.filter { endpoints[$0] != nil && tasks[$0] == nil }.sorted {
-            if ($0.hostId == "local") != ($1.hostId == "local") { return $0.hostId == "local" }
-            return $0.hostId < $1.hostId
-        }
-        for host in ordered where tasks.count < 2 {
-            guard let endpoint = endpoints[host] else { continue }
-            pending.remove(host)
-            checking.insert(host)
-            tasks[host] = Task { [weak self] in
-                guard let self else { return }
-                await self.reconcile(endpoint)
-                self.checking.remove(host)
-                self.tasks[host] = nil
-                self.drain()
-            }
-            if host.hostId == "local" { return }
+        guard ready, !stopped, pending, task == nil, let endpoint else { return }
+        pending = false
+        let host = endpoint.token.host
+        checking = [host]
+        task = Task { [weak self] in
+            guard let self else { return }
+            await self.reconcile(endpoint)
+            self.checking = []
+            self.task = nil
+            self.drain()
         }
     }
 
@@ -290,7 +280,7 @@ struct ScopedModelsObservation: Sendable {
                     $0.status = readback.baseline.hash == baseline.hash ? (attempt.sends < 2 ? .pending : .failed) : .conflict
                 }
                 // One bounded value-idempotent retry. A reconnect/relaunch uses the same budget.
-                if readback.baseline.hash == baseline.hash, attempt.sends < 2 { pending.insert(host) }
+                if readback.baseline.hash == baseline.hash, attempt.sends < 2 { pending = true }
             }
         } catch ScopedModelsFailure.stale {
             // Superseded revisions/generations cannot mark a newer intent applied.

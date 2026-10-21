@@ -16,7 +16,7 @@ public struct ProjectCheckoutGroup: Identifiable, Sendable {
     public var representative: Hosted<Project> { checkouts[0] }
 }
 
-/// A presentation over HostClients' inventory and existing RepositoryBindings, not another project store.
+/// A presentation over ClientDirectory' inventory and existing RepositoryBindings, not another project store.
 public enum ProjectCheckouts {
     public static func groups(_ projects: [Hosted<Project>], origins: [CheckoutOrigin],
                               bindings: RepositoryBindings, local: HostRef?) -> [ProjectCheckoutGroup] {

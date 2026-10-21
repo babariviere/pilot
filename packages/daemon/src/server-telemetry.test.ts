@@ -54,7 +54,6 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 		undefined,
 		undefined,
 		undefined,
-		undefined,
 		telemetry,
 	);
 	server.listen(0, "127.0.0.1");
