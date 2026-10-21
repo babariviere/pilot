@@ -57,7 +57,7 @@ test("unknown dispatched responses omit usage rather than inventing zero tokens/
 	assert.throws(() =>
 		parseUsageObservation({ ...unknown, parent: { sourceId: CHAT, operationId: "https://private" } }),
 	);
-	assert.throws(() => parseUsageObservation({ ...unknown, activity: "compaction" }));
+	assert.throws(() => parseUsageObservation({ ...unknown, kind: "request", activity: "compaction" }));
 	assert.equal(
 		parseUsageObservation({ ...unknown, kind: "checkpoint", activity: "compaction", requests: 0 }).activity,
 		"compaction",

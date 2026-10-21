@@ -4,8 +4,10 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { UsageHistoryWriteResult, UsageObservation } from "@pilot/protocol";
 import type { ReportSubscriptionLimit } from "./subscription-limit.ts";
 import type { TodoArgs, TodoCall, TodoResult } from "./todos.ts";
+import type { AcquireUsageEpoch, PublishUsage, UsageCaptureEpoch } from "./usage-capture.ts";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -14,6 +16,8 @@ const BRIDGE_ENV = "PILOT_TODO_BRIDGE";
 export async function startTodoBridge(
 	call: TodoCall,
 	reportLimit?: ReportSubscriptionLimit,
+	reportUsage?: PublishUsage,
+	acquireUsageEpoch?: AcquireUsageEpoch,
 ): Promise<{ close(): Promise<void> }> {
 	const directory = await mkdtemp(join(tmpdir(), "pt-"));
 	await chmod(directory, 0o700);
@@ -26,7 +30,10 @@ export async function startTodoBridge(
 		res.setHeader("content-type", "application/json");
 		if (
 			req.method !== "POST" ||
-			(req.url !== "/todo" && (req.url !== "/subscription-limit" || !reportLimit)) ||
+			(req.url !== "/todo" &&
+				(req.url !== "/subscription-limit" || !reportLimit) &&
+				(req.url !== "/usage-history" || !reportUsage) &&
+				(req.url !== "/usage-history-epoch" || !acquireUsageEpoch)) ||
 			req.headers.authorization !== `Bearer ${token}`
 		) {
 			res.writeHead(403).end(JSON.stringify({ error: "Todo bridge unavailable" }));
@@ -42,14 +49,20 @@ export async function startTodoBridge(
 		try {
 			const chunks: Buffer[] = [];
 			let bytes = 0;
+			const requestLimit =
+				req.url === "/usage-history" ? 4096 : req.url === "/usage-history-epoch" ? 1024 : MAX_REQUEST_BYTES;
 			for await (const chunk of req) {
 				bytes += chunk.length;
-				if (bytes > MAX_REQUEST_BYTES) throw new Error("Todo request too large");
+				if (bytes > requestLimit) throw new Error("Bridge request too large");
 				chunks.push(chunk);
 			}
 			const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 			let result: unknown;
-			if (req.url === "/subscription-limit") {
+			if (req.url === "/usage-history-epoch") result = await acquireUsageEpoch!();
+			else if (req.url === "/usage-history") {
+				if (bytes > 4096) throw new Error("Invalid usage record");
+				result = await reportUsage!(body);
+			} else if (req.url === "/subscription-limit") {
 				if (
 					!body ||
 					!["anthropic", "openai"].includes(body.provider) ||
@@ -121,8 +134,12 @@ export function callParentTodo(args: TodoArgs, actor: string): Promise<TodoResul
 }
 
 export const callParentSubscriptionLimit: ReportSubscriptionLimit = (limit) => callParent("/subscription-limit", limit);
+export const callParentUsage: PublishUsage = (row: UsageObservation) =>
+	callParent<UsageHistoryWriteResult>("/usage-history", row);
+export const callParentUsageEpoch: AcquireUsageEpoch = () =>
+	callParent<UsageCaptureEpoch>("/usage-history-epoch", {}, 150);
 
-function callParent<T>(path: string, body: unknown): Promise<T> {
+function callParent<T>(path: string, body: unknown, timeoutMs = 30_000): Promise<T> {
 	const config = process.env[BRIDGE_ENV];
 	if (!config) return Promise.reject(new Error("Parent chat bridge is unavailable"));
 	const { socketPath, token } = JSON.parse(config);
@@ -155,7 +172,7 @@ function callParent<T>(path: string, body: unknown): Promise<T> {
 			},
 		);
 		req.on("error", reject);
-		req.setTimeout(30_000, () => req.destroy(new Error("Parent todo request timed out")));
+		req.setTimeout(timeoutMs, () => req.destroy(new Error("Parent todo request timed out")));
 		req.end(JSON.stringify(body));
 	});
 }

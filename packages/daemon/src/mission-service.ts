@@ -198,6 +198,12 @@ export class MissionService {
 			},
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
+			usageAttribution: (sessionId) => {
+				const shared = this.sharing?.membership(sessionId)?.grant.task.mission;
+				const missionId = shared?.missionId ?? store.missionOf(sessionId);
+				const home = shared?.home ?? this.sharing?.host;
+				return missionId && home ? { homeId: home.daemonId, lineageId: home.lineageId, missionId } : undefined;
+			},
 			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);

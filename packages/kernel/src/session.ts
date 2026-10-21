@@ -61,12 +61,11 @@ import { createControlMemoryTools } from "./control-memory-tools.ts";
 import { controlPermissionPreparation } from "./control-permission-preparation.ts";
 import { type ControlCall, ControlTurn } from "./control-turn.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
+import { compactionLine, DeterministicCompaction, deterministicCompactionEnabled } from "./deterministic-compaction.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
 import { createDiagnosticsTool, type DiagnosticsCall } from "./diagnostics-tool.ts";
-import { compactionLine, DeterministicCompaction, deterministicCompactionEnabled } from "./deterministic-compaction.ts";
-import { createHistoryRecallTool } from "./history-recall.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
@@ -77,6 +76,7 @@ import {
 	pauseInputs,
 	type SystemMessageStateEvent,
 } from "./held-inputs.ts";
+import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
@@ -122,6 +122,7 @@ import {
 import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import { nativeToolPolicy } from "./tool-policy.ts";
 import type { KernelUsage } from "./usage.ts";
+import { UsageCapture } from "./usage-capture.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
 
@@ -150,6 +151,8 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	reportUsageHistory?: import("./usage-capture.ts").PublishUsage;
+	acquireUsageEpoch?: import("./usage-capture.ts").AcquireUsageEpoch;
 	prepareControlPermission?(): Promise<import("./tool-policy.ts").ControlPermission | undefined>;
 	onRunAdmitted?(controlCaused: boolean, requestIds: string[], recoveredOnly?: boolean): Promise<void>;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
@@ -230,6 +233,7 @@ export class KernelSession {
 	#retired = false;
 	#cwd = "";
 	#storage!: Storage;
+	#usageCapture?: UsageCapture;
 	#attempts?: SessionAttempt[];
 	#compactionLog?: PerformanceLog;
 
@@ -289,6 +293,19 @@ export class KernelSession {
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
 		if (spec.control && (!hooks.callControl || spec.projectId || spec.pilot?.workspace || spec.pilot?.ask))
 			throw new Error("Invalid project-less control session");
+		// Recovery may launch descendants while native extensions initialize, before this
+		// worker's Harness exists. They must already inherit the host-issued capture epoch.
+		if (spec.usageHistory && hooks.reportUsageHistory)
+			process.env.PILOT_USAGE_HISTORY = JSON.stringify({
+				...spec.usageHistory,
+				attribution: {
+					chatId: spec.sessionId,
+					...(spec.projectId ? { projectId: spec.projectId } : {}),
+					...(spec.usageMission ? { mission: spec.usageMission } : {}),
+				},
+				purpose: spec.control ? "control" : "agent",
+			});
+		else delete process.env.PILOT_USAGE_HISTORY;
 		const owned = await openSessionStorage(spec.storageDir);
 		const performanceLog =
 			process.env.PILOT_PERF_TIMINGS === "0"
@@ -475,7 +492,12 @@ export class KernelSession {
 				},
 			};
 			if (!spec.pilot?.ask && !spec.control)
-				todoBridge = await startTodoBridge(callTodo, hooks.reportSubscriptionLimit);
+				todoBridge = await startTodoBridge(
+					callTodo,
+					hooks.reportSubscriptionLimit,
+					hooks.reportUsageHistory,
+					hooks.acquireUsageEpoch,
+				);
 			const diagnosticScope = spec.diagnosticTarget
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
 				: spec.diagnosticScope;
@@ -633,11 +655,33 @@ export class KernelSession {
 				const ref = adapter!.model;
 				return adapter!.models.getModel(ref.provider, ref.modelId)?.contextWindow ?? 0;
 			};
+			const usageCapture =
+				spec.usageHistory && hooks.reportUsageHistory
+					? new UsageCapture(
+							{
+								...spec.usageHistory,
+								attribution: {
+									chatId: spec.sessionId,
+									...(spec.projectId ? { projectId: spec.projectId } : {}),
+									...(spec.usageMission ? { mission: spec.usageMission } : {}),
+								},
+								purpose: spec.control ? "control" : "agent",
+							},
+							hooks.reportUsageHistory,
+							hooks.acquireUsageEpoch,
+							join(spec.storageDir, "usage-capture.json"),
+						)
+					: undefined;
+			usageCapture?.instrumentStreams(adapter.session.extensionRunner.getModelRegistry());
 			harness = await Harness.open(
 				owned.storage,
 				{
-					models: adapter.models,
-					registry: control ? control.registry(registry) : registry,
+					models: usageCapture ? usageCapture.deferredModels(adapter.models) : adapter.models,
+					registry: usageCapture
+						? usageCapture.registry(control ? control.registry(registry) : registry)
+						: control
+							? control.registry(registry)
+							: registry,
 					// The Harness reads settings on every resolution, so the getter follows model and window changes.
 					settings: digestCompaction
 						? Object.defineProperty({ ...settings }, "compaction", {
@@ -650,6 +694,10 @@ export class KernelSession {
 				},
 				context,
 			);
+			if (usageCapture) {
+				await usageCapture.bind(harness);
+				process.env.PILOT_USAGE_HISTORY = JSON.stringify(usageCapture.configuration);
+			}
 			// The agent applies only on first creation; a reopened session keeps its pinned choices.
 			const root = () =>
 				harness!.root(context, {
@@ -739,6 +787,7 @@ export class KernelSession {
 			);
 			session.#cwd = spec.cwd;
 			session.#storage = owned.storage;
+			session.#usageCapture = usageCapture;
 			session.#compactionLog = compactionLog;
 			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
 			const recoverFollowThrough = async (
@@ -1004,13 +1053,17 @@ export class KernelSession {
 					context,
 					signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
 					summarize: async (text, maxTokens, signal) => {
-						const answer = await this.adapter.models.completeSimple(
-							choice.model,
-							{
-								messages: [{ role: "user", content: text, timestamp: Date.now() }],
-							},
-							{ maxTokens, signal },
-						);
+						const request = () =>
+							this.adapter.models.completeSimple(
+								choice.model,
+								{
+									messages: [{ role: "user", content: text, timestamp: Date.now() }],
+								},
+								{ maxTokens, signal },
+							);
+						const answer = await (this.#usageCapture
+							? this.#usageCapture.compaction(this.conversation.id, request)
+							: request());
 						// Like ordinary compaction, every response costs usage, even if rebuilding later fails.
 						await this.harness.commit(async (tx) => {
 							const models = (await tx.doc(UsageDoc, this.conversation.id)).models;

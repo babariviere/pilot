@@ -4,7 +4,7 @@
 	"sourceId": "22222222-2222-4222-8222-222222222222",
 	"operationId": "request:lost",
 	"revision": 1,
-	"kind": "request",
+	"kind": "checkpoint",
 	"scope": "direct",
 	"observedAt": 1792530000000,
 	"coverage": "partial",
