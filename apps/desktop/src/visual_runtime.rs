@@ -1,7 +1,9 @@
 //! Off-UI process transport. No VM/engine is linked into the desktop process.
 use crate::visual_wire;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(all(test, target_os = "macos"))]
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
@@ -71,6 +73,12 @@ pub(crate) fn worker_path() -> Result<PathBuf, Fault> {
 }
 impl Process {
     pub(crate) async fn start() -> Result<Self, Fault> {
+        if !cfg!(target_os = "macos") {
+            return Err(Fault::new(
+                "unavailable",
+                "Native source execution is disabled until this platform's confinement is validated. Source remains available.",
+            ));
+        }
         Self::start_at(&worker_path()?).await
     }
     async fn start_at(path: &Path) -> Result<Self, Fault> {
@@ -325,7 +333,7 @@ fn verify_sandbox(pid: u32, _: &Path) -> bool {
 fn verify_sandbox(_: u32, _: &Path) -> bool {
     false
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     #[tokio::test]
@@ -423,16 +431,15 @@ mod tests {
         assert!(p.child.try_wait().unwrap().is_some());
     }
     #[tokio::test]
-    async fn native_unresponsive_worker_is_hard_killed_and_reaped() {
+    async fn stopped_owned_worker_hits_parent_hard_deadline_and_is_killed_reaped() {
         let mut p = Process::start().await.unwrap();
-        let pid = p.child.id();
-        assert!(
-            tokio::time::timeout(Duration::from_millis(25), p.read_frame())
-                .await
-                .is_err()
-        );
-        p.stop().await;
-        assert!(pid.is_some());
+        let pid = p.child.id().unwrap();
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
+        let error=p.exchange(json!({"kind":"load","source":"({ui})=>ui.text('Synthetic')","data":null,"state":null,"seed":"synthetic","now":0})).await.unwrap_err();
+        assert_eq!(error.kind, "timeout");
         assert!(p.child.try_wait().unwrap().is_some());
+        let mut fresh = Process::start().await.unwrap();
+        assert!(fresh.exchange(json!({"kind":"load","source":"({ui})=>ui.text('Fresh')","data":null,"state":null,"seed":"synthetic","now":0})).await.is_ok());
+        fresh.stop().await;
     }
 }

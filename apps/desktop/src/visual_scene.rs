@@ -34,12 +34,14 @@ pub(crate) struct Scene {
     pub(crate) controls: BTreeMap<String, Control>,
     pub(crate) canvases: Vec<(String, f64)>,
     pub(crate) nodes: usize,
+    pub(crate) charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
 }
 struct Check {
     controls: BTreeMap<String, Control>,
     canvases: Vec<(String, f64)>,
     nodes: usize,
     text: usize,
+    charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
 }
 fn object<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, Bad> {
     let o = v.as_object().ok_or("Expected object")?;
@@ -118,6 +120,7 @@ impl Scene {
             canvases: Vec::new(),
             nodes: 0,
             text: 0,
+            charts: BTreeMap::new(),
         };
         c.node(&value["root"], "0", 0)?;
         Ok(Self {
@@ -125,6 +128,7 @@ impl Scene {
             controls: c.controls,
             canvases: c.canvases,
             nodes: c.nodes,
+            charts: c.charts,
         })
     }
 }
@@ -294,6 +298,10 @@ impl Check {
                 if v["stacked"] == true && !matches!(v["kind"].as_str(), Some("bar" | "area")) {
                     return Err("Invalid stacked chart");
                 }
+                self.charts.insert(
+                    path.into(),
+                    crate::visual_chart::Chart::parse(v).map(Arc::new),
+                );
             }
             "rule" => {}
             "space" => {

@@ -15,12 +15,13 @@ pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
 mod appearance;
-#[cfg(test)]
+mod artifact_model;
+mod artifact_view;
+mod artifact_worker;
+mod visual_chart;
+mod visual_chart_view;
 mod visual_runtime;
-#[cfg(test)]
 mod visual_scene;
-#[cfg(test)]
 mod visual_session;
-#[cfg(test)]
 mod visual_wire;
 pub use appearance::{ChromeAssets, follow_appearance, init_appearance};
