@@ -85,19 +85,36 @@ struct VisualHostTests {
         #expect(await host.event("d", "0/onClick").scriptError?.kind == .timeout)
     }
 
-    @Test(.timeLimit(.minutes(1))) func reportsMemoryAndStackExhaustionWithLines() async {
+    @Test(.timeLimit(.minutes(1))) func reportsMemoryAndStackExhaustionWithLines() async throws {
         let host = VisualHost()
         // Large allocations reach the heap limit in a few steps, far below the setup time limit on a slow runner.
         let memory = await host.load("a", request(
             "function visual() {\n  const chunks = [];\n  for (;;) chunks.push(new ArrayBuffer(8 * 1024 * 1024));\n}"))
-        #expect(memory.scriptError?.kind == .memory)
-        #expect(memory.scriptError?.message == "the visual used more than 32 MiB of memory")
-        #expect(memory.scriptError?.line == 3)
+        let memoryError = try #require(memory.scriptError)
+        #expect(memoryError.kind == .memory)
+        #expect(memoryError.message == "the visual used more than 32 MiB of memory")
+        // QuickJS may be unable to allocate its OOM Error, so no source stack exists.
+        // Do not invent a line, but still require correct attribution whenever metadata survived.
+        #expect(memoryError.line == 3 || (memoryError.line == nil && memoryError.stack == nil))
 
         let stack = await host.load("b", request("function visual() {\n  const f = (n) => f(n + 1) + 1;\n  return f(0);\n}"))
         #expect(stack.scriptError?.kind == .stack)
         #expect(stack.scriptError?.message == "RangeError: Maximum call stack size exceeded")
         #expect(stack.scriptError?.line == 2)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func reportsMetadataFreeMemoryErrorsWithoutInventingLines() async throws {
+        let host = VisualHost()
+        // QuickJS uses a null exception when it cannot allocate an OOM Error. Throwing null
+        // deterministically exercises that existing fallback without relying on heap allocation order.
+        let result = await host.load("a", request("function visual() {\n  throw null;\n}"))
+        let error = try #require(result.scriptError)
+        #expect(error.kind == .memory)
+        #expect(error.message == "the visual used more than 32 MiB of memory")
+        #expect(error.line == nil)
+        #expect(error.stack == nil)
+        #expect(VisualFailure.script(error).message == error.message)
+        #expect(host.liveIDs.isEmpty)
     }
 
     @Test(.timeLimit(.minutes(1))) func reportsScriptErrorsWithLines() async {
