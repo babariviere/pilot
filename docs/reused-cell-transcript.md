@@ -175,13 +175,12 @@ strategy before rollout, rather than silently blurring the editor or keeping eve
 Persisted visual JSON does not by itself preserve arbitrary web DOM/input state across teardown; define and
 test the same supported remount behavior as today, with no accidental new reloads during a focused edit.
 
-## Approved ordered migration PRs
+## Historical migration (reverted)
 
-The AppKit transcript is now the default. `PILOT_APPKIT_TRANSCRIPT=0` selects the retained SwiftUI fallback;
-`1` forces native. Either explicit environment value overrides the saved `appKitTranscript` app preference;
-without it, a stored false selects legacy, true selects native, and an absent preference selects native.
-Other environment values are ignored. The user-approved default change does not close the outstanding
-smoothness, interaction or scaling gates; source-pinned measurements remain historical evidence.
+The user requested reverting the AppKit transcript transition. Chat now uses the restored SwiftUI
+implementation unconditionally. The AppKit transcript implementation and its renderer overrides are removed.
+The implementation notes below and source-pinned measurements describe the reverted migration, not the
+current product, and remain historical evidence of its outstanding smoothness, interaction and scaling gaps.
 The native controller consumes the existing
 history/live split, rebinds only changed live rows, and bounds the measured-height cache to 4,096 entries.
 NSTableView's installed geometry is tracked separately so measurement eviction or font invalidation cannot
@@ -190,8 +189,8 @@ it must not infer chrome changes from the streaming revision.
 
 The first prototype used compatibility hosts for complex Markdown and non-text rows. The remaining-row port
 removes those generic hosts. Native AppKit views now supply bubbles, work/tool steps, diffs, timeline/error rows,
-code, tables, diagrams, artifact chrome, header/footer, pagination and scheduled messages. The shipping-default
-SwiftUI path is still present for comparison and fallback, but is no longer the default.
+code, tables, diagrams, artifact chrome, header/footer, pagination and scheduled messages. That AppKit path
+has since been removed, and the SwiftUI transcript is restored.
 
 Native Markdown shares incremental preparation, selection and Core Animation veils. Native Mermaid uses its
 existing off-main bitmap engine; unsupported diagrams embed the same sandboxed WebKit fallback directly.

@@ -49,30 +49,24 @@ private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "l
 }
 
 @Test(arguments: [false, true]) @MainActor
-func retiredNativeHeaderUsesReadOnlyHistoryNoticeWithoutReconnect(cached: Bool) throws {
+func retiredHistoryNoticeStaysReadOnlyWithoutReconnect(cached: Bool) throws {
     let clients = ClientDirectory()
     let context = HostViewContext(host: retiredBox, hosts: clients)
-    let header = NativeTranscriptHeader(disconnected: context, historyCached: cached)
-    let banner = try #require(header.disconnectionBanner)
     let message = DisconnectedHistoryMessage(context: context, historyCached: cached)
-    #expect(banner.title == message.title)
-    let detail = try #require(banner.detail)
-    #expect(detail.contains(message.detail))
-    #expect(detail.contains("does not stop work"))
-    #expect(detail.contains(cached ? "Cached history is read-only" : "not cached on this Mac"))
-    #expect(!detail.contains("Reconnect"))
-    #expect(banner.action == nil)
-    #expect(NativeTranscriptHeader().disconnectionBanner == nil)
+    #expect(message.title == "Remote history · box")
+    #expect(message.detail.contains(cached ? "Cached history is read-only" : "not cached on this Mac"))
+    #expect(!message.detail.contains("Reconnect"))
+    let ownership = try #require(message.ownership)
+    #expect(ownership.contains("does not stop work"))
 }
 
-@Test @MainActor func localNativeHeaderKeepsLocalOutageSeparateFromRetiredHistory() throws {
+@Test @MainActor func localHistoryNoticeKeepsLocalOutageSeparateFromRetiredHistory() {
     let context = HostViewContext(host: retiredLocal, hosts: ClientDirectory())
-    let banner = try #require(NativeTranscriptHeader(disconnected: context).disconnectionBanner)
-    #expect(banner.title == "Local daemon unavailable")
-    let detail = try #require(banner.detail)
-    #expect(detail.contains("pilotd") && detail.contains("stays on this Mac"))
-    #expect(!detail.contains("Remote devboxes"))
-    #expect(banner.action == nil)
+    let message = DisconnectedHistoryMessage(context: context, historyCached: true)
+    #expect(message.title == "Local daemon unavailable")
+    #expect(message.detail.contains("pilotd") && message.detail.contains("stays on this Mac"))
+    #expect(!message.detail.contains("Remote devboxes"))
+    #expect(message.ownership == nil)
 }
 
 @MainActor private func retiredApp(_ directory: URL, hosts: ClientDirectory) throws -> AppModel {
