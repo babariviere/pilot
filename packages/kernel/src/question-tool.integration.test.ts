@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -18,6 +18,7 @@ import type { DatabaseCall } from "./database-tool.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
 import { KernelSession } from "./session.ts";
+import { TOOL_ACTIVITY_FILE, type ToolActivityRecord } from "./tool-activity.ts";
 
 async function open(
 	t: TestContext,
@@ -98,7 +99,7 @@ async function open(
 		await Promise.all(refreshes);
 		await session.close();
 	});
-	return { session, faux, completions };
+	return { session, faux, completions, storageDir: join(root, "storage") };
 }
 
 async function questions(session: KernelSession) {
@@ -220,6 +221,70 @@ test("ask_user through codemode still records the question", { timeout: 20_000 }
 		},
 	]);
 	assert.equal((await settled(completions, 1))?.outcome, "question");
+});
+
+test("a caught nested DB rejection remains a failed call even when discovery, approval and the script succeed", {
+	timeout: 20_000,
+}, async (t) => {
+	const calls: string[] = [];
+	const failure =
+		"Database connection failed (SQLSTATE 28000). PostgreSQL server authentication rules rejected the connection. The server reported an unencrypted connection; this alone does not establish a TLS requirement. Pilot access approval does not verify connectivity.";
+	const { session, faux, completions, storageDir } = await open(t, "database-caught-failure", {
+		databases: true,
+		callDatabase: async (action, args): Promise<JsonValue> => {
+			calls.push(action);
+			if (action === "access") {
+				assert.ok(!calls.includes("query"), "listing and approval happen before any connection attempt");
+				return args.env
+					? { status: "granted", env: "prod", mode: "read" }
+					: { environments: [{ name: "prod", modes: { read: "allow" }, granted: [] }] };
+			}
+			throw Object.assign(new Error(failure), { code: "28000" });
+		},
+	});
+	faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: `text(typeof tools.db);
+text(await tools.db({action: "access"}));
+text(await tools.db({action: "access", env: "prod"}));
+try { await tools.db({action: "query", env: "prod", sql: "select 'private-query-marker'"}); }
+catch (error) { text(String(error)); }
+text("script finished, not connectivity success");`,
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The script finished, but the database query failed. No SQL results were returned."),
+	]);
+	await session.submit("query", "Run the offline DB failure fixture", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	const messages = (await session.conversation.context(BACKGROUND_CONTEXT)).messages;
+	const outer = messages.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+	assert.ok(outer?.role === "toolResult");
+	assert.equal(outer.isError, false);
+	assert.match(JSON.stringify(outer.content), /SQLSTATE 28000.*does not establish a TLS requirement/);
+	assert.match(JSON.stringify(outer.content), /script finished, not connectivity success/);
+	assert.doesNotMatch(JSON.stringify(outer.content), /rowCount|columns/);
+	assert.deepEqual(calls, ["access", "access", "query"], "no automatic retry after the caught rejection");
+	assert.equal((await settled(completions, 1))?.outcome, "done", "run completion is separate from query outcome");
+	await session.close();
+	const activity = await readFile(join(storageDir, TOOL_ACTIVITY_FILE), "utf8");
+	const finished = activity
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as ToolActivityRecord)
+		.filter((record) => record.kind === "finished");
+	assert.deepEqual(
+		finished.map(({ category, nested, outcome }) => ({ category, nested, outcome })),
+		[
+			{ category: "orchestration", nested: true, outcome: "success" },
+			{ category: "orchestration", nested: true, outcome: "success" },
+			{ category: "orchestration", nested: true, outcome: "failure" },
+			{ category: "codemode", nested: false, outcome: "success" },
+		],
+	);
+	assert.equal(new Set(finished.map(({ ref }) => ref)).size, 4, "independently attributable calls");
+	assert.doesNotMatch(activity, /private-query-marker|SQLSTATE|prod|authentication|postgres:\/\//);
 });
 
 test("without a database config, chats have no db tool", { timeout: 20_000 }, async (t) => {

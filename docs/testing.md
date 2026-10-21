@@ -191,6 +191,32 @@ persists a codemode image-then-error, reopens the failed chat and completes thro
 serializer with offline SSE, checking that the error result is text-only, the image is still sent, and
 history, request hooks and already-committed tool effects remain intact.
 
+## Database connection diagnosis
+
+Database fixtures run only against disposable local PostgreSQL servers and synthetic driver failures.
+`databases.test.ts` covers URL/object TLS precedence, retained CA/certificate/key options, certificate
+verification, driver defaults, no plaintext fallback, and secret-free connection errors. Its authentication
+matrix includes several `28000` causes: an unencrypted-connection hint is not proof of a TLS requirement.
+`databases.integration.test.ts` also follows owner-only `database.json` through a settings edit,
+`DatabaseService`, and the real driver. Discovery and native approval make zero connections; explicit
+queries retain verified TLS, enforce read-only transactions, and leave grants unchanged after failures.
+
+`question-tool.integration.test.ts` uses the real Harness, native DB tool and codemode with a synthetic
+daemon rejection. A caught nested DB failure remains a separate failed activity record even when listing,
+approval and the outer script succeed. `session-diagnostics.test.ts` checks that the bounded diagnostic
+projection preserves those separate outcomes while excluding unexpected connection strings, SQL and error
+context. Script completion, discovery and approval are not evidence of database connectivity.
+
+These checks do not establish the effective settings or authentication rules of any production endpoint.
+The reviewed production evidence showed a rejected connection, not a successful query or a verified TLS
+root cause. The current client already resolves URLs once before merging explicit TLS settings and does
+not pass `connectionString` back to pg, so a second driver parse cannot discard the configured CA.
+No additional client-setting defect was demonstrated in this investigation. No production database or
+diagnosed chat was opened, retried, restarted, replayed or changed, and no security policy was relaxed.
+An administrator must still correlate the rejected connection with the server's authentication rules
+(client address, role, database and encryption state) and verify the effective client TLS settings through
+an approved secure channel. Do not publish credentials, connection strings or certificate/key contents.
+
 ## Diagnostic redaction responsiveness
 
 `diagnostic-redaction.stress.test.ts` runs twelve ordered synthetic records (six colon-rich URL-like
