@@ -145,6 +145,7 @@ impl Engine {
         width: f64,
         height: f64,
         t: f64,
+        pointer: Option<(f64, f64)>,
     ) -> Result<(bool, Vec<u8>), ()> {
         self.result(|e, out| {
             let mut written = 0;
@@ -156,9 +157,9 @@ impl Engine {
                     width,
                     height,
                     t,
-                    0,
-                    0.,
-                    0.,
+                    i32::from(pointer.is_some()),
+                    pointer.map_or(0., |p| p.0),
+                    pointer.map_or(0., |p| p.1),
                     std::ptr::null_mut(),
                     0,
                     &mut written,

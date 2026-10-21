@@ -289,6 +289,28 @@ impl LocalViewer {
     /// Network/state-free native renderer corpus. Uses stored expected trees, never evaluates JS.
     pub fn visual_preview(index: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self::preview(PreviewState::Conversation, window, cx);
+        if index == 9 {
+            let reference = crate::artifact_model::Reference {
+                id: "synthetic-visual".into(),
+                session: "synthetic".into(),
+                revision: 1,
+                title: "Static canvas (synthetic record)".into(),
+                kind: "visual".into(),
+            };
+            view.state.artifacts = Arc::new(vec![reference.clone()]);
+            view.artifacts_open = true;
+            let width = (f32::from(window.viewport_size().width)
+                - if window.viewport_size().width < px(800.) {
+                    184.
+                } else {
+                    232.
+                })
+            .min(760.)
+                - 24.;
+            view.artifacts
+                .update(cx, |p, cx| p.preview_canvas(reference, width as f64, cx));
+            return view;
+        }
         let corpus: serde_json::Value = serde_json::from_str(include_str!(
             "../../../packages/protocol/fixtures/visual/conformance.json"
         ))
@@ -314,6 +336,19 @@ impl LocalViewer {
             )
         });
         view
+    }
+    /// Native fixture sizing only. Never used by a connected/captured viewer or canonical artifacts.
+    pub fn resize_synthetic_canvas(&mut self, width: f64, cx: &mut Context<Self>) {
+        if self.client.is_some()
+            || self.writer.is_some()
+            || !self.state.status.starts_with("Synthetic")
+        {
+            return;
+        }
+        if let Some(reference) = self.state.artifacts.first().cloned() {
+            self.artifacts
+                .update(cx, |p, cx| p.preview_canvas(reference, width, cx));
+        }
     }
     /// Fixed synthetic states, no daemon/private draft store or mutation capability.
     pub fn preview(state: PreviewState, window: &mut Window, cx: &mut Context<Self>) -> Self {

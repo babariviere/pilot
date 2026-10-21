@@ -375,6 +375,9 @@ impl Check {
                 if v["id"].as_str() != Some(path) {
                     return Err("Invalid canvas path");
                 }
+                if self.canvases.len() >= 8 {
+                    return Err("Too many canvas nodes");
+                }
                 self.canvases.push((path.into(), height));
             }
             "shader" => {

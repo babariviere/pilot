@@ -69,6 +69,40 @@ impl Session {
             self.program.now = now;
         }
     }
+    pub(crate) async fn draw(
+        &mut self,
+        version: u64,
+        id: &str,
+        width: f64,
+        height: f64,
+    ) -> Result<crate::visual_drawing::Drawing, Fault> {
+        if version != self.version
+            || self.process.is_none()
+            || !width.is_finite()
+            || !height.is_finite()
+            || !(24.0..=600.).contains(&height)
+            || !(1.0..=2000.).contains(&width)
+            || self
+                .scene
+                .as_ref()
+                .and_then(|s| s.canvases.iter().find(|(canvas, _)| canvas == id))
+                .is_none_or(|(_, h)| (*h - height).abs() > 0.5)
+        {
+            return Err(invalid("This canvas request is no longer active"));
+        }
+        let result = self
+            .process
+            .as_mut()
+            .unwrap()
+            .drawing(
+                json!({"kind":"draw","id":id,"width":width,"height":height,"t":0,"pointer":null}),
+            )
+            .await;
+        if result.is_err() {
+            self.stop().await;
+        }
+        result
+    }
     pub(crate) async fn event(
         &mut self,
         version: u64,
@@ -187,6 +221,38 @@ mod tests {
             let version = session.version;
             session.event(version, "0.1", json!(false)).await.unwrap();
             assert_eq!(session.state.as_deref(), Some("[{\"n\":1}]"));
+            session.stop().await;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn draw_interrupt_or_null_error_discards_vm_and_keeps_committed_state() {
+        for failure in ["for(;;){}", "throw null;"] {
+            let source="({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(String(s.n)+':'+String(globalThis.partial||0)),ui.canvas({height:120,draw:g=>{globalThis.partial=7;__FAILURE__}})]);}".replace("__FAILURE__",failure);
+            let mut session = Session::new(
+                Program {
+                    source,
+                    data: Value::Null,
+                    seed: "synthetic".into(),
+                    now: 0.,
+                },
+                None,
+            )
+            .unwrap();
+            session.retry().await.unwrap();
+            let state = session.state.clone();
+            let version = session.version;
+            let error = session.draw(version, "0.1", 320., 120.).await.unwrap_err();
+            assert!(matches!(error.kind, "timeout" | "memory"));
+            assert!(session.process.is_none());
+            assert_eq!(session.state, state);
+            assert_eq!(session.version, version);
+            session.retry().await.unwrap();
+            assert_eq!(
+                session.scene.as_ref().unwrap().root["children"][0]["runs"][0]["text"],
+                "0:0"
+            );
+            assert!(session.draw(version, "0.1", 320., 120.).await.is_err());
             session.stop().await;
         }
     }

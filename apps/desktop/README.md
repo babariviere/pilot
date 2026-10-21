@@ -110,8 +110,11 @@ available even for unsupported kinds. Reader state is in memory for eight
 revisions, separate from Swift and canonical data; it resets on restart.
 
 Native text/layout/stats/tables, buttons/toggles/tabs, slider steppers and
-bounded non-stacked line/area/bar/scatter charts are implemented with explicit
-display limits and simplified typography/axes. Canvas, Mermaid, image/SwiftUI
+bounded non-stacked line/area/bar/scatter charts and a bounded static canvas
+subset are implemented with explicit display limits and simplified typography/axes.
+Static canvas supports trusted native path/text painting, limited transforms,
+viewport margins and approximated curves; animation/pointer scheduling and
+non-uniform strokes/transformed text remain unsupported. Mermaid, image/SwiftUI
 previews and stacked/out-of-domain charts currently show honest placeholders.
 HTML/React/browser libraries and shaders remain deferred and stored data is not
 deleted. Links are inert. No prepared HTML or external assets are consumed.
