@@ -1,5 +1,5 @@
 {
-  "method": "Same real SwiftUI main scene, 1280x820 window frame; native viewport approximately 606pt. Three alternating unlocked120Hz AC release pairs per workload, no profiler or diagnostic hooks.",
+  "method": "Same real SwiftUI main scene, requested 1280x820 content size; native viewport approximately 606pt. Three alternating unlocked120Hz AC release pairs per workload, no profiler or diagnostic hooks.",
   "date": "2026-10-21",
   "baselineSource": "e3bb09bd2eff35a0fc41f7d1fdaffb0e8571a954 + identical single-scene fixture correction",
   "nativeSource": "f6c09610a36331594bf18dec72fee5b03fae94f4 + single-scene fixture correction",

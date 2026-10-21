@@ -19,8 +19,8 @@ cover existing-window/root identity and missing/ambiguous rejection. Production 
 selection, focus, artifact engines, sizing rules and the default flag are unchanged.
 
 Do not compare the new numbers with the old two-graph batch as a renderer speedup. The real scene also has
-its actual toolbar/chrome: its frame is 1280×820 rather than the old manual window's 1280×900. Both new
-controls use the same corrected fixture. Historical reports remain evidence of those older experiments,
+its actual toolbar/chrome. Both new controls request the same 1280×820 content size with the corrected
+fixture. Historical reports remain evidence of those older experiments,
 not clean one-window acceptance controls.
 
 ## Corrected release comparison
@@ -108,6 +108,46 @@ commit cost, or that the change improves hitches. Tiny later commits remain unat
 captured main-thread commit p95 is not a presentation-hitch measurement.
 
 [Bounded correlation data, complete-generation mapping and confidence limits](benchmarks/native-transcript-commit-correlation-2026-10-21.json).
+
+### Rejected prepared-height experiment
+
+The candidate gave successful async Markdown preparation a dedicated callback, after prepared state and
+task cleanup. The controller immediately installed that row's height only outside binding/update/flush
+and with no unrelated pending item. Generation fencing and a shared reentrant flush guard preserved
+later pending work; ordinary binding, layout and artifact callbacks remained deferred. It did not change
+source cadence, content, selections, sizing rules or the opt-in default.
+
+Both frozen native release binaries used the repaired scene fixture, requested 1280×820 content size,
+and had no profiler or trace hooks. After one rich warmup each, three alternating pairs per workload ran
+on AC and an unlocked built-in 120 Hz display. An earlier attempt stopped at its initial lock guard,
+before any warmup, window or measurement; none of its output is a sample. The valid run passed every
+pre/post-run lock and power guard, with no recorded thermal/performance warning. A process-snapshot
+`sort | head` pipeline emitted a broken-pipe notice once; it did not affect the app run or its output.
+
+| Pair | Streaming hitches, before → candidate | Rich hitches, before → candidate | Rich p95, before → candidate | Rich steps over 16 ms, before → candidate |
+| --- | --- | --- | --- | --- |
+| 1 | 50.9 → 52.6 ms/s | 39.1 → 53.1 ms/s | 7.3 → 8.3 ms | 4 → 4 / 600 |
+| 2 | 50.1 → 40.9 ms/s | 47.8 → 33.0 ms/s | 8.0 → 6.0 ms | 2 → 0 / 600 |
+| 3 | 48.5 → 77.8 ms/s | 46.9 → 56.5 ms/s | 7.8 → 8.5 ms | 4 → 2 / 600 |
+
+Median streaming main-thread CPU improved 11.0→9.6%, but hitch time regressed 50.1→52.6 ms/s and
+peak RSS rose 187.6→199.8 MiB. Physical footprint was effectively unchanged at 181.0→180.5 MiB.
+Rich main-thread CPU rose 19.7→21.1%, hitches 46.9→53.1 ms/s and p95 7.8→8.3 ms. Rich RSS fell
+186.4→175.1 MiB. These mixed metrics are not a smoothness win. Streaming had zero bottom-gap changes
+in all runs; before had one 6-point reversal per run and candidate had 1/0/1. The reversal remains unresolved.
+All runs ended at the same document/viewport positions for their workload. Rich runs retained exactly
+the same five mounted/nine created cells, 85 bindings, 110 measurements and 49 height transactions;
+streaming ended with 42 height transactions on both sides. Moving completion timing did not establish
+less total layout/commit work.
+
+The candidate regresses hitches in two pairs for each workload and rich p95 in two pairs. It and its new
+tests were **reverted**, rather than retained for lower CPU alone. Four new message/lifecycle fixtures
+were syntax-checked but not compiled or run, per the CI-only native-test rule. Read-only review found no
+obvious source blocker but identified missing controller nested-flush/drain coverage and a weak post-await
+timing assertion; those would have required stronger tests before retaining the candidate. They are not
+claimed as passing regression coverage. No further causal profile is claimed for the rejected candidate.
+
+[All raw summaries, binary/diff/runner hashes and limitations](benchmarks/native-transcript-prepared-height-2026-10-21.json).
 
 ## Verification and remaining gates
 
