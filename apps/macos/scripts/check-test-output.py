@@ -7,8 +7,15 @@ warning/diagnostic prose or trust the aggregate exit status.
 """
 
 import argparse
+import math
+import os
+from pathlib import Path
 import re
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 
 
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -26,7 +33,91 @@ def failed_summary(line):
     return bool(SWIFT_FAILURE.match(line) or XCTEST_FAILURE.match(line))
 
 
-def check_output(source, output, diagnostics, required_tests=()):
+def descendant_runners(table, parent):
+    """Only this pipeline's runners, never another checkout's Swift processes."""
+    processes = []
+    for line in table.splitlines():
+        fields = line.strip().split(None, 2)
+        if len(fields) == 3 and fields[0].isdigit() and fields[1].isdigit():
+            processes.append((int(fields[0]), int(fields[1]), Path(fields[2]).name))
+    descendants = {parent}
+    while True:
+        found = descendants | {pid for pid, ppid, _ in processes if ppid in descendants}
+        if found == descendants:
+            break
+        descendants = found
+    return sorted(pid for pid, _, name in processes if pid in descendants and pid != parent
+                  and (name == "swiftpm-testing" or name == "xctest" or name.endswith("PackageTests")))[:2]
+
+
+def sample_stalled_runners(parent):
+    """Best-effort, bounded diagnostics. Never terminate or change a test's result."""
+    try:
+        table = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,comm="], check=True,
+                               capture_output=True, text=True, timeout=5).stdout
+        runners = descendant_runners(table, parent)
+        print(f"Swift test output stalled; sampling runner PIDs: {runners}", file=sys.stderr, flush=True)
+        directory = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "swift-test-stalls"
+        directory.mkdir(parents=True, exist_ok=True)
+        for pid in runners:
+            path = directory / f"runner-{os.getpid()}-{pid}.sample.txt"
+            try:
+                subprocess.run(["/usr/bin/sample", str(pid), "2", "-file", str(path)],
+                               check=True, capture_output=True, timeout=10)
+                with path.open() as source:
+                    excerpt = source.read(24000)
+                print(f"== Swift stall sample: {path.name} ==\n{excerpt}", file=sys.stderr, flush=True)
+            except (OSError, subprocess.SubprocessError) as error:
+                print(f"Swift stall sample unavailable: {type(error).__name__}", file=sys.stderr, flush=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        print(f"Swift stall discovery unavailable: {type(error).__name__}", file=sys.stderr, flush=True)
+
+
+class StallSampler:
+    def __init__(self, seconds, capture, clock=time.monotonic):
+        self.seconds, self.capture, self.clock = seconds, capture, clock
+        self.condition = threading.Condition()
+        self.active = self.stopped = self.sampled = False
+        self.deadline = 0
+        self.thread = threading.Thread(target=self.watch, daemon=True)
+
+    def progress(self, active):
+        with self.condition:
+            self.active = active
+            self.deadline = self.clock() + self.seconds
+            self.condition.notify_all()
+
+    def capture_if_due(self):
+        with self.condition:
+            if self.stopped or self.sampled or not self.active or self.clock() < self.deadline:
+                return False
+            self.sampled = True
+        self.capture()
+        return True
+
+    def watch(self):
+        while True:
+            with self.condition:
+                if self.stopped:
+                    return
+                if self.sampled or not self.active:
+                    self.condition.wait()
+                    continue
+                remaining = self.deadline - self.clock()
+                if remaining > 0:
+                    self.condition.wait(remaining)
+                    continue
+            self.capture_if_due()
+
+    def close(self):
+        with self.condition:
+            self.stopped = True
+            self.condition.notify_all()
+        if self.thread.is_alive():
+            self.thread.join(timeout=26)  # ps (5s), at most two samples (10s each).
+
+
+def check_output(source, output, diagnostics, required_tests=(), *, sampler=None):
     required = {name: re.compile(r"^◇ Test " + re.escape(name) + r"\(") for name in required_tests}
     seen_required = set()
     failed = False
@@ -44,6 +135,8 @@ def check_output(source, output, diagnostics, required_tests=()):
             started += 1
         if SWIFT_TERMINAL.match(decoded) or XCTEST_TERMINAL.match(decoded):
             terminal += 1
+        if sampler:
+            sampler.progress(terminal < started)
     incomplete = terminal < started
     if incomplete:
         print(f"error: {started - terminal} native test runner(s) started without a terminal summary", file=diagnostics)
@@ -59,8 +152,22 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--require-test", action="append", default=[],
                         help="Fail if this Swift Testing function did not start (repeatable)")
+    parser.add_argument("--sample-stalled-after", type=float,
+                        help="Capture one bounded live stack after this many seconds without test output")
     args = parser.parse_args()
-    return check_output(sys.stdin.buffer, sys.stdout.buffer, sys.stderr, args.require_test)
+    if args.sample_stalled_after is not None and (not math.isfinite(args.sample_stalled_after)
+                                                 or args.sample_stalled_after <= 0):
+        parser.error("--sample-stalled-after must be finite and positive")
+    sampler = None
+    if args.sample_stalled_after is not None:
+        parent = os.getppid()
+        sampler = StallSampler(args.sample_stalled_after, lambda: sample_stalled_runners(parent))
+        sampler.thread.start()
+    try:
+        return check_output(sys.stdin.buffer, sys.stdout.buffer, sys.stderr, args.require_test, sampler=sampler)
+    finally:
+        if sampler:
+            sampler.close()
 
 
 if __name__ == "__main__":

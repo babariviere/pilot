@@ -147,6 +147,9 @@ run_tests() {
 	# Compilation gets its own budget. A wedged test runner must not consume the
 	# entire CI step; capture its stacks before terminating only its private session.
 	if [ -n "${CI:-}" ]; then runner=(python3 "$here/scripts/run-swift-tests.py" -- swift); fi
+	# Capture the live runner before CI's existing deadline kills it. Diagnostic only:
+	# no test cancellation, deadline increase, assertion change or local sampling.
+	if [ "${CI:-}" = true ]; then guards+=(--sample-stalled-after 60); fi
 	if [ -n "$required" ]; then
 		IFS='|' read -r -a required_tests <<< "$required"
 		for name in "${required_tests[@]}"; do guards+=(--require-test "$name"); done
