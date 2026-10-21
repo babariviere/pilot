@@ -33,6 +33,9 @@ The contract combines existing evidence instead of replacing it:
 Conversation history, prompts, responses, reasoning, tool traffic and private compaction reports are explicitly
 outside this contract.
 
+The separate [local accounting store](usage-history-contract.md) is also outside diagnostic reads and export.
+Its allowlisted model and attribution identifiers do not expand any telemetry serializer or diagnostic payload.
+
 ## Data classes and controls
 
 The three controls are independent. Turning one on never turns on another.

@@ -31,6 +31,7 @@ An observation contains only:
 | `virtualModel` | Optional **observed** `{provider, model}` identifiers; never a newly inferred routing policy |
 | `tokens`, `cost` | Existing `AIUsageTokens` and `AIUsageCost`; retain pricing revision with the estimate |
 | `requests`, `providerAttempts`, `retries`, `durationMs` | Optional committed/observed nonnegative integer counters |
+| `outcome` | Optional `success`, `failure`, `cancelled` or `unknown` from committed outcome evidence |
 
 The full canonical allowlisted record is at most 4 KiB. No arbitrary metadata, error text, tool names, titles,
 paths, URLs, messages, prompts, completions, headers, tokens/credentials, email, account fingerprints or request
@@ -49,8 +50,10 @@ physical invocation needs its own operation identity; replaying its evidence doe
 child-tool summary code and its replacement/roll-forward semantics, unchanged. Do not treat successive checkpoint
 values as increments. Do not add a rolled legacy total to its detailed requests.
 
-Only `request` rows are additive in dated charts and model/purpose breakdowns. `checkpoint` rows are a **separate,
-non-additive reconciliation view**, including undated legacy totals. This first version does not invent dated
+Only `request` rows with committed completion timestamps are additive in dated charts and model/purpose breakdowns.
+Unknown historical dates must be represented by checkpoints, not undated additive requests.
+`checkpoint` rows are a **separate, non-additive reconciliation view**, including undated legacy totals.
+This first version does not invent dated
 residuals by subtracting incompatible snapshots. A chart is explicitly observed/partial when checkpoint coverage
 exceeds detailed evidence. Consumers must never sum the two views.
 
@@ -73,7 +76,7 @@ lifecycle, configuration, credential affinity, provider polling or paid calls ar
 
 ## Storage, recovery and migration
 
-One `usage-history.sqlite` per execution host, under its private Pilot home, mode 0600 in a mode 0700 directory.
+One `accounting/usage-history.sqlite` per execution host, under its private Pilot home, mode 0600 in a mode 0700 directory.
 All SQLite work/fsync is off the daemon event loop in a dedicated worker. Transactions durably commit before
 acknowledgement (`synchronous=FULL`, bounded rollback journal). A crash before ack is uncertain: replay the same
 committed source identity/revision, never reissue inference. Failed writes expose partial/unavailable status and
@@ -91,8 +94,10 @@ The store is a bounded materialization, not a second transcript or permanent led
 days** of locally observed evidence, including checkpoints by their observation time; request dates older than the
 window cannot be resurrected by replay. A monotonic persisted retention floor rejects stale replay. Maximum
 **50,000 rows**, **64 MiB database** (plus bounded SQLite transaction journal), **32 pending messages / 256 KiB
-ingress**. Expire in bounded batches on writes/maintenance, not on UI repaint. Capacity rejects new writes rather
-than evicting replay fences or growing without bound. Rejections/expiration/conflicts and store availability are
+ingress**. Expire in <=500-row batches on writes/startup and hourly idle maintenance, not on UI repaint.
+Reads immediately exclude expired rows; idle physical cleanup can lag by at most an hour while the host is running.
+Capacity rejects new writes rather than evicting replay fences or growing without bound.
+Rejections/expiration/conflicts and store availability are
 visible through content-free status. Counters survive restart; volatile queue overflow is explicitly process-local.
 At most one outstanding maintenance call. Closed/draining stores refuse new work and join before home removal.
 
@@ -103,7 +108,10 @@ charges. Delete a chat: delete attributed rows **before** removing its session d
 rotating the host generation. Clear usage history: atomically delete all rows, rotate generation, advance the
 capture floor, reset coverage start. No durable tombstone list that can grow without bound. Old in-flight reports
 are rejected. Capture adapters must acquire the new generation and start at the new floor, never replay cleared
-history. Clearing diagnostics does not clear accounting; clearing accounting does not change credentials, runtime
+history. Never transplant old operation evidence into a new generation. After any erasure, legacy cumulative
+summary import is disabled for that store: a later summary timestamp cannot prove which lifetime tokens came
+after deletion. New capture adapters resume with new committed operations only.
+Clearing diagnostics does not clear accounting; clearing accounting does not change credentials, runtime
 history or existing composer summaries. This is logical deletion using SQLite secure_delete, not a guarantee
 against filesystem snapshots/backups or SSD forensic recovery.
 
@@ -141,3 +149,14 @@ query <=50ms and <=512KiB; no new uninterrupted main-thread accounting task >10m
 requires separate permission and evidence; routine checks stay offscreen. Full suites/packaging run in remote CI.
 Rollout preserves direct selection, composer summaries, quota gates and informational budgets. Larger retention,
 content/credential storage or remote export needs separate user review, not a routine schema revision.
+
+### Initial offscreen store probe (not a release pass)
+
+`node packages/daemon/src/usage-history.bench.ts` seeds 50,000 synthetic rows outside measurement in a disposable
+home. On macOS arm64 / Node 24.21.0, one run of 200 indexed 100-row pages and 500 revision replacements measured
+p95 page latency 1.18ms, largest response 50,777 bytes, event-loop p99 10.74ms versus an idle baseline 11.08ms.
+Peak process RSS grew **51.34 MiB**, exceeding the proposed 16 MiB gate. Do not waive that gate or call the dashboard
+performance-verified from this probe. Worker/isolate/query allocation needs profiling and repeatable before/after
+measurement before default dashboard rollout. It ran no providers, native UI, live chats or on-screen benchmark.
+Capture latency, full provider lifecycle recovery, native DTO execution, exact-head CI and packaging remain
+separate verification obligations; a store test does not prove them.

@@ -160,6 +160,7 @@ import {
 import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-stalls.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
+import { UsageHistoryStore } from "./usage-history.ts";
 import type { WatchService } from "./watch-service.ts";
 import { settledSessionEvents } from "./watch-sessions.ts";
 import { WorkerActivity } from "./worker-activity.ts";
@@ -1443,6 +1444,9 @@ export class SessionManager {
 	private readonly lifecycle: LifecycleDiagnostics;
 	private readonly nativeDiagnostics: NativeDiagnosticsStore;
 	private readonly aiUsage: AIUsageLedger;
+	/** Local accounting only. Never include raw records in diagnostics or telemetry. */
+	readonly usageHistory: UsageHistoryStore;
+	private legacyUsageMigration?: Promise<void>;
 	private readonly autoRebase: PullRequestAutoRebase;
 	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
 	private readonly rebasingWorkspaces = new Set<string>();
@@ -1762,6 +1766,7 @@ export class SessionManager {
 		this.lifecycle = new LifecycleDiagnostics(home);
 		this.nativeDiagnostics = new NativeDiagnosticsStore(home);
 		this.aiUsage = new AIUsageLedger(home);
+		this.usageHistory = new UsageHistoryStore(home);
 		this.telemetry = options.telemetry ? { ...options.telemetry } : undefined;
 		this.lifecycle.setEnabled(options.telemetry?.localDiagnostics ?? true);
 		this.nativeDiagnostics.setEnabled(options.telemetry?.localDiagnostics ?? true);
@@ -1999,6 +2004,9 @@ export class SessionManager {
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
 		await this.aiUsage.load(this.metas.keys());
+		// Derived migration is bounded per chat and runs off the startup critical path. Failure cannot
+		// stop agents; the store reports unavailable/partial instead of inventing history.
+		this.legacyUsageMigration = this.importLegacyUsage();
 		for (const meta of this.metas.values()) {
 			if (!meta.createMissionId) continue;
 			try {
@@ -7137,7 +7145,29 @@ export class SessionManager {
 		await drainRepairProjects;
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
+		await this.legacyUsageMigration;
+		await this.usageHistory.close();
 		await this.lifecycle.close();
+	}
+
+	private async importLegacyUsage(): Promise<void> {
+		try {
+			await this.usageHistory.maintainExisting();
+		} catch {
+			return;
+		}
+		let checked = 0;
+		for (const id of this.metas.keys()) {
+			if (++checked % 8 === 0) await new Promise<void>((done) => setImmediate(done));
+			if (this.closing) break;
+			const summary = this.aiUsage.summary(id);
+			if (!summary) continue;
+			try {
+				if (!(await this.usageHistory.importLegacy(id, summary))) break;
+			} catch {
+				break;
+			} // Keep corrupt/unsupported accounting untouched. No retries on the hot path.
+		}
 	}
 
 	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
