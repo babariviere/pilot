@@ -1,25 +1,23 @@
 import AppKit
-import NativeTestSupport
 import PilotCore
 import SwiftUI
 import Testing
 @testable import Pilot
 
 @Test(.timeLimit(.minutes(1))) @MainActor
-func nativeExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
+func swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
     _ = NSApplication.shared
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let hosts = ClientDirectory(operationDirectory: directory)
     let owner = HostRef(hostId: "offline-fixture", daemonId: "artifact-daemon", lineageId: "artifact-lineage")
     let reference = ArtifactReference(id: "artifact", sessionId: "fixture", title: "Offline artifact", revision: 1)
-    var presentation = TranscriptPresentation()
-    presentation.rows = [.artifact(id: "artifact-row", reference: reference)]
-    let model = TranscriptRowsModel(presentation)
-    let root = NativeTranscriptSection(model: model,
-        resource: NativeTranscriptResource(sessionID: reference.sessionId, host: owner),
-        scroll: TranscriptScrollState(), toolExpansions: TranscriptExpansions(),
-        messageExpansions: TranscriptExpansions(), header: NativeTranscriptHeader(), footer: NativeTranscriptFooter(),
-        chromeRevision: UUID(), loadEarlier: {})
+    let html = "<p>Saved offline artifact</p>"
+    let revision = ArtifactRevision(id: reference.id, sessionId: reference.sessionId, projectId: nil,
+        title: reference.title, kind: .html, revision: 1, createdAt: 0, updatedAt: 0,
+        source: html, html: html, libraries: [])
+    ArtifactInlineCache.store(revision, for: reference, host: owner)
+    let root = ArtifactCard(reference: reference, host: owner)
+        .frame(width: 760, height: 500)
         .environment(\.hostViewContext, HostViewContext(host: owner, hosts: hosts))
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
         styleMask: [.titled], backing: .buffered, defer: false)
@@ -28,16 +26,16 @@ func nativeExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
     window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
     window.orderFrontRegardless()
     do {
-        // Mount the actual AppKit row and the actual SwiftUI sheet, with a disconnected
+        // Mount the restored SwiftUI card and its sheet, with a disconnected
         // owner so this regression cannot contact a daemon, account or artifact library.
         try await settleArtifactSheet(window) {
             guard let content = window.contentView else { return false }
-            return !NativeInput.views(in: content, of: NativeArtifactRow.self).isEmpty
+            return artifactSheetButton(in: content, title: "Open \(reference.title) in the viewer") != nil
         }
         for useEscape in [false, true, false] {
             let content = try #require(window.contentView)
-            let row = try #require(NativeInput.views(in: content, of: NativeArtifactRow.self).first)
-            let opened = row.activate()
+            let expand = try #require(artifactSheetButton(in: content, title: "Open \(reference.title) in the viewer"))
+            let opened = expand.accessibilityPerformPress()
             #expect(opened)
             try await settleArtifactSheet(window) { window.attachedSheet?.contentView != nil }
             let sheet = try #require(window.attachedSheet)

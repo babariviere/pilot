@@ -1,8 +1,9 @@
 # Single-scene transcript measurement
 
 **Historical measurement, before the default switch.** This report repairs the benchmark, not the renderer.
-Native was subsequently selected by default at the user's request, with the legacy renderer retained as
-an explicit fallback. That product choice does not change these source-pinned results or close their gaps.
+Native was subsequently selected by default, then the user requested reverting the AppKit transition.
+The SwiftUI transcript is restored and the AppKit transcript removed. These source-pinned results remain
+historical evidence, not measurements of the restored implementation.
 
 ## What was wrong
 

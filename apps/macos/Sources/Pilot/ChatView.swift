@@ -505,30 +505,7 @@ struct ChatView: View {
         }
     }
 
-    @ViewBuilder private var transcriptContent: some View {
-        if NativeTranscriptFlag.enabled {
-            NativeTranscriptSection(model: feed.rows,
-                resource: NativeTranscriptResource(sessionID: session.id, host: context?.host ?? model.localHost),
-                scroll: scroll, toolExpansions: toolExpansions, messageExpansions: messageExpansions,
-                header: nativeTranscriptHeader, footer: nativeTranscriptFooter,
-                chromeRevision: UUID(),
-                loadEarlier: feed.loadEarlier, hasSnapshot: feed.hasSnapshot,
-                loadingEarlier: feed.loadingEarlier, earlierError: feed.earlierError)
-                .environment(\.transcriptComposer, session.isReadOnlyHistory ? nil : composer)
-                .environment(\.transcriptMessageToggled, scroll.messageToggled)
-                .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
-                .keyboardFocusHandler(.content) { scroll.focusTranscript?() ?? false }
-                .onChange(of: feed.outgoing.messages.count) { previous, count in
-                    guard count > previous else { return }
-                    scroll.follow.resumeFollowing()
-                    scroll.pinBottom?()
-                }
-        } else {
-            swiftUITranscript
-        }
-    }
-
-    private var swiftUITranscript: some View {
+    private var transcriptContent: some View {
         let transcript = feed.status
         return ScrollViewReader { proxy in
             ScrollView {
@@ -640,61 +617,6 @@ struct ChatView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
-    }
-
-    private var nativeTranscriptHeader: NativeTranscriptHeader {
-        var banners: [NativeTranscriptBanner] = []
-        if session.isDiagnosticsSpecialist {
-            let summary: String
-            if session.diagnosticScope == .app { summary = "App-wide read-only evidence · no initial chat focus" }
-            else if let target = session.diagnosticTarget { summary = "App-wide read-only · focus: \(target.chatURL) on \(target.host.hostId)" }
-            else if let id = session.diagnosticTargetId { summary = "App-wide read-only · focus: \(DiagnosticSetup.link(id))" }
-            else { summary = "App-wide read-only diagnostics" }
-            banners.append(NativeTranscriptBanner(title: "Diagnostics", detail: summary, icon: PilotIcon.bug))
-        }
-        if let origin = session.continuationOf {
-            banners.append(NativeTranscriptBanner(title: "",
-                action: NativeChromeAction(title: SessionSummary.continuedFromLabel(endpoint.session(origin)?.title),
-                icon: PilotIcon.handoff, help: "Open the earlier chat. It stays read-only.", perform: {
-                    if let context, context.host != model.localHost {
-                        model.navigate(.session, id: context.ref(.session, origin).storageKey)
-                    } else { model.reveal(session: origin) }
-                })))
-        }
-        return NativeTranscriptHeader(banners: banners,
-            disconnected: context?.available == false ? context : nil, historyCached: feed.status.hasRows,
-            loading: feed.loading && session.state != "failed" && context?.available != false
-                ? (session.state == "starting" ? "Starting task…" : "Loading conversation…") : nil)
-    }
-
-    private var nativeTranscriptFooter: NativeTranscriptFooter {
-        let transcript = feed.status
-        var actions: [NativeChromeAction] = []
-        if session.canRetryStartup == true, !session.isReadOnlyHistory {
-            actions.append(NativeChromeAction(title: "Retry Startup", icon: PilotIcon.refresh,
-                identifier: "retry-startup", help: "Reload extensions and continue with the original queued messages. History and workspace files stay as they are.",
-                enabled: !retryingStartup, perform: {
-                    retryingStartup = true; composer.error = nil
-                    Task {
-                        defer { retryingStartup = false }
-                        do { try await perform { client, id in try await client.retryStartup(id) } }
-                        catch { composer.error = error.localizedDescription }
-                    }
-                }))
-            actions.append(NativeChromeAction(title: "Stop Chat", identifier: "stop-failed-recovery",
-                help: "Cancel this chat and its saved subagent work without restarting the worker. History and workspace files stay as they are.",
-                enabled: !retryingStartup && !model.pendingSessionActions.contains(session.id), perform: stop))
-        }
-        return NativeTranscriptFooter(pending: feed.outgoing.messages.map {
-                NativeTranscriptFooter.Pending(id: "outgoing-\($0.id)", text: $0.text)
-            }, failure: transcript.failureBannerText(for: session), actions: actions,
-            scheduleSessionID: session.isReadOnlyHistory ? nil : session.id, bottomPadding: bottomPadding,
-            review: {
-                guard !session.isWorking, session.outcome != nil, feed.hasSnapshot, !transcript.working, !transcript.streaming,
-                      model.hosts.selection == context?.ref(.session, session.id) || (context == nil && model.selectedSessionId == session.id) else { return }
-                if let context { model.review(session, on: context.host, chatVisible: true) }
-                else { model.review(session, chatVisible: true) }
-            })
     }
 
     private func perform<Value>(_ action: (PilotClient, String) async throws -> Value) async throws -> Value {
