@@ -866,6 +866,9 @@ test("diagnostics specialist prompt grants no repair or repository authority", (
 	assert.match(prompt, /No repeated per-chat consent/);
 	assert.match(prompt, /Focus is not an access boundary/);
 	assert.match(prompt, /repair_proposal/);
+	assert.match(prompt, /1–16 unique diagnostic:v1: refs returned by diagnostics for the proposal subject/);
+	assert.match(prompt, /Never use diagnostic-history:v1: or diagnostic-log:v1: refs/);
+	assert.match(prompt, /no eligible evidence .* report the limitation, never invent refs/);
 	assert.match(prompt, /only explicit user confirmation/);
 	assert.match(prompt, /does not start a repair/);
 	assert.doesNotMatch(prompt, /gh pr create|git push|read, find, grep|subagents/);

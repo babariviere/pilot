@@ -17,6 +17,12 @@ test("repair proposal only publishes bounded review material and grants no execu
 	assert.equal(tool.name, REPAIR_PROPOSAL_TOOL);
 	assert.equal(tool.annotations?.readOnlyHint, false);
 	assert.equal(tool.annotations?.destructiveHint, false);
+	assert.match(tool.description, /diagnostic:v1: refs from diagnostics, never history\/log refs/);
+	const schema = tool.parameters as { properties: { evidenceRefs: { description: string } } };
+	const evidenceGuidance = schema.properties.evidenceRefs.description;
+	assert.match(evidenceGuidance, /diagnostic:v1: refs returned by diagnostics for the proposal subject/);
+	assert.match(evidenceGuidance, /diagnostic-history:v1: and diagnostic-log:v1: refs are not accepted/);
+	assert.match(evidenceGuidance, /no eligible evidence .* report that limitation rather than inventing refs/);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /start|spawn|execute|retry|restart|replay/i);
 	const draft = {
 		evidenceRefs: ["diagnostic:v1:lifecycle:one"],

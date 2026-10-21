@@ -2099,23 +2099,41 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		)?.error ?? "",
 		/no longer available/,
 	);
-	specialistWorker.publishRepairProposal("raw-log-ref", {
-		...proposalDraft,
-		evidenceRefs: ["diagnostic-log:v1:opaque"],
-	});
-	await until(() =>
-		specialistWorker.sent.some(
-			(command) => command.type === "diagnostics.proposal.result" && command.callId === "raw-log-ref",
-		),
-	);
-	assert.match(
-		specialistWorker.sent.find(
+	const historyRef = `diagnostic-history:v1:${target.id}:107`;
+	const invalidRefError =
+		/diagnostic:v1: strings .*returned by diagnostics.*diagnostic-history:v1:.*diagnostic-log:v1:.*not accepted/;
+	for (const [callId, evidenceRefs, expectedError] of [
+		["history-only", [historyRef], invalidRefError],
+		[
+			"mixed-history",
+			[historyRef, `diagnostic-history:v1:${target.id}:110`, `diagnostic-history:v1:${target.id}:112`, evidence.ref],
+			invalidRefError,
+		],
+		["raw-log-ref", ["diagnostic-log:v1:opaque"], invalidRefError],
+		["non-string-ref", [42], invalidRefError],
+		["oversized-ref", [`diagnostic:v1:${"x".repeat(256)}`], invalidRefError],
+		["empty-refs", [], /requires 1 to 16 unique diagnostic evidence refs/],
+		["duplicate-refs", [evidence.ref, evidence.ref], /requires 1 to 16 unique diagnostic evidence refs/],
+		[
+			"too-many-refs",
+			Array.from({ length: 17 }, (_, index) => `diagnostic:v1:lifecycle:${index}`),
+			/requires 1 to 16 unique diagnostic evidence refs/,
+		],
+	] as const) {
+		specialistWorker.publishRepairProposal(callId, { ...proposalDraft, evidenceRefs } as never);
+		await until(() =>
+			specialistWorker.sent.some(
+				(command) => command.type === "diagnostics.proposal.result" && command.callId === callId,
+			),
+		);
+		const rejected = specialistWorker.sent.find(
 			(command): command is Extract<KernelCommand, { type: "diagnostics.proposal.result" }> =>
-				command.type === "diagnostics.proposal.result" && command.callId === "raw-log-ref",
-		)?.error ?? "",
-		/requires .* diagnostic evidence refs/,
-		"raw log refs cannot enter an unreviewed proposal or handoff",
-	);
+				command.type === "diagnostics.proposal.result" && command.callId === callId,
+		);
+		assert.match(rejected?.error ?? "", expectedError, callId);
+		assert.equal(rejected?.result, undefined, callId);
+		assert.equal(sessions.get(specialist.id)?.diagnosticRepairProposal, undefined, callId);
+	}
 	specialistWorker.publishRepairProposal("proposal", proposalDraft);
 	await until(() =>
 		specialistWorker.sent.some(
