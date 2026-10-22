@@ -362,6 +362,70 @@ fn verify_sandbox(_: u32, _: &Path) -> bool {
 mod tests {
     use super::*;
     #[tokio::test]
+    async fn shared_draw_errors_match_without_relaxing_the_production_budget() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../packages/protocol/fixtures/visual/conformance.json"
+        ))
+        .unwrap();
+        let mut checked = 0;
+        let mut overridden = 0;
+        for case in corpus["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c.get("draws").is_some())
+        {
+            let mut p = Process::start().await.unwrap();
+            p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":null,"seed":"","now":0})).await.unwrap();
+            let mut error = None;
+            for draw in case["draws"].as_array().unwrap() {
+                let input = &draw["input"];
+                if let Err(e)=p.drawing(json!({"kind":"draw","id":draw["id"],"width":input["width"],"height":input["height"],"t":input["t"],"pointer":input.get("pointer")})).await{error=Some(e);break;}
+            }
+            if error.is_none() {
+                for event in case["events"].as_array().unwrap_or(&Vec::new()) {
+                    if let Err(e) = p
+                        .exchange(
+                            json!({"kind":"event","id":event["id"],"value":event["value"],"now":0}),
+                        )
+                        .await
+                    {
+                        error = Some(e);
+                        break;
+                    }
+                }
+            }
+            let e = error.expect("synthetic draw corpus must fail");
+            let text = if let Some(line) = e.line {
+                format!("line {line}: {}", e.message)
+            } else {
+                e.message.clone()
+            };
+            if case.get("drawMs").is_some() {
+                overridden += 1;
+                assert!(
+                    text == case["error"].as_str().unwrap()
+                        || (e.kind == "timeout"
+                            && e.message == "the drawing took longer than 8 ms"),
+                    "production8ms budget never increases to the fixture5000ms override: {}",
+                    case["name"]
+                );
+            } else {
+                assert_eq!(
+                    text,
+                    case["error"].as_str().unwrap(),
+                    "synthetic draw failure: {}",
+                    case["name"]
+                );
+                checked += 1;
+            }
+            assert!(p.child.try_wait().unwrap().is_some());
+            p.stop().await;
+        }
+        assert_eq!(checked, 12);
+        assert_eq!(overridden, 1);
+    }
+    #[tokio::test]
     async fn native_canvas_packets_match_shared_commands_ops_and_strings() {
         let corpus: Value = serde_json::from_str(include_str!(
             "../../../packages/protocol/fixtures/visual/conformance.json"

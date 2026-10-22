@@ -11,6 +11,9 @@ pub(crate) struct Reference {
 }
 impl Reference {
     pub(crate) fn parse(value: &Value, owner: &str) -> Option<Self> {
+        Self::parse_kind(value, owner, value["kind"].as_str()?)
+    }
+    fn parse_kind(value: &Value, owner: &str, kind: &str) -> Option<Self> {
         let id = value["id"]
             .as_str()
             .filter(|id| crate::local_model::valid_id(id))?;
@@ -18,7 +21,6 @@ impl Reference {
             return None;
         }
         let title = value["title"].as_str()?;
-        let kind = value["kind"].as_str()?;
         if title.encode_utf16().count() > 240
             || kind.len() > 32
             || !crate::local_model::valid_id(owner)
@@ -38,6 +40,9 @@ impl Reference {
     }
     pub(crate) fn same_revision(&self, other: &Self) -> bool {
         self.id == other.id && self.session == other.session && self.revision == other.revision
+    }
+    pub(crate) fn pinned(value: &Value) -> Option<Self> {
+        Self::parse_kind(value, value["sessionId"].as_str()?, "unknown")
     }
 }
 pub(crate) fn summaries(value: &Value, owner: &str) -> Arc<Vec<Reference>> {
@@ -103,6 +108,12 @@ mod tests {
     fn scoped_revision_checks_do_not_trust_titles_or_html() {
         let v = json!({"id":"synthetic","sessionId":"owner","revision":2,"title":"Synthetic","kind":"visual","source":"()=>null","html":"not consumed","visual":{"api":1,"engine":"quickjs-ng 0.17.0"},"createdAt":1,"updatedAt":2});
         let expected = Reference::parse(&v, "owner").unwrap();
+        let mut bare = v.clone();
+        bare.as_object_mut().unwrap().remove("kind");
+        let pin = Reference::pinned(&bare).unwrap();
+        assert!(Reference::parse(&bare, "owner").is_none());
+        assert!(Revision::parse(bare, &pin).is_err());
+        assert!(Revision::parse(v.clone(), &pin).unwrap().visual_supported);
         assert!(Reference::parse(&v, "other").is_none());
         let r = Revision::parse(v.clone(), &expected).unwrap();
         assert!(r.visual_supported);

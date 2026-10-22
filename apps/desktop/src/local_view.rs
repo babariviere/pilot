@@ -277,6 +277,16 @@ impl LocalViewer {
             })
             .collect();
         rows.extend(crate::tool_presentation::fixture_work());
+        rows.push(Message::artifact(
+            99_999,
+            crate::artifact_model::Reference {
+                id: "synthetic-artifact".into(),
+                session: "synthetic".into(),
+                revision: 3,
+                title: "Latency by region".into(),
+                kind: "visual".into(),
+            },
+        ));
         view.transcript
             .update(cx, |view, cx| view.replace_readonly(rows, true, cx));
         view
@@ -492,6 +502,26 @@ impl LocalViewer {
                     }
                 }
             });
+        let artifact_events = cx.subscribe_in(
+            &transcript,
+            window,
+            |view, _, event: &crate::transcript_view::ArtifactOpen, window, cx| {
+                if view.client.is_none() {
+                    return;
+                }
+                if view.selected.as_deref() != Some(&event.0.session) {
+                    view.state.chat_status = "Artifact owner mismatch; no lookup performed.".into();
+                    cx.notify();
+                    return;
+                }
+                view.artifacts_open = true;
+                view.artifacts.update(cx, |pane, cx| {
+                    pane.context(view.selected.clone(), view.state.artifacts.clone(), cx);
+                    pane.open(event.0.clone(), window, cx);
+                });
+                cx.notify();
+            },
+        );
         Self {
             client,
             chats,
@@ -503,7 +533,7 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
-            _subscriptions: vec![subscription, editor_events],
+            _subscriptions: vec![subscription, editor_events, artifact_events],
             updates: None,
             writes: None,
             editor,
@@ -791,6 +821,58 @@ impl Render for LocalViewer {
 mod refresh_tests {
     use super::*;
     use gpui_kit::{TestAppContext, WindowOptions};
+    #[gpui_kit::test]
+    fn publication_navigation_fences_other_owners_without_transport_fallback(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        let (_, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| LocalViewer::synthetic(window, cx)),
+            )
+            .unwrap()
+        });
+        let (client, commands) = LocalClient::synthetic_commands();
+        let wrong = crate::artifact_model::Reference {
+            id: "synthetic-art".into(),
+            session: "other".into(),
+            revision: 3,
+            title: "Synthetic".into(),
+            kind: "unknown".into(),
+        };
+        view.update(cx, |v, cx| {
+            v.client = Some(client);
+            v.selected = Some("owner".into());
+            v.transcript.update(cx, |_, cx| {
+                cx.emit(crate::transcript_view::ArtifactOpen(wrong.clone()))
+            });
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| {
+            assert!(!v.artifacts_open);
+            assert_eq!(v.selected.as_deref(), Some("owner"));
+            assert!(v.state.chat_status.contains("owner mismatch"));
+        });
+        assert!(commands.try_recv().is_err());
+        let mut expected = wrong;
+        expected.session = "owner".into();
+        view.update(cx, |v, cx| {
+            v.transcript.update(cx, |_, cx| {
+                cx.emit(crate::transcript_view::ArtifactOpen(expected))
+            })
+        });
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |v, _| v.artifacts_open));
+        assert!(commands.try_recv().is_err());
+    }
     #[gpui_kit::test]
     fn compact_chrome_keeps_open_chat_and_keyboard_search_separate(cx: &mut TestAppContext) {
         use gpui_kit::test::TestWindowExt;

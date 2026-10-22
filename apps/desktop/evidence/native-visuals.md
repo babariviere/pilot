@@ -131,7 +131,27 @@ locked app/helper builds and symbol separation pass. Both shared PD records
 draw interrupt/null recovery and faux load/event/draw/close tests pass; viewport
 margin, geometry/transform budgets and real canvas pixels are asserted.
 
-Full draw/error-budget corpus, complete canvas transforms/animation/pointer/text
+Pinned publication follow-on: canonical `pilot.artifact` entries produce stable,
+bounded inline Open cards, without a Markdown parser or source lookup on arrival.
+Body links/JSON never become reads. Explicit click carries its original revision;
+the selected-owner fence rejects other chats without fallback. Gallery metadata
+and fetched revisions remain strict; minimal journal references do not relax them.
+Legacy tool-only output still uses the gallery. Native mouse-click/no-parser,
+deduplication, malformed-reference and parent owner-fence tests cover this path.
+Charts show all category labels through12 and endpoints above12; numeric scatter
+axes retain endpoints, rather than misplacing nonuniform middle labels. Axis/legend/unit
+labels are visibly elided at80 Unicode scalars; stored source/data remain intact. Displayed
+category text is charged against the aggregate budget, including sparse last labels.
+All12 ordinary shared draw errors match exact message/line through the real helper
+and every failed process is reaped. The single command-overflow fixture requests
+5000ms; production remains8ms, so its exact command-limit error OR truthful8ms
+timeout is accepted. This is not full5000ms fixture equivalence or a larger cap.
+Full follow-on gates:98 library tests pass/one ignored workload, fmt-all, strict
+workspace Clippy, native fixture/browser,16 chrome and40 visual scenes, locked
+app/helper builds and engine-symbol separation pass. Static SwiftUI mock revision2
+illustrates the inline card separately; it is not the running GPUI views.
+
+Complete canvas transforms/animation/pointer/text
 metrics, image/SwiftUI previews, Mermaid
 candidate/license/corpus, durable reader state and complete chart/style parity
 remain unfinished. Native Wayland/macOS15, broader escape probes, OS IME and

@@ -105,13 +105,17 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 Use Artifacts in a Local chat's header to browse its bounded metadata gallery,
 then explicitly open a pinned revision. No preview auto-runs from a message or
-metadata update. Previous revisions, source/provenance and Copy source remain
+metadata update. Canonical artifact publication entries also have inline pinned
+Open cards; body links/JSON and legacy tool-only output are not parsed into reads.
+Cards cannot switch owners or silently open the latest revision. Previous revisions, source/provenance and Copy source remain
 available even for unsupported kinds. Reader state is in memory for eight
 revisions, separate from Swift and canonical data; it resets on restart.
 
 Native text/layout/stats/tables, buttons/toggles/tabs, slider steppers and
 bounded non-stacked line/area/bar/scatter charts and a bounded static canvas
 subset are implemented with explicit display limits and simplified typography/axes.
+Category labels show all through12, sparse endpoints above; labels/legends/units
+are visibly elided after80 Unicode scalars; stored source/data remain intact.
 Static canvas supports trusted native path/text painting, limited transforms,
 viewport margins and approximated curves; animation/pointer scheduling and
 non-uniform strokes/transformed text remain unsupported. Mermaid, image/SwiftUI
