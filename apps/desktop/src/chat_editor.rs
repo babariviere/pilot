@@ -260,7 +260,26 @@ impl ChatEditor {
     fn marked(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.text.update(cx, |state, cx| {
             state.marked_text_range(window, cx).is_some()
+        }) || self.cwd.update(cx, |state, cx| {
+            state.marked_text_range(window, cx).is_some()
         })
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn shell_probe_setup(
+        &mut self,
+        writer: Interaction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.client = Some(writer);
+        self.state.book = Some(std::sync::Arc::new(
+            crate::delivery_store::Book::shell_probe(),
+        ));
+        self.select("chat:synthetic".into(), true, false, window, cx);
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn shell_probe(&self) -> (Entity<TextareaState>, Entity<InputState>, Option<Draft>) {
+        (self.text.clone(), self.cwd.clone(), self.draft().cloned())
     }
     pub(crate) fn background(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.background_work != active {
@@ -512,6 +531,31 @@ impl ChatEditor {
         if self.ready() && self.selected.is_some() {
             self.text.update(cx, |state, cx| state.focus(window, cx));
         }
+    }
+    pub(crate) fn capture_navigation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.marked(window, cx) {
+            return false;
+        }
+        self.changed(cx);
+        true
+    }
+    pub(crate) fn can_adopt_creation(
+        &mut self,
+        key: &str,
+        revision: u64,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.capture_navigation(window, cx)
+            && self.selected.as_deref() == Some(key)
+            && self.draft().is_some_and(|d| {
+                d.revision == revision && d.text.is_empty() && d.created.as_deref() == Some(target)
+            })
     }
 }
 

@@ -18,10 +18,13 @@ pub use local_view::disclosure_probe::run_disclosure_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::history_probe::run_history_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::shell_probe::run_shell_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
+mod app_shell;
 mod appearance;
 mod artifact_model;
 mod artifact_view;

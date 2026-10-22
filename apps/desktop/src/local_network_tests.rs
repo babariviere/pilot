@@ -129,7 +129,8 @@ impl Mock {
                             let _guard=Guard(active);
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
-                                socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working"},{"id":"b","title":"Synthetic B","state":"idle"}]}).to_string().into())).await.unwrap();
+                                socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
+                                socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working","projectId":"p-a"},{"id":"b","title":"Synthetic B","state":"idle","projectId":"p-b"}]}).to_string().into())).await.unwrap();
                             } else {
                                 let id=if path.contains("/b/"){ "b" }else{ "a" };
                                 if matches!(scenario,Scenario::Refused) {
@@ -231,7 +232,12 @@ async fn thinking_deltas_do_not_publish_transcripts_or_wake_the_ui() {
 async fn real_sockets_are_readonly_paged_switch_fenced_and_cancelled() {
     let mock = Mock::start(Scenario::Normal).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
-    until(&rx, |v| v.chats.len() == 2).await;
+    let catalog = until(&rx, |v| v.chats.len() == 2 && v.projects_loaded).await;
+    assert_eq!(catalog.projects.len(), 2);
+    assert_eq!(catalog.projects[0].id, "p-a");
+    assert_eq!(catalog.projects[1].path, "/synthetic/b");
+    assert_eq!(catalog.chats[0].project_id.as_deref(), Some("p-a"));
+    assert!(catalog.projects_error.is_none());
     assert!(client.command(Command::Open {
         id: "a".into(),
         generation: 1

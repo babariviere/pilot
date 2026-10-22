@@ -6,10 +6,14 @@ pub(crate) mod disclosure_probe;
 #[path = "history_probe.rs"]
 pub(crate) mod history_probe;
 #[cfg(feature = "native-probes")]
+#[path = "shell_probe.rs"]
+pub(crate) mod shell_probe;
+#[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 use crate::{
     LocalOptions, TranscriptView,
+    app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
     appearance::{self},
     chat_editor::{ChatEditor, EditorEvent},
     delivery_store::Store,
@@ -23,6 +27,7 @@ use crate::{
 use gpui_kit::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
     Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
+    base::Selectable,
     component::{
         ActiveTheme, Disableable, IconName, IndexPath, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -39,7 +44,7 @@ use std::{
     time::Duration,
 };
 
-gpui_kit::actions!(desktop, [FocusChats]);
+gpui_kit::actions!(desktop, [FocusChats, GoHome, ShowAllChats]);
 #[derive(Clone, Copy)]
 pub enum PreviewState {
     Conversation,
@@ -55,6 +60,7 @@ struct ChatList {
     selected: Option<IndexPath>,
     opened: Option<String>,
     loaded: bool,
+    project: Option<String>,
     corners: HashMap<String, Entity<CornerView>>,
 }
 impl ChatList {
@@ -66,7 +72,12 @@ impl ChatList {
             .iter()
             .enumerate()
             .filter(|(_, c)| {
-                (self.archived || !c.archived) && c.title.to_lowercase().contains(&self.query)
+                (self.archived || !c.archived)
+                    && (self.query.is_empty() || c.title.to_lowercase().contains(&self.query))
+                    && self
+                        .project
+                        .as_ref()
+                        .is_none_or(|id| c.project_id.as_ref() == Some(id))
             })
             .map(|(ix, _)| ix)
             .collect();
@@ -173,6 +184,13 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    page: Page,
+    project_scope: Option<String>,
+    projects: Entity<ListState<ProjectList>>,
+    overview: Entity<Overview>,
+    nav_projects: Arc<Vec<crate::local_model::Project>>,
+    pending_transcript: Option<(Vec<Message>, bool)>,
+    nav_error: Option<&'static str>,
     client: Option<LocalClient>,
     chats: Entity<ListState<ChatList>>,
     transcript: Entity<TranscriptView>,
@@ -199,12 +217,17 @@ pub struct LocalViewer {
 
 impl LocalViewer {
     pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys([KeyBinding::new("secondary-f", FocusChats, None)]);
+        cx.bind_keys([
+            KeyBinding::new("secondary-f", FocusChats, None),
+            KeyBinding::new("secondary-1", GoHome, None),
+            KeyBinding::new("secondary-2", ShowAllChats, None),
+        ]);
     }
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
+        view.page = Page::Home;
         view.artifacts.update(cx, |pane, _| pane.options(options));
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
@@ -264,6 +287,7 @@ impl LocalViewer {
                 signal: Some(Signal::Working),
                 background_work: false,
                 cwd: String::new(),
+                project_id: None,
             },
             Chat {
                 id: "synthetic-two".into(),
@@ -276,6 +300,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 cwd: String::new(),
+                project_id: None,
             },
             Chat {
                 id: "synthetic-archive".into(),
@@ -288,6 +313,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 cwd: String::new(),
+                project_id: None,
             },
         ]);
         view.chats.update(cx, |list, cx| {
@@ -445,6 +471,7 @@ impl LocalViewer {
             signal: Some(Signal::Failed),
             background_work: false,
             cwd: String::new(),
+            project_id: None,
         });
         view.state.chats = Arc::new(chats);
         let mut rows = vec![Message::live(
@@ -523,6 +550,7 @@ impl LocalViewer {
                     selected: None,
                     opened: None,
                     loaded: false,
+                    project: None,
                     corners: HashMap::new(),
                 },
                 window,
@@ -539,6 +567,30 @@ impl LocalViewer {
             }
         });
         chats.update(cx, |list, cx| list.focus(window, cx));
+        let projects =
+            cx.new(|cx| ListState::new(ProjectList::new(), window, cx).searchable(false));
+        let overview = cx.new(|_| Overview::new());
+        let project_events = cx.subscribe_in(&projects, window, |view, list, event, window, cx| {
+            if let ListEvent::Confirm(ix) = event
+                && let Some(id) = list.read(cx).delegate().at(*ix).map(|p| p.id.clone())
+            {
+                view.show_project(id, window, cx);
+            }
+        });
+        let shell_events =
+            cx.subscribe_in(
+                &overview,
+                window,
+                |view, _, event, window, cx| match event {
+                    ShellEvent::Project(id) => view.show_project(id.clone(), window, cx),
+                    ShellEvent::AllChats => view.show_chats(window, cx),
+                    ShellEvent::Chat(id) => {
+                        if let Some(chat) = view.state.chats.iter().find(|c| &c.id == id).cloned() {
+                            view.open(chat, window, cx);
+                        }
+                    }
+                },
+            );
         let transcript = cx.new(|cx| TranscriptView::readonly(window, cx));
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let editor_events =
@@ -565,6 +617,13 @@ impl LocalViewer {
                     revision,
                     target,
                 } => {
+                    if view.page != Page::Chat
+                        || !view.editor.update(cx, |editor, cx| {
+                            editor.can_adopt_creation(key, *revision, target, window, cx)
+                        })
+                    {
+                        return;
+                    }
                     view.open(
                         Chat {
                             id: target.clone(),
@@ -577,6 +636,7 @@ impl LocalViewer {
                             signal: Some(Signal::Working),
                             background_work: false,
                             cwd: String::new(),
+                            project_id: None,
                         },
                         window,
                         cx,
@@ -621,6 +681,13 @@ impl LocalViewer {
             },
         );
         Self {
+            page: Page::Chat,
+            project_scope: None,
+            projects,
+            overview,
+            nav_projects: Arc::new(Vec::new()),
+            pending_transcript: None,
+            nav_error: None,
             client,
             chats,
             transcript,
@@ -631,7 +698,14 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
-            _subscriptions: vec![subscription, editor_events, artifact_events, history_events],
+            _subscriptions: vec![
+                subscription,
+                editor_events,
+                artifact_events,
+                history_events,
+                project_events,
+                shell_events,
+            ],
             updates: None,
             writes: None,
             editor,
@@ -650,15 +724,30 @@ impl LocalViewer {
     }
 
     fn open(&mut self, chat: Chat, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.capture_navigation(window, cx))
+        {
+            return;
+        }
         if chat.local_draft {
+            self.page = Page::Chat;
+            self.nav_error = None;
             self.clear_chat(cx);
             self.title = "New Local chat draft".into();
             self.editor.update(cx, |editor, cx| {
                 editor.select(chat.id, true, false, window, cx)
             });
+            self.rebuild_nav(window, cx);
+            cx.notify();
             return;
         }
         if self.selected.as_ref() == Some(&chat.id) {
+            self.page = Page::Chat;
+            self.nav_error = None;
+            self.resume_transcript(cx);
+            self.rebuild_nav(window, cx);
+            cx.notify();
             return;
         }
         let generation = self.generation + 1;
@@ -668,9 +757,18 @@ impl LocalViewer {
                 generation,
             })
         }) {
+            self.nav_error = Some(if self.client.is_some() {
+                "Chat could not be opened. Try again."
+            } else {
+                "This captured view cannot open another chat."
+            });
+            cx.notify();
             return;
         }
         self.generation = generation;
+        self.page = Page::Chat;
+        self.nav_error = None;
+        self.pending_transcript = None;
         self.earlier_attempt = None;
         self.earlier_request = None;
         self.refreshing = false;
@@ -700,6 +798,9 @@ impl LocalViewer {
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
         if self.refreshing && state.generation == self.generation && !state.loaded {
+            self.state.projects = state.projects;
+            self.state.projects_loaded = state.projects_loaded;
+            self.state.projects_error = state.projects_error;
             self.state.chats = state.chats;
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
@@ -721,18 +822,31 @@ impl LocalViewer {
             let rows = std::mem::take(&mut state.rows);
             let reset = self.refreshing;
             self.refreshing = false;
-            self.transcript.update(cx, |view, cx| {
-                view.history_scope(self.generation);
-                view.replace_readonly(rows, reset, cx);
-                if reset {
-                    view.latest(cx);
-                }
-            });
+            if self.page == Page::Chat {
+                self.transcript.update(cx, |view, cx| {
+                    view.history_scope(self.generation);
+                    view.replace_readonly(rows, reset, cx);
+                    if reset {
+                        view.latest(cx);
+                    }
+                });
+                self.pending_transcript = None;
+            } else {
+                let reset = reset
+                    || self
+                        .pending_transcript
+                        .as_ref()
+                        .is_some_and(|(_, reset)| *reset);
+                self.pending_transcript = Some((rows, reset));
+            }
             self.state = state;
         } else {
             // An old chat never replaces the selected chat, even while switching quickly.
             self.state.chats = state.chats;
             self.state.status = state.status;
+            self.state.projects = state.projects;
+            self.state.projects_loaded = state.projects_loaded;
+            self.state.projects_error = state.projects_error;
         }
         if let Some(chat) = self
             .selected
@@ -756,6 +870,7 @@ impl LocalViewer {
     }
 
     fn clear_chat(&mut self, cx: &mut Context<Self>) {
+        self.pending_transcript = None;
         self.editor
             .update(cx, |editor, cx| editor.activity(false, cx));
         self.artifacts_open = false;
@@ -787,6 +902,9 @@ impl LocalViewer {
         });
     }
     fn earlier(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if self.page != Page::Chat {
+            return;
+        }
         if self.earlier_request.is_some() && !manual {
             // A fitting list's bounce may re-arm Tail during another upward
             // wheel packet. Preserve that explicit reader intent while paging.
@@ -853,40 +971,161 @@ impl LocalViewer {
         if !self.editor.read(cx).ready() {
             return;
         }
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.capture_navigation(window, cx))
+        {
+            return;
+        }
+        self.page = Page::Chat;
+        self.project_scope = None;
+        self.chats.update(cx, |list, cx| {
+            // This remains an explicitly global creation flow, not project authority.
+            list.delegate_mut().project = None;
+            list.delegate_mut().filter();
+            cx.notify();
+        });
         // Do not inherit another agent's isolated working copy as a Build destination.
         let cwd = String::new();
+        self.nav_error = None;
         self.clear_chat(cx);
         self.title = "New Local chat".into();
         self.editor
             .update(cx, |editor, cx| editor.new_draft(cwd, window, cx));
     }
-    fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let drafts = self.editor.read(cx).new_drafts();
-        if Arc::ptr_eq(&self.nav_chats, &self.state.chats)
-            && drafts == self.nav_drafts
-            && self.chats.read(cx).delegate().opened == self.selected
-            && self.chats.read(cx).delegate().loaded == self.state.list_loaded
+    fn resume_transcript(&mut self, cx: &mut Context<Self>) {
+        if let Some((rows, reset)) = self.pending_transcript.take() {
+            self.transcript.update(cx, |view, cx| {
+                view.history_scope(self.generation);
+                view.replace_readonly(rows, reset, cx);
+                if reset {
+                    view.latest(cx);
+                }
+            });
+        }
+    }
+    fn leave_artifacts(&mut self, cx: &mut Context<Self>) {
+        if self.artifacts_open {
+            self.artifacts_open = false;
+            self.artifacts.update(cx, |p, _| p.close());
+        }
+    }
+    fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.capture_navigation(window, cx))
         {
             return;
         }
+        self.leave_artifacts(cx);
+        self.page = Page::Home;
+        self.nav_error = None;
+        self.project_scope = None;
+        self.rebuild_nav(window, cx);
+        self.chats.update(cx, |list, cx| list.focus(window, cx));
+        cx.notify();
+    }
+    fn show_project(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::local_model::valid_id(&id)
+            || !self
+                .editor
+                .update(cx, |editor, cx| editor.capture_navigation(window, cx))
+        {
+            return;
+        }
+        self.leave_artifacts(cx);
+        self.project_scope = Some(id.clone());
+        self.page = Page::Project(id);
+        self.nav_error = None;
+        self.rebuild_nav(window, cx);
+        self.chats.update(cx, |list, cx| list.focus(window, cx));
+        cx.notify();
+    }
+    fn show_chats(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self
+            .editor
+            .update(cx, |editor, cx| editor.capture_navigation(window, cx))
+        {
+            return;
+        }
+        self.leave_artifacts(cx);
+        self.page = Page::Chat;
+        self.project_scope = None;
+        self.nav_error = None;
+        self.resume_transcript(cx);
+        self.rebuild_nav(window, cx);
+        self.chats.update(cx, |list, cx| list.focus(window, cx));
+        cx.notify();
+    }
+    fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page != Page::Chat {
+            self.overview.update(cx, |view, cx| {
+                view.sync(
+                    OverviewInput {
+                        projects: self.state.projects.clone(),
+                        chats: self.state.chats.clone(),
+                        project: self.project_scope.clone(),
+                        projects_loaded: self.state.projects_loaded,
+                        chats_loaded: self.state.list_loaded,
+                        error: self.state.projects_error,
+                    },
+                    cx,
+                )
+            });
+        }
+        if !Arc::ptr_eq(&self.nav_projects, &self.state.projects)
+            || self.projects.read(cx).delegate().selected != self.project_scope
+        {
+            self.nav_projects = self.state.projects.clone();
+            self.projects.update(cx, |list, cx| {
+                let d = list.delegate_mut();
+                d.all = self.state.projects.clone();
+                d.selected = self.project_scope.clone();
+                cx.notify();
+            });
+        }
+        let drafts = self.editor.read(cx).new_drafts();
+        let opened = if self.page == Page::Chat {
+            self.selected.clone()
+        } else {
+            None
+        };
+        if Arc::ptr_eq(&self.nav_chats, &self.state.chats)
+            && drafts == self.nav_drafts
+            && self.chats.read(cx).delegate().opened == opened
+            && self.chats.read(cx).delegate().loaded == self.state.list_loaded
+            && self.chats.read(cx).delegate().project == self.project_scope
+        {
+            return;
+        }
+        let metadata_changed =
+            !Arc::ptr_eq(&self.nav_chats, &self.state.chats) || drafts != self.nav_drafts;
         self.nav_chats = self.state.chats.clone();
         self.nav_drafts = drafts.clone();
-        let mut all: Vec<_> = drafts
-            .into_iter()
-            .map(|(key, title)| Chat {
-                id: key,
-                title,
-                state: "Draft".into(),
-                archived: false,
-                local_draft: true,
-                writable: false,
-                busy: false,
-                signal: None,
-                background_work: false,
-                cwd: String::new(),
-            })
-            .collect();
-        all.extend(self.state.chats.iter().cloned());
+        let all = if !metadata_changed {
+            self.chats.read(cx).delegate().all.clone()
+        } else if drafts.is_empty() {
+            self.state.chats.clone()
+        } else {
+            let mut all: Vec<_> = drafts
+                .into_iter()
+                .map(|(key, title)| Chat {
+                    id: key,
+                    title,
+                    state: "Draft".into(),
+                    archived: false,
+                    local_draft: true,
+                    writable: false,
+                    busy: false,
+                    signal: None,
+                    background_work: false,
+                    cwd: String::new(),
+                    project_id: None,
+                })
+                .collect();
+            all.extend(self.state.chats.iter().cloned());
+            Arc::new(all)
+        };
         self.chats.update(cx, |list, cx| {
             let selected = list
                 .delegate()
@@ -894,9 +1133,10 @@ impl LocalViewer {
                 .and_then(|ix| list.delegate().at(ix))
                 .map(|c| c.id.clone());
             let delegate = list.delegate_mut();
-            delegate.all = Arc::new(all);
-            delegate.opened = self.selected.clone();
+            delegate.all = all;
+            delegate.opened = opened;
             delegate.loaded = self.state.list_loaded;
+            delegate.project = self.project_scope.clone();
             delegate.filter();
             let selected = selected
                 .and_then(|id| {
@@ -949,7 +1189,7 @@ impl Render for LocalViewer {
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
-                if !view.artifacts_open && view.selected.is_some() {
+                if view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
                     view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
                 }
             }))
@@ -958,8 +1198,11 @@ impl Render for LocalViewer {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
+                if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
+            .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
+            .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|view.chats.update(cx,|list,cx|list.focus(window,cx))))
             .child(
                 div().id("chat-sidebar").test_support().v_flex().w(sidebar_width).min_w(sidebar_width).max_w(sidebar_width).h_full()
@@ -967,20 +1210,35 @@ impl Render for LocalViewer {
                     .child(div().v_flex().p_3().gap_2()
                         .child(div().h_flex().items_center().justify_between().gap_1()
                             .child(div().text_sm().font_semibold().child("Pilot Next"))
-                            .child(Button::new("new-local-chat").ghost().small().icon(IconName::Plus).label("New chat")
+                            .child(Button::new("new-local-chat").ghost().small().icon(IconName::Plus).label("New chat").tooltip("Start a Local chat with an explicit folder. Project selection here is browse-only.")
                                 .disabled(!self.editor.read(cx).ready()).on_click(cx.listener(|view,_,window,cx|view.new_chat(window,cx)))))
                         .child(div().text_xs().text_color(cx.theme().muted_foreground).child(SharedString::from(format!("{count} Local chats"))))
                         .child(Checkbox::new("archives").label("Include archived").checked(archived)
                             .on_change(cx.listener(|view,checked,_,cx|{
                                 view.chats.update(cx,|list,cx|{let d=list.delegate_mut();d.archived = *checked;d.filter();cx.notify();});
                             }))))
+                    .child(div().v_flex().px_3().pb_2().gap_1()
+                        .child(Button::new("nav-home").ghost().small().w_full().accessibility_label("Home").child(div().w_full().min_w_0().truncate().child("Home")).selected(self.page==Page::Home)
+                            .on_click(cx.listener(|view,_,window,cx|view.show_home(window,cx))))
+                        .child(Button::new("nav-all-chats").ghost().small().w_full().accessibility_label("All chats").child(div().w_full().min_w_0().truncate().child("All chats")).selected(self.page==Page::Chat&&self.project_scope.is_none())
+                            .on_click(cx.listener(|view,_,window,cx|view.show_chats(window,cx)))))
+                    .when(self.state.projects_loaded||self.state.projects_error.is_some(),|this|this.child(div().v_flex().px_3().pb_2().gap_1()
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Projects"))
+                        .when(!self.state.projects.is_empty(),|this|this.child(div().h(px((self.state.projects.len().min(5) as f32*30.).min(f32::from(window.viewport_size().height)*0.22).max(30.))).w_full().min_h_0()
+                            .child(List::new(&self.projects))))
+                        .when(self.state.projects.is_empty(),|this|this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(if self.state.projects_error.is_some(){"Project list unavailable"}else{"No configured projects"})))))
                     .child(div().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+                    .when_some(self.nav_error,|this,error|this.child(div().p_3().text_xs().text_color(cx.theme().danger).child(error)))
                     .children((!healthy).then(||div().v_flex().p_3().gap_2().border_t_1().border_color(cx.theme().border)
                         .child(div().text_xs().text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
                         .child(Button::new("reconnect").ghost().small().label("Reconnect").disabled(self.client.is_none())
                             .on_click(cx.listener(|view,_,_,_|{if let Some(client)=&view.client{client.command(Command::Reconnect);}})))))
             )
             .child(
+                if self.page!=Page::Chat {
+                    div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                        .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else {
                 div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                     .child(div().v_flex().px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
                         .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
@@ -1007,6 +1265,8 @@ impl Render for LocalViewer {
                             .on_click(cx.listener(|view,_,_,cx|{view.details_open = !view.details_open;cx.notify();})))
                         .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
                         .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
+                        .into_any_element()
+                }
             )
     }
 }
@@ -1150,6 +1410,7 @@ mod refresh_tests {
                         signal: None,
                         background_work: false,
                         cwd: String::new(),
+                        project_id: None,
                     },
                     window,
                     cx,

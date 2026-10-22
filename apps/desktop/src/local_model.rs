@@ -10,6 +10,93 @@ pub(crate) const ROW_CAP: usize = 512;
 pub(crate) const SOURCE_CAP: usize = 8 * 1024 * 1024;
 pub(crate) const MESSAGE_CAP: usize = 1024 * 1024;
 pub(crate) const SESSION_CAP: usize = 1000;
+pub(crate) const PROJECT_CAP: usize = 256;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Project {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+}
+pub(crate) fn projects(value: &Value) -> Result<Vec<Project>, &'static str> {
+    let values = value.as_array().ok_or("Project list is unavailable.")?;
+    if values.len() > PROJECT_CAP {
+        return Err("Project catalog exceeds the 256-project display limit.");
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut out = Vec::with_capacity(values.len());
+    for value in values {
+        let id = value["id"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .ok_or("Invalid project identity; previous catalog retained.")?;
+        let path = value["path"]
+            .as_str()
+            .filter(|p| p.starts_with('/') && p.len() <= 4096 && !p.contains('\0'))
+            .ok_or("Invalid project path; previous catalog retained.")?;
+        if !ids.insert(id) {
+            return Err("Duplicate project identity; previous catalog retained.");
+        }
+        out.push(Project {
+            id: id.into(),
+            name: bounded(
+                value["name"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Untitled project"),
+                240,
+            ),
+            path: path.into(),
+        });
+    }
+    out.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.id.cmp(&b.id))
+    });
+    Ok(out)
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn bounded_atomic_project_catalog_retains_only_navigation_metadata() {
+        let p=projects(&json!([{"id":"B","name":"Same","path":"/synthetic/B","environment":{"secret":"never retain"}}, {"id":"A","name":"same","path":"/synthetic/A"}])).unwrap();
+        assert_eq!(
+            p.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        assert!(!format!("{p:?}").contains("never retain"));
+        assert!(projects(&json!([{"id":"a","path":"/a"},{"id":"a","path":"/b"}])).is_err());
+        assert!(projects(&json!([{"id":"a","path":"relative"}])).is_err());
+        assert!(projects(&json!([{"id":"../a","path":"/a"}])).is_err());
+        assert!(projects(&json!([{"id":"a","path":"/a"}, {"id":null,"path":"/b"}])).is_err());
+        assert!(projects(&json!(null)).is_err());
+        assert!(
+            projects(&json!(
+                (0..=PROJECT_CAP)
+                    .map(|ix| json!({"id":ix.to_string(),"path":"/synthetic"}))
+                    .collect::<Vec<_>>()
+            ))
+            .is_err()
+        );
+        assert_eq!(projects(&json!([])).unwrap(), Vec::new());
+        let bounded = projects(&json!([{"id":"a","path":"/a","name":"é".repeat(400)}])).unwrap();
+        assert!(bounded[0].name.len() <= 240);
+    }
+    #[test]
+    fn projects_are_explicit_not_inferred_from_checkout_paths() {
+        let mut raw = json!({"id":"a","cwd":"/synthetic/project/clone","projectId":"PROJECT"});
+        assert_eq!(chat(&raw).unwrap().project_id.as_deref(), Some("PROJECT"));
+        raw["projectId"] = json!("bad/id");
+        assert!(chat(&raw).unwrap().project_id.is_none());
+        raw["projectId"] = Value::Null;
+        assert!(chat(&raw).unwrap().project_id.is_none());
+    }
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
@@ -23,6 +110,7 @@ pub(crate) struct Chat {
     pub(crate) signal: Option<crate::dither::Signal>,
     pub(crate) background_work: bool,
     pub(crate) cwd: String,
+    pub(crate) project_id: Option<String>,
 }
 impl Chat {
     pub(crate) fn signal_label(&self) -> &str {
@@ -64,6 +152,10 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         signal,
         background_work,
         cwd: bounded(value["cwd"].as_str().unwrap_or(""), 4096),
+        project_id: value["projectId"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .map(str::to_owned),
     })
 }
 

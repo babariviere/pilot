@@ -62,7 +62,7 @@ pub(crate) struct Interaction {
     close: async_channel::Sender<()>,
 }
 impl Interaction {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn recording() -> (Self, async_channel::Receiver<WriteCommand>) {
         let (commands, receiver) = async_channel::bounded(8);
         let (wake, _) = async_channel::bounded(1);

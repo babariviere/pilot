@@ -178,6 +178,9 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) projects: Arc<Vec<local_model::Project>>,
+    pub(crate) projects_loaded: bool,
+    pub(crate) projects_error: Option<&'static str>,
     pub(crate) artifacts: Arc<Vec<crate::artifact_model::Reference>>,
     pub(crate) chats: Arc<Vec<Chat>>,
     pub(crate) rows: Vec<Message>,
@@ -631,6 +634,11 @@ async fn run(
                             // wake the UI when the activity label is unchanged.
                             if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
                         } else if value["type"] == "error" { model.stop_thinking(); view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                    } else if value["type"] == "projects" {
+                        match local_model::projects(&value["projects"]) {
+                            Ok(projects)=>{view.projects=Arc::new(projects);view.projects_loaded=true;view.projects_error=None;},
+                            Err(error)=>view.projects_error=Some(error),
+                        }
                     } else if value["type"] == "sessions" {
                         view.list_loaded=true;
                         let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).take(local_model::SESSION_CAP).collect::<Vec<_>>()).unwrap_or_default();

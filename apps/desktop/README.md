@@ -165,7 +165,16 @@ Scrolling to the transcript top loads the previous bounded history page while
 holding the reading position and selection. Earlier remains a manual retry;
 failed pages do not retry automatically on repeated overscroll. See
 [scroll-history checks](evidence/scroll-history.md).
-This is not Home/Inbox/settings or full app parity. macOS is the current focus;
+The Local viewer starts at Home with loaded-chat activity and configured projects.
+Home includes all projects; selecting a project filters chat browsing by exact
+`projectId`, never by checkout path. All chats restores the global list and current
+conversation. Cmd/Ctrl-1 opens Home and Cmd/Ctrl-2 opens All chats. Navigation
+captures the current draft, refuses active preedit and preserves the current
+transcript/reading state; hidden stream projections coalesce until return.
+Project browsing is read-only. New chat still asks for its own explicit Local
+folder and does not inherit a project, path, model or permission from selection.
+See [everyday parity inventory and checks](evidence/everyday-parity.md).
+Home/dashboard, Inbox, settings and full app parity remain incomplete. macOS is the current focus;
 Linux/Wayland verification is deferred, not a delivery gate or support claim.
 
 ### Private rendered-UI capture
