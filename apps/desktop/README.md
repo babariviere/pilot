@@ -161,6 +161,10 @@ The composer uses one continuous tray surface, Kit-owned text padding and a
 compact control row, with the single transient activity line just above it.
 See [composer layout correction](evidence/composer-layout.md) for native bounds,
 synthetic captures and interaction-preservation checks.
+Scrolling to the transcript top loads the previous bounded history page while
+holding the reading position and selection. Earlier remains a manual retry;
+failed pages do not retry automatically on repeated overscroll. See
+[scroll-history checks](evidence/scroll-history.md).
 This is not Home/Inbox/settings or full app parity. macOS is the current focus;
 Linux/Wayland verification is deferred, not a delivery gate or support claim.
 
