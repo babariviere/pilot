@@ -23,3 +23,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test controls
 # Real top scroll/selection with faux paged reads, never a real Local action.
 bash scripts/cargo.sh clippy --locked --features native-probes --test history -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test history
+# Actual Home/projects/chat navigation with synthetic summaries/faux channels only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test shell -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test shell

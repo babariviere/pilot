@@ -79,6 +79,39 @@ fn setup_width(
 }
 
 #[gpui_kit::test]
+fn creation_adoption_requires_current_empty_revision_after_live_capture(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.cache.insert(
+                "new:slot".into(),
+                Draft {
+                    revision: 7,
+                    cwd: "/synthetic".into(),
+                    created: Some("created".into()),
+                    ..Default::default()
+                },
+            );
+            editor.select("new:slot".into(), true, false, window, cx);
+            assert!(editor.can_adopt_creation("new:slot", 7, "created", window, cx));
+            assert!(!editor.can_adopt_creation("new:other", 7, "created", window, cx));
+            assert!(!editor.can_adopt_creation("new:slot", 6, "created", window, cx));
+            assert!(!editor.can_adopt_creation("new:slot", 7, "different", window, cx));
+            editor.text.update(cx, |input, cx| {
+                input.set_value("Newer native draft 👩‍💻", window, cx)
+            });
+            assert!(!editor.can_adopt_creation("new:slot", 7, "created", window, cx));
+            assert_eq!(editor.cache["new:slot"].text, "Newer native draft 👩‍💻");
+            assert_eq!(editor.cache["new:slot"].revision, 8);
+            editor.select("chat:a".into(), true, false, window, cx);
+            assert!(!editor.can_adopt_creation("new:slot", 8, "created", window, cx));
+        })
+    })
+    .unwrap();
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
 fn compact_composer_keeps_controls_inside_and_text_live(cx: &mut TestAppContext) {
     for width in [320., 472., 760.] {
         let (handle, view, commands) = setup_width(cx, width);

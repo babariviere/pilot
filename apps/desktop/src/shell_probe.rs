@@ -1,0 +1,568 @@
+//! Actual headless production view with faux reader/writer channels and public summaries.
+//! Never connects, creates, sends, stops, approves or reads private state.
+use super::*;
+use gpui_kit::{
+    Bounds, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions,
+    component::{Theme, ThemeMode},
+    point, size,
+    test::TestWindowExt,
+};
+use serde_json::json;
+
+fn settle(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle) {
+    for _ in 0..32 {
+        cx.advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+            .unwrap();
+    }
+}
+pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
+    let captures = std::env::var_os("PILOT_NEXT_SHELL_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (client, reads) = LocalClient::synthetic_commands();
+            let (writer, writes) = Interaction::recording();
+            let initial:Vec<_>=(100..120).map(|id|Message::live(id,"assistant".into(),format!("Synthetic message {id}: retain this 👩‍💻 e\u{301} selection while browsing projects.\n\n{}","A calm synthetic paragraph. ".repeat(16)))).collect();
+            let projects = crate::local_model::projects(&json!([
+                {"id":"project-a","name":"Synthetic Atlas","path":"/synthetic/shared-name"},
+                {"id":"project-b","name":"Synthetic Boreal","path":"/synthetic/shared-name"}
+            ]))
+            .unwrap();
+            let chats=Arc::new(vec![
+            crate::local_model::chat(&json!({"id":"synthetic","title":"Synthetic active chat","cwd":"/synthetic/shared-name","projectId":"project-a","state":"working"})).unwrap(),
+            crate::local_model::chat(&json!({"id":"other","title":"Synthetic other chat","cwd":"/synthetic/shared-name","projectId":"project-b","state":"idle"})).unwrap(),
+            crate::local_model::chat(&json!({"id":"unassigned","title":"Synthetic unassigned","cwd":"/synthetic/shared-name","state":"idle"})).unwrap(),
+            crate::local_model::chat(&json!({"id":"archived","title":"Synthetic archived","projectId":"project-a","archivedAt":1,"state":"idle"})).unwrap(),
+        ]);
+            let (handle, view) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(760.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |window, cx| {
+                        cx.new(|cx| {
+                            let mut view =
+                                LocalViewer::preview(PreviewState::Conversation, window, cx);
+                            view.client = Some(client);
+                            view.writer = Some(writer.clone());
+                            view.state.projects = Arc::new(projects);
+                            view.state.projects_loaded = true;
+                            view.state.chats = chats;
+                            view.editor
+                                .update(cx, |v, cx| v.shell_probe_setup(writer, window, cx));
+                            view.transcript
+                                .update(cx, |v, cx| v.replace_readonly(initial.clone(), true, cx));
+                            view.rebuild_nav(window, cx);
+                            view
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            settle(cx, handle);
+            assert!(reads.try_recv().is_err());
+            assert!(writes.try_recv().is_err());
+            for _ in 0..20 {
+                cx.update_window(handle, |_, window, cx| {
+                    window.scroll(
+                        "viewport",
+                        ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                        cx,
+                    )
+                })
+                .unwrap();
+                settle(cx, handle);
+                if cx
+                    .update_window(handle, |_, window, _| {
+                        window.try_find(("copy-source", 100u64)).is_some()
+                    })
+                    .unwrap()
+                {
+                    break;
+                }
+            }
+            let (selected_text, selected_range, anchor_y, anchor_before) = cx
+                .update_window(handle, |_, window, cx| {
+                    let t = view.read(cx).transcript.read(cx).history_probe_row(100);
+                    let b = t.read(cx).bounds();
+                    window.drag(
+                        b.origin + point(px(2.), px(8.)),
+                        b.origin + point(px(180.), px(8.)),
+                        cx,
+                    );
+                    let range = t
+                        .read(cx)
+                        .selected_source_range()
+                        .expect("native drag selects real text");
+                    (
+                        t,
+                        range,
+                        f32::from(b.top()),
+                        view.read(cx).transcript.read(cx).history_probe_anchor(cx),
+                    )
+                })
+                .unwrap();
+            // A live editor change and immediate navigation, before deferred Change, must capture now.
+            cx.update_window(handle, |_, window, cx| {
+                let text = view.read(cx).editor.read(cx).shell_probe().0;
+                text.update(cx, |v, cx| {
+                    v.set_value("Private synthetic draft 👩‍💻 e\u{301}", window, cx)
+                });
+                view.update(cx, |v, cx| v.show_home(window, cx));
+                assert_eq!(
+                    view.read(cx).editor.read(cx).shell_probe().2.unwrap().text,
+                    "Private synthetic draft 👩‍💻 e\u{301}"
+                );
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                let main = window.find("overview").bounds();
+                let sidebar = window.find("chat-sidebar").bounds();
+                assert!(main.left() >= sidebar.right() && f32::from(main.size.width) > 350.);
+                assert_eq!(view.read(cx).page, Page::Home);
+                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 3);
+                assert!(window.try_find("home-project-project-a").is_some());
+                assert!(window.try_find("home-project-project-b").is_some());
+                let button = window.find("home-project-project-a").bounds();
+                let label = window.find("overview-project-title-project-a").bounds();
+                assert!(
+                    label.left() >= button.left()
+                        && label.right() <= button.right()
+                        && label.right() <= main.right()
+                );
+                assert!(
+                    f32::from(label.left() - button.left()) < 12.,
+                    "project labels must actually align left, not just their button root"
+                );
+                window.click("home-project-project-a", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                assert_eq!(view.read(cx).page, Page::Project("project-a".into()));
+                let v = view.read(cx);
+                let d = v.chats.read(cx).delegate();
+                assert_eq!(d.filtered.len(), 1);
+                assert_eq!(d.at(IndexPath::new(0)).unwrap().id, "synthetic");
+                assert!(
+                    Arc::ptr_eq(&d.all, &v.state.chats),
+                    "scope changes must share, not deep-clone, the loaded chat metadata"
+                );
+                window.click("archives", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                let chats = view.read(cx).chats.clone();
+                chats.update(cx, |l, cx| l.set_query("other", window, cx))
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update(|cx| {
+                assert!(
+                    view.read(cx).chats.read(cx).delegate().filtered.is_empty(),
+                    "search must stay within project scope"
+                )
+            });
+            cx.update_window(handle, |_, window, cx| {
+                let chats = view.read(cx).chats.clone();
+                chats.update(cx, |l, cx| l.set_query("", window, cx))
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 2);
+                window.click("archives", cx);
+                window.click("nav-home", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(handle)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}-home.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            cx.update_window(handle, |_, window, cx| {
+                window.click("project-project-b", cx)
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                assert_eq!(view.read(cx).page, Page::Project("project-b".into()));
+                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1);
+                assert_eq!(
+                    view.read(cx)
+                        .chats
+                        .read(cx)
+                        .delegate()
+                        .at(IndexPath::new(0))
+                        .unwrap()
+                        .id,
+                    "other"
+                );
+                window.click("nav-home", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            // Coalesce many hidden canonical updates without mounting/parsing transcript rows.
+            let render_count =
+                cx.update(|cx| view.read(cx).transcript.read(cx).probe_render_count());
+            for n in 0..32 {
+                cx.update_window(handle, |_, window, cx| {
+                    view.update(cx, |v, cx| {
+                        let mut state = v.state.clone();
+                        state.rows = initial.clone();
+                        state.rows.push(Message::live(
+                            999,
+                            "assistant".into(),
+                            format!(
+                                "Latest hidden publication {n}. {}",
+                                "Synthetic source. ".repeat(512)
+                            ),
+                        ));
+                        v.accept(state, window, cx);
+                    })
+                })
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.draw(cx).clear(cx);
+                })
+                .unwrap();
+            }
+            cx.update(|cx| {
+                let v = view.read(cx);
+                assert_eq!(v.transcript.read(cx).probe_render_count(), render_count);
+                let pending = &v.pending_transcript.as_ref().unwrap().0;
+                assert_eq!(pending.len(), initial.len() + 1);
+                assert!(
+                    pending
+                        .last()
+                        .unwrap()
+                        .source()
+                        .starts_with("Latest hidden publication 31.")
+                );
+            });
+            // Removing a selected project must not silently broaden to All or borrow the other cwd.
+            cx.update_window(handle, |_, window, cx| {
+                window.click("home-project-project-a", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.projects = Arc::new(vec![state.projects[1].clone()]);
+                    // Worker publications are complete canonical projections. The
+                    // UI intentionally drains state.rows, so do not clone that
+                    // empty UI buffer as a fake canonical history replacement.
+                    state.rows = v.pending_transcript.as_ref().unwrap().0.clone();
+                    v.accept(state, window, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                assert_eq!(view.read(cx).page, Page::Project("project-a".into()));
+                assert_eq!(view.read(cx).project_scope.as_deref(), Some("project-a"));
+                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1);
+                window.click("nav-all-chats", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| {
+                assert_eq!(view.read(cx).page, Page::Chat);
+                assert!(view.read(cx).pending_transcript.is_none());
+                assert!(window.try_find(("copy-source",100u64)).is_some(),"the read message must really be mounted after return");
+                let retained = view.read(cx).transcript.read(cx).history_probe_row(100);
+                assert_eq!(retained.entity_id(), selected_text.entity_id());
+                // Native UI clicks/search intentionally dismiss a text selection,
+                // as before this shell. Never resurrect a hidden stale selection.
+                assert!(retained.read(cx).selected_source_range().is_none());
+                assert!(
+                    initial[0].source().is_char_boundary(selected_range.start)
+                        && initial[0].source().is_char_boundary(selected_range.end)
+                );
+                assert!(
+                    (f32::from(retained.read(cx).bounds().top()) - anchor_y).abs() <= 1.,
+                    "Home/project round trip plus hidden append must retain read position: before_y={anchor_y}, after_y={}, before={anchor_before:?}, after={:?}",f32::from(retained.read(cx).bounds().top()),view.read(cx).transcript.read(cx).history_probe_anchor(cx)
+                );
+                let b = retained.read(cx).bounds();
+                window.drag(
+                    b.origin + point(px(2.), px(8.)),
+                    b.origin + point(px(180.), px(8.)),
+                    cx,
+                );
+                assert!(retained.read(cx).selected_source_range().is_some());
+                let copied = gpui_kit::base::TextSelection::selected_text(window, cx);
+                assert!(!copied.is_empty());
+                let copied_range=retained.read(cx).selected_source_range().unwrap();
+                window.press("secondary-c", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), &initial[0].source()[copied_range]);
+                assert_eq!(
+                    view.read(cx)
+                        .editor
+                        .read(cx)
+                        .shell_probe()
+                        .0
+                        .read(cx)
+                        .value()
+                        .as_ref(),
+                    "Private synthetic draft 👩‍💻 e\u{301}"
+                );
+                window.press("secondary-l", cx);
+                let text = view.read(cx).editor.read(cx).shell_probe().0;
+                text.update(cx, |v, cx| {
+                    v.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx)
+                });
+                view.update(cx, |v, cx| v.show_home(window, cx));
+                assert_eq!(
+                    view.read(cx).page,
+                    Page::Chat,
+                    "preedit must prevent hiding the composer"
+                );
+                text.update(cx, |v, cx| v.unmark_text(window, cx));
+                view.update(cx, |v, cx| v.show_home(window, cx));
+            })
+            .unwrap();
+            settle(cx, handle);
+            // Real Home-chat click routes through the existing reader only, with exact ID/generation.
+            cx.update_window(handle, |_, window, cx| window.click("home-chat-other", cx))
+                .unwrap();
+            settle(cx, handle);
+            assert!(matches!(reads.try_recv(),Ok(Command::Open{id,..}) if id=="other"));
+            assert!(reads.try_recv().is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "navigation must not create/send/Stop or approve"
+            );
+            cx.update(|cx| assert_eq!(view.read(cx).selected.as_deref(), Some("other")));
+            // A new draft still requires an explicit folder. Cwd preedit also fences shell navigation.
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |v, cx| v.new_chat(window, cx))
+            })
+            .unwrap();
+            settle(cx, handle);
+            assert!(matches!(reads.try_recv(), Ok(Command::Clear { .. })));
+            cx.update_window(handle, |_, window, cx| {
+                let cwd = view.read(cx).editor.read(cx).shell_probe().1;
+                cwd.update(cx, |v, cx| {
+                    v.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx)
+                });
+                view.update(cx, |v, cx| v.show_home(window, cx));
+                assert_eq!(view.read(cx).page, Page::Chat);
+                cwd.update(cx, |v, cx| {
+                    v.unmark_text(window, cx);
+                    v.set_value("/synthetic/explicit-folder", window, cx);
+                });
+                view.update(cx, |v, cx| v.show_home(window, cx));
+                let draft = view.read(cx).editor.read(cx).shell_probe().2.unwrap();
+                assert_eq!(draft.cwd, "/synthetic/explicit-folder");
+            })
+            .unwrap();
+            settle(cx, handle);
+            // A durable creation receipt arriving after navigation is retained, not adopted over Home.
+            cx.update_window(handle, |_, window, cx| {
+                let editor = view.read(cx).editor.clone();
+                let draft = editor.read(cx).shell_probe().2.unwrap();
+                let key = view
+                    .read(cx)
+                    .nav_drafts
+                    .iter()
+                    .find(|(key, _)| key.starts_with("new:"))
+                    .unwrap()
+                    .0
+                    .clone();
+                let mut book = crate::delivery_store::Book::shell_probe();
+                let mut done = draft;
+                done.created = Some("synthetic-created".into());
+                book.drafts.insert(key, done);
+                editor.update(cx, |e, cx| {
+                    e.accept(
+                        crate::interaction::WriteState {
+                            book: Some(Arc::new(book)),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update(|cx| {
+                assert_eq!(view.read(cx).page, Page::Home);
+                assert_eq!(
+                    view.read(cx)
+                        .editor
+                        .read(cx)
+                        .shell_probe()
+                        .2
+                        .unwrap()
+                        .created
+                        .as_deref(),
+                    Some("synthetic-created")
+                );
+            });
+            assert!(reads.try_recv().is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "late creation receipt must not adopt/retire after newer shell navigation"
+            );
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |v, cx| v.show_chats(window, cx));
+                let editor = view.read(cx).editor.clone();
+                let (text, _, draft) = editor.read(cx).shell_probe();
+                let revision = draft.unwrap().revision;
+                let key = view
+                    .read(cx)
+                    .nav_drafts
+                    .iter()
+                    .find(|(key, _)| key.starts_with("new:"))
+                    .unwrap()
+                    .0
+                    .clone();
+                text.update(cx, |t, cx| {
+                    t.set_value(
+                        "A newer synthetic draft before receipt adoption",
+                        window,
+                        cx,
+                    )
+                });
+                editor.update(cx, |_, cx| {
+                    cx.emit(EditorEvent::OpenCreated {
+                        key,
+                        revision,
+                        target: "synthetic-created".into(),
+                    })
+                });
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update(|cx| {
+                let v = view.read(cx);
+                assert!(v.selected.is_none());
+                assert_eq!(
+                    v.editor.read(cx).shell_probe().2.unwrap().text,
+                    "A newer synthetic draft before receipt adoption"
+                );
+            });
+            assert!(reads.try_recv().is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "deferred creation receipt must not navigate/retire a newer input revision"
+            );
+            cx.update_window(handle, |_, window, cx| window.press("secondary-1", cx))
+                .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle,|_,window,cx|{
+                assert_eq!(view.read(cx).page,Page::Home);
+                for _ in 0..4{assert!(view.read(cx).client.as_ref().unwrap().command(Command::Reconnect));}
+                let chat=view.read(cx).state.chats.iter().find(|c|c.id=="other").unwrap().clone();
+                view.update(cx,|v,cx|v.open(chat,window,cx));
+                assert_eq!(view.read(cx).page,Page::Home,"reader backpressure must not display the previous chat as the requested destination");
+                assert!(view.read(cx).nav_error.is_some());assert!(view.read(cx).selected.is_none());
+            }).unwrap();
+            settle(cx, handle);
+            for _ in 0..4 {
+                assert!(matches!(reads.try_recv(), Ok(Command::Reconnect)));
+            }
+            assert!(reads.try_recv().is_err());
+            cx.update_window(handle, |_, window, cx| window.press("secondary-2", cx))
+                .unwrap();
+            settle(cx, handle);
+            cx.update(|cx| {
+                assert_eq!(view.read(cx).page, Page::Chat);
+                assert!(view.read(cx).nav_error.is_none());
+            });
+            if width == 1100. && mode == ThemeMode::Dark {
+                let catalog=crate::local_model::projects(&json!((0..256).map(|ix|json!({"id":format!("p{ix:03}"),"name":format!("Project {ix:03} {}","name ".repeat(60)),"path":format!("/synthetic/{}","x".repeat(4085))})).collect::<Vec<_>>())).unwrap();
+                let large=Arc::new((0..1000).map(|ix|crate::local_model::chat(&json!({"id":format!("c{ix:04}"),"title":format!("Chat {ix:04} {}","title ".repeat(60)),"projectId":format!("p{:03}",ix%256),"cwd":format!("/synthetic/{}","x".repeat(4085)),"state":"idle"})).unwrap()).collect::<Vec<_>>());
+                let string_bytes = large
+                    .iter()
+                    .map(|c| {
+                        c.title.len()
+                            + c.cwd.len()
+                            + c.id.len()
+                            + c.state.len()
+                            + c.project_id.as_ref().map_or(0, String::len)
+                    })
+                    .sum::<usize>();
+                cx.update_window(handle, |_, window, cx| {
+                    view.update(cx, |v, cx| {
+                        let mut state = v.state.clone();
+                        state.projects = Arc::new(catalog);
+                        state.chats = large;
+                        state.rows = Vec::new();
+                        v.accept(state, window, cx);
+                        v.show_home(window, cx);
+                    })
+                })
+                .unwrap();
+                settle(cx, handle);
+                let shared = cx.update(|cx| view.read(cx).chats.read(cx).delegate().all.clone());
+                for ix in 0..32 {
+                    cx.update_window(handle, |_, window, cx| {
+                        view.update(cx, |v, cx| v.show_project(format!("p{ix:03}"), window, cx))
+                    })
+                    .unwrap();
+                    cx.update(|cx| {
+                        assert!(Arc::ptr_eq(
+                            &shared,
+                            &view.read(cx).chats.read(cx).delegate().all
+                        ))
+                    });
+                }
+                settle(cx, handle);
+                cx.update_window(handle, |_, window, cx| {
+                    view.update(cx, |v, cx| v.show_home(window, cx))
+                })
+                .unwrap();
+                settle(cx, handle);
+                cx.update_window(handle, |_, window, cx| {
+                    assert_eq!(view.read(cx).state.projects.len(), 256);
+                    assert_eq!(view.read(cx).state.chats.len(), 1000);
+                    assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1001);
+                    let title = window.find("overview-project-title-p000").bounds();
+                    let b = window.find("home-project-p000").bounds();
+                    assert!(title.left() >= b.left() && title.right() <= b.right());
+                })
+                .unwrap();
+                assert!(reads.try_recv().is_err());
+                assert!(writes.try_recv().is_err());
+                println!(
+                    "{}",
+                    json!({"capacity_scene":true,"projects":256,"canonical_chats":1000,"private_drafts":1,"metadata_string_payload_bytes":string_bytes,"scope_changes_without_metadata_deep_clone":32,"ordinary_overview_max_rows":12,"project_previews_max_rows":8,"actual_native_long_label_containment":true,"timing_or_rss_claim":false})
+                );
+                if let Some(dir) = &captures {
+                    cx.capture_screenshot(handle)
+                        .unwrap()
+                        .save(dir.join("capacity-home.png"))
+                        .unwrap();
+                }
+            }
+            println!(
+                "{}",
+                json!({"width":width,"mode":mode.name(),"home_projects_exact_scope":true,"same_cwd_not_membership":true,"archived_and_search_scope":true,"scope_shares_metadata":true,"draft_capture_unicode":true,"text_and_cwd_preedit_block_navigation":true,"late_receipt_and_newer_input_fenced":true,"removed_project_no_fallback":true,"text_entity_and_pixel_anchor_retained":true,"pointer_dismiss_and_reselect_copy":true,"home_all_chats_shortcuts":true,"reader_backpressure_keeps_destination_and_draft":true,"injected_faux_queue_controls":4,"hidden_publications_coalesced":32,"hidden_transcript_renders":0,"explicit_chat_open_read_commands":1,"clear_read_subscription":1,"write_commands":0,"native_offscreen_production_root":true})
+            );
+            cx.update_window(handle, |_, window, _| window.remove_window())
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
+}

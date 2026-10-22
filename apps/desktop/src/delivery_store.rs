@@ -147,6 +147,14 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
 }
 
 impl Book {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn shell_probe() -> Self {
+        Self::fresh(Host {
+            host_id: "local".into(),
+            daemon_id: "synthetic-daemon".into(),
+            lineage_id: "synthetic-lineage".into(),
+        })
+    }
     fn fresh(host: Host) -> Self {
         Self {
             schema_version: 1,
