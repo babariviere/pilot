@@ -22,6 +22,7 @@ enum Scenario {
     Redirect,
     Resume,
     Refused,
+    Thinking,
 }
 
 #[tokio::test]
@@ -61,6 +62,7 @@ struct Mock {
     requests: Arc<Mutex<Vec<String>>>,
     sockets: Arc<AtomicUsize>,
     task: JoinHandle<()>,
+    step: async_channel::Sender<()>,
 }
 impl Drop for Mock {
     fn drop(&mut self) {
@@ -81,6 +83,7 @@ impl Mock {
         let sockets = Arc::new(AtomicUsize::new(0));
         let (record, active) = (requests.clone(), sockets.clone());
         let attempts = Arc::new(AtomicUsize::new(0));
+        let (step, steps) = async_channel::bounded::<()>(2);
         let task = tokio::spawn(async move {
             let mut handlers = tokio::task::JoinSet::new();
             loop {
@@ -88,6 +91,7 @@ impl Mock {
                     accepted=listener.accept() => {
                         let Ok((stream,_))=accepted else { break; };
                         let (record,active,attempts)=(record.clone(),active.clone(),attempts.clone());
+                        let steps=steps.clone();
                         handlers.spawn(async move {
                             let mut reader=BufReader::new(stream);
                             let mut headers=String::new();
@@ -144,6 +148,14 @@ impl Mock {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(7,"before disconnect")}]}).to_string().into())).await.unwrap();
                                         let _=socket.close(Some(CloseFrame{code:CloseCode::Again,reason:"synthetic restart".into()})).await; return;
                                     }
+                                    if matches!(scenario,Scenario::Thinking) {
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"message_start","message":{"content":[{"type":"thinking","thinking":"synthetic"}]}}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        let changes:Vec<_>=(0..1024).map(|_|json!({"type":"thinking_delta","contentIndex":0,"delta":"x".repeat(4096)})).collect();
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"message_update","changes":changes}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":4,"events":[{"type":"run_end"}]}).to_string().into())).await.unwrap();
+                                    }
                                 }
                             }
                             while let Some(Ok(frame))=socket.next().await {
@@ -160,6 +172,7 @@ impl Mock {
             requests,
             sockets,
             task,
+            step,
         }
     }
 }
@@ -180,6 +193,38 @@ async fn until(
     })
     .await
     .expect("bounded synthetic update")
+}
+
+#[tokio::test]
+async fn thinking_deltas_do_not_publish_transcripts_or_wake_the_ui() {
+    let mock = Mock::start(Scenario::Thinking).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    until(&rx, |v| v.list_loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 1,
+    });
+    let thinking = until(&rx, |v| v.thinking).await;
+    assert_eq!(thinking.rows.len(), 1);
+    assert_eq!(thinking.rows[0].source(), "a tail");
+    mock.step.send(()).await.unwrap();
+    mock.step.send(()).await.unwrap();
+    let done = until(&rx, |v| v.batches == 4).await;
+    assert!(!done.thinking);
+    assert!(done.rows == thinking.rows);
+    assert_eq!(
+        done.test_publications,
+        thinking.test_publications + 1,
+        "only run_end publishes; 1024 reasoning deltas do not clone rows or wake the UI, even if the receiver coalesces"
+    );
+    drop(client);
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.starts_with("GET "))
+    );
 }
 
 #[tokio::test]

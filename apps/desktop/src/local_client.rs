@@ -173,6 +173,7 @@ pub(crate) enum Command {
     Open { id: String, generation: u64 },
     Earlier { before: u64, generation: u64 },
     Reconnect,
+    StopThinking { generation: u64 },
 }
 
 #[derive(Clone, Default)]
@@ -192,6 +193,9 @@ pub(crate) struct Presentation {
     pub(crate) page_revision: u64,
     pub(crate) batches: u64,
     pub(crate) queued: usize,
+    pub(crate) thinking: bool,
+    #[cfg(test)]
+    pub(crate) test_publications: u64,
 }
 
 /// Drop closes the command source; the runtime aborts every task and socket.
@@ -553,7 +557,7 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    selected=None;model=LiveTranscript::default();view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());
+                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
@@ -562,6 +566,7 @@ async fn run(
                     selected = Some(id.clone());
                     view.artifacts=Arc::new(Vec::new());
                     model = LiveTranscript::default();
+                    model.presentation_dirty = true;
                     view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
@@ -579,6 +584,7 @@ async fn run(
                     }));
                 }
                 Ok(Command::Reconnect) => {
+                    model.thinking=false;
                     inbox.epoch+=1; fenced=false;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
                     control.abort();
@@ -588,17 +594,22 @@ async fn run(
                         chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),view.generation,inbox.clone()));
                     }
                 }
+                Ok(Command::StopThinking { generation }) => {
+                    if generation == view.generation { model.stop_thinking(); }
+                }
             },
             event = incoming.recv() => match event {
                 Err(_) => break,
                 Ok((epoch,_)) if epoch != inbox.epoch => continue,
                 Ok((_,Incoming::Fatal(text))) => {
+                    model.stop_thinking();
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
                     view.page_busy=false; view.status=text.into(); view.chat_status=text.into();
                 },
                 Ok((_, Incoming::Status {generation, chat, text})) => {
+                    if !chat || generation == view.generation { model.thinking=false; }
                     if chat { if generation != view.generation { continue; } view.chat_status = text.into(); }
                     else { view.status = text.into(); }
                 }
@@ -615,7 +626,11 @@ async fn run(
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
                             for event in events { model.apply(event); }
-                        } else if value["type"] == "error" { view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                            // Repeated reasoning deltas only update bounded
+                            // counters. Do not publish/clone a transcript or
+                            // wake the UI when the activity label is unchanged.
+                            if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
+                        } else if value["type"] == "error" { model.stop_thinking(); view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
                     } else if value["type"] == "sessions" {
                         view.list_loaded=true;
                         let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).take(local_model::SESSION_CAP).collect::<Vec<_>>()).unwrap_or_default();
@@ -629,7 +644,7 @@ async fn run(
                 }
             }
         }
-        if !model.prefix_pending {
+        if !model.prefix_pending && model.presentation_dirty {
             view.rows = model.rows();
         }
         view.cursor = if fenced || model.prefix_pending || !model.has_capacity() {
@@ -641,6 +656,11 @@ async fn run(
         view.omitted = model.unsupported;
         view.loaded = model.loaded && !model.prefix_pending;
         view.queued = model.queued;
+        view.thinking = model.thinking && !fenced;
+        #[cfg(test)]
+        {
+            view.test_publications += 1;
+        }
         publish(&updates, &replace, view.clone());
     }
     control.abort();

@@ -1,4 +1,7 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
+#[cfg(feature = "native-probes")]
+#[path = "disclosure_probe.rs"]
+pub(crate) mod disclosure_probe;
 use crate::{
     LocalOptions, TranscriptView,
     appearance::{self, Corner},
@@ -472,6 +475,21 @@ impl LocalViewer {
             cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
                 EditorEvent::Flushed => cx.quit(),
+                EditorEvent::StopRequested { key } => {
+                    if view
+                        .selected
+                        .as_deref()
+                        .is_some_and(|id| key.strip_prefix("chat:") == Some(id))
+                    {
+                        view.state.thinking = false;
+                        if let Some(client) = &view.client {
+                            client.command(Command::StopThinking {
+                                generation: view.generation,
+                            });
+                        }
+                        cx.notify();
+                    }
+                }
                 EditorEvent::OpenCreated {
                     key,
                     revision,
@@ -585,6 +603,7 @@ impl LocalViewer {
         self.state.page_busy = false;
         self.state.chat_status = "Loading chat…".into();
         self.state.queued = 0;
+        self.state.thinking = false;
         self.rebuild_nav(window, cx);
         self.transcript
             .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
@@ -596,6 +615,7 @@ impl LocalViewer {
             self.state.chats = state.chats;
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
+            self.state.thinking = state.thinking;
         } else if state.generation == self.generation {
             let rows = std::mem::take(&mut state.rows);
             let reset = self.refreshing;
@@ -618,9 +638,13 @@ impl LocalViewer {
             .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
         {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
-            self.editor
-                .update(cx, |editor, cx| editor.permission(writable, busy, cx));
+            self.editor.update(cx, |editor, cx| {
+                editor.permission(writable, busy, cx);
+            });
         }
+        self.editor.update(cx, |editor, cx| {
+            editor.activity(self.state.thinking && self.selected.is_some(), cx)
+        });
         self.rebuild_nav(window, cx);
         self.artifacts.update(cx, |pane, cx| {
             pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
@@ -629,6 +653,8 @@ impl LocalViewer {
     }
 
     fn clear_chat(&mut self, cx: &mut Context<Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.activity(false, cx));
         self.artifacts_open = false;
         self.state.artifacts = Arc::new(Vec::new());
         self.artifacts.update(cx, |pane, cx| {
@@ -644,6 +670,7 @@ impl LocalViewer {
         self.state.cursor = None;
         self.state.chat_status.clear();
         self.state.queued = 0;
+        self.state.thinking = false;
         if let Some(client) = &self.client {
             client.command(Command::Clear {
                 generation: self.generation,
@@ -663,6 +690,9 @@ impl LocalViewer {
             }) {
                 self.generation = generation;
                 self.refreshing = true;
+                self.state.thinking = false;
+                self.editor
+                    .update(cx, |editor, cx| editor.activity(false, cx));
                 self.state.page_busy = true;
                 self.state.chat_status = "Loading newest bounded window…".into();
                 cx.notify();
@@ -916,6 +946,49 @@ mod refresh_tests {
         });
     }
     #[gpui_kit::test]
+    fn deferred_stop_activity_is_fenced_to_its_originating_chat(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (client, commands) = LocalClient::synthetic_commands();
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| {
+                        let mut view = LocalViewer::synthetic(window, cx);
+                        view.client = Some(client);
+                        view.state.thinking = true;
+                        view
+                    })
+                },
+            )
+            .unwrap()
+        });
+        for (key, matches) in [("chat:other", false), ("chat:synthetic", true)] {
+            cx.update_window(handle, |_, _, cx| {
+                let editor = view.read(cx).editor.clone();
+                editor.update(cx, |_, cx| {
+                    cx.emit(EditorEvent::StopRequested { key: key.into() })
+                })
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.update(|cx| assert_eq!(view.read(cx).state.thinking, !matches));
+            if matches {
+                assert!(matches!(
+                    commands.try_recv().unwrap(),
+                    Command::StopThinking { generation: 0 }
+                ));
+            } else {
+                assert!(commands.try_recv().is_err());
+            }
+        }
+    }
+
+    #[gpui_kit::test]
     fn refresh_retains_old_window_allows_retry_fences_late_results_and_clears_on_navigation(
         cx: &mut TestAppContext,
     ) {
@@ -941,9 +1014,12 @@ mod refresh_tests {
             .unwrap()
         });
         cx.update_window(handle,|_,window,cx|view.update(cx,|view,cx|{
-            view.latest(cx);assert!(view.refreshing);let first=view.generation;
+            view.state.thinking=true;
+            view.latest(cx);assert!(view.refreshing);assert!(!view.state.thinking);let first=view.generation;
             assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==first));
+            view.state.thinking=true;
             view.accept(Presentation{generation:first,chat_status:"Unavailable; retry explicitly".into(),..Default::default()},window,cx);
+            assert!(!view.state.thinking,"loading/reconnect must clear the cached activity");
             assert!(view.state.loaded);assert_eq!(view.state.queued,7);assert!(view.state.chat_status.contains("Unavailable"));
             view.latest(cx);let second=view.generation;assert!(second>first);
             assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==second));

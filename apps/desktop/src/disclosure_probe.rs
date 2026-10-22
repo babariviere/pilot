@@ -1,0 +1,329 @@
+//! Native production-root disclosure geometry, synthetic state and no transport.
+use super::LocalViewer;
+use crate::{local_model::LiveTranscript, model::Message};
+use gpui_kit::{
+    AppContext, Bounds, HeadlessAppContext, ScrollDelta, SharedString, WindowBounds, WindowOptions,
+    point, px, size, test::TestWindowExt,
+};
+use serde_json::json;
+use std::time::Duration;
+
+pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    let captures = std::env::var_os("PILOT_NEXT_DISCLOSURE_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    for width in [620., 1100.] {
+        let mut model = LiveTranscript::default();
+        let calls:Vec<_>=(0..24).map(|i|json!({"type":"toolCall","id":format!("disclosure-{i}"),"name":"read","arguments":{"path":format!("synthetic-{i}.rs")}})).collect();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+        for i in 0..24 {
+            model.apply(&json!({"type":"tool_execution_start","toolCallId":format!("disclosure-{i}"),"toolName":"read"}));
+        }
+        let mut rows: Vec<_> = (100..120)
+            .map(|i| Message::live(i, "assistant".into(), crate::model::REPLY.into()))
+            .collect();
+        rows.extend(model.rows());
+        let id = rows.last().unwrap().id();
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(width), px(760.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| {
+                        let v = LocalViewer::synthetic(window, cx);
+                        v.transcript
+                            .update(cx, |v, cx| v.replace_readonly(rows, true, cx));
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|cx| view.read(cx).text_parsers_ready(cx)));
+        let key = SharedString::from(format!("work-toggle-{id}"));
+        let mut identity = None;
+        let mut collapsed_y = 0.;
+        for action in [
+            "initial",
+            "collapse",
+            "expand",
+            "stream",
+            "prepend",
+            "rapid-collapse",
+            "rapid-expand",
+            "rapid-burst",
+            "manual",
+            "detail",
+            "detail-stream",
+            "detail-close",
+            "wheel-bottom",
+            "remount-top",
+            "remount-bottom",
+            "reveal-header",
+            "hold-again",
+            "latest",
+        ] {
+            if matches!(
+                action,
+                "collapse" | "expand" | "rapid-collapse" | "rapid-expand" | "hold-again"
+            ) {
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.click(key.clone(), cx);
+                })
+                .unwrap();
+            }
+            if matches!(action, "stream" | "detail-stream") {
+                for frame in 0..6 {
+                    model.apply(&json!({"type":"tool_execution_update","toolCallId":"disclosure-0","output":{"set":format!("synthetic update {frame}\n{}", "tall bounded output 日本語\n".repeat(if action == "detail-stream" {120} else {8}))}}));
+                    let mut rows: Vec<_> = ((if action == "detail-stream" { 98 } else { 100 })
+                        ..120)
+                        .map(|i| Message::live(i, "assistant".into(), crate::model::REPLY.into()))
+                        .collect();
+                    rows.extend(model.rows());
+                    cx.update_window(handle, |_, window, cx| {
+                        view.update(cx, |v, cx| {
+                            v.transcript
+                                .update(cx, |v, cx| v.replace_readonly(rows, false, cx))
+                        });
+                        window.render_frame(cx);
+                    })
+                    .unwrap();
+                    cx.advance_clock(Duration::from_millis(16));
+                    cx.run_until_parked();
+                }
+            }
+            if action == "prepend" {
+                let mut rows: Vec<_> = (98..120)
+                    .map(|i| Message::live(i, "assistant".into(), crate::model::REPLY.into()))
+                    .collect();
+                rows.extend(model.rows());
+                cx.update_window(handle, |_, _, cx| {
+                    view.update(cx, |v, cx| {
+                        v.transcript
+                            .update(cx, |v, cx| v.replace_readonly(rows, false, cx))
+                    })
+                })
+                .unwrap();
+            }
+            if matches!(
+                action,
+                "manual" | "wheel-bottom" | "remount-top" | "remount-bottom" | "reveal-header"
+            ) {
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.scroll(
+                        "viewport",
+                        ScrollDelta::Pixels(point(
+                            px(0.),
+                            px(match action {
+                                "manual" => -300.,
+                                "remount-top" => 100000.,
+                                "reveal-header" => 300.,
+                                _ => -100000.,
+                            }),
+                        )),
+                        cx,
+                    );
+                })
+                .unwrap();
+            }
+            if matches!(action, "detail" | "detail-close") {
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.click("step-toggle-call:disclosure-0", cx);
+                })
+                .unwrap();
+            }
+            if action == "latest" {
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.click("latest", cx);
+                })
+                .unwrap();
+            }
+            let mut samples = Vec::new();
+            for frame in 0..20 {
+                let sample=cx.update_window(handle,|_,window,cx|{
+                    window.render_frame(cx);
+                    if action=="rapid-burst" && frame<12 {
+                        window.click(key.clone(),cx);
+                        window.render_frame(cx);
+                    }
+                    let h=window.find_all(key.clone()).first().map(|e|e.bounds());
+                    let t=h.map(|_|window.within(key.clone()).find("disclosure-text").bounds());
+                    let(i,offset,following,open,entity)=view.read(cx).transcript.read(cx).disclosure_probe_state(id,cx);
+                    let (detail_open,body_states)=view.read(cx).transcript.read(cx).disclosure_probe_step("disclosure-0",cx);
+                    if matches!(action,"detail"|"detail-stream") { assert!(detail_open,"{action}: native pointer must actually expand the detail"); }
+                    if action=="detail-close" { assert!(!detail_open); }
+                    if let Some(prior)=identity{assert_eq!(entity,prior);}else{identity=Some(entity);}
+                    json!({"frame":frame,"header_x":h.map(|h|f32::from(h.left())),"header_y":h.map(|h|f32::from(h.top())),"header_height":h.map(|h|f32::from(h.size.height)),"relative_text_x":h.zip(t).map(|(h,t)|f32::from(t.left()-h.left())),"relative_text_y":h.zip(t).map(|(h,t)|f32::from(t.top()-h.top())),"item":i,"offset":offset,"following":following,"open":open,"detail_open":detail_open,"detail_body_states":body_states})
+                }).unwrap();
+                samples.push(sample);
+                cx.advance_clock(Duration::from_millis(16));
+                cx.run_until_parked();
+            }
+            let y = samples.last().unwrap()["header_y"]
+                .as_f64()
+                .unwrap_or_default();
+            if matches!(action, "collapse" | "rapid-collapse") {
+                collapsed_y = y;
+            }
+            if matches!(
+                action,
+                "expand" | "stream" | "prepend" | "rapid-expand" | "rapid-burst"
+            ) {
+                assert!(
+                    samples
+                        .iter()
+                        .all(|s| (s["header_y"].as_f64().unwrap() - collapsed_y).abs() <= 1.),
+                    "{action}: disclosure lost its reading anchor"
+                );
+                assert!(samples.iter().all(|s| s["following"] == false));
+            }
+            if matches!(action, "wheel-bottom" | "remount-bottom" | "latest") {
+                assert_eq!(
+                    samples.last().unwrap()["following"],
+                    true,
+                    "{action} must resume following"
+                );
+            }
+            if action != "remount-top" {
+                let first = samples[0]["relative_text_x"].as_f64().unwrap();
+                assert!(
+                    samples
+                        .iter()
+                        .all(|s| (s["relative_text_x"].as_f64().unwrap() - first).abs() < 0.1),
+                    "text/icon alignment oscillated"
+                );
+            }
+            println!(
+                "{}",
+                json!({"width":width,"phase":action,"samples":samples,"native_production_root":true})
+            );
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(handle)
+                    .expect("native renderer required")
+                    .save(dir.join(format!("{}-{action}.png", width as u32)))
+                    .unwrap();
+            }
+        }
+        cx.capture_screenshot(handle)
+            .expect("native renderer required");
+        cx.update_window(handle, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+    }
+    run_thinking_probe(cx, captures.as_deref());
+}
+
+fn run_thinking_probe(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {
+    for width in [620., 1100.] {
+        let mut model = LiveTranscript::default();
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        point(px(0.), px(0.)),
+                        size(px(width), px(760.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| {
+                        let v = LocalViewer::synthetic(window, cx);
+                        v.editor.update(cx, |v, cx| {
+                            v.select("chat:synthetic".into(), false, true, window, cx)
+                        });
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        let mut viewport_height: Option<f32> = None;
+        for phase in [
+            "history",
+            "thinking",
+            "thinking-delta",
+            "tools",
+            "text",
+            "done",
+            "reconnect",
+            "stop",
+        ] {
+            match phase {
+                "history"=>model.apply(&json!({"type":"entry_appended","entry":{"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"thinking","thinking":"synthetic historical reasoning"},{"type":"text","text":" \n"}]}]}})),
+                "thinking"=>model.apply(&json!({"type":"message_start","message":{"content":[{"type":"thinking","thinking":"synthetic"}]}})),
+                "thinking-delta"=>{
+                    for _ in 0..32 {model.apply(&json!({"type":"message_update","changes":[{"type":"thinking_delta","contentIndex":0,"delta":"synthetic"}]}));}
+                }
+                "tools"=>model.apply(&json!({"type":"tool_execution_start","toolCallId":"thinking-tool","toolName":"read"})),
+                "text"=>model.apply(&json!({"type":"message_update","changes":[{"type":"text_start","contentIndex":1,"block":{"type":"text","text":"An ordinary substantive assistant note 日本語."}}]})),
+                "done"=>model.apply(&json!({"type":"run_end"})),
+                "reconnect"=>model.apply(&json!({"type":"snapshot","entries":[],"generation":{"message":{"content":[{"type":"thinking","thinking":"historical reconnect body"}]}}})),
+                "stop"=>{
+                    model.stop_thinking();
+                    model.apply(&json!({"type":"message_update","changes":[{"type":"thinking_delta","contentIndex":0,"delta":"late"}]}));
+                }
+                _=>unreachable!(),
+            }
+            let rows = model.rows();
+            let thinking = model.thinking;
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = rows;
+                    state.thinking = thinking;
+                    let chats = std::sync::Arc::make_mut(&mut state.chats);
+                    chats[0].busy = phase != "done";
+                    v.accept(state, window, cx);
+                })
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let sample=cx.update_window(handle,|_,window,cx|{
+                window.render_frame(cx);
+                let (rows,text_states)=view.read(cx).transcript.read(cx).presentation_probe_counts();
+                let editor=view.read(cx).editor.read(cx);
+                let label=editor.activity_label();
+                let expected=match phase {"thinking"|"thinking-delta"=>Some("Thinking..."),"done"=>None,_=>Some("Working...")};
+                assert_eq!(label,expected);
+                let indicators=window.find_all("activity-indicator");
+                assert_eq!(indicators.len(),usize::from(expected.is_some()),"single activity indicator");
+                if matches!(phase,"history"|"thinking"|"thinking-delta"|"reconnect"|"stop") {
+                    assert_eq!((rows,text_states),(0,0),"reasoning must not construct a transcript view/parser");
+                }
+                let height=f32::from(window.find("viewport").bounds().size.height);
+                if matches!(phase,"history"|"thinking"|"thinking-delta") {
+                    if let Some(before)=viewport_height {assert!((height-before).abs()<0.1);} else {viewport_height=Some(height);}
+                }
+                json!({"phase":phase,"width":width,"rows":rows,"text_states":text_states,"activity":label,"indicators":indicators.len(),"viewport_height":height,"native_production_root":true})
+            }).unwrap();
+            println!("{sample}");
+            let shot = cx
+                .capture_screenshot(handle)
+                .expect("native renderer required");
+            if let Some(dir) = captures {
+                shot.save(dir.join(format!("{}-activity-{phase}.png", width as u32)))
+                    .unwrap();
+            }
+        }
+        cx.update_window(handle, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+    }
+}

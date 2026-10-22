@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+native-probes = ["gpui-kit/test-support"]
+
 [workspace]
 members = ["visual-worker"]
 default-members = ["."]
@@ -56,3 +59,9 @@ harness = false
 name = "scaling"
 harness = false
 test = false
+
+[[test]]
+name = "disclosure"
+harness = false
+test = false
+required-features = ["native-probes"]

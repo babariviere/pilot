@@ -101,9 +101,6 @@ impl Message {
     pub(crate) fn work_note(&self) -> bool {
         self.work_note
     }
-    pub(crate) fn mark_note(&mut self) {
-        self.work_note = true;
-    }
     pub(crate) fn attach_tools(&mut self, ids: Vec<String>) {
         if !ids.is_empty() {
             self.tool_ids = Some(Arc::new(ids));

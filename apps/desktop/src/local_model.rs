@@ -69,6 +69,14 @@ pub(crate) struct LiveTranscript {
     entries: BTreeMap<u64, Vec<Message>>,
     aliases: HashMap<(u64, usize), u64>,
     live: Option<Value>,
+    // Presentation-only activity and byte accounting. Never retain reasoning
+    // bodies in the UI projection; canonical daemon history is untouched.
+    pub(crate) thinking: bool,
+    reasoning_bytes: Vec<usize>,
+    thinking_suppressed: bool,
+    pub(crate) presentation_dirty: bool,
+    #[cfg(test)]
+    assistant_message_builds: usize,
     live_key: u64,
     next_key: u64,
     tools: Tools,
@@ -97,9 +105,11 @@ impl LiveTranscript {
     }
 
     pub(crate) fn rows(&mut self) -> Vec<Message> {
+        self.presentation_dirty = false;
         let mut rows: Vec<_> = self.entries.values().flatten().cloned().collect();
-        if let Some(live) = self.live.clone() {
+        if let Some(live) = self.live.take() {
             rows.extend(self.assistant_rows(self.live_key, &live, None));
+            self.live = Some(live);
         }
         let referenced: std::collections::BTreeSet<_> = rows
             .iter()
@@ -141,13 +151,33 @@ impl LiveTranscript {
         value: &Value,
         entry: Option<(u64, usize)>,
     ) -> Vec<Message> {
-        let value = slim_message(value);
+        // Do this before slimming, row identity allocation and Message/Markdown
+        // construction. Reasoning and empty shells have no transcript height.
+        if value["content"].as_array().is_none_or(|blocks| {
+            blocks.iter().all(|block| {
+                block["type"] == "thinking"
+                    || (block["type"] == "text"
+                        && block["text"].as_str().unwrap_or("").trim().is_empty())
+            })
+        }) && value["content"]
+            .as_str()
+            .is_none_or(|text| text.trim().is_empty())
+        {
+            return Vec::new();
+        }
+        let value = slim_message(value, 0);
         self.register_calls(&value);
         let Some(blocks) = value["content"].as_array() else {
             return vec![message(key, &value, "assistant")];
         };
         let mut rows = Vec::new();
         for (block_ix, block) in blocks.iter().enumerate() {
+            if block["type"] == "thinking"
+                || (block["type"] == "text"
+                    && block["text"].as_str().unwrap_or("").trim().is_empty())
+            {
+                continue;
+            }
             if block["type"] == "toolCall" {
                 if let Some(id) = block["id"].as_str()
                     && let Some(key) = self.tools.key(id)
@@ -179,7 +209,11 @@ impl LiveTranscript {
                 self.live_block_keys.insert(block_ix, key);
                 key
             };
-            let mut row = message(
+            #[cfg(test)]
+            {
+                self.assistant_message_builds += 1;
+            }
+            let row = message(
                 row_key,
                 &serde_json::json!({"content":[block]}),
                 if entry.is_some() {
@@ -188,15 +222,9 @@ impl LiveTranscript {
                     "Assistant · streaming"
                 },
             );
-            if block["type"] == "thinking" {
-                row.mark_note();
-            }
             if row.source() != "[No text content]" {
                 rows.push(row);
             }
-        }
-        if rows.is_empty() {
-            rows.push(message(key, &value, "assistant"));
         }
         rows
     }
@@ -318,6 +346,28 @@ impl LiveTranscript {
 
     /// Returned changes are applied in sequence on one background owner.
     pub(crate) fn apply(&mut self, event: &Value) {
+        if matches!(event["type"].as_str(), Some("run_start" | "run_end")) {
+            self.thinking_suppressed = false;
+        }
+        if reasoning_deltas_only(event) {
+            for change in event["changes"].as_array().unwrap() {
+                self.change_live(change);
+            }
+            self.thinking &= !self.thinking_suppressed;
+            return;
+        }
+        self.presentation_dirty = true;
+        match event["type"].as_str().unwrap_or("") {
+            "run_error" | "error" => self.stop_thinking(),
+            "snapshot"
+            | "run_start"
+            | "message_end"
+            | "run_end"
+            | "tool_execution_start"
+            | "tool_execution_update"
+            | "tool_execution_end" => self.thinking = false,
+            _ => {}
+        }
         match event["type"].as_str().unwrap_or("") {
             "snapshot" => {
                 let active = event["entries"].as_array().cloned().unwrap_or_default();
@@ -382,15 +432,15 @@ impl LiveTranscript {
                 self.queued = event["items"].as_array().map_or(0, Vec::len)
                     + event["automatic"].as_array().map_or(0, Vec::len);
             }
-            "message_start" => self.set_live(event["message"].clone()),
+            "message_start" => {
+                self.set_live(event["message"].clone());
+                self.thinking = self.live.as_ref().is_some_and(active_thinking);
+            }
             "message_update" => {
-                if let Some(live) = &mut self.live
-                    && let Some(changes) = event["changes"].as_array()
-                {
+                if let Some(changes) = event["changes"].as_array() {
                     for change in changes {
-                        change_message(live, change);
+                        self.change_live(change);
                     }
-                    *live = slim_message(live);
                 }
                 if let Some(live) = self.live.clone() {
                     self.register_calls(&live);
@@ -468,6 +518,12 @@ impl LiveTranscript {
                 self.tools.end_snapshot(&ids);
             }
         }
+        self.thinking &= !self.thinking_suppressed;
+    }
+
+    pub(crate) fn stop_thinking(&mut self) {
+        self.thinking = false;
+        self.thinking_suppressed = true;
     }
 
     fn finish_snapshot(&mut self) {
@@ -504,6 +560,26 @@ impl LiveTranscript {
     }
 
     fn set_live(&mut self, value: Value) {
+        self.reasoning_bytes = value["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .take(256)
+                    .map(|block| {
+                        if block["type"] == "thinking" {
+                            block["thinking"]
+                                .as_str()
+                                .unwrap_or("")
+                                .len()
+                                .min(MESSAGE_CAP + 1)
+                        } else {
+                            0
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         if value.is_null() {
             self.live = None;
             return;
@@ -512,12 +588,85 @@ impl LiveTranscript {
             self.live_key = self.key();
             self.live_block_keys.clear();
         }
-        let slim = slim_message(&value);
+        let slim = slim_message(&value, 0);
         self.register_calls(&slim);
         self.live = Some(slim);
     }
 
+    fn change_live(&mut self, change: &Value) {
+        let kind = change["type"].as_str().unwrap_or("");
+        if kind == "thinking_end" {
+            self.thinking = false;
+            return;
+        }
+        if kind == "message" {
+            self.set_live(change["message"].clone());
+            self.thinking = self.live.as_ref().is_some_and(active_thinking);
+            return;
+        }
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        let Some(ix) = change["contentIndex"]
+            .as_u64()
+            .filter(|ix| *ix < 256)
+            .map(|ix| ix as usize)
+        else {
+            return;
+        };
+        self.reasoning_bytes
+            .resize(self.reasoning_bytes.len().max(ix + 1), 0);
+        match kind {
+            "thinking_delta" => {
+                if live["content"]
+                    .as_array()
+                    .and_then(|blocks| blocks.get(ix))
+                    .is_none_or(|block| block["type"] != "thinking")
+                {
+                    return;
+                }
+                self.thinking = true;
+                self.reasoning_bytes[ix] = self.reasoning_bytes[ix]
+                    .saturating_add(change["delta"].as_str().unwrap_or("").len())
+                    .min(MESSAGE_CAP + 1);
+                // No invisible body buffer, Markdown, row or layout work.
+                // Enforce the aggregate source budget on the next visible
+                // change, without rebuilding existing visible text here.
+                return;
+            }
+            "thinking_end" | "text_end" | "toolcall_end" => self.thinking = false,
+            "thinking_start" | "block"
+                if kind == "thinking_start" || change["block"]["type"] == "thinking" =>
+            {
+                self.thinking = true;
+                self.reasoning_bytes[ix] = change["block"]["thinking"]
+                    .as_str()
+                    .unwrap_or("")
+                    .len()
+                    .min(MESSAGE_CAP + 1);
+                change_message(
+                    live,
+                    &serde_json::json!({"type":"block","contentIndex":ix,"block":{"type":"thinking"}}),
+                );
+            }
+            _ => {
+                if matches!(
+                    kind,
+                    "text_start" | "text_delta" | "toolcall_start" | "toolcall_delta" | "block"
+                ) {
+                    self.thinking = false;
+                }
+                if matches!(kind, "text_start" | "toolcall_start" | "block") {
+                    self.reasoning_bytes[ix] = 0;
+                }
+                change_message(live, change);
+            }
+        }
+        *live = slim_message(live, self.reasoning_bytes.iter().sum());
+    }
+
     pub(crate) fn page(&mut self, before: u64, value: &Value) {
+        self.presentation_dirty = true;
         if self.prefix_pending || self.cursor != Some(before) {
             return;
         }
@@ -534,9 +683,26 @@ impl LiveTranscript {
     }
 }
 
-fn slim_message(value: &Value) -> Value {
+pub(crate) fn reasoning_deltas_only(event: &Value) -> bool {
+    event["type"] == "message_update"
+        && event["changes"].as_array().is_some_and(|changes| {
+            !changes.is_empty()
+                && changes
+                    .iter()
+                    .all(|change| change["type"] == "thinking_delta")
+        })
+}
+
+fn active_thinking(value: &Value) -> bool {
+    value["content"]
+        .as_array()
+        .and_then(|blocks| blocks.last())
+        .is_some_and(|block| block["type"] == "thinking")
+}
+
+fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
     let mut content = Vec::new();
-    let mut bytes = 0;
+    let mut bytes = omitted_reasoning_bytes;
     if let Some(text) = value["content"].as_str() {
         content.push(serde_json::json!({"type":"text","text":if text.len()<=MESSAGE_CAP {text} else {"[Message exceeds 1 MiB viewer limit]"}}));
     } else if let Some(blocks) = value["content"].as_array() {
@@ -555,6 +721,10 @@ fn slim_message(value: &Value) -> Value {
             };
             let text = block[field].as_str().unwrap_or("");
             bytes += text.len();
+            if kind == "thinking" {
+                content.push(serde_json::json!({"type":"thinking"}));
+                continue;
+            }
             if kind == "toolCall" {
                 let encoded = serde_json::to_string(&block["arguments"]).unwrap_or_default();
                 let args = if encoded.len() <= crate::tool_presentation::ARG_CAP {
@@ -587,10 +757,7 @@ fn message(id: u64, value: &Value, label: &str) -> Message {
         for block in blocks {
             match block["type"].as_str().unwrap_or("") {
                 "text" => source.push_str(block["text"].as_str().unwrap_or("")),
-                "thinking" => {
-                    source.push_str("\n\nThinking:\n\n");
-                    source.push_str(block["thinking"].as_str().unwrap_or(""));
-                }
+                "thinking" => {}
                 "toolCall" => {
                     source.push_str("\n\n[Tool call. Actions/arguments are not rendered.]\n\n")
                 }
@@ -692,6 +859,104 @@ fn change_message(message: &mut Value, change: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn reasoning_is_early_filtered_and_deltas_do_not_build_or_dirty_rows() {
+        let mut model = LiveTranscript::default();
+        for (id, content) in [json!([]), json!([{"type":"text","text":" \n\t"}]), json!([{"type":"thinking","thinking":""}]), json!([{"type":"thinking","thinking":"private synthetic reasoning"},{"type":"text","text":"  "}])].into_iter().enumerate() {
+            model.apply(&json!({"type":"entry_appended","entry":{"id":id+1,"kind":"pi.assistant","model":[{"role":"assistant","content":content}]}}));
+        }
+        assert!(!model.thinking, "history never manufactures activity");
+        assert!(model.rows().is_empty());
+        assert_eq!(model.assistant_message_builds, 0);
+        assert!(model.block_aliases.is_empty());
+        model.apply(&json!({"type":"message_start","message":{"timestamp":12,"content":[{"type":"thinking","thinking":"synthetic"}]}}));
+        assert!(model.thinking);
+        assert!(model.rows().is_empty());
+        for _ in 0..1024 {
+            model.apply(&json!({"type":"message_update","changes":[{"type":"thinking_delta","contentIndex":0,"delta":"🦀".repeat(1024)}]}));
+            assert!(model.thinking);
+            assert!(!model.presentation_dirty);
+        }
+        assert_eq!(model.reasoning_bytes, vec![MESSAGE_CAP + 1]);
+        assert_eq!(
+            model.live.as_ref().unwrap()["content"],
+            json!([{"type":"thinking"}])
+        );
+        assert!(model.rows().is_empty());
+        assert_eq!(model.assistant_message_builds, 0);
+        assert!(model.live_block_keys.is_empty());
+        model.apply(&json!({"type":"message_update","changes":[{"type":"text_start","contentIndex":1,"block":{"type":"text","text":"answer"}}]}));
+        assert!(!model.thinking);
+        assert!(model.presentation_dirty);
+        assert!(
+            model.rows()[0].source().contains("limit"),
+            "omitted reasoning still counts against aggregate source limits"
+        );
+    }
+
+    #[test]
+    fn thinking_lifecycle_resets_without_suppressing_ordinary_notes_or_answers() {
+        let start = json!({"type":"message_start","message":{"timestamp":12,"content":[{"type":"thinking","thinking":"synthetic private body"}]}});
+        let delta = json!({"type":"message_update","changes":[{"type":"thinking_delta","contentIndex":0,"delta":"more"}]});
+        for terminal in [
+            json!({"type":"tool_execution_start","toolCallId":"a","toolName":"read"}),
+            json!({"type":"run_end"}),
+            json!({"type":"message_end"}),
+            json!({"type":"error"}),
+            json!({"type":"run_error"}),
+            json!({"type":"snapshot","entries":[],"generation":{"message":{"content":[{"type":"thinking","thinking":"old"}]}}}),
+        ] {
+            let mut model = LiveTranscript::default();
+            model.apply(&start);
+            assert!(model.thinking);
+            model.apply(&terminal);
+            assert!(!model.thinking);
+            if matches!(terminal["type"].as_str(), Some("run_error" | "error")) {
+                model.apply(&delta);
+                assert!(
+                    !model.thinking,
+                    "late reasoning cannot revive an errored activity"
+                );
+            }
+            assert!(
+                model
+                    .rows()
+                    .iter()
+                    .all(|row| !row.source().contains("synthetic private body"))
+            );
+        }
+        let mut model = LiveTranscript::default();
+        model.apply(&start);
+        model.apply(&json!({"type":"message_update","changes":[{"type":"thinking_end"}]}));
+        assert!(!model.thinking);
+        model.apply(&delta);
+        assert!(model.thinking);
+        model.stop_thinking();
+        model.apply(&delta);
+        assert!(
+            !model.thinking,
+            "late deltas cannot revive a stopped indicator"
+        );
+        model.apply(&json!({"type":"run_start"}));
+        assert!(
+            !model.thinking,
+            "a new run starts as working, not historical thinking"
+        );
+        model.apply(&json!({"type":"run_end"}));
+        model.apply(&start);
+        assert!(model.thinking, "a later run can think again");
+        model.apply(&json!({"type":"message_update","changes":[{"type":"text_start","contentIndex":1,"block":{"type":"text","text":"Thinking: an ordinary substantive note 日本語"}}]}));
+        assert!(!model.thinking);
+        assert_eq!(
+            model.rows()[0].source(),
+            "Thinking: an ordinary substantive note 日本語"
+        );
+        model.apply(&json!({"type":"message_end","entry":{"id":22,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"thinking","thinking":"historical private body"},{"type":"text","text":"Final answer"}]}]}}));
+        assert!(!model.thinking);
+        assert_eq!(model.rows()[0].source(), "Final answer");
+        assert_eq!(model.assistant_message_builds, 2);
+    }
     #[test]
     fn canonical_publication_keeps_pinned_card_identity_and_never_parses_body_links() {
         let mut model = LiveTranscript::default();
