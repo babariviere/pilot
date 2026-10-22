@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
   "upstream": "https://crates.io/crates/gpui-component/0.8.0",
-  "purpose": "Explicit reader-disclosure viewport hold with bottom-wheel/Latest resume; unchanged default follow behavior.",
+  "purpose": "Explicit disclosure anchor hold and opt-in suppression of row hover fill; defaults unchanged.",
   "edits": [
     {
       "path": "src/message_scroller.rs",
@@ -49,6 +49,26 @@
       "path": "src/message_scroller.rs",
       "old": "            .id(root_id.clone())\n            .relative()",
       "new": "            .id(root_id.clone())\n            // ScrollBounce consumes scrollable wheel packets itself. When the\n            // content fits it lets the packet bubble without its callback.\n            .on_scroll_wheel({\n                let state = self.state.downgrade();\n                move |_, _, cx| {\n                    let _ = state.update(cx, |state, cx| {\n                        if state.disclosure_hold && state.list_state.max_offset_for_scrollbar().y <= px(0.) {\n                            state.user_scrolled(cx);\n                        }\n                    });\n                }\n            })\n            .relative()"
+    },
+    {
+      "path": "src/list/list_item.rs",
+      "old": "    confirmed: bool,\n",
+      "new": "    confirmed: bool,\n    hover_fill: bool,\n"
+    },
+    {
+      "path": "src/list/list_item.rs",
+      "old": "            confirmed: false,\n",
+      "new": "            confirmed: false,\n            hover_fill: true,\n"
+    },
+    {
+      "path": "src/list/list_item.rs",
+      "old": "    /// Set to show check icon, default is None.\n",
+      "new": "    /// Whether an unselected row draws its default hover fill. A caller with\n    /// its own hover decoration can opt out without disabling selection/input.\n    pub fn hover_fill(mut self, enabled: bool) -> Self {\n        self.hover_fill = enabled;\n        self\n    }\n\n    /// Set to show check icon, default is None.\n"
+    },
+    {
+      "path": "src/list/list_item.rs",
+      "old": "                        if is_active {",
+      "new": "                        if is_active || !self.hover_fill {"
     }
   ]
 }

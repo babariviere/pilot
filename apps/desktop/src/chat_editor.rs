@@ -44,6 +44,8 @@ pub(crate) struct ChatEditor {
     busy: bool,
     thinking: bool,
     thinking_held: bool,
+    background_work: bool,
+    corner: Entity<crate::dither_view::CornerView>,
     follow_up: bool,
     pending: BTreeMap<String, u64>,
     unsaved_local: BTreeSet<String>,
@@ -65,7 +67,7 @@ impl ChatEditor {
         let text = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
                 .placeholder("Message Local chat…")
-                .auto_grow(2, 6);
+                .auto_grow(1, 6);
             state.set_submit_on_enter(true, cx);
             state
         });
@@ -92,6 +94,14 @@ impl ChatEditor {
             busy: false,
             thinking: false,
             thinking_held: false,
+            background_work: false,
+            corner: cx.new(|cx| {
+                crate::dither_view::CornerView::new(
+                    crate::dither::Spec::composer(false, false),
+                    window,
+                    cx,
+                )
+            }),
             follow_up: true,
             pending: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
@@ -213,6 +223,7 @@ impl ChatEditor {
         self.busy = busy;
         self.thinking = false;
         self.thinking_held = false;
+        self.background_work = false;
         self.error = None;
         self.load_input(window, cx);
         self.open_completed(cx);
@@ -241,7 +252,7 @@ impl ChatEditor {
     pub(crate) fn activity_label(&self) -> Option<&'static str> {
         if self.thinking {
             Some("Thinking...")
-        } else if self.busy {
+        } else if self.busy || self.background_work {
             Some("Working...")
         } else {
             None
@@ -252,6 +263,12 @@ impl ChatEditor {
         self.text.update(cx, |state, cx| {
             state.marked_text_range(window, cx).is_some()
         })
+    }
+    pub(crate) fn background(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.background_work != active {
+            self.background_work = active;
+            cx.notify();
+        }
     }
     fn load_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(draft) = self.selected.as_ref().and_then(|key| self.cache.get(key)) else {
@@ -536,20 +553,36 @@ impl Render for ChatEditor {
             .pending
             .as_ref()
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
-        let mut footer = div()
+        let spec = crate::dither::Spec::composer(
+            self.busy || self.thinking || self.background_work,
+            self.background_work && !self.thinking,
+        );
+        self.corner.update(cx, |view, cx| view.configure(spec, cx));
+        let footer = div()
+            .id("composer-tray")
             .v_flex()
             .relative()
             .overflow_hidden()
-            .bg(cx.theme().muted)
-            .p_3()
+            .bg(crate::appearance::tray(cx))
+            .p_1()
             .gap_2()
-            .border_t_1()
+            .mx_6()
+            .mb_4()
+            .mt(px(6.))
+            .rounded(px(crate::appearance::Radius::TRAY))
+            .shadow(vec![gpui_kit::BoxShadow {
+                inset: false,
+                color: gpui_kit::hsla(0., 0., 0., 0.06),
+                offset: gpui_kit::point(px(0.), px(4.)),
+                blur_radius: px(12.),
+                spread_radius: px(0.),
+            }])
+            .border_1()
             .border_color(cx.theme().border)
-            .when(self.busy || self.thinking, |this| {
-                this.child(
-                    crate::appearance::corner(crate::appearance::Corner::Working, cx).opacity(0.15),
-                )
-            });
+            .child(crate::dither_view::layer(self.corner.clone()));
+        #[cfg(any(test, feature = "native-probes"))]
+        let footer = footer.test_support();
+        let mut footer = footer;
         if is_new {
             footer = footer.child(
                 div()
@@ -591,9 +624,21 @@ impl Render for ChatEditor {
             footer = footer.child(indicator);
         }
         footer = footer.child(
-            Textarea::new(&self.text)
-                .readonly(!can_edit)
-                .aria_label("Local chat message"),
+            div()
+                .id("composer-card")
+                .rounded(px(crate::appearance::Radius::CARD))
+                .bg(crate::appearance::card(cx))
+                .border_1()
+                .border_color(cx.theme().border)
+                .px(px(14.))
+                .py(px(12.))
+                .child(
+                    Textarea::new(&self.text)
+                        .appearance(false)
+                        .bordered(false)
+                        .readonly(!can_edit)
+                        .aria_label("Local chat message"),
+                ),
         );
         footer = footer.child(
             div()
@@ -623,6 +668,7 @@ impl Render for ChatEditor {
                         .gap_2()
                         .child(
                             Checkbox::new("follow-up")
+                                .rounded(px(crate::appearance::Radius::SMALL))
                                 .label("Follow-up")
                                 .checked(self.follow_up)
                                 .on_change(cx.listener(|view, next, _, cx| {

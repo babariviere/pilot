@@ -1,8 +1,43 @@
-//! Portable chrome tokens from Theme.swift / DitherCorner.swift at 04830d53.
-//! Static Bayer masks deliberately add no animation clock, shader or external assets.
+//! Portable chrome tokens from Swift Theme.swift / DitherCorner.swift.
+//! Bounded app-owned dither motion is implemented in dither_view, without shaders.
 use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_kit::{App, AssetSource, SharedString, Styled, Window, px, svg};
-use std::{borrow::Cow, rc::Rc, sync::OnceLock};
+use gpui_kit::{App, AssetSource, SharedString, Window};
+use std::{borrow::Cow, rc::Rc};
+
+/// Swift Theme.Radius, picked by surface role rather than arbitrary size.
+pub(crate) struct Radius;
+impl Radius {
+    pub const SMALL: f32 = 4.;
+    pub const ROW: f32 = 6.;
+    pub const CONTROL: f32 = 8.;
+    pub const CARD: f32 = 10.;
+    pub const BUBBLE: f32 = 12.;
+    pub const TRAY: f32 = 14.;
+}
+pub(crate) fn tray(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::rgb(if cx.theme().is_dark() {
+        0x2c2c2c
+    } else {
+        0xf5f5f5
+    })
+    .into()
+}
+pub(crate) fn card(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::rgb(if cx.theme().is_dark() {
+        0x303030
+    } else {
+        0xffffff
+    })
+    .into()
+}
+pub(crate) fn code(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::rgb(if cx.theme().is_dark() {
+        0x2c2c2c
+    } else {
+        0xfafafa
+    })
+    .into()
+}
 
 fn config(dark: bool) -> Rc<ThemeConfig> {
     let (page, sidebar, ink, meta, muted, selected, border, card, error) = if dark {
@@ -44,8 +79,8 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
         },
         font_size: Some(14.),
         mono_font_size: Some(13.),
-        radius: Some(6),
-        radius_lg: Some(10),
+        radius: Some(Radius::CONTROL as usize),
+        radius_lg: Some(Radius::CARD as usize),
         shadow: Some(false),
         colors: {
             let mut colors = ThemeConfigColors::default();
@@ -89,6 +124,7 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
     })
 }
 pub fn init_appearance(cx: &mut App) {
+    crate::dither_view::prepare(cx);
     Theme::update(cx, |theme| {
         let mut light = (*config(false)).clone();
         light.highlight = theme.light_theme.highlight.clone();
@@ -115,109 +151,32 @@ pub(crate) fn selected(cx: &App) -> gpui_kit::Hsla {
         gpui_kit::rgba(0x0000000f).into()
     }
 }
-#[derive(Clone, Copy)]
-pub(crate) enum Corner {
-    Working,
-    Failed,
-}
-impl Corner {
-    fn path(self) -> &'static str {
-        match self {
-            Self::Working => "chrome/working.svg",
-            Self::Failed => "chrome/failed.svg",
-        }
-    }
-    fn index(self) -> usize {
-        match self {
-            Self::Working => 0,
-            Self::Failed => 1,
-        }
-    }
-}
-const BAYER: [u8; 64] = [
-    0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60,
-    28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15,
-    47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
-];
-fn mask(corner: Corner) -> Vec<u8> {
-    let mut out = String::from(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"104\" height=\"48\" viewBox=\"0 0 104 48\"><path fill=\"black\" d=\"",
-    );
-    for y in 0..24 {
-        for x in 0..52 {
-            let dx = (51.5 - x as f64) / 46.;
-            let dy = (23.5 - y as f64) / 25.;
-            let f = (1. - dx.hypot(dy)).max(0.);
-            let amount = f
-                * f
-                * (3. - 2. * f)
-                * match corner {
-                    Corner::Working => 0.55,
-                    Corner::Failed => 0.68,
-                };
-            if (BAYER[(y % 8) * 8 + x % 8] as f64 + 0.5) / 64. < amount {
-                use std::fmt::Write;
-                write!(out, "M{} {}h2v2h-2z", x * 2, y * 2).unwrap();
-            }
-        }
-    }
-    out.push_str("\"/></svg>");
-    out.into_bytes()
-}
-static MASKS: [OnceLock<Vec<u8>>; 2] = [OnceLock::new(), OnceLock::new()];
-/// Two bounded application-owned SVG masks; fallback is Kit's embedded icon bundle only.
+/// Embedded Kit icons only. Dither frames are trusted app-owned native cells.
 pub struct ChromeAssets;
 impl AssetSource for ChromeAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
-        for corner in [Corner::Working, Corner::Failed] {
-            if path == corner.path() {
-                return Ok(Some(Cow::Borrowed(
-                    MASKS[corner.index()]
-                        .get_or_init(|| mask(corner))
-                        .as_slice(),
-                )));
-            }
-        }
         gpui_kit::assets::Assets.load(path)
     }
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
-        let mut list = gpui_kit::assets::Assets.list(path)?;
-        list.extend(
-            [Corner::Working, Corner::Failed]
-                .into_iter()
-                .map(Corner::path)
-                .filter(|p| p.starts_with(path))
-                .map(Into::into),
-        );
-        Ok(list)
+        gpui_kit::assets::Assets.list(path)
     }
-}
-pub(crate) fn corner(kind: Corner, _cx: &App) -> gpui_kit::Svg {
-    let tint: gpui_kit::Hsla = match kind {
-        Corner::Working => gpui_kit::rgb(0x6366f1).into(),
-        Corner::Failed => gpui_kit::rgb(0xef4444).into(),
-    };
-    svg()
-        .path(kind.path())
-        .w(px(104.))
-        .h(px(48.))
-        .absolute()
-        .bottom_0()
-        .right_0()
-        .text_color(tint)
-        .opacity(0.4)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn masks_are_static_bounded_and_asset_paths_have_no_external_fallback() {
-        let a = ChromeAssets.load(Corner::Working.path()).unwrap().unwrap();
-        let b = ChromeAssets.load(Corner::Working.path()).unwrap().unwrap();
-        assert_eq!(a.as_ptr(), b.as_ptr());
-        assert!(a.len() < 16 * 1024);
-        let f = mask(Corner::Failed);
-        assert!(f.len() > a.len() && f.len() < 16 * 1024);
+    fn radii_and_embedded_assets_do_not_introduce_external_fallback() {
+        assert_eq!(
+            [
+                Radius::SMALL,
+                Radius::ROW,
+                Radius::CONTROL,
+                Radius::CARD,
+                Radius::BUBBLE,
+                Radius::TRAY
+            ],
+            [4., 6., 8., 10., 12., 14.]
+        );
         assert!(!matches!(
             ChromeAssets.load("file:///private/unsupported"),
             Ok(Some(_))

@@ -84,13 +84,17 @@ historical checksum is not the current image-policy specification checksum.
 ## Reader-controlled work disclosures
 
 `gpui-component-0.8.0.json` pins the original Component archive separately and
-contains nine exact edits to its message scroller. The original
+contains thirteen exact edits across two files: nine to its message scroller
+and four for an opt-in `ListItem::hover_fill(false)`. The original
 `pause_following_tail(cx)` forwarding method remains available. A separate
 `hold_for_disclosure(cx)` records reader intent and preserves the logical anchor
 in Normal mode. A temporary Tail pause alone immediately re-arms during bottom
 layout, which made expansion jump to the new bottom. Layout and streaming never
 release this explicit hold. Both list and ScrollBounce user-scroll callbacks use
 the measured scrollbar range, even while offscreen heights remain unknown.
+The hover-fill option defaults to true. App-owned dither rows opt out of the
+default fill while retaining input, selection, keyboard highlight and hover
+callbacks. Other lists retain their original behavior.
 Genuine scrolling to the bottom (including content
 that fits), Latest or a chat reset re-arms Tail. Shrinking content still clamps
 normally when the old viewport would extend past its end.
