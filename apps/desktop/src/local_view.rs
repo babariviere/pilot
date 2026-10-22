@@ -326,6 +326,40 @@ impl LocalViewer {
     /// Network/state-free native renderer corpus. Uses stored expected trees, never evaluates JS.
     pub fn visual_preview(index: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self::preview(PreviewState::Conversation, window, cx);
+        if index >= 10 {
+            let (title, tree) = crate::visual_chart::synthetic_fixture(index);
+            let reference = crate::artifact_model::Reference {
+                id: "synthetic-visual".into(),
+                session: "synthetic".into(),
+                revision: 1,
+                title: title.into(),
+                kind: "visual".into(),
+            };
+            view.state.artifacts = Arc::new(vec![reference.clone()]);
+            view.artifacts_open = true;
+            let scene = crate::visual_scene::Scene::parse(tree.clone()).unwrap();
+            let mut props = tree["root"].clone();
+            props.as_object_mut().unwrap().remove("type");
+            let source = if index == 13 {
+                let children = props["children"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| {
+                        let mut p = v.clone();
+                        p.as_object_mut().unwrap().remove("type");
+                        format!("ui.chart({p})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("({{ui}})=>ui.column([{children}])")
+            } else {
+                format!("({{ui}})=>ui.chart({props})")
+            };
+            view.artifacts
+                .update(cx, |p, cx| p.preview(reference, source, scene, cx));
+            return view;
+        }
         if index == 9 {
             let reference = crate::artifact_model::Reference {
                 id: "synthetic-visual".into(),

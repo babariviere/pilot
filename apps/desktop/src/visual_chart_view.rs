@@ -1,17 +1,18 @@
 //! Trusted native primitives over a finite normalized plan. No dynamic SVG or image-cache churn.
 use crate::visual_chart::Chart;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, Bounds, Context, Corners, Hsla, IntoElement, ParentElement, PathBuilder,
     SharedString, Styled, canvas,
     component::{ActiveTheme, StyledExt},
-    div, fill, point, px, size,
+    div, fill, point, px, relative, size,
 };
 use std::sync::Arc;
 pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
     let t = cx.theme();
     match name {
         "muted" => t.muted_foreground,
-        "accent" => t.primary,
+        "accent" => t.chart_1,
         "success" => t.success,
         "warning" => t.warning,
         "danger" => t.danger,
@@ -21,11 +22,11 @@ pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
         "chart3" => t.chart_3,
         "chart4" => t.chart_4,
         "chart5" => t.chart_5,
-        "chart6" => t.link,
+        "chart6" => gpui_kit::rgb(if t.is_dark() { 0x22d3ee } else { 0x0891b2 }).into(),
         _ => t.foreground,
     }
 }
-pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyElement {
+pub(crate) fn render<T: 'static>(chart: Arc<Chart>, key: &str, cx: &Context<T>) -> AnyElement {
     let colors = chart
         .series
         .iter()
@@ -33,7 +34,13 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
         .collect::<Vec<_>>();
     let border = cx.theme().border;
     let height = chart.height;
-    let mut view = div().v_flex().w_full().min_w_0().gap_1();
+    use gpui_kit::InteractiveElement;
+    let mut view = div()
+        .id(SharedString::from(key.to_owned()))
+        .v_flex()
+        .w_full()
+        .min_w_0()
+        .gap_1();
     let mut legend = div().h_flex().flex_wrap().gap_3();
     for (i, s) in chart.series.iter().enumerate() {
         legend = legend.child(
@@ -47,14 +54,21 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
     let (low, high) = chart.range;
     let caption = format!("{} to {} {}", number(low), number(high), chart.unit);
     let labels = chart.labels.clone();
-    let band = labels.len() == 1
-        || (chart.kind == "bar"
-            && chart
-                .series
-                .first()
-                .is_some_and(|s| s.points.len() == labels.len()));
+    let positions = chart.label_positions.clone();
+    let x_label = chart.x_label.clone();
+    let chart_label_count = labels.len();
+    let plot = {
+        use gpui_kit::InteractiveElement;
+        use gpui_kit::TestSupportExt;
+        div()
+            .w_full()
+            .h(px(height))
+            .overflow_hidden()
+            .id("chart-plot")
+            .test_support()
+    };
     view.child(
-        div().w_full().h(px(height)).overflow_hidden().child(
+        plot.child(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -70,18 +84,36 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
                         Bounds::new(point(origin.x, zero), size(px(w), px(1.))),
                         border,
                     ));
+                    for x in &chart.label_positions {
+                        let at = p((*x, 0.));
+                        window.paint_quad(fill(Bounds::new(at, size(px(1.), px(4.))), border));
+                    }
                     for (i, s) in chart.series.iter().enumerate() {
                         let c = colors[i];
                         if chart.kind == "bar" || chart.kind == "scatter" {
-                            for (x, y) in s.points.iter().flatten().copied() {
+                            for (j, value) in s.points.iter().enumerate() {
+                                let Some((x, y)) = *value else { continue };
                                 let at = p((x, y));
+                                let zero = if chart.kind == "bar" {
+                                    p((x, s.bases[j])).y
+                                } else {
+                                    zero
+                                };
                                 let r = if chart.kind == "scatter" {
                                     Bounds::new(at - point(px(3.), px(3.)), size(px(6.), px(6.)))
                                 } else {
                                     let bw = (w / s.points.len().max(1) as f32 * 0.8
-                                        / chart.series.len() as f32)
-                                        .max(0.25);
-                                    let dx = (i as f32 - (chart.series.len() - 1) as f32 / 2.) * bw;
+                                        / if chart.stacked {
+                                            1.
+                                        } else {
+                                            chart.series.len() as f32
+                                        })
+                                    .max(0.25);
+                                    let dx = if chart.stacked {
+                                        0.
+                                    } else {
+                                        (i as f32 - (chart.series.len() - 1) as f32 / 2.) * bw
+                                    };
                                     Bounds::new(
                                         point(at.x + px(dx - bw / 2.), at.y.min(zero)),
                                         size(px(bw), at.y.max(zero) - at.y.min(zero)),
@@ -141,22 +173,40 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
     )
     .child(
         div()
-            .h_flex()
-            .justify_between()
-            .gap_2()
-            .px_3()
+            .relative()
+            .h(px(18.))
+            .mx_3()
             .min_w_0()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .children(labels.into_iter().map(|label| {
-                let text = div().min_w_0().truncate().child(SharedString::from(label));
-                if band {
-                    text.flex_1().text_center()
+            .children(labels.into_iter().zip(positions).map(|(label, position)| {
+                let width = 1. / chart_label_count.max(1) as f32;
+                let left = (position - width / 2.).clamp(0., 1. - width);
+                let text = div()
+                    .absolute()
+                    .left(relative(left))
+                    .w(relative(width))
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(label));
+                if position < width / 2. {
+                    text.text_left()
+                } else if position > 1. - width / 2. {
+                    text.text_right()
                 } else {
-                    text
+                    text.text_center()
                 }
             })),
     )
+    .when(!x_label.is_empty(), |view| {
+        view.child(
+            div()
+                .text_xs()
+                .text_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(SharedString::from(x_label)),
+        )
+    })
     .child(
         div()
             .text_xs()
@@ -166,9 +216,5 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
     .into_any_element()
 }
 pub(crate) fn number(value: f64) -> String {
-    if value.abs() > 1e6 || (value != 0. && value.abs() < 0.001) {
-        format!("{value:.3e}")
-    } else {
-        value.to_string()
-    }
+    crate::visual_chart::format_number(value)
 }

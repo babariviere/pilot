@@ -117,6 +117,13 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
             colors.popover = s(card);
             colors.popover_foreground = s(ink);
             colors.link = s(ink);
+            colors.chart_1 = s(if dark { "#60A5FA" } else { "#2563EB" });
+            colors.success = s(if dark { "#34D399" } else { "#047857" });
+            colors.warning = s(if dark { "#FBBF24" } else { "#B45309" });
+            colors.chart_2 = s(if dark { "#FBBF24" } else { "#D97706" });
+            colors.chart_3 = s(if dark { "#34D399" } else { "#059669" });
+            colors.chart_4 = s(if dark { "#A78BFA" } else { "#7C3AED" });
+            colors.chart_5 = s(if dark { "#FB7185" } else { "#E11D48" });
             colors.link_hover = s(ink);
             colors
         },

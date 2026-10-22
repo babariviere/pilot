@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..10 {
+            for case in 0..14 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -96,6 +96,49 @@ fn main() {
                             > 30,
                         "native canvas must paint, not merely mount an empty placeholder"
                     );
+                }
+                if case == 10 || case == 12 {
+                    let b = cx
+                        .update_window(handle, |_, window, cx| {
+                            window.render_frame(cx);
+                            window.find("chart-plot").bounds()
+                        })
+                        .unwrap();
+                    let image = cx.capture_screenshot(handle).unwrap();
+                    let scale = image.width() as f32 / width;
+                    let sample = |normalized: f32| {
+                        image
+                            .get_pixel(
+                                ((f32::from(b.left()) + 12. + (f32::from(b.size.width) - 24.) / 6.)
+                                    * scale) as u32,
+                                ((f32::from(b.top())
+                                    + 8.
+                                    + (1. - normalized) * (f32::from(b.size.height) - 16.))
+                                    * scale) as u32,
+                            )
+                            .0
+                    };
+                    let samples = if case == 10 {
+                        [sample(7. / 11.), sample(9.5 / 11.), sample(5.5 / 11.)]
+                    } else {
+                        [sample(4. / 6.), sample(5.5 / 6.), sample(2.5 / 6.)]
+                    };
+                    let [blue, amber, green] = samples;
+                    assert!(blue[2] > blue[0] && blue[2] > blue[1]);
+                    assert!(amber[0] > amber[2] && amber[1] > amber[2]);
+                    assert!(green[1] > green[0] && green[1] > green[2]);
+                    for i in 1..samples.len() {
+                        assert!(
+                            samples[0]
+                                .iter()
+                                .zip(samples[i])
+                                .take(3)
+                                .map(|(a, b)| (*a as i32 - b as i32).abs())
+                                .sum::<i32>()
+                                > 30,
+                            "same-column signed layers must actually paint distinct native colors"
+                        );
+                    }
                 }
                 if let Some(dir) = &directory {
                     shot.save(dir.join(format!("{}-{}-{case}.png", width as u32, mode.name())))

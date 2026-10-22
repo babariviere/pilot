@@ -832,7 +832,7 @@ impl ArtifactPane {
                         )
                     } else {
                         *budget -= points;
-                        crate::visual_chart_view::render(chart.clone(), cx)
+                        crate::visual_chart_view::render(chart.clone(), path, cx)
                     }
                 }
                 Some(Err(message)) => Self::note(message),
