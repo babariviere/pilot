@@ -3,9 +3,11 @@ use crate::{
     delivery_store::{DRAFT_CAP, Draft, TEXT_CAP},
     interaction::{Interaction, WriteCommand, WriteState},
 };
+#[cfg(any(test, feature = "native-probes"))]
+use gpui_kit::TestSupportExt;
 use gpui_kit::{
-    AppContext, Context, Entity, EntityInputHandler, EventEmitter, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Window,
+    AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -27,6 +29,9 @@ pub(crate) enum EditorEvent {
         target: String,
     },
     Flushed,
+    StopRequested {
+        key: String,
+    },
 }
 
 pub(crate) struct ChatEditor {
@@ -37,6 +42,8 @@ pub(crate) struct ChatEditor {
     selected: Option<String>,
     writable: bool,
     busy: bool,
+    thinking: bool,
+    thinking_held: bool,
     follow_up: bool,
     pending: BTreeMap<String, u64>,
     unsaved_local: BTreeSet<String>,
@@ -83,6 +90,8 @@ impl ChatEditor {
             selected: None,
             writable: false,
             busy: false,
+            thinking: false,
+            thinking_held: false,
             follow_up: true,
             pending: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
@@ -202,6 +211,8 @@ impl ChatEditor {
         self.selected = Some(key);
         self.writable = writable;
         self.busy = busy;
+        self.thinking = false;
+        self.thinking_held = false;
         self.error = None;
         self.load_input(window, cx);
         self.open_completed(cx);
@@ -214,6 +225,27 @@ impl ChatEditor {
         self.writable = writable;
         self.busy = busy;
         cx.notify();
+    }
+
+    pub(crate) fn activity(&mut self, active: bool, cx: &mut Context<Self>) {
+        if !active {
+            self.thinking_held = false;
+        }
+        let next = active && !self.thinking_held;
+        if next != self.thinking {
+            self.thinking = next;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn activity_label(&self) -> Option<&'static str> {
+        if self.thinking {
+            Some("Thinking...")
+        } else if self.busy {
+            Some("Working...")
+        } else {
+            None
+        }
     }
 
     fn marked(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -428,8 +460,13 @@ impl ChatEditor {
                 request,
             })
         }) {
-            self.pending.insert(key, request);
+            self.pending.insert(key.clone(), request);
             self.error = None;
+            if stop {
+                self.thinking = false;
+                self.thinking_held = true;
+                cx.emit(EditorEvent::StopRequested { key });
+            }
         } else {
             self.error = Some("Local action queue is busy. Nothing new was submitted.");
         }
@@ -508,7 +545,7 @@ impl Render for ChatEditor {
             .gap_2()
             .border_t_1()
             .border_color(cx.theme().border)
-            .when(self.busy, |this| {
+            .when(self.busy || self.thinking, |this| {
                 this.child(
                     crate::appearance::corner(crate::appearance::Corner::Working, cx).opacity(0.15),
                 )
@@ -543,13 +580,15 @@ impl Render for ChatEditor {
                     ),
             );
         }
-        if self.busy {
-            footer = footer.child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Working"),
-            );
+        if let Some(label) = self.activity_label() {
+            let indicator = div()
+                .id("activity-indicator")
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label);
+            #[cfg(any(test, feature = "native-probes"))]
+            let indicator = indicator.test_support();
+            footer = footer.child(indicator);
         }
         footer = footer.child(
             Textarea::new(&self.text)

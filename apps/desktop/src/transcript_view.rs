@@ -177,6 +177,9 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         assert!(self.readonly);
+        if !reset && self.transcript.messages() == rows.as_slice() {
+            return;
+        }
         let old = self.transcript.messages();
         let old_ids: Vec<_> = old.iter().map(Message::id).collect();
         let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
@@ -369,7 +372,7 @@ impl TranscriptView {
         use crate::{tool_presentation::Step, work_view::Change};
         if matches!(change, Change::Disclosure(_)) {
             self.scroller
-                .update(cx, |state, cx| state.pause_following_tail(cx));
+                .update(cx, |state, cx| state.hold_for_disclosure(cx));
         }
         let index = self.transcript.messages().iter().position(|row| {
             row.work_data().is_some_and(|work| match change {
@@ -387,6 +390,33 @@ impl TranscriptView {
                 .update(cx, |state, cx| state.remeasure_items(index..index + 1, cx));
         }
         cx.notify();
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn disclosure_probe_step(&self, id: &str, cx: &App) -> (bool, usize) {
+        self.work_ui.step_info(id, cx)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn presentation_probe_counts(&self) -> (usize, usize) {
+        (
+            self.transcript.messages().len(),
+            self.text_states.iter().flatten().count(),
+        )
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn disclosure_probe_state(
+        &self,
+        id: u64,
+        cx: &App,
+    ) -> (usize, f32, bool, bool, gpui_kit::EntityId) {
+        let s = self.scroller.read(cx);
+        let p = s.logical_scroll_top();
+        (
+            p.item_ix,
+            p.offset_in_item.into(),
+            s.is_following_tail(),
+            self.work_ui.group_open(id, cx),
+            self.work_ui.groups[&id].entity_id(),
+        )
     }
     fn render_row(
         &self,
@@ -479,7 +509,7 @@ impl Render for TranscriptView {
         let full = self.transcript.is_full();
         let weak = cx.weak_entity();
         let viewport = div().id("viewport").flex_1().min_h_0().min_w_0();
-        #[cfg(test)]
+        #[cfg(any(test, feature = "native-probes"))]
         let viewport = {
             use gpui_kit::test::TestSupportExt;
             viewport.test_support()

@@ -233,6 +233,17 @@ Linux prerequisites/linkage and real Wayland operation have not been verified he
 Close the window or use Cmd/Ctrl-Q to flush Local drafts and exit. The synthetic
 fixture remains memory-only. This is not an installer or production lifecycle shell.
 
+## Activity and reader position
+
+In the Local viewer, work disclosures preserve the reading anchor instead of
+following their newly expanded bottom. Latest or scrolling to the bottom resumes
+following. Reasoning-only/empty assistant shells never become transcript rows or
+Markdown documents. Active projected reasoning uses the composer's existing
+single **Thinking...** indicator in place of **Working...**, without exposing
+reasoning bodies. History and reconnect snapshots do not activate it. Tools,
+ordinary text, terminal events, errors and Stop clear it. Canonical daemon history
+is unchanged. See [focused evidence](evidence/disclosure-thinking.md).
+
 ## Synthetic fixture mode
 
 - 24 deterministic Markdown/code/table history rows start at the tail.

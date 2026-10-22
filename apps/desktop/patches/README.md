@@ -84,12 +84,20 @@ historical checksum is not the current image-policy specification checksum.
 ## Reader-controlled work disclosures
 
 `gpui-component-0.8.0.json` pins the original Component archive separately and
-adds one method to its message scroller. `pause_following_tail(cx)` forwards to
-GPUI's existing offset-preserving pause. Expanding/collapsing work is reader
-navigation, not a request to jump to the newest output. Parser/stream updates
-do not invoke that pause; Latest and wheel-to-bottom retain Kit's behavior.
-When content still fits at the bottom, GPUI may immediately resume following.
-No default, framework version, registry or global configuration is changed.
+contains nine exact edits to its message scroller. The original
+`pause_following_tail(cx)` forwarding method remains available. A separate
+`hold_for_disclosure(cx)` records reader intent and preserves the logical anchor
+in Normal mode. A temporary Tail pause alone immediately re-arms during bottom
+layout, which made expansion jump to the new bottom. Layout and streaming never
+release this explicit hold. Both list and ScrollBounce user-scroll callbacks use
+the measured scrollbar range, even while offscreen heights remain unknown.
+Genuine scrolling to the bottom (including content
+that fits), Latest or a chat reset re-arms Tail. Shrinking content still clamps
+normally when the old viewport would extend past its end.
+Only explicit app-owned disclosure actions opt in. No default, framework version,
+registry or global configuration is changed. Native production-root regressions
+cover header/icon positions, streaming, prepend, tall detail, remount, wheel and
+Latest; see `../evidence/disclosure-thinking.md`.
 
 ## Retained-layout cleanup
 

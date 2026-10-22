@@ -10,6 +10,74 @@ fn model() -> LiveTranscript {
     model
 }
 #[gpui_kit::test]
+fn working_disclosure_mounted_frame_diagnosis(cx: &mut TestAppContext) {
+    let mut model = LiveTranscript::default();
+    let calls:Vec<_>=(0..24).map(|i|json!({"type":"toolCall","id":format!("jitter-{i}"),"name":"read","arguments":{"path":format!("synthetic-{i}.rs")}})).collect();
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+    for i in 0..24 {
+        model.apply(&json!({"type":"tool_execution_start","toolCallId":format!("jitter-{i}"),"toolName":"read"}));
+    }
+    let mut rows: Vec<_> = (100..120)
+        .map(|i| Message::live(i, "assistant".into(), crate::model::REPLY.into()))
+        .collect();
+    rows.extend(model.rows());
+    let id = rows.last().unwrap().id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    let key = SharedString::from(format!("work-toggle-{id}"));
+    let mut collapsed_y = None;
+    for action in ["initial", "collapse", "expand"] {
+        if action != "initial" {
+            cx.update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.click(key.clone(), cx);
+            })
+            .unwrap();
+        }
+        let mut trace = Vec::new();
+        for frame in 0..12 {
+            let sample=cx.update_window(handle,|_,window,cx|{window.render_frame(cx);let h=window.find(key.clone()).bounds();let t=window.within(key.clone()).find("disclosure-text").bounds();let s=view.read(cx).scroller.read(cx);let p=s.logical_scroll_top();json!({"frame":frame,"header_y":f32::from(h.top()),"relative_text_x":f32::from(t.left()-h.left()),"item":p.item_ix,"offset":f32::from(p.offset_in_item),"following":s.is_following_tail(),"open":view.read(cx).work_ui.group_open(id,cx)})}).unwrap();
+            trace.push(sample);
+            cx.run_until_parked();
+        }
+        // Sample multiple mounted frames, not just the settled final offset.
+        if action == "collapse" {
+            collapsed_y = trace.last().and_then(|s| s["header_y"].as_f64());
+        }
+        if action == "expand" {
+            let expected = collapsed_y.unwrap();
+            assert!(
+                trace
+                    .iter()
+                    .all(|s| (s["header_y"].as_f64().unwrap() - expected).abs() <= 1.),
+                "expanding must retain the clicked header instead of following the new bottom: {}",
+                json!(trace)
+            );
+        }
+    }
+}
+#[gpui_kit::test]
+fn a_fitting_disclosure_can_resume_following_with_a_real_bottom_wheel(cx: &mut TestAppContext) {
+    let mut model = model();
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(SharedString::from(format!("work-toggle-{id}")), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!view.read(cx).scroller.read(cx).is_following_tail());
+        window.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(-80.))), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| assert!(view.read(cx).scroller.read(cx).is_following_tail()));
+}
+
+#[gpui_kit::test]
 fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestAppContext) {
     let mut model = model();
     let rows = model.rows();

@@ -3,12 +3,52 @@
   "version": "0.8.0",
   "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
   "upstream": "https://crates.io/crates/gpui-component/0.8.0",
-  "purpose": "Expose GPUI's existing offset-preserving tail pause for explicit transcript disclosures; no default behavior change.",
+  "purpose": "Explicit reader-disclosure viewport hold with bottom-wheel/Latest resume; unchanged default follow behavior.",
   "edits": [
     {
       "path": "src/message_scroller.rs",
       "old": "    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end",
       "new": "    /// Pause following without moving the current viewport. An explicit disclosure\n    /// is reader navigation, not a new message or a request to jump to the end.\n    pub fn pause_following_tail(&mut self, cx: &mut Context<Self>) {\n        self.list_state.pause_following_tail();\n        cx.notify();\n    }\n\n    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    list_state: ListState,\n}",
+      "new": "    list_state: ListState,\n    disclosure_hold: bool,\n}"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "        Self { list_state }",
+      "new": "        Self { list_state, disclosure_hold: false }"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "                let _ = weak_state.update(cx, |_, cx| cx.notify());",
+      "new": "                let _ = weak_state.update(cx, |state, cx| state.user_scrolled(cx));"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "        self.list_state.reset(item_count);",
+      "new": "        self.disclosure_hold = false;\n        self.list_state.reset(item_count);"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end",
+      "new": "    /// An explicit disclosure is reader navigation. Keep its current anchor\n    /// through measurement; layout alone must not resume tail following.\n    /// Genuine scrolling to the bottom or Latest re-arms normal tail behavior.\n    pub fn hold_for_disclosure(&mut self, cx: &mut Context<Self>) {\n        let anchor = self.list_state.logical_scroll_top();\n        self.disclosure_hold = true;\n        self.list_state.set_follow_mode(FollowMode::Normal);\n        self.list_state.scroll_to(anchor);\n        cx.notify();\n    }\n\n    // Only event-derived scroll callbacks call this, never measurement.\n    // Some offscreen rows may still have unknown heights: use the same\n    // measured-coordinate range as the scrollbar/user scroll clamp.\n    fn user_scrolled(&mut self, cx: &mut Context<Self>) {\n        if self.disclosure_hold {\n            let max = self.list_state.max_offset_for_scrollbar().y;\n            let offset = -self.list_state.scroll_px_offset_for_scrollbar().y;\n            if offset >= max - px(0.5) {\n                self.disclosure_hold = false;\n                self.list_state.set_follow_mode(FollowMode::Tail);\n            }\n        }\n        cx.notify();\n    }\n\n    /// Resume tail following and scroll to the latest row.\n    pub fn scroll_to_end"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {\n        self.list_state.set_follow_mode",
+      "new": "    pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {\n        self.disclosure_hold = false;\n        self.list_state.set_follow_mode"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "                            let _ = state.update(cx, |_, cx| cx.notify());",
+      "new": "                            let _ = state.update(cx, |state, cx| state.user_scrolled(cx));"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "            .id(root_id.clone())\n            .relative()",
+      "new": "            .id(root_id.clone())\n            // ScrollBounce consumes scrollable wheel packets itself. When the\n            // content fits it lets the packet bubble without its callback.\n            .on_scroll_wheel({\n                let state = self.state.downgrade();\n                move |_, _, cx| {\n                    let _ = state.update(cx, |state, cx| {\n                        if state.disclosure_hold && state.list_state.max_offset_for_scrollbar().y <= px(0.) {\n                            state.user_scrolled(cx);\n                        }\n                    });\n                }\n            })\n            .relative()"
     }
   ]
 }

@@ -131,7 +131,7 @@ impl WorkUi {
             })
         })
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn step_info(&self, id: &str, cx: &gpui_kit::App) -> (bool, usize) {
         let step = self.steps[&format!("call:{id}")].read(cx);
         (step.open, step.bodies.len())
@@ -147,7 +147,7 @@ impl WorkUi {
             .state
             .clone()
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn group_open(&self, id: u64, cx: &gpui_kit::App) -> bool {
         self.groups[&id].read(cx).open()
     }
