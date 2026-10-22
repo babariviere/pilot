@@ -68,6 +68,21 @@ additional transcript renders through12 ticks, not a CPU/smoothness claim.
 Four runner tests, locked app/helper builds and direct engine-symbol separation
 pass. The existing `block0.1.6` future-incompatibility warning remains.
 
+### Streaming-during-pagination supplement
+
+A test-only follow-up adds two synthetic stream projections while the earlier
+read is outstanding: append a reply, then extend that same reply. Both retain
+the old page revision and an idle flag from a pre-request projection. The reader
+keeps its in-flight token, existing message/pixel anchor, selection entity/range
+and manual-reading state; stream/render/remeasure causes no duplicate read.
+The subsequent prepend retains the same anchor and selection.
+
+All eight long/fitting, narrow/wide, light/dark native scenes and strict native
+Clippy pass with this additional coverage. No production code changed. The
+121-library-test/full-gate and four-runner/build/symbol results above are reused
+from the published implementation checkpoint, not a fresh full-suite rerun for
+this test-only supplement. Raw stream captures remain private and ignored.
+
 ```sh
 cd apps/desktop
 bash scripts/cargo.sh test --locked --lib history -- --test-threads=1

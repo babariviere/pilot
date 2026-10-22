@@ -187,7 +187,44 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                     })
                     .unwrap();
                 let mut expanded = rows(76, 100);
-                expanded.extend(original.clone());
+                let mut streamed = original.clone();
+                for phase in 0..2 {
+                    streamed = original.clone();
+                    streamed.push(Message::live(
+                        if fitting { 101 } else { 120 },
+                        "assistant".into(),
+                        format!(
+                            "Synthetic streamed reply 👩‍💻 e\u{301}. {}",
+                            "A new tail update. ".repeat(4 + phase * 4)
+                        ),
+                    ));
+                    // A stream publication at the same page revision is not a
+                    // history completion, even if it predates the busy flag.
+                    page(cx, handle, &view, streamed.clone(), Some(100), 0);
+                    cx.update_window(handle, |_, window, cx| {
+                        window.render_frame(cx);
+                        let v = view.read(cx);
+                        assert!(v.state.page_busy && v.earlier_request.is_some());
+                        let transcript = v.transcript.read(cx);
+                        let retained = transcript.history_probe_row(100);
+                        assert_eq!(retained.entity_id(), text.entity_id());
+                        assert_eq!(
+                            retained.read(cx).selected_source_range(),
+                            Some(selected.clone())
+                        );
+                        assert!(
+                            (f32::from(retained.read(cx).bounds().top()) - old_y).abs() <= 1.,
+                            "stream must preserve current read position"
+                        );
+                        assert!(!transcript.history_probe_anchor(cx).2);
+                    })
+                    .unwrap();
+                    assert!(
+                        commands.try_recv().is_err(),
+                        "stream/remeasure cannot create another history read"
+                    );
+                }
+                expanded.extend(streamed);
                 page(cx, handle, &view, expanded.clone(), Some(76), 1);
                 let new_y = cx
                     .update_window(handle, |_, window, cx| {
@@ -313,7 +350,7 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 assert!(commands.try_recv().is_err());
                 println!(
                     "{}",
-                    json!({"width":width,"mode":mode.name(),"fitting":fitting,"native_top_scroll":true,"scrollbar_release_top":true,"page_commands":4,"anchor_before":old_y,"anchor_after":new_y,"selection_entity_retained":true,"no_layout_fetch_or_retry_storm":true,"latest_restores_tail":true,"faux_read_channel":true})
+                    json!({"width":width,"mode":mode.name(),"fitting":fitting,"native_top_scroll":true,"scrollbar_release_top":true,"page_commands":4,"anchor_before":old_y,"anchor_after":new_y,"selection_entity_retained":true,"stream_append_and_update_while_paging":true,"no_layout_fetch_or_retry_storm":true,"latest_restores_tail":true,"faux_read_channel":true})
                 );
                 if let Some(dir) = &captures {
                     cx.capture_screenshot(handle)
