@@ -165,6 +165,38 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 .update_window(handle, |_, window, _| window.find("composer-tray").bounds())
                 .unwrap();
             let sample = |x: f32, y: f32| after.get_pixel((x * scale) as u32, (y * scale) as u32).0;
+            let (input, controls, stop, send) = cx
+                .update_window(handle, |_, window, _| {
+                    (
+                        window.find("composer-input").bounds(),
+                        window.find("composer-controls").bounds(),
+                        window.find("local-stop").bounds(),
+                        window.find("local-send").bounds(),
+                    )
+                })
+                .unwrap();
+            assert!(tray.size.height <= px(88.) && input.size.height <= px(44.));
+            assert_eq!(input.bottom(), controls.top());
+            for rect in [input, controls, stop, send] {
+                assert!(
+                    rect.left() >= tray.left() && rect.right() <= tray.right(),
+                    "control must not clip: {rect:?} vs {tray:?}"
+                );
+                assert!(rect.top() >= tray.top() && rect.bottom() <= tray.bottom());
+            }
+            assert_eq!(stop.center().y, send.center().y);
+            assert_eq!(
+                sample(f32::from(input.left()) + 16., f32::from(input.top()) + 2.),
+                sample(
+                    f32::from(controls.left()) + 16.,
+                    f32::from(controls.top()) + 2.
+                ),
+                "one continuous surface, not a contrasting nested editor card"
+            );
+            println!(
+                "{}",
+                json!({"composer_width":width,"mode":mode.name(),"tray_height":f32::from(tray.size.height),"input_height":f32::from(input.size.height),"send_stop_one_row":true,"controls_contained":true,"native_production_root":true})
+            );
             let outside = sample(f32::from(tray.left()) + 0.5, f32::from(tray.top()) + 0.5);
             let top = sample(f32::from(tray.left()) + 24., f32::from(tray.top()) + 2.);
             assert_ne!(
