@@ -32,12 +32,14 @@ impl Control {
 pub(crate) struct Scene {
     pub(crate) root: Arc<Value>,
     pub(crate) controls: BTreeMap<String, Control>,
+    pub(crate) sliders: BTreeMap<String, (crate::visual_slider::Spec, f64)>,
     pub(crate) canvases: Vec<(String, f64)>,
     pub(crate) nodes: usize,
     pub(crate) charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
 }
 struct Check {
     controls: BTreeMap<String, Control>,
+    sliders: BTreeMap<String, (crate::visual_slider::Spec, f64)>,
     canvases: Vec<(String, f64)>,
     nodes: usize,
     text: usize,
@@ -118,6 +120,7 @@ impl Scene {
         }
         let mut c = Check {
             controls: BTreeMap::new(),
+            sliders: BTreeMap::new(),
             canvases: Vec::new(),
             nodes: 0,
             text: 0,
@@ -128,6 +131,7 @@ impl Scene {
         Ok(Self {
             root: Arc::new(value["root"].clone()),
             controls: c.controls,
+            sliders: c.sliders,
             canvases: c.canvases,
             nodes: c.nodes,
             charts: c.charts,
@@ -365,6 +369,13 @@ impl Check {
                 })?;
                 self.texts(o, &["label", "unit"], 500)?;
                 self.control(v, path, Control::Slider { min, max })?;
+                self.sliders.insert(
+                    path.into(),
+                    (
+                        crate::visual_slider::Spec::checked_node(v),
+                        v["value"].as_f64().unwrap(),
+                    ),
+                );
             }
             "button" => {
                 self.text(&v["label"], 500)?;

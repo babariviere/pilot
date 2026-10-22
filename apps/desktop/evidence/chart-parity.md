@@ -71,6 +71,9 @@ separately labelled SwiftUI chart artifact is a static mock, not GPUI evidence.
 
 ## Remaining work
 
+The later [native slider slice](slider-interaction.md) implements bounded dragging
+and coalescing; its evidence and limitations supersede that item below only.
+
 This is only the chart portion of the larger artifact backlog. Slider dragging/
 coalescing, per-run typography, complete canvas transforms/text/animation/pointer
 scheduling, Mermaid candidate/license/corpus, safe prepared image/SwiftUI decoding

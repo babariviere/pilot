@@ -408,6 +408,10 @@ impl LocalViewer {
         });
         view
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_artifact_pane(&self) -> Entity<crate::artifact_view::ArtifactPane> {
+        self.artifacts.clone()
+    }
     /// Native fixture sizing only. Never used by a connected/captured viewer or canonical artifacts.
     pub fn resize_synthetic_canvas(&mut self, width: f64, cx: &mut Context<Self>) {
         if self.client.is_some()

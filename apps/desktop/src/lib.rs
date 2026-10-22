@@ -10,6 +10,8 @@ mod tool_presentation;
 mod transcript_view;
 mod work_view;
 
+#[cfg(feature = "native-probes")]
+pub use artifact_view::slider_probe::run_slider_probe;
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
 pub use local_view::disclosure_probe::run_disclosure_probe;
@@ -32,5 +34,6 @@ mod visual_drawing;
 mod visual_runtime;
 mod visual_scene;
 mod visual_session;
+mod visual_slider;
 mod visual_wire;
 pub use appearance::{ChromeAssets, follow_appearance, init_appearance};
