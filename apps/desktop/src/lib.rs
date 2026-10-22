@@ -13,6 +13,8 @@ mod work_view;
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
 pub use local_view::disclosure_probe::run_disclosure_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::style_probe::run_style_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
@@ -20,6 +22,8 @@ mod appearance;
 mod artifact_model;
 mod artifact_view;
 mod artifact_worker;
+mod dither;
+mod dither_view;
 mod visual_canvas_plan;
 mod visual_canvas_view;
 mod visual_chart;

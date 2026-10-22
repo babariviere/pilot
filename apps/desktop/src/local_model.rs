@@ -20,7 +20,22 @@ pub(crate) struct Chat {
     pub(crate) local_draft: bool,
     pub(crate) writable: bool,
     pub(crate) busy: bool,
+    pub(crate) signal: Option<crate::dither::Signal>,
+    pub(crate) background_work: bool,
     pub(crate) cwd: String,
+}
+impl Chat {
+    pub(crate) fn signal_label(&self) -> &str {
+        use crate::dither::Signal;
+        match self.signal {
+            Some(Signal::Working) if self.background_work => "Working in background",
+            Some(Signal::Working) => "Working",
+            Some(Signal::NeedsYou) => "Needs you",
+            Some(Signal::Failed) => "Failed",
+            Some(Signal::Ready) => "Ready to merge",
+            None => &self.state,
+        }
+    }
 }
 pub(crate) fn interactive_local(value: &Value) -> bool {
     value["control"] != true
@@ -36,6 +51,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     if !valid_id(id) {
         return None;
     }
+    let (signal, background_work) = decoration(value);
     Some(Chat {
         id: id.into(),
         title: bounded(value["title"].as_str().unwrap_or("Untitled chat"), 240),
@@ -45,8 +61,71 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         writable: interactive_local(value),
         busy: value["working"] == true
             || matches!(value["state"].as_str(), Some("working" | "starting")),
+        signal,
+        background_work,
         cwd: bounded(value["cwd"].as_str().unwrap_or(""), 4096),
     })
+}
+
+// Read-only summary projection, mirroring SessionSignal/WorkingLine. It does not
+// import Swift's private review marks or alter action eligibility/working state.
+fn decoration(value: &Value) -> (Option<crate::dither::Signal>, bool) {
+    use crate::dither::Signal;
+    let state = value["state"].as_str().unwrap_or("");
+    let jobs = value["runningJobs"]
+        .as_array()
+        .is_some_and(|jobs| !jobs.is_empty());
+    let paused = value["sleepPaused"] == true || value["offlinePaused"] == true;
+    let working = !paused
+        && value["working"]
+            .as_bool()
+            .unwrap_or(matches!(state, "working" | "starting") || jobs);
+    let background = working && !matches!(state, "working" | "starting") && jobs;
+    let reason = value["attentionReason"]["kind"].as_str().unwrap_or("");
+    let coordinator =
+        value["missionCoordinator"] == true || value["activeMissionCoordinator"] == true;
+    let ready = value["offlinePaused"] != true
+        && !coordinator
+        && reason != "pr_stuck"
+        && value["pullRequest"]["state"] == "open"
+        && value["pullRequest"]["readiness"]["state"] == "ready";
+    let terminal = value["unpublishedWork"] != true
+        && !coordinator
+        && matches!(
+            value["pullRequest"]["state"].as_str(),
+            Some("merged" | "closed")
+        )
+        && ["pullRequests", "boundPullRequests"].iter().all(|field| {
+            let pr = &value[*field];
+            pr.as_array().is_none_or(|prs| {
+                prs.iter()
+                    .all(|pr| matches!(pr["state"].as_str(), Some("merged" | "closed")))
+            })
+        });
+    let missing_pr = value["unpublishedWork"] == true
+        && value["mode"] != "ask"
+        && !coordinator
+        && value["continuedTo"].is_null()
+        && value["archivedAt"].is_null()
+        && value["control"] != true
+        && value["pullRequest"].is_null()
+        && ["pullRequests", "boundPullRequests"]
+            .iter()
+            .all(|field| value[*field].as_array().is_none_or(Vec::is_empty));
+    let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall") {
+        Some(Signal::NeedsYou)
+    } else if working {
+        Some(Signal::Working)
+    } else if value["scheduledMessage"] == true {
+        ready.then_some(Signal::Ready)
+    } else if !paused && !terminal && (value["outcome"] == "failed" || state == "failed") {
+        Some(Signal::Failed)
+    } else if (!paused && value["outcome"] == "question") || reason == "pr_stuck" || missing_pr {
+        Some(Signal::NeedsYou)
+    } else {
+        ready.then_some(Signal::Ready)
+    };
+    (signal, background)
 }
 
 pub(crate) fn valid_id(id: &str) -> bool {
@@ -859,6 +938,71 @@ fn change_message(message: &mut Value, change: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn corner_summary_projection_preserves_action_eligibility_and_background_work() {
+        use crate::dither::Signal;
+        for (value, signal, bg) in [
+            (
+                json!({"id":"a","state":"working","working":true}),
+                Some(Signal::Working),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","runningJobs":[{"name":"synthetic"}]}),
+                Some(Signal::Working),
+                true,
+            ),
+            (
+                json!({"id":"a","state":"working","attentionReason":{"kind":"tool_stall"}}),
+                Some(Signal::NeedsYou),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","outcome":"question"}),
+                Some(Signal::NeedsYou),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"failed"}),
+                Some(Signal::Failed),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","pullRequest":{"state":"open","readiness":{"state":"ready"}}}),
+                Some(Signal::Ready),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","unpublishedWork":true}),
+                Some(Signal::NeedsYou),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","unpublishedWork":true,"control":true}),
+                None,
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","outcome":"failed","pullRequest":{"state":"merged"},"pullRequests":[{"state":"open"}]}),
+                Some(Signal::Failed),
+                false,
+            ),
+            (
+                json!({"id":"a","state":"idle","outcome":"failed","pullRequest":{"state":"merged"},"pullRequests":[{"state":"closed"}]}),
+                None,
+                false,
+            ),
+        ] {
+            let projected = chat(&value).unwrap();
+            assert_eq!((projected.signal, projected.background_work), (signal, bg));
+            assert_eq!(projected.writable, interactive_local(&value));
+            assert_eq!(
+                projected.busy,
+                value["working"] == true
+                    || matches!(value["state"].as_str(), Some("working" | "starting"))
+            );
+        }
+    }
 
     #[test]
     fn reasoning_is_early_filtered_and_deltas_do_not_build_or_dirty_rows() {

@@ -1,5 +1,9 @@
 # Reader-controlled disclosures and transient thinking
 
+The checksum below identifies the original disclosure checkpoint. The later
+rounded-surface slice adds an opt-in hover-fill patch without changing these
+scroller edits; see [its evidence](rounded-dither.md) for the current checksum.
+
 2026-10-22. Synthetic production views only, Apple M3 Pro/36 GiB, macOS27,
 Kit0.8.0/GPUI0.3.9, Rust1.98.1. No visible app, real chat content, canonical
 data writes, automated real actions, backend change or default switch.

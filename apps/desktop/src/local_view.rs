@@ -2,11 +2,16 @@
 #[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
+#[cfg(feature = "native-probes")]
+#[path = "style_probe.rs"]
+pub(crate) mod style_probe;
 use crate::{
     LocalOptions, TranscriptView,
-    appearance::{self, Corner},
+    appearance::{self},
     chat_editor::{ChatEditor, EditorEvent},
     delivery_store::Store,
+    dither::{Signal, Spec},
+    dither_view::CornerView,
     interaction::{Interaction, WriteCommand},
     local_client::{Command, LocalClient, Presentation},
     local_model::Chat,
@@ -25,7 +30,11 @@ use gpui_kit::{
     prelude::FluentBuilder,
     px,
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 gpui_kit::actions!(desktop, [FocusChats]);
 #[derive(Clone, Copy)]
@@ -43,9 +52,12 @@ struct ChatList {
     selected: Option<IndexPath>,
     opened: Option<String>,
     loaded: bool,
+    corners: HashMap<String, Entity<CornerView>>,
 }
 impl ChatList {
     fn filter(&mut self) {
+        let ids: HashSet<_> = self.all.iter().map(|chat| chat.id.as_str()).collect();
+        self.corners.retain(|id, _| ids.contains(id.as_str()));
         self.filtered = self
             .all
             .iter()
@@ -68,19 +80,28 @@ impl ListDelegate for ChatList {
     fn render_item(
         &mut self,
         ix: IndexPath,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
-        let chat = self.at(ix)?;
+        let chat = self.at(ix)?.clone();
+        let spec = Spec::row(chat.signal, chat.background_work);
+        let corner = self
+            .corners
+            .entry(chat.id.clone())
+            .or_insert_with(|| cx.new(|cx| CornerView::new(spec, window, cx)))
+            .clone();
+        corner.update(cx, |view, cx| view.configure(spec, cx));
+        let has_corner = corner.read(cx).has_corner(cx);
         Some(
             ListItem::new(SharedString::from(chat.id.clone()))
+                .hover_fill(!has_corner)
                 .confirmed(self.opened.as_ref() == Some(&chat.id))
                 .child(
                     div()
                         .v_flex()
                         .relative()
                         .overflow_hidden()
-                        .rounded_md()
+                        .rounded(px(appearance::Radius::ROW))
                         .px_2()
                         .py_1()
                         .bg(if self.opened.as_ref() == Some(&chat.id) {
@@ -91,12 +112,7 @@ impl ListDelegate for ChatList {
                         .min_w_0()
                         .w_full()
                         .gap_1()
-                        .when(chat.busy, |this| {
-                            this.child(appearance::corner(Corner::Working, cx))
-                        })
-                        .when(!chat.busy && chat.state == "failed", |this| {
-                            this.child(appearance::corner(Corner::Failed, cx))
-                        })
+                        .child(crate::dither_view::layer(corner))
                         .child(
                             div()
                                 .truncate()
@@ -108,7 +124,7 @@ impl ListDelegate for ChatList {
                                 .text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!(
                                     "{}{}",
-                                    chat.state,
+                                    chat.signal_label(),
                                     if chat.archived { " · Archived" } else { "" }
                                 ))),
                         ),
@@ -172,6 +188,8 @@ pub struct LocalViewer {
     details_open: bool,
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
+    #[cfg(feature = "native-probes")]
+    render_count: u64,
 }
 
 impl LocalViewer {
@@ -238,6 +256,8 @@ impl LocalViewer {
                 local_draft: false,
                 writable: false,
                 busy: true,
+                signal: Some(Signal::Working),
+                background_work: false,
                 cwd: String::new(),
             },
             Chat {
@@ -248,6 +268,8 @@ impl LocalViewer {
                 local_draft: false,
                 writable: false,
                 busy: false,
+                signal: None,
+                background_work: false,
                 cwd: String::new(),
             },
             Chat {
@@ -258,6 +280,8 @@ impl LocalViewer {
                 local_draft: false,
                 writable: false,
                 busy: false,
+                signal: None,
+                background_work: false,
                 cwd: String::new(),
             },
         ]);
@@ -375,6 +399,8 @@ impl LocalViewer {
             local_draft: false,
             writable: false,
             busy: false,
+            signal: Some(Signal::Failed),
+            background_work: false,
             cwd: String::new(),
         });
         view.state.chats = Arc::new(chats);
@@ -454,6 +480,7 @@ impl LocalViewer {
                     selected: None,
                     opened: None,
                     loaded: false,
+                    corners: HashMap::new(),
                 },
                 window,
                 cx,
@@ -504,6 +531,8 @@ impl LocalViewer {
                             local_draft: false,
                             writable: true,
                             busy: true,
+                            signal: Some(Signal::Working),
+                            background_work: false,
                             cwd: String::new(),
                         },
                         window,
@@ -562,6 +591,8 @@ impl LocalViewer {
             details_open: false,
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
+            #[cfg(feature = "native-probes")]
+            render_count: 0,
         }
     }
 
@@ -640,6 +671,7 @@ impl LocalViewer {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
+                editor.background(chat.background_work, cx);
             });
         }
         self.editor.update(cx, |editor, cx| {
@@ -733,6 +765,8 @@ impl LocalViewer {
                 local_draft: true,
                 writable: false,
                 busy: false,
+                signal: None,
+                background_work: false,
                 cwd: String::new(),
             })
             .collect();
@@ -764,6 +798,10 @@ impl LocalViewer {
 
 impl Render for LocalViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "native-probes")]
+        {
+            self.render_count += 1;
+        }
         let archived = self.chats.read(cx).delegate().archived;
         let count = self.chats.read(cx).delegate().filtered.len();
         let sidebar_width = px(if window.viewport_size().width < px(800.) {
@@ -836,8 +874,8 @@ impl Render for LocalViewer {
                         .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
                             .child(div().font_semibold().child("Choose a chat"))
                             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
-                        .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone()))
-                        .when(self.artifacts_open,|this|this.child(self.artifacts.clone())))
+                        .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
+                        .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
                     .child(div().w_full().max_w(px(760.)).mx_auto().child(self.editor.clone()))
                     .child(div().v_flex().px_3().py_1().gap_1().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground)
                         .child(Button::new("view-details").ghost().small().self_start().label(if self.details_open{"Hide details"}else{"Details"})

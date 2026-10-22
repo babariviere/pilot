@@ -136,11 +136,19 @@ See [exact boundaries, checks and remaining work](evidence/native-visuals.md).
 The Local browser uses the app's soft light/dark palette, follows system
 appearance, keeps a compact adaptive sidebar and centers a bounded reading
 column. Neutral selection identifies the opened chat independently of search.
-Cmd/Ctrl-F focuses chat search. Static cached Bayer corners mark projected
-working/failed rows and the working composer without adding an animation clock.
+Cmd/Ctrl-F focuses chat search. Swift-style 4/6/8/10/12/14-point radii shape small
+controls, rows, controls, cards, user bubbles and composer trays. Native 2-point
+Bayer corners ripple while working (half-speed for background jobs), breathe
+for needs-you and stay steady for failed/ready states. Hover recedes over 300 ms;
+signal changes dissolve over 600 ms. Reduce Motion stays still. One bounded clock
+per window sleeps for hidden, unmounted and nonmoving decorations, with fixed
+off-thread alpha atlases and cached transcript/artifact viewports.
 Details reveals prototype limitations; capacity/error notices remain visible.
 See [interface verification and remaining gaps](evidence/interface.md).
-This is not Home/Inbox/settings, animated-dither or full app parity.
+See [rounded surfaces and motion evidence](evidence/rounded-dither.md), including
+native light/dark/narrow/wide checks and remaining ancestor-rendering costs.
+This is not Home/Inbox/settings or full app parity. macOS is the current focus;
+Linux/Wayland verification is deferred, not a delivery gate or support claim.
 
 ### Private rendered-UI capture
 

@@ -13,6 +13,8 @@ use gpui_kit::{
         text::{TextView, TextViewState},
     },
     div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::{
     cell::RefCell,
@@ -460,9 +462,16 @@ impl StepView {
             .child(
                 div()
                     .id(SharedString::from(format!("body-{id}-{label}")))
-                    .max_h_64()
+                    .max_h(px(260.))
                     .overflow_y_scroll()
                     .min_w_0()
+                    .when(plain, |this| {
+                        this.p(px(10.))
+                            .bg(crate::appearance::code(cx))
+                            .rounded(px(crate::appearance::Radius::CONTROL))
+                            .border_1()
+                            .border_color(cx.theme().border)
+                    })
                     .child(
                         TextView::new(&state)
                             .selectable(true)

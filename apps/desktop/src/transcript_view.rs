@@ -11,7 +11,7 @@ use gpui_kit::{
         message_scroller::{MessageScroller, MessageScrollerState},
         text::{TextView, TextViewState},
     },
-    div,
+    div, px,
 };
 
 use crate::model::{Message, TICK_MS, Transcript};
@@ -32,6 +32,8 @@ pub struct TranscriptView {
     readonly: bool,
     text_subscriptions: HashMap<u64, Subscription>,
     work_ui: crate::work_view::WorkUi,
+    #[cfg(feature = "native-probes")]
+    render_count: u64,
 }
 
 impl TranscriptView {
@@ -117,6 +119,8 @@ impl TranscriptView {
             readonly,
             text_subscriptions: HashMap::new(),
             work_ui: Default::default(),
+            #[cfg(feature = "native-probes")]
+            render_count: 0,
         };
         view.text_states = (0..view.transcript.messages().len())
             .map(|ix| view.create_text_state(ix, cx))
@@ -403,6 +407,10 @@ impl TranscriptView {
         )
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_render_count(&self) -> u64 {
+        self.render_count
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn disclosure_probe_state(
         &self,
         id: u64,
@@ -433,7 +441,8 @@ impl TranscriptView {
                 .min_w_0()
                 .p_3()
                 .border_1()
-                .rounded_md()
+                .rounded(px(crate::appearance::Radius::CARD))
+                .bg(crate::appearance::card(cx))
                 .border_color(cx.theme().border)
                 .child(
                     Button::new(("open-artifact", row.id()))
@@ -460,7 +469,7 @@ impl TranscriptView {
         div()
             .id(("message", row.id()))
             .v_flex()
-            .rounded_lg()
+            .rounded(px(crate::appearance::Radius::BUBBLE))
             .when(user, |this| this.bg(cx.theme().muted).p_3())
             .gap_2()
             .w_full()
@@ -505,6 +514,10 @@ impl TranscriptView {
 
 impl Render for TranscriptView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "native-probes")]
+        {
+            self.render_count += 1;
+        }
         let busy = self.transcript.is_streaming();
         let full = self.transcript.is_full();
         let weak = cx.weak_entity();

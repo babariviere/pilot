@@ -65,3 +65,9 @@ name = "disclosure"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "style"
+harness = false
+test = false
+required-features = ["native-probes"]
