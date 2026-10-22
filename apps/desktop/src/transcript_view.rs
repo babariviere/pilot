@@ -563,6 +563,10 @@ mod work_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn retained_layout_sweep_threshold_liveness_and_cross_thread_drop() {
+        gpui_kit::base::text::assert_retained_layout_sweep_invariants();
+    }
     use super::TranscriptView;
     use gpui_kit::{
         AppContext, Bounds, ScrollDelta, TestAppContext, WindowBounds, WindowOptions, point, px,

@@ -51,3 +51,8 @@ harness = false
 [[test]]
 name = "visuals"
 harness = false
+
+[[test]]
+name = "scaling"
+harness = false
+test = false
