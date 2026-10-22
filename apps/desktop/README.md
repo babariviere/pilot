@@ -332,11 +332,18 @@ without another writer in this workspace. It does not clean targets or caches.
 The second uses two temporary, private targets and removes only those probe
 directories. Neither is a repeated cold-build/second-worktree benchmark.
 
+For opt-in native text scaling, build `bash scripts/cargo.sh test --locked --test scaling --no-run`
+and pass that exact executable to `scripts/measure-scaling.py` with its build-time
+`--base-patch-sha256`. The wrapper freezes it before serial synthetic runs. It
+does not read chats or open visible windows. See [scaling evidence](evidence/scaling.md)
+for source-readiness/copy assertions, the unchanged4096-entry cleanup trigger,
+the selected-source timeout fix and unresolved long-line/layout costs. These
+debug offscreen results are not release, frame-pacing or Swift comparisons.
+
 ## Known gaps and next review
 
-This is not full Swift parity. Only the explicit Local interaction slice above
-is connected. Interface/dither parity and native non-shader visual artifacts
-remain subsequent work. Tool summaries have conservative generic fallbacks;
+This is not full Swift parity. The Local interaction and selected interface/native
+visual subsets above are connected; their wider parity gaps remain. Tool summaries have conservative generic fallbacks;
 unsupported image/rich result content is not silently treated as text.
 
 - The fixture now opts into message-local selection retention through its

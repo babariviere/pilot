@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "d5cd7de73d5b2d3d18b94a928abf343922091fa77bc472f77b7d2e7e8b1823a7",
   "upstream": "https://crates.io/crates/gpui-base/0.8.0",
-  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer; no accessibility patches.",
+  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change.",
   "edits": [
     {
       "path": "src/text_selection.rs",
@@ -115,6 +115,36 @@
       "path": "src/text/state.rs",
       "old": "            image_source: self.image_source.clone(),",
       "new": "            image_source: if self.images_enabled { self.image_source.clone() } else {\n                Some(std::sync::Arc::new(|_| gpui::ImageSource::from(\"__disabled_document_image__\")))\n            },"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "thread_local! {\n    static RETAINED_LAYOUTS:",
+      "new": "// A dead-state epoch avoids rescanning an entirely live table at every paint.\n// Count completed InlineState destruction on any parser/UI thread.\nstatic RETAINED_STATE_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n\n#[derive(Debug, Default, PartialEq)]\npub(crate) struct RetainedLiveness;\n\nimpl Drop for RetainedLiveness {\n    fn drop(&mut self) {\n        RETAINED_STATE_DROPS.fetch_add(1, std::sync::atomic::Ordering::Release);\n    }\n}\n\nthread_local! {\n    static RETAINED_LAST_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };\n    static RETAINED_LAYOUTS:"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {\n    RETAINED_LAYOUTS.with(|layouts| {\n        let mut layouts = layouts.borrow_mut();\n        if layouts.len() >= RETAINED_SWEEP_AT {\n            layouts.retain(|_, retained| retained.state.strong_count() > 0);\n        }\n        layouts.insert(state_key(state), retained);\n    });\n}",
+      "new": "fn sweep_retained_layouts(\n    layouts: &mut HashMap<usize, RetainedLayout>,\n    epoch: usize,\n    last_sweep: &std::cell::Cell<usize>,\n) -> bool {\n    if layouts.len() < RETAINED_SWEEP_AT || last_sweep.get() == epoch {\n        return false;\n    }\n    // Remember the epoch from before the walk: a concurrent destruction must\n    // still trigger the next walk, even if it happened during this one.\n    last_sweep.set(epoch);\n    layouts.retain(|_, retained| retained.state.strong_count() > 0);\n    true\n}\n\nfn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {\n    RETAINED_LAYOUTS.with(|layouts| {\n        let mut layouts = layouts.borrow_mut();\n        let epoch = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n        RETAINED_LAST_SWEEP.with(|last| { sweep_retained_layouts(&mut layouts, epoch, last); });\n        layouts.insert(state_key(state), retained);\n    });\n}"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "mod tests {\n",
+      "new": "mod tests {\n    #[test]\n    fn retained_layout_sweeps_follow_destruction_without_changing_the_threshold() {\n        super::assert_retained_layout_sweep_invariants();\n    }\n"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "    pub(crate) editor_key: Option<u64>,\n}",
+      "new": "    pub(crate) editor_key: Option<u64>,\n    // Zero-sized destruction signal; InlineState itself stays movable.\n    pub(crate) _retained_liveness: RetainedLiveness,\n}"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "impl InlineState {\n    /// Save actually rendered text",
+      "new": "#[cfg(any(test, feature = \"test-support\"))]\n#[doc(hidden)]\npub fn assert_retained_layout_sweep_invariants() {\n    assert_eq!(std::mem::size_of::<RetainedLiveness>(),0);\n    fn entry(state: &Arc<Mutex<InlineState>>) -> RetainedLayout {\n        RetainedLayout { state: Arc::downgrade(state), styled_text: StyledText::new(\"x\"),\n            text: \"x\".into(), runs: Vec::new(), text_style: TextStyle::default() }\n    }\n    let mut owners = Vec::new();\n    let mut layouts = HashMap::new();\n    let last = std::cell::Cell::new(usize::MAX);\n    for _ in 0..RETAINED_SWEEP_AT {\n        let owner = Arc::new(Mutex::new(InlineState::default()));\n        layouts.insert(state_key(&owner), entry(&owner));\n        owners.push(owner);\n    }\n    let epoch = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert!(sweep_retained_layouts(&mut layouts, epoch, &last));\n    for _ in 0..128 {\n        assert!(!sweep_retained_layouts(&mut layouts, epoch, &last));\n    }\n    assert_eq!(layouts.len(), RETAINED_SWEEP_AT);\n    let dead = owners.pop().unwrap();\n    let dead_key = state_key(&dead);\n    std::thread::spawn(move || drop(dead)).join().unwrap();\n    let changed = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert_ne!(epoch, changed);\n    assert!(sweep_retained_layouts(&mut layouts, changed, &last));\n    assert!(!layouts.contains_key(&dead_key));\n    assert_eq!(layouts.len(), RETAINED_SWEEP_AT - 1);\n    assert!(owners.iter().all(|owner| layouts.contains_key(&state_key(owner))));\n    // Below the original threshold, dead entries remain until the next\n    // eligible insertion, exactly as before.\n    let another = owners.pop().unwrap();\n    let another_key = state_key(&another);\n    drop(another);\n    let next = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert!(!sweep_retained_layouts(&mut layouts, next, &last));\n    assert!(layouts.contains_key(&another_key));\n    let owner = Arc::new(Mutex::new(InlineState::default()));\n    layouts.insert(state_key(&owner), entry(&owner));\n    assert!(sweep_retained_layouts(&mut layouts, next, &last));\n    assert!(!layouts.contains_key(&another_key));\n\n}\n\nimpl InlineState {\n    /// Save actually rendered text"
+    },
+    {
+      "path": "src/text/mod.rs",
+      "old": "mod inline;\n",
+      "new": "mod inline;\n#[cfg(feature = \"test-support\")]\n#[doc(hidden)]\npub use inline::assert_retained_layout_sweep_invariants;\n"
     }
   ]
 }

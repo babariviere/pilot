@@ -77,7 +77,7 @@ policy in retained Base state keeps Component styling and built-in fade intact.
 The default remains enabled for other callers. A fake HTTP-client regression
 checks zero image requests while rendering a remote Markdown image in live mode.
 
-Current combined specification: 22 exact edits, still four Base source files.
+Image-policy specification: 22 exact edits, still four Base source files.
 Earlier evidence documents the prior 18-edit selection/composer revision; its
 historical checksum is not the current image-policy specification checksum.
 
@@ -90,3 +90,24 @@ navigation, not a request to jump to the newest output. Parser/stream updates
 do not invoke that pause; Latest and wheel-to-bottom retain Kit's behavior.
 When content still fits at the bottom, GPUI may immediately resume following.
 No default, framework version, registry or global configuration is changed.
+
+## Retained-layout cleanup
+
+The combined Base specification now has28 exact edits across six files. The
+four additional `inline.rs` edits keep the4096-entry sweep trigger and weak
+identity checks unchanged. This trigger is not a live-entry size cap.
+
+Previously, every retained inline above that trigger walked the whole table,
+even if all states were still alive. A zero-sized state-lifetime marker now
+increments an atomic destruction epoch, including on the parser thread. Each
+UI thread remembers its last completed sweep epoch and skips redundant walks
+when no state has died. Below the original trigger, cleanup remains deferred.
+Live layouts are never evicted, capacity is not raised and text/selection/fade
+or source mappings do not change. A destruction during a sweep remains visible
+to the next sweep because the pre-walk epoch is recorded.
+
+Two test-support-only edits expose the actual cleanup invariant assertion to the
+desktop's library tests (dependency packages cannot run their dev-tests as
+non-workspace members). This seam is absent from normal builds; it adds no tool,
+transport or host capability. The ordinary threshold/dead-entry/live-entry and
+cross-thread-drop regression therefore runs against the real patched code.
