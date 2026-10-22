@@ -71,3 +71,9 @@ name = "style"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "controls"
+path = "tests/controls.rs"
+harness = false
+required-features = ["native-probes"]

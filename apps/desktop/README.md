@@ -135,6 +135,11 @@ explicit bar-domain clipping, positioned x-ticks/numeric scatter domain labels
 and Swift's visual palette. It retains unsupported placeholders for stacked
 areas, duplicate categorical grouping and non-bar clipping; it is not full
 artifact parity. Existing helper/security/provenance boundaries are unchanged.
+The [native slider follow-on](evidence/slider-interaction.md) adds dragging with
+one in-flight isolated callback and one latest pending value, new-version
+revalidation, failure rollback and lifetime fences. Precise steppers remain;
+unsupported numeric grids explain their dragging fallback. Generated handlers
+never run in the UI process, and pending values are not canonical writes.
 
 ### Conversation interface
 

@@ -53,7 +53,7 @@ fn now() -> f64 {
         .map_or(0., |d| d.as_secs_f64() * 1000.)
 }
 impl Worker {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic() -> (Self, async_channel::Receiver<Command>) {
         let (commands, events) = async_channel::bounded(2);
         let (lifetime, _) = async_channel::bounded(1);

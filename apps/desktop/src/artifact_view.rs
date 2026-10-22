@@ -1,17 +1,26 @@
 //! Native read-only artifact detail. User controls change isolated reader state only.
+#[cfg(feature = "native-probes")]
+#[path = "artifact_slider_probe.rs"]
+pub(crate) mod slider_probe;
 use crate::{
     LocalOptions,
     artifact_model::Reference,
     artifact_worker::{Command, Snapshot, Worker},
+    visual_slider::{
+        Flow as SliderFlow, Grid as SliderGrid, Intent as SliderIntent, Offer as SliderOffer,
+        Spec as SliderSpec,
+    },
 };
 use gpui_kit::base::SelectableText;
 use gpui_kit::{
-    AnyElement, ClipboardItem, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
+    AnyElement, AppContext, ClipboardItem, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task,
+    TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         checkbox::Checkbox,
+        slider::{Slider, SliderEvent, SliderState},
     },
     div,
     prelude::FluentBuilder,
@@ -19,7 +28,7 @@ use gpui_kit::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
 };
@@ -36,6 +45,17 @@ pub(crate) struct ArtifactPane {
     busy: bool,
     source: bool,
     states: VecDeque<(Reference, String)>,
+    sliders: BTreeMap<String, SliderBinding>,
+    slider_flow: SliderFlow,
+    slider_serial: u64,
+    slider_synced: Option<(u64, u64, bool)>,
+}
+struct SliderBinding {
+    serial: u64,
+    spec: SliderSpec,
+    grid: SliderGrid,
+    state: Entity<SliderState>,
+    _subscription: Subscription,
 }
 impl ArtifactPane {
     pub(crate) fn new() -> Self {
@@ -52,6 +72,10 @@ impl ArtifactPane {
             busy: false,
             source: false,
             states: VecDeque::new(),
+            sliders: BTreeMap::new(),
+            slider_flow: SliderFlow::default(),
+            slider_serial: 0,
+            slider_synced: None,
         }
     }
     pub(crate) fn preview(
@@ -178,6 +202,9 @@ impl ArtifactPane {
         }
     }
     pub(crate) fn close(&mut self) {
+        self.sliders.clear();
+        self.slider_flow.clear();
+        self.slider_synced = None;
         self.worker = None;
         self.updates = None;
         self.reference = None;
@@ -223,6 +250,9 @@ impl ArtifactPane {
                             break;
                         }
                     }
+                    let _ = view.update_in(cx, |view, _, cx| {
+                        view.reader_ended(generation, &reference, cx)
+                    });
                 }));
             }
             Err(message) => {
@@ -268,9 +298,186 @@ impl ArtifactPane {
                 self.states.pop_front();
             }
         }
+        let healthy = snapshot.live && snapshot.error.is_none();
+        let queued = self.slider_flow.finish(snapshot.version, healthy);
         self.snapshot = snapshot;
-        self.busy = false;
+        self.busy = self.slider_flow.flight.is_some();
+        if let Some(intent) = queued {
+            self.send_slider(intent, cx);
+        }
         cx.notify();
+    }
+    fn valid_slider(&self, intent: &SliderIntent) -> bool {
+        intent.generation == self.generation
+            && self.snapshot.live
+            && self.snapshot.error.is_none()
+            && self.sliders.get(&intent.id).is_some_and(|binding| {
+                binding.serial == intent.binding
+                    && self
+                        .snapshot
+                        .scene
+                        .as_ref()
+                        .and_then(|s| s.sliders.get(&intent.id))
+                        .is_some_and(|(spec, _)| *spec == binding.spec)
+                    && self
+                        .snapshot
+                        .scene
+                        .as_ref()
+                        .and_then(|s| s.controls.get(&intent.id))
+                        .is_some_and(|c| c.accepts(&json!(intent.value)))
+            })
+    }
+    fn reader_ended(&mut self, generation: u64, expected: &Reference, cx: &mut Context<Self>) {
+        if generation != self.generation
+            || !self
+                .reference
+                .as_ref()
+                .is_some_and(|r| r.same_revision(expected))
+        {
+            return;
+        }
+        self.worker = None;
+        self.updates = None;
+        self.generation += 1;
+        self.busy = false;
+        self.slider_flow.clear();
+        self.sliders.clear();
+        self.slider_synced = None;
+        self.snapshot.live = false;
+        if self.snapshot.error.is_none() {
+            self.snapshot.error = Some(crate::visual_runtime::Fault {
+                kind: "unavailable",
+                message: "The isolated reader ended. Retry or reopen for a fresh preview.".into(),
+                line: None,
+                limit: None,
+            });
+        }
+        cx.notify();
+    }
+    fn send_slider(&mut self, intent: SliderIntent, cx: &mut Context<Self>) {
+        if self.busy || !self.valid_slider(&intent) {
+            self.slider_synced = None;
+            return;
+        }
+        let version = self.snapshot.version;
+        if self.worker.as_ref().is_some_and(|w| {
+            w.command(Command::Event {
+                version,
+                id: intent.id.clone(),
+                value: json!(intent.value),
+            })
+        }) {
+            self.slider_flow.sent(intent, version);
+            self.busy = true;
+        } else {
+            self.worker = None;
+            self.updates = None;
+            self.generation += 1;
+            self.slider_flow.clear();
+            self.sliders.clear();
+            self.slider_synced = None;
+            self.snapshot.live = false;
+            self.snapshot.error = Some(crate::visual_runtime::Fault {
+                kind: "unavailable",
+                message: "Isolated preview is unavailable. Reopen it to continue.".into(),
+                line: None,
+                limit: None,
+            });
+        }
+        cx.notify();
+    }
+    fn slide(&mut self, intent: SliderIntent, cx: &mut Context<Self>) {
+        if !intent.value.is_finite() || !self.valid_slider(&intent) {
+            return;
+        }
+        if self.slider_flow.flight.is_none()
+            && self
+                .snapshot
+                .scene
+                .as_ref()
+                .and_then(|s| s.sliders.get(&intent.id))
+                .is_some_and(|(_, value)| *value == intent.value)
+        {
+            return;
+        }
+        match self.slider_flow.offer(&intent, self.busy) {
+            SliderOffer::Send => self.send_slider(intent, cx),
+            SliderOffer::Queued => cx.notify(),
+            SliderOffer::Rejected => {
+                self.slider_synced = None;
+                cx.notify();
+            }
+            SliderOffer::Unchanged => {}
+        }
+    }
+    fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let key = (self.generation, self.snapshot.version, self.snapshot.live);
+        if self.slider_synced == Some(key) {
+            return;
+        }
+        self.slider_synced = Some(key);
+        let Some(scene) = self.snapshot.scene.clone() else {
+            self.sliders.clear();
+            return;
+        };
+        self.sliders.retain(|id, b| {
+            scene
+                .sliders
+                .get(id)
+                .is_some_and(|(spec, _)| *spec == b.spec)
+        });
+        for (id, (spec, value)) in &scene.sliders {
+            let Some(grid) = SliderGrid::new(spec) else {
+                continue;
+            };
+            if !self.sliders.contains_key(id) {
+                self.slider_serial = self.slider_serial.wrapping_add(1);
+                let (serial, generation, id_) = (self.slider_serial, self.generation, id.clone());
+                let state = cx.new(|_| {
+                    SliderState::new()
+                        .min(0.)
+                        .max(grid.ticks as f32)
+                        .step(1.)
+                        .default_value(grid.position(*value))
+                });
+                let subscription = cx.subscribe(&state, move |v, _, event, cx| {
+                    if let SliderEvent::Change(value) = event
+                        && let Some(value) = grid.value(value.end())
+                    {
+                        v.slide(
+                            SliderIntent {
+                                generation,
+                                binding: serial,
+                                id: id_.clone(),
+                                value,
+                            },
+                            cx,
+                        );
+                    }
+                });
+                self.sliders.insert(
+                    id.clone(),
+                    SliderBinding {
+                        serial,
+                        spec: spec.clone(),
+                        grid,
+                        state,
+                        _subscription: subscription,
+                    },
+                );
+            }
+            let binding = &self.sliders[id];
+            let shown = self
+                .slider_flow
+                .latest(id, binding.serial)
+                .unwrap_or(*value);
+            let index = binding.grid.position(shown);
+            if binding.state.read(cx).value().end() != index {
+                binding
+                    .state
+                    .update(cx, |state, cx| state.set_value(index, window, cx));
+            }
+        }
     }
     fn draw(
         &mut self,
@@ -629,57 +836,97 @@ impl ArtifactPane {
                 row.into_any_element()
             }
             "slider" => {
-                let n = value["value"].as_f64().unwrap_or(0.);
+                let binding = self.sliders.get(&id);
+                let n = binding
+                    .and_then(|b| self.slider_flow.latest(&id, b.serial))
+                    .unwrap_or_else(|| value["value"].as_f64().unwrap_or(0.));
                 let min = value["min"].as_f64().unwrap_or(0.);
                 let max = value["max"].as_f64().unwrap_or(1.);
                 let step = value["step"].as_f64().unwrap_or(1.);
                 let minus = id.clone();
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .child(SharedString::from(format!(
-                        "{}: {}",
-                        value["label"].as_str().unwrap_or(""),
-                        crate::visual_chart_view::number(n)
-                    )))
-                    .child(
+                let mut row = div().v_flex().gap_1().child(SharedString::from(format!(
+                    "{}: {} {}",
+                    value["label"].as_str().unwrap_or(""),
+                    crate::visual_chart_view::number(n),
+                    value["unit"].as_str().unwrap_or("")
+                )));
+                if let Some(binding) = binding {
+                    let own_flight =
+                        self.slider_flow.flight.as_ref().is_some_and(|f| {
+                            f.intent.id == id && f.intent.binding == binding.serial
+                        });
+                    row = row.child(
                         div()
-                            .h_flex()
-                            .gap_2()
+                            .id(SharedString::from(format!("{path}-slider")))
+                            .test_support()
+                            .w_full()
+                            .px_3()
                             .child(
-                                Button::new(SharedString::from(format!("{path}-minus")))
-                                    .ghost()
-                                    .small()
-                                    .label("−")
-                                    .disabled(!enabled || n <= min)
-                                    .on_click(cx.listener(move |v, _, _, cx| {
-                                        v.event(
-                                            generation,
-                                            version,
-                                            minus.clone(),
-                                            json!((n - step).clamp(min, max)),
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("{path}-plus")))
-                                    .ghost()
-                                    .small()
-                                    .label("+")
-                                    .disabled(!enabled || n >= max)
-                                    .on_click(cx.listener(move |v, _, _, cx| {
-                                        v.event(
-                                            generation,
-                                            version,
-                                            id.clone(),
-                                            json!((n + step).clamp(min, max)),
-                                            cx,
-                                        )
-                                    })),
+                                Slider::new(&binding.state)
+                                    .accessibility_label(format!(
+                                        "{}: {} {}",
+                                        binding.spec.label,
+                                        crate::visual_chart_view::number(n),
+                                        binding.spec.unit
+                                    ))
+                                    .disabled(!self.snapshot.live || (self.busy && !own_flight))
+                                    .w_full(),
                             ),
-                    )
-                    .into_any_element()
+                    );
+                    if own_flight {
+                        row = row.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Updating isolated preview…"),
+                        );
+                    }
+                } else {
+                    row = row.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("This range/step uses precise steppers, not native dragging."),
+                    );
+                }
+                row.child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new(SharedString::from(format!("{path}-minus")))
+                                .ghost()
+                                .small()
+                                .label("−")
+                                .disabled(!enabled || n <= min)
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.event(
+                                        generation,
+                                        version,
+                                        minus.clone(),
+                                        json!((n - step).clamp(min, max)),
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("{path}-plus")))
+                                .ghost()
+                                .small()
+                                .label("+")
+                                .disabled(!enabled || n >= max)
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.event(
+                                        generation,
+                                        version,
+                                        id.clone(),
+                                        json!((n + step).clamp(min, max)),
+                                        cx,
+                                    )
+                                })),
+                        ),
+                )
+                .into_any_element()
             }
             "table" => {
                 let rows = value["rows"].as_array().unwrap();
@@ -843,7 +1090,8 @@ impl ArtifactPane {
     }
 }
 impl Render for ArtifactPane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_sliders(window, cx);
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let generation = self.generation;
         let mut view = div()
@@ -954,20 +1202,21 @@ impl Render for ArtifactPane {
                 .as_ref()
                 .is_some_and(|r| r.visual_supported)
             {
+                let retry_reference = reference.clone();
                 view = view.child(
                     Button::new("artifact-retry")
                         .ghost()
                         .small()
                         .label("Retry in fresh worker")
                         .disabled(self.busy)
-                        .on_click(cx.listener(move |v, _, _, cx| {
-                            if generation == v.generation
-                                && !v.busy
-                                && v.snapshot.error.is_some()
-                                && v.worker.as_ref().is_some_and(|w| w.command(Command::Retry))
-                            {
-                                v.busy = true;
-                                cx.notify();
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            if generation == v.generation && !v.busy && v.snapshot.error.is_some() {
+                                if v.worker.as_ref().is_some_and(|w| w.command(Command::Retry)) {
+                                    v.busy = true;
+                                    cx.notify();
+                                } else {
+                                    v.open(retry_reference.clone(), window, cx);
+                                }
                             }
                         })),
                 );
@@ -1069,6 +1318,54 @@ mod tests {
     }
     fn snapshot(reference: Reference) -> Snapshot {
         Snapshot{drawings:Default::default(),revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None}
+    }
+    fn slider_snapshot(version: u64, value: f64) -> Snapshot {
+        let mut s = snapshot(reference(1));
+        s.version = version;
+        s.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"slider","id":"0","label":"Load","min":0,"max":100,"step":1,"value":value}})).unwrap()));
+        s
+    }
+    #[gpui_kit::test]
+    fn slider_queue_uses_new_ack_version_and_drops_fault_replacement_close(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        let (worker, commands) = Worker::synthetic();
+        let window = cx.add_window(|window, cx| {
+            let mut p = ArtifactPane::new();
+            p.reference = Some(reference(1));
+            p.generation = 20;
+            p.worker = Some(worker);
+            p.snapshot = slider_snapshot(1, 0.);
+            p.sync_sliders(window, cx);
+            p
+        });
+        let pane = window.root(cx).unwrap();
+        pane.update(cx,|p,cx|{
+            let binding=p.sliders["0"].serial;
+            let intent=|value|SliderIntent{generation:20,binding,id:"0".into(),value};
+            p.slide(intent(0.),cx);assert!(commands.try_recv().is_err(),"programmatic/canonical values do not send");
+            p.slide(intent(1.),cx);for i in 2..=100 {p.slide(intent(f64::from(i)),cx);}
+            assert!(matches!(commands.try_recv(),Ok(Command::Event{version:1,value,..})if value==json!(1.)));assert!(commands.try_recv().is_err());
+            p.accept(20,&reference(1),slider_snapshot(1,0.),cx);assert!(p.busy&&commands.try_recv().is_err(),"same-version update is not an ack");
+            p.accept(19,&reference(1),slider_snapshot(2,1.),cx);assert!(commands.try_recv().is_err());
+            p.accept(20,&reference(1),slider_snapshot(2,1.),cx);
+            assert!(matches!(commands.try_recv(),Ok(Command::Event{version:2,value,..})if value==json!(100.)));assert!(commands.try_recv().is_err());
+            p.accept(20,&reference(1),slider_snapshot(3,100.),cx);assert!(!p.busy&&p.slider_flow.flight.is_none());
+            p.slide(intent(90.),cx);p.slide(intent(80.),cx);let _=commands.try_recv();
+            let mut failed=slider_snapshot(3,100.);failed.live=false;failed.error=Some(crate::visual_runtime::Fault{kind:"timeout",message:"synthetic failure".into(),line:None,limit:None});
+            p.accept(20,&reference(1),failed,cx);assert!(p.slider_flow.flight.is_none()&&p.slider_flow.queued.is_none());assert!(commands.try_recv().is_err());
+            p.accept(20,&reference(1),slider_snapshot(4,50.),cx);p.slide(intent(60.),cx);p.slide(intent(70.),cx);let _=commands.try_recv();
+            let mut replaced=slider_snapshot(5,60.);let mut root=(*replaced.scene.take().unwrap().root).clone();root["label"]=json!("Different control");replaced.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":root})).unwrap()));
+            p.accept(20,&reference(1),replaced,cx);assert!(!p.busy&&commands.try_recv().is_err(),"changed semantic descriptor cannot replay pending input");
+            p.accept(20,&reference(1),slider_snapshot(6,20.),cx);p.slide(intent(40.),cx);p.slide(intent(50.),cx);let _=commands.try_recv();
+            p.reader_ended(19,&reference(1),cx);assert!(p.busy);
+            p.reader_ended(20,&reference(1),cx);assert!(!p.busy&&!p.snapshot.live&&p.snapshot.scene.is_some()&&p.snapshot.error.is_some());assert!(p.slider_flow.flight.is_none()&&p.slider_flow.queued.is_none());assert!(commands.try_recv().is_err());
+            p.close();p.slide(intent(70.),cx);assert!(p.sliders.is_empty()&&p.slider_flow.flight.is_none());assert!(commands.try_recv().is_err());
+        });
     }
     #[gpui_kit::test]
     fn generation_revision_and_typed_event_fences_and_bounded_state_cache(cx: &mut TestAppContext) {

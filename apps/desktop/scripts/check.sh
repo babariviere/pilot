@@ -17,3 +17,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test disclosure
 # Native production-root rounded geometry, motion, cancellation and cached-history checks.
 bash scripts/cargo.sh clippy --locked --features native-probes --test style -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test style
+# Actual native gestures over a faux isolated-reader channel, never Local actions.
+bash scripts/cargo.sh clippy --locked --features native-probes --test controls -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test controls
