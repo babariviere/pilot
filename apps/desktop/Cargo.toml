@@ -89,3 +89,9 @@ name = "shell"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "navigation"
+harness = false
+test = false
+required-features = ["native-probes"]

@@ -127,6 +127,7 @@ impl ListDelegate for ProjectList {
 }
 
 pub(crate) struct Overview {
+    scroll: gpui_kit::ScrollHandle,
     projects: Arc<Vec<Project>>,
     chats: Arc<Vec<Chat>>,
     project: Option<String>,
@@ -145,6 +146,7 @@ impl EventEmitter<ShellEvent> for Overview {}
 impl Overview {
     pub(crate) fn new() -> Self {
         Self {
+            scroll: gpui_kit::ScrollHandle::default(),
             projects: Arc::new(Vec::new()),
             chats: Arc::new(Vec::new()),
             project: None,
@@ -262,6 +264,14 @@ impl Overview {
                     ))),
             )
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Chat(id.clone()))))
+    }
+    pub(crate) fn scroll_position(&self) -> f32 {
+        f32::from(self.scroll.offset().y)
+    }
+    pub(crate) fn restore_scroll(&mut self, y: f32, cx: &mut Context<Self>) {
+        self.scroll
+            .set_offset(gpui_kit::point(px(0.), px(crate::navigation::offset(y))));
+        cx.notify();
     }
 }
 impl Render for Overview {
@@ -450,6 +460,8 @@ impl Render for Overview {
             .min_h_0()
             .min_w_0()
             .overflow_y_scrollbar()
+            .id("overview-scroll")
+            .with_scroll_handle(&self.scroll)
             .child(body)
     }
 }

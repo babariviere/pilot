@@ -291,6 +291,43 @@ impl TranscriptView {
             .update(cx, |state, cx| state.scroll_to_end(cx));
         cx.notify();
     }
+    pub(crate) fn reading_mark(&self, cx: &App) -> Option<crate::navigation::ReadingMark> {
+        let s = self.scroller.read(cx);
+        let top = s.logical_scroll_top();
+        self.transcript
+            .messages()
+            .get(top.item_ix)
+            .map(|m| crate::navigation::ReadingMark {
+                message: m.id(),
+                offset: f32::from(top.offset_in_item),
+                following: s.is_following_tail(),
+            })
+    }
+    pub(crate) fn restore_reading(
+        &mut self,
+        mark: crate::navigation::ReadingMark,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if mark.following {
+            self.latest(cx);
+            return true;
+        }
+        let Some(ix) = self
+            .transcript
+            .messages()
+            .iter()
+            .position(|m| m.id() == mark.message)
+        else {
+            return false;
+        };
+        let offset = if mark.offset.is_finite() {
+            mark.offset.clamp(0., 1_000_000.)
+        } else {
+            0.
+        };
+        self.scroller
+            .update(cx, |s, cx| s.restore_anchor(ix, px(offset), cx))
+    }
 
     pub(crate) fn history_scope(&mut self, generation: u64) {
         if self.history_scope != generation {
