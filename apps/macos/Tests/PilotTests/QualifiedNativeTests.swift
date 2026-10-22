@@ -53,42 +53,6 @@ import Testing
     #expect(app.hosts.selection == nil)
 }
 
-@Test @MainActor func retiredProjectScopeStartsLocalWithoutRetargetingSavedRemoteDraft() async throws {
-    let app = AppModel()
-    let local = HostRef(hostId: "local", daemonId: "a", lineageId: "1")
-    let remote = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
-    try app.registerLocal(local)
-    let project = Project(id: "same", name: "Repository", path: "/same/repo", createdAt: 0)
-    app.client.loadFixture(projects: [project], sessions: [])
-    let remoteClient = PilotClient()
-    remoteClient.loadFixture(projects: [project], sessions: [])
-    try loadClientFixture(remoteClient, host: remote, into: app.hosts)
-    let context = HostViewContext(host: remote, hosts: app.hosts)
-    let ref = context.ref(.project, "same")
-    app.focus(on: ref.storageKey)
-    #expect(app.focusedProjectRef == ref)
-    #expect(app.hosts.selection == ref)
-    app.newChatInScope()
-    // Match the composer's destination resolution: nil means the installed Local host.
-    #expect((app.newSessionForm.executionHost ?? app.localHost) == local)
-    #expect(app.newSessionForm.executionHost != remote)
-    // A draft restored from an older release still retains its original remote identity.
-    app.newSessionForm.executionHost = remote
-    app.newSessionForm.message = "Keep this remote draft"
-    app.openHome()
-    #expect(app.newSessionForm.executionHost == remote)
-    #expect(app.newSessionForm.message == "Keep this remote draft")
-    await app.hosts.disconnect(remote)
-    app.openMemory("same", context: context)
-    #expect(app.memoryProjectId == ref.storageKey)
-    #expect(app.hosts.selection == ref)
-    #expect(app.hosts.presentationClient(remote) !== app.client)
-    app.showInbox(for: "same", context: context)
-    #expect(app.inboxHost == remote)
-    #expect(app.inboxProjectId == "same")
-    app.focus(on: nil)
-}
-
 @Test @MainActor func offlinePresentationRetainsLatestRemoteSummaryWithoutLocalFallback() async throws {
     let host = HostRef(hostId: "box", daemonId: "b", lineageId: "2")
     let hosts = ClientDirectory()

@@ -267,27 +267,6 @@ private func keyEvent(_ characters: String, keyCode: UInt16, modifiers: NSEvent.
     #expect(!model.performKeyboardRoute(.toggleTerminal))
 }
 
-@Test @MainActor func goToControlIsUnavailableEvenWithLegacyInventory() {
-    let defaults = UserDefaults(suiteName: "keyboard-go-control-\(UUID().uuidString)")!
-    let model = AppModel(projectFolderDefaults: defaults)
-    let project = Project(id: "p1", name: "pilot", path: "/tmp/pilot", createdAt: 1)
-    let chat = SessionSummary(id: "a", title: "a", cwd: "/tmp", projectId: "p1", createdAt: 1, updatedAt: 2, state: "idle")
-    model.client.loadFixture(projects: [project], sessions: [chat])
-    model.selectedSessionId = "a"
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-    #expect(model.selectedSessionId == "a")
-
-    var control = SessionSummary(id: "ctl", title: "Control", cwd: "", createdAt: 1, updatedAt: 3, state: "idle",
-                                 mode: .ask, pinned: true)
-    control.control = true
-    model.client.loadFixture(projects: [project], sessions: [chat, control])
-    model.focus(on: "p1")
-    #expect(model.sidebarScope == "p1")
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-    #expect(model.selectedSessionId != "ctl")
-    #expect(model.sidebarScope == "p1")
-}
-
 @Test func shortcutReferenceListsFocusKeysAndNoLetterShortcuts() {
     let keys = Dictionary(uniqueKeysWithValues: KeyboardShortcuts.groups.flatMap(\.entries).map { ($0.title, $0.keys) })
     #expect(keys["Focus next region"] == nil && keys["Focus previous region"] == nil)

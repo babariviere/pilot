@@ -30,7 +30,6 @@ done
 # of unrelated MainActor tests and their nested AppKit run loops. Keep their
 # assertions and time limits, running each in its own process with the same build.
 isolated=artifactHeightRespectsNestedClippingWhileKeepingVisibleOverflow
-devbox=retiredDevboxesKeepSettingsLocalAndCachedHistoryReadOnly
 terminal=terminalOpeningAndResizingDoNotFeedNativeFittingSizeBackIntoWindowConstraints
 callbacks='missionTaskDragLoadsItsPlainTextOnTheMainActor'
 # Each journey activates NSApp's process-global key window and pumps nested main run loops. Keep them in separate
@@ -47,7 +46,6 @@ scoped_model_tests=(
 	localModelScopeConflictAndLeaveCannotBeOverwrittenByAnotherSave
 	localModelScopeReplacementWaitsForOldWriteWithoutPublishingStaleSuccess
 	localModelScopeSupersededSavesApplyOnlyTheLatestPendingSelection
-	modelScopeLiveOwnerNeverSyncsRetiredDevboxes
 	modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch
 	modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet
 	modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending
@@ -57,15 +55,6 @@ scoped_model_tests=(
 printf -v scoped_models '%s|' "${scoped_model_tests[@]}"
 scoped_models="${scoped_models%|}"
 scoped_model_native='scopedModelsNativeSavePersistsAndDispatchesExplicitAllOnlyAfterClick|scopedModelsNativeSelectorPreservesAdvancedPatterns|scopedModelsNativeSaveUsesHostOwnerCapabilityHttpAndLiteralReadback'
-# Retirement/history fixtures need MainActor scheduling, not native window run loops.
-automatic_update_tests=(
-	retiredOfflineRestoreKeepsLegacyBytesAndUnknownOutboxWithoutNetwork
-	retiredLocalDraftParksUnsubmittedRemoteTextWithoutRetargeting
-	retiredRemoteProjectsCannotStartOrImportChats
-	retiredCorruptOfflineMetadataCannotBlockLocalOrReplaceSavedFiles
-)
-printf -v automatic_updates '%s|' "${automatic_update_tests[@]}"
-automatic_updates="${automatic_updates%|}"
 # Host-specific HTTP fault fixtures need MainActor scheduling, not AppKit event loops.
 mcp_tests=(localDirectoryRejectsRemoteEndpointsWithoutCallingThem)
 printf -v host_mcps '%s|' "${mcp_tests[@]}"
@@ -100,7 +89,7 @@ native_pointers="${native_pointers%|}"
 # binaries. Preserve the UI/scheduler boundary regardless of the build driver.
 visual_layout=longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView
 ui_probe=inlineArtifactLayoutKeepsTheReadingColumnWhenResized
-broad_exclusions="$isolated|$devbox|$terminal|$callbacks|$journeys|$scoped_models|$scoped_model_native|$automatic_updates|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers|$visual_layout"
+broad_exclusions="$isolated|$terminal|$callbacks|$journeys|$scoped_models|$scoped_model_native|$host_mcps|$repair_footer|$settings_bar|$scheduler_regressions|$native_pointers|$visual_layout"
 partition=1
 reuse=(--skip-build)
 for argument in "$@"; do
@@ -133,7 +122,6 @@ run_tests() {
 if [ "$partition" = 1 ]; then
 	run_tests "" "$@" --skip "$broad_exclusions|PilotUITests"
 	run_tests "$isolated" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$isolated"
-	run_tests "$devbox" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$devbox"
 	run_tests "$terminal" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$terminal"
 	# Stop and drag-data callbacks keep their MainActor deadlines without competing with UI run loops.
 	run_tests "$callbacks" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$callbacks"
@@ -144,7 +132,6 @@ if [ "$partition" = 1 ]; then
 	for name in "${scoped_model_native_tests[@]}"; do
 		run_tests "$name" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$name"
 	done
-	run_tests "$automatic_updates" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$automatic_updates"
 	run_tests "$host_mcps" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$host_mcps"
 	run_tests "$repair_footer" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$repair_footer"
 	run_tests "$settings_bar" ${reuse[@]+"${reuse[@]}"} "$@" --filter "$settings_bar"

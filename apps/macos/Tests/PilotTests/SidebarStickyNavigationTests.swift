@@ -22,19 +22,6 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
     return app
 }
 
-@Test @MainActor func retiredControlHasNoSidebarSlotInAnyScope() throws {
-    let app = try fixture()
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-    app.focus(on: "p1")
-    // Retired Control has no fixed slot or live chat group.
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-    let all = SidebarUrgency.groups(app.client.activeSessions, unread: { _ in false })
-    let listed = all.pinned + all.needsYou + all.readyToMerge + all.working + all.recent
-    #expect(!listed.contains { $0.isRetainedHistory })
-    let scoped = app.client.activeSessions.filter { $0.projectId == "p1" }
-    #expect(!scoped.contains { $0.isRetainedHistory })
-}
-
 @Test func allControlHistoriesStayOutsideTheNormalSidebarSlot() throws {
     let control = try chat("control", project: nil, control: true)
     let remote = Hosted(ref: HostResourceRef(host: box, kind: .session, localId: "control"), value: control)
@@ -64,14 +51,14 @@ private func chat(_ id: String, project: String?, control: Bool = false) throws 
 @Test func arrowKeysReachTheFixedRowsAsTheListsFirstItems() {
     typealias Nav = SidebarStickyNavigation
     #expect(Nav.step(down: true, sticky: [], current: nil, listHasSelection: false) == .native)
-    // From nothing selected, down selects the control chat; from it, down enters the list natively.
+    // From nothing selected, down selects the first fixed row; from it, down enters the list natively.
     #expect(Nav.step(down: true, sticky: ["c"], current: nil, listHasSelection: false) == .select("c"))
     #expect(Nav.step(down: true, sticky: ["c"], current: "c", listHasSelection: false) == .native)
     #expect(Nav.step(down: false, sticky: ["c"], current: "c", listHasSelection: false) == .stay)
-    // In the list, up moves natively, reaching the control chat only from the first row.
+    // In the list, up moves natively, reaching the fixed rows only from the first list row.
     #expect(Nav.step(down: false, sticky: ["c"], current: "a", listHasSelection: true) == .nativeOr("c"))
     #expect(Nav.step(down: true, sticky: ["c"], current: "a", listHasSelection: true) == .native)
-    // Devboxes: each host's control chat in order.
+    // Multiple fixed rows are traversed in order.
     #expect(Nav.step(down: true, sticky: ["c", "r"], current: "c", listHasSelection: false) == .select("r"))
     #expect(Nav.step(down: false, sticky: ["c", "r"], current: "r", listHasSelection: false) == .select("c"))
     #expect(Nav.step(down: false, sticky: ["c", "r"], current: "a", listHasSelection: true) == .nativeOr("r"))

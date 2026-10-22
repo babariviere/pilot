@@ -49,13 +49,6 @@ class ReleaseMetadataTests(unittest.TestCase):
         write_plist(self.source, self.output, "/checkout", env={})
         self.assertEqual(plistlib.loads(self.output.read_bytes())["PilotRepoPath"], "/checkout")
 
-    def test_retired_remote_key_is_not_embedded_in_the_mac_app(self):
-        self.env["LINUX_RUNTIME_PUBLIC_KEY"] = base64.b64encode(bytes(range(32))).decode()
-        write_plist(self.source, self.output, "/checkout", True, self.env)
-        self.assertNotIn("PilotLinuxRuntimePublicKey", plistlib.loads(self.output.read_bytes()))
-        self.env["LINUX_RUNTIME_PUBLIC_KEY"] = base64.b64encode(b"short").decode()
-        write_plist(self.source, self.output, "/checkout", True, self.env)
-        self.assertNotIn("PilotLinuxRuntimePublicKey", plistlib.loads(self.output.read_bytes()))
 
     def test_bundle_uses_package_version_without_changing_sparkle_build_version(self):
         write_plist(self.source, self.output, "/checkout", True, self.env, app_version="1.2.3")

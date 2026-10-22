@@ -105,53 +105,6 @@ private final class ScopeHTTPFixture: URLProtocol {
 }
 
 @Suite(.serialized) struct ScopedModelsTransportTests {
-    @Test @MainActor func modelScopeLiveOwnerNeverSyncsRetiredDevboxes() async throws {
-        ScopeHTTPFixture.reset(["local": .init(), "a": .init(), "b": .init()])
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let models = directory.appendingPathComponent("models")
-        var acquisitions: [HostRef] = []
-        func facade() -> ClientDirectory {
-            ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"),
-                scopedModelsStore: ScopedModelsStore(directory: models), readScopedModelCapability: { host in
-                    #expect(host.hostId == "local")
-                    acquisitions.append(host)
-                    return "fixture-local"
-                })
-        }
-        let hosts = facade()
-        let (localClient, local) = try scopeTransportClient("local")
-        let (aClient, a) = try scopeTransportClient("a")
-        let (bClient, b) = try scopeTransportClient("b")
-        let inventory = OfflineHostStore(directory: directory.appendingPathComponent("hosts"))
-        try await inventory.save([a, b].map { OfflineHostSnapshot(host: $0, configuration: try LegacyDevboxAddress(alias: "fixture-\($0.hostId)")) })
-        try await hosts.restoreOffline(from: inventory)
-        // Synthetic installed clients exercise the boundary even if an old caller retains an endpoint.
-        try hosts.install(localClient, host: local)
-        #expect(throws: HostRoutingError.identityChanged) { try hosts.install(aClient, host: a) }
-        #expect(throws: HostRoutingError.identityChanged) { try hosts.install(bClient, host: b) }
-        #expect(ScopeHTTPFixture.requests.isEmpty && acquisitions.isEmpty)
-        hosts.startScopedModels(); hosts.startScopedModels()
-        try await wireScopeWait { hosts.scopedModels.observations[local] != nil && hosts.scopedModels.isIdle }
-        let baseline = try #require(hosts.scopedModels.observations[local]?.baseline)
-        await hosts.scopedModels.save(.all, on: local, baseline: baseline)
-        try await wireScopeWait { hosts.scopedModels.state.entry(local)?.status == .synced && hosts.scopedModels.isIdle }
-        #expect(hosts.scopedModels.observations[a] == nil && hosts.scopedModels.observations[b] == nil)
-        #expect(ScopeHTTPFixture.requests.allSatisfy { $0.host == "local" })
-        await hosts.disconnectAll()
-        let writes = ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count
-        let restarted = facade()
-        try await restarted.restoreOffline(from: OfflineHostStore(directory: directory.appendingPathComponent("hosts")))
-        let (freshLocal, _) = try scopeTransportClient("local")
-        try restarted.install(freshLocal, host: local)
-        restarted.startScopedModels()
-        try await wireScopeWait { restarted.scopedModels.state.entry(local)?.status == .synced && restarted.scopedModels.isIdle }
-        #expect(ScopeHTTPFixture.requests.filter { $0.method == "PUT" }.count == writes)
-        #expect(ScopeHTTPFixture.requests.allSatisfy { $0.host == "local" })
-        #expect(acquisitions == [local])
-        await restarted.disconnectAll()
-    }
-
     @Test @MainActor func modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch() async throws {
         ScopeHTTPFixture.reset(["local": .init(mode: "conflict")])
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

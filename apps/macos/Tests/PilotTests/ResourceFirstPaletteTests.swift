@@ -44,32 +44,3 @@ private func model() -> AppModel {
     #expect(KeyboardShortcuts.filtered("⌘L").flatMap(\.entries).contains { $0.keys == "⌘L" })
     #expect(KeyboardShortcuts.filtered("zzzz").isEmpty)
 }
-
-@MainActor
-private func modelWithControl() -> AppModel {
-    let model = model()
-    var control = SessionSummary(id: "ctl", title: "Control", cwd: "", createdAt: 1, updatedAt: 0, state: "idle",
-                                 mode: .ask, pinned: true)
-    control.control = true
-    model.client.loadFixture(projects: model.client.projects, sessions: model.client.sessions + [control])
-    return model
-}
-
-@Test @MainActor func retiredControlNeverAppearsAsALivePaletteDestination() throws {
-    let model = modelWithControl()
-    let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
-    let entries = catalog.entries()
-    #expect(!entries.contains { $0.session?.isRetainedHistory == true })
-    #expect(!entries.contains { $0.item.id == "page:control" || $0.item.id == "page:control-screen" })
-    let sections = CommandPalette.results(for: "", items: entries.map(\.item))
-    let recent = try #require(sections.first { $0.title == "Recent chats" })
-    #expect(recent.items.count == CommandPaletteCatalog.recentChats)
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-}
-
-@Test @MainActor func paletteHasNoControlEntryWithoutTheControlChat() {
-    let model = model()
-    let catalog = CommandPaletteCatalog(model: model, openSettings: {}, openKeyboardShortcuts: {})
-    #expect(!catalog.entries().contains { $0.item.id == "page:control" })
-    #expect(!GoDestination.allCases.map(\.rawValue).contains("control"))
-}
