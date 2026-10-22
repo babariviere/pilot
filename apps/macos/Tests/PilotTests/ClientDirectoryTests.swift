@@ -39,6 +39,11 @@ private let savedRemoteHost = HostRef(hostId: "box", daemonId: "linux", lineageI
         #expect(try clients.endpoint(localHost) === live)
         await clients.disconnectAll()
         #expect(clients.localHost == nil)
+        #expect(clients.available.isEmpty)
+        #expect(!live.connected)
+        #expect(throws: HostRoutingError.disconnected) { try clients.endpoint(localHost) }
+        // Shutdown is final and cannot be undone by a late installation.
+        #expect(throws: HostRoutingError.identityChanged) { try clients.install(live, host: localHost) }
         try? FileManager.default.removeItem(at: directory)
     } catch {
         await clients.disconnectAll()

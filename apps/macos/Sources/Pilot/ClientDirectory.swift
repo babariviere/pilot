@@ -508,6 +508,8 @@ final class ClientDirectory: ObservableObject {
         await reconciliationTask?.value
         for task in diagnosticReads.values { await task.value }
         await scopedModels.stopAndWait()
+        // Drain work before removing the endpoint so its task handles remain available to join.
+        if let host = localHost { removeConnection(host) }
     }
 
     /// Removal keeps last-known summaries. It does not invent an execution outcome.
