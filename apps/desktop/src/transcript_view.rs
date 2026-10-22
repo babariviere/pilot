@@ -17,6 +17,8 @@ use gpui_kit::{
 use crate::model::{Message, TICK_MS, Transcript};
 
 gpui_kit::actions!(fixture, [Quit, FocusComposer]);
+pub(crate) struct ArtifactOpen(pub(crate) crate::artifact_model::Reference);
+impl gpui_kit::EventEmitter<ArtifactOpen> for TranscriptView {}
 
 pub struct TranscriptView {
     transcript: Transcript,
@@ -132,7 +134,7 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextViewState>> {
         let row = &self.transcript.messages()[ix];
-        if row.work_data().is_some() {
+        if row.work_data().is_some() || row.artifact_data().is_some() {
             return None;
         }
         // User input is not Markdown: a typed image URL cannot trigger a fetch.
@@ -210,7 +212,7 @@ impl TranscriptView {
         );
         for ix in 0..self.transcript.messages().len() {
             let row = &self.transcript.messages()[ix];
-            let state = if row.work_data().is_some() {
+            let state = if row.work_data().is_some() || row.artifact_data().is_some() {
                 self.text_subscriptions.remove(&row.id());
                 None
             } else if let Some((old, state)) = retained.remove(&row.id()) {
@@ -386,8 +388,36 @@ impl TranscriptView {
         }
         cx.notify();
     }
-    fn render_row(&self, ix: usize, cx: &App) -> impl IntoElement + use<> {
+    fn render_row(
+        &self,
+        ix: usize,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+    ) -> impl IntoElement + use<> {
         let row = &self.transcript.messages()[ix];
+        if let Some(reference) = row.artifact_data() {
+            let reference = (**reference).clone();
+            return div()
+                .id(("message", row.id()))
+                .w_full()
+                .min_w_0()
+                .p_3()
+                .border_1()
+                .rounded_md()
+                .border_color(cx.theme().border)
+                .child(
+                    Button::new(("open-artifact", row.id()))
+                        .ghost()
+                        .label(SharedString::from(format!(
+                            "Open {} · r{}",
+                            reference.title, reference.revision
+                        )))
+                        .on_click(move |_, _, cx| {
+                            let _ =
+                                owner.update(cx, |_, cx| cx.emit(ArtifactOpen(reference.clone())));
+                        }),
+                );
+        }
         if let Some(view) = self.work_ui.groups.get(&row.id()) {
             return div()
                 .id(("message", row.id()))
@@ -472,7 +502,11 @@ impl Render for TranscriptView {
                             self.scroller.clone(),
                             move |ix, _, cx| {
                                 weak.upgrade()
-                                    .map(|view| view.read(cx).render_row(ix, cx).into_any_element())
+                                    .map(|view| {
+                                        view.read(cx)
+                                            .render_row(ix, cx, weak.clone())
+                                            .into_any_element()
+                                    })
                                     .unwrap_or_else(|| div().into_any_element())
                             },
                         )
@@ -503,7 +537,7 @@ impl Render for TranscriptView {
                     .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
             .child(viewport.child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
-                    weak.upgrade().map(|view| view.read(cx).render_row(ix, cx).into_any_element())
+                    weak.upgrade().map(|view| view.read(cx).render_row(ix, cx,weak.clone()).into_any_element())
                         .unwrap_or_else(|| div().into_any_element())
                 }).with_list_style(list_style).jump_button(false)))
             .child(div().v_flex().p_4().gap_2().border_t_1().border_color(cx.theme().border)

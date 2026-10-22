@@ -214,7 +214,20 @@ impl LiveTranscript {
         }
         let kind = bounded(entry["kind"].as_str().unwrap_or("unknown"), 80);
         let mut rows = Vec::new();
-        if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
+        if kind == "pilot.artifact" {
+            if let Some(reference) =
+                crate::artifact_model::Reference::pinned(&entry["data"]["artifact"])
+            {
+                rows.push(Message::artifact(id * 64, reference));
+            } else {
+                self.unsupported += 1;
+                rows.push(Message::live(
+                    id * 64,
+                    "Artifact unavailable".into(),
+                    "[Invalid artifact publication metadata; no lookup performed.]".into(),
+                ));
+            }
+        } else if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
             for (ix, value) in models.iter().take(32).enumerate() {
                 if ix == 0
                     && let Some(key) = promote
@@ -679,6 +692,45 @@ fn change_message(message: &mut Value, change: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn canonical_publication_keeps_pinned_card_identity_and_never_parses_body_links() {
+        let mut model = LiveTranscript::default();
+        let reference =
+            json!({"id":"synthetic-art","sessionId":"owner","revision":3,"title":"Synthetic"});
+        let publication =
+            json!({"id":3,"kind":"pilot.artifact","data":{"artifact":reference},"model":[]});
+        let user = json!({"id":2,"kind":"pi.user","model":[{"role":"user","content":[{"type":"text","text":"{\"artifact\":{\"id\":\"body-only\",\"revision\":1}}"}]}]});
+        model.apply(&json!({"type":"snapshot","entries":[user,publication.clone()]}));
+        let rows = model.rows();
+        assert_eq!(
+            rows.iter().filter(|r| r.artifact_data().is_some()).count(),
+            1
+        );
+        let row = rows.iter().find(|r| r.artifact_data().is_some()).unwrap();
+        let key = row.id();
+        assert_eq!(row.artifact_data().unwrap().revision, 3);
+        assert_eq!(row.artifact_data().unwrap().session, "owner");
+        model.apply(&json!({"type":"entry_appended","entry":publication}));
+        let rows = model.rows();
+        assert_eq!(
+            rows.iter().filter(|r| r.artifact_data().is_some()).count(),
+            1
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.artifact_data().is_some())
+                .unwrap()
+                .id(),
+            key
+        );
+    }
+    #[test]
+    fn malformed_publication_does_not_become_an_open_action() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[{"id":1,"kind":"pilot.artifact","data":{"artifact":{"id":"../escape","sessionId":"owner","revision":0,"title":"Bad"}},"model":[]}]}));
+        assert!(model.rows().iter().all(|r| r.artifact_data().is_none()));
+        assert_eq!(model.unsupported, 1);
+    }
     fn entry(id: u64, text: &str) -> Value {
         json!({"id":id,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":text}]}]})
     }

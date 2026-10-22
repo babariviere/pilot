@@ -19,6 +19,7 @@ pub(crate) struct Message {
     work: Option<Arc<crate::tool_presentation::Work>>,
     tool_ids: Option<Arc<Vec<String>>>,
     work_note: bool,
+    artifact: Option<Arc<crate::artifact_model::Reference>>,
 }
 
 impl Message {
@@ -42,6 +43,7 @@ impl Message {
             work: None,
             tool_ids: None,
             work_note: false,
+            artifact: None,
         }
     }
     pub(crate) fn id(&self) -> u64 {
@@ -77,6 +79,18 @@ impl Message {
     }
     pub(crate) fn work_data(&self) -> Option<&Arc<crate::tool_presentation::Work>> {
         self.work.as_ref()
+    }
+    pub(crate) fn artifact_data(&self) -> Option<&Arc<crate::artifact_model::Reference>> {
+        self.artifact.as_ref()
+    }
+    pub(crate) fn artifact(id: u64, reference: crate::artifact_model::Reference) -> Self {
+        let mut row = Self::live(
+            id,
+            "Artifact".into(),
+            format!("{} · r{}", reference.title, reference.revision),
+        );
+        row.artifact = Some(Arc::new(reference));
+        row
     }
     pub(crate) fn tool_ids(&self) -> Option<&[String]> {
         self.tool_ids.as_ref().map(|ids| ids.as_slice())
@@ -216,6 +230,7 @@ impl Transcript {
             work: None,
             tool_ids: None,
             work_note: false,
+            artifact: None,
         });
     }
 
@@ -299,6 +314,7 @@ fn history_message(ix: usize) -> Message {
         work: None,
         tool_ids: None,
         work_note: false,
+        artifact: None,
     }
 }
 

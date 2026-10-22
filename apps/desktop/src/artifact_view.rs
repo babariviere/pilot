@@ -186,7 +186,12 @@ impl ArtifactPane {
         self.busy = false;
         self.source = false;
     }
-    fn open(&mut self, reference: Reference, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open(
+        &mut self,
+        reference: Reference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.owner.as_deref() != Some(&reference.session) {
             return;
         }
@@ -423,6 +428,25 @@ impl ArtifactPane {
                     .filter_map(|s| s["name"].as_str())
                     .map(str::len)
                     .sum::<usize>()
+                    + value["x"]
+                        .as_array()
+                        .map(|labels| {
+                            if labels.len() <= 12 {
+                                labels
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::len)
+                                    .sum::<usize>()
+                            } else {
+                                [labels.first(), labels.last()]
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(Value::as_str)
+                                    .map(str::len)
+                                    .sum::<usize>()
+                            }
+                        })
+                        .unwrap_or(0)
                     + 1024
             }
             "button" | "toggle" | "slider" | "link" => value["label"].as_str().map_or(0, str::len),

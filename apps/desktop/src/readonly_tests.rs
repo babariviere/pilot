@@ -3,6 +3,33 @@ use gpui_kit::{
     Bounds, ScrollDelta, TestAppContext, WindowBounds, WindowOptions, base::TextSelection, point,
     px, size, test::TestWindowExt,
 };
+#[gpui_kit::test]
+fn inline_artifact_card_skips_parser_and_emits_only_its_pinned_reference(cx: &mut TestAppContext) {
+    use std::{cell::RefCell, rc::Rc};
+    let reference = crate::artifact_model::Reference {
+        id: "synthetic-art".into(),
+        session: "owner".into(),
+        revision: 3,
+        title: "Synthetic publication".into(),
+        kind: "unknown".into(),
+    };
+    let (handle, view) = setup(cx, vec![Message::artifact(42, reference.clone())]);
+    assert!(view.read_with(cx, |v, _| v.text_states[0].is_none()));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&view, move |_, event: &ArtifactOpen, _| {
+            observed.borrow_mut().push(event.0.clone())
+        })
+    });
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("open-artifact", 42u64), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(&*events.borrow(), &[reference]);
+}
 
 pub(super) fn setup(
     cx: &mut TestAppContext,

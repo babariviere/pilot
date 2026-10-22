@@ -46,7 +46,13 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
     view = view.child(legend);
     let (low, high) = chart.range;
     let caption = format!("{} to {} {}", number(low), number(high), chart.unit);
-    let ends = chart.x_ends.clone();
+    let labels = chart.labels.clone();
+    let band = labels.len() == 1
+        || (chart.kind == "bar"
+            && chart
+                .series
+                .first()
+                .is_some_and(|s| s.points.len() == labels.len()));
     view.child(
         div().w_full().h(px(height)).overflow_hidden().child(
             canvas(
@@ -138,10 +144,18 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, cx: &Context<T>) -> AnyEleme
             .h_flex()
             .justify_between()
             .gap_2()
+            .px_3()
+            .min_w_0()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child(SharedString::from(ends.0))
-            .child(SharedString::from(ends.1)),
+            .children(labels.into_iter().map(|label| {
+                let text = div().min_w_0().truncate().child(SharedString::from(label));
+                if band {
+                    text.flex_1().text_center()
+                } else {
+                    text
+                }
+            })),
     )
     .child(
         div()
