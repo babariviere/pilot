@@ -1,0 +1,454 @@
+//! Bounded window navigation against production views, never a live daemon or writer.
+use super::*;
+use crate::navigation::{Location, Target};
+use gpui_kit::{
+    Bounds, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions,
+    component::{Theme, ThemeMode},
+    point, size,
+    test::TestWindowExt,
+};
+use serde_json::json;
+fn rows(first: u64) -> Vec<Message> {
+    (first..first + 20)
+        .map(|id| {
+            Message::live(
+                id,
+                "assistant".into(),
+                format!(
+                    "Synthetic read marker {id} 👩‍💻 e\u{301}.\n\n{}",
+                    "Keep the bounded source and a stable reading position. ".repeat(10)
+                ),
+            )
+        })
+        .collect()
+}
+fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
+    for _ in 0..32 {
+        cx.advance_clock(Duration::from_millis(16));
+        cx.run_until_parked();
+        cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+    }
+}
+fn publish(
+    cx: &mut HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+    v: &Entity<LocalViewer>,
+    generation: u64,
+    first: u64,
+) {
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            let mut s = v.state.clone();
+            s.generation = generation;
+            s.rows = rows(first);
+            s.loaded = true;
+            s.chat_status = "Synthetic loaded projection".into();
+            s.cursor = Some(first);
+            v.accept(s, w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+}
+pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
+    let captures = std::env::var_os("PILOT_NEXT_NAVIGATION_DIR").map(std::path::PathBuf::from);
+    if let Some(d) = &captures {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (client, reads) = LocalClient::synthetic_commands();
+            let (writer, writes) = Interaction::recording();
+            let catalog=crate::local_model::projects(&json!([{"id":"a","name":"Synthetic Atlas","path":"/synthetic/shared"},{"id":"b","name":"Synthetic Boreal","path":"/synthetic/shared"}])).unwrap();
+            let mut chats=vec![crate::local_model::chat(&json!({"id":"synthetic","title":"Atlas conversation","projectId":"a","cwd":"/synthetic/shared","state":"idle"})).unwrap(),crate::local_model::chat(&json!({"id":"other","title":"Boreal conversation","projectId":"b","cwd":"/synthetic/shared","state":"idle"})).unwrap(),crate::local_model::chat(&json!({"id":"archived","title":"Atlas archived","projectId":"a","archivedAt":1,"state":"idle"})).unwrap()];
+            for ix in 0..80 {
+                chats.push(crate::local_model::chat(&json!({"id":format!("chat{ix}"),"title":format!("{} row {ix}",if ix%2==0{"Atlas"}else{"Boreal"}),"projectId":if ix%2==0{"a"}else{"b"},"state":"idle"})).unwrap());
+            }
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(600.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                            v.client = Some(client);
+                            v.writer = Some(writer.clone());
+                            v.editor
+                                .update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                            v.generation = 10;
+                            v.state.generation = 10;
+                            v.state.loaded = true;
+                            v.state.projects = Arc::new(catalog);
+                            v.state.projects_loaded = true;
+                            v.state.chats = Arc::new(chats);
+                            v.transcript.update(cx, |t, cx| {
+                                t.history_scope(10);
+                                t.replace_readonly(rows(100), true, cx);
+                            });
+                            v.rebuild_nav(w, cx);
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            settle(cx, h);
+            for _ in 0..24 {
+                cx.update_window(h, |_, w, cx| {
+                    w.scroll(
+                        "viewport",
+                        ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                        cx,
+                    )
+                })
+                .unwrap();
+                settle(cx, h);
+                if cx
+                    .update_window(h, |_, w, _| w.try_find(("copy-source", 100u64)).is_some())
+                    .unwrap()
+                {
+                    break;
+                }
+            }
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    v.state.cursor = Some(100);
+                    v.show_project("a".into(), w, cx);
+                    let chat = v.state.chats[0].clone();
+                    assert!(v.open(chat, w, cx));
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            let retained = cx.update(|cx| v.read(cx).transcript.read(cx).history_probe_row(100));
+            cx.update_window(h, |_, w, cx| {
+                let text = v.read(cx).editor.read(cx).shell_probe().0;
+                text.update(cx, |t, cx| {
+                    t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+                });
+                let old = v.read(cx).location(cx);
+                w.press("secondary-[", cx);
+                assert_eq!(v.read(cx).location(cx), old);
+                text.update(cx, |t, cx| {
+                    t.unmark_text(w, cx);
+                    t.set_value("Native draft 👩‍💻 e\u{301}", w, cx);
+                });
+                w.press("secondary-[", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(v.read(cx).page, Page::Project("a".into()));
+                w.press("secondary-]", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(v.read(cx).page, Page::Chat);
+                assert_eq!(
+                    v.read(cx)
+                        .transcript
+                        .read(cx)
+                        .history_probe_row(100)
+                        .entity_id(),
+                    retained.entity_id()
+                );
+                let list = v.read(cx).chats.clone();
+                list.update(cx, |l, cx| l.set_query("Atlas", w, cx));
+                w.click("archives", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.scroll(
+                    "chat-list-pane",
+                    ScrollDelta::Pixels(point(px(0.), px(-220.))),
+                    cx,
+                )
+            })
+            .unwrap();
+            settle(cx, h);
+            let sidebar_y =
+                cx.update(|cx| f32::from(v.read(cx).chats.read(cx).scroll_handle().offset().y));
+            assert!(sidebar_y < -50.);
+            cx.update_window(h, |_, w, cx| {
+                let query = v.read(cx).chats.read(cx).query_input();
+                query.update(cx, |q, cx| q.set_value(" AtLaS ", w, cx));
+                w.click("project-b", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(v.read(cx).page, Page::Project("b".into()));
+                assert!(!v.read(cx).chats.read(cx).delegate().archived);
+                let list = v.read(cx).chats.clone();
+                list.update(cx, |l, cx| l.set_query("Boreal", w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.scroll("overview", ScrollDelta::Pixels(point(px(0.), px(-70.))), cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            let overview_b_y = cx.update(|cx| v.read(cx).overview.read(cx).scroll_position());
+            assert!(overview_b_y < -10.);
+            cx.update_window(h, |_, w, cx| w.click("project-a", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let view = v.read(cx);
+                assert_eq!(view.page, Page::Chat);
+                assert_eq!(view.selected.as_deref(), Some("synthetic"));
+                assert_eq!(view.state.cursor, Some(100));
+                let l = view.chats.read(cx);
+                assert!(l.delegate().archived);
+                assert_eq!(l.query_input().read(cx).value().as_ref(), " AtLaS ");
+                assert!((f32::from(l.scroll_handle().offset().y) - sidebar_y).abs() <= 1.);
+                assert!(w.try_find(("copy-source", 100u64)).is_some());
+                assert_eq!(
+                    view.transcript.read(cx).history_probe_row(100).entity_id(),
+                    retained.entity_id()
+                );
+                let q = l.query_input();
+                q.update(cx, |q, cx| {
+                    q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+                });
+                let old = v.read(cx).location(cx);
+                w.press("secondary-[", cx);
+                assert_eq!(v.read(cx).location(cx), old);
+                q.update(cx, |q, cx| q.unmark_text(w, cx));
+                let list = v.read(cx).chats.clone();
+                list.update(cx, |l, cx| l.restore_query(" AtLaS ", w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(
+                reads.try_recv().is_err(),
+                "same current owner/scope navigation must not reconnect or fetch history"
+            );
+            cx.update_window(h, |_, w, cx| w.click("project-b", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update(|cx| {
+                assert!((v.read(cx).overview.read(cx).scroll_position() - overview_b_y).abs() <= 1.)
+            });
+            cx.update_window(h, |_, _w, cx| {
+                v.update(cx, |v, cx| {
+                    v.overview.update(cx, |o, cx| o.restore_scroll(0., cx))
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("home-chat-other", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(reads.try_recv(),Ok(Command::Open{id,generation:11})if id=="other"));
+            publish(cx, h, &v, 11, 300);
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(
+                matches!(reads.try_recv(),Ok(Command::Open{id,generation:12})if id=="synthetic")
+            );
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut stale = v.state.clone();
+                    stale.generation = 11;
+                    stale.rows = rows(300);
+                    v.accept(stale, w, cx);
+                    assert!(v.pending_reader.is_some());
+                })
+            })
+            .unwrap();
+            publish(cx, h, &v, 12, 100);
+            cx.update_window(h, |_, w, cx| {
+                let index = v.read(cx).projects.read(cx).selected_index().unwrap();
+                assert_eq!(
+                    v.read(cx)
+                        .projects
+                        .read(cx)
+                        .delegate()
+                        .at(index)
+                        .unwrap()
+                        .id,
+                    "a",
+                    "project highlight must match the restored scope, not the prior click"
+                );
+                assert!(w.try_find(("copy-source", 100u64)).is_some());
+                assert!(!v.read(cx).transcript.read(cx).history_probe_anchor(cx).2);
+                assert!(v.read(cx).pending_reader.is_none());
+            })
+            .unwrap();
+            assert!(
+                reads.try_recv().is_err(),
+                "restoring a loaded marker cannot manufacture Earlier requests"
+            );
+            assert!(writes.try_recv().is_err());
+            if let Some(d) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("{}-{}-restored.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            // Forward admission is transactional when the reader queue is full.
+            cx.update_window(h, |_, w, cx| w.press("secondary-]", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                for _ in 0..4 {
+                    assert!(
+                        v.read(cx)
+                            .client
+                            .as_ref()
+                            .unwrap()
+                            .command(Command::Reconnect)
+                    );
+                }
+                let before = v.read(cx).location(cx);
+                w.press("secondary-]", cx);
+                assert_eq!(v.read(cx).location(cx), before);
+            })
+            .unwrap();
+            settle(cx, h);
+            for _ in 0..4 {
+                assert!(matches!(reads.try_recv(), Ok(Command::Reconnect)));
+            }
+            cx.update_window(h, |_, _, cx| {
+                v.update(cx, |v, _| {
+                    v.reader_marks.put(
+                        "other".into(),
+                        crate::navigation::ReadingMark {
+                            message: 999_999,
+                            offset: 0.,
+                            following: false,
+                        },
+                    )
+                })
+            })
+            .unwrap();
+            cx.update_window(h, |_, w, cx| w.press("secondary-]", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(reads.try_recv(),Ok(Command::Open{id,generation:13})if id=="other"));
+            publish(cx, h, &v, 13, 300);
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    v.read(cx).nav_error.is_some(),
+                    "an unloaded older marker needs an honest notice, not auto paging"
+                );
+                assert!(v.read(cx).pending_reader.is_none());
+                assert!(reads.try_recv().is_err());
+                w.click("latest", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update(|cx| {
+                assert!(v.read(cx).nav_error.is_none());
+                assert!(v.read(cx).transcript.read(cx).history_probe_anchor(cx).2);
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-[", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("nav-home", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update(|cx| {
+                assert!(
+                    !v.read(cx).navigation.can_move(true),
+                    "new navigation truncates only the local forward suffix"
+                )
+            });
+            // A draft history entry reopens the same slot, not a new-chat action.
+            cx.update_window(h, |_, w, cx| w.click("new-local-chat", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(reads.try_recv(), Ok(Command::Clear { .. })));
+            let draft_key = cx.update(|cx| {
+                v.read(cx)
+                    .editor
+                    .read(cx)
+                    .navigation_key()
+                    .unwrap()
+                    .to_owned()
+            });
+            cx.update_window(h, |_, w, cx| {
+                let text = v.read(cx).editor.read(cx).shell_probe().0;
+                text.update(cx, |t, cx| t.set_value("Keep this exact draft 👩‍💻", w, cx));
+                w.click("nav-home", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(reads.try_recv(), Ok(Command::Clear { .. })));
+            cx.update(|cx| {
+                let e = v.read(cx).editor.read(cx);
+                assert_eq!(e.navigation_key(), Some(draft_key.as_str()));
+                assert_eq!(e.shell_probe().2.unwrap().text, "Keep this exact draft 👩‍💻");
+                assert_eq!(e.new_drafts().len(), 1);
+            });
+            assert!(reads.try_recv().is_err());
+            assert!(
+                writes.try_recv().is_err(),
+                "history cannot create/send/Stop/approve"
+            );
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let scoped = Location {
+                        scope: Some("a".into()),
+                        target: Target::Chat("synthetic".into()),
+                    };
+                    assert!(v.can_restore(&scoped, cx));
+                    let mut moved = v.state.chats.as_ref().clone();
+                    moved[0].project_id = Some("b".into());
+                    v.state.chats = Arc::new(moved);
+                    assert!(
+                        !v.can_restore(&scoped, cx),
+                        "membership change cannot reinterpret a saved scoped chat"
+                    );
+                    v.focus_scope("a".into(), w, cx);
+                    assert_eq!(
+                        v.page,
+                        Page::Project("a".into()),
+                        "invalid last chat falls back to the same project's overview"
+                    );
+                    v.state.projects = Arc::new(vec![v.state.projects[1].clone()]);
+                    assert!(!v.can_restore(
+                        &Location {
+                            scope: Some("a".into()),
+                            target: Target::Project("a".into())
+                        },
+                        cx
+                    ));
+                    v.rebuild_nav(w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(reads.try_recv().is_err());
+            assert!(writes.try_recv().is_err());
+            println!(
+                "{}",
+                json!({"width":width,"mode":mode.name(),"bounded_navigation":true,"native_back_forward_keys":true,"scope_query_case_archive_scroll_and_last_chat":true,"textarea_and_search_preedit_fences":true,"same_owner_transcript_cursor_entity_retained":true,"cross_owner_reader_mark_generation_fenced":true,"no_restoration_history_fetch":true,"full_queue_cursor_transaction":true,"new_navigation_truncates_forward":true,"draft_slot_reused_no_submit":true,"canonical_write_commands":0,"native_offscreen":true})
+            );
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+}

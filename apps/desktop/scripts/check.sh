@@ -26,3 +26,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test history
 # Actual Home/projects/chat navigation with synthetic summaries/faux channels only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test shell -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test shell
+# Bounded destination/scope state, fake read channel, no replay of actions.
+bash scripts/cargo.sh clippy --locked --features native-probes --test navigation -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test navigation
