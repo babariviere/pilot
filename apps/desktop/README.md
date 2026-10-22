@@ -174,6 +174,15 @@ transcript/reading state; hidden stream projections coalesce until return.
 Project browsing is read-only. New chat still asks for its own explicit Local
 folder and does not inherit a project, path, model or permission from selection.
 See [everyday parity inventory and checks](evidence/everyday-parity.md).
+Back/Forward (Cmd/Ctrl-[ / ]) keeps up to100 window-local destinations.
+The project sidebar restores its last valid chat or Overview, search/archive
+filter and scroll positions (up to64 scopes). An explicit Overview button and
+Home project cards still open Overview. Current-chat history stays retained in
+its one retained transcript; switching back from another chat uses the Local
+reader and a bounded message-position token, never a transcript cache or silent
+history drain. Preedit and refused reads cannot advance history, and draft
+destinations reuse existing slots without replaying sends. See
+[navigation boundaries and verification](evidence/navigation.md).
 Home/dashboard, Inbox, settings and full app parity remain incomplete. macOS is the current focus;
 Linux/Wayland verification is deferred, not a delivery gate or support claim.
 

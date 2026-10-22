@@ -6,6 +6,7 @@ mod local_client;
 mod local_model;
 mod local_view;
 mod model;
+mod navigation;
 mod tool_presentation;
 mod transcript_view;
 mod work_view;
@@ -17,6 +18,8 @@ pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 pub use local_view::disclosure_probe::run_disclosure_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::history_probe::run_history_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::shell_probe::run_shell_probe;
 #[cfg(feature = "native-probes")]

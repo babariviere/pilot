@@ -145,6 +145,11 @@
       "path": "src/text/mod.rs",
       "old": "mod inline;\n",
       "new": "mod inline;\n#[cfg(feature = \"test-support\")]\n#[doc(hidden)]\npub use inline::assert_retained_layout_sweep_invariants;\n"
+    },
+    {
+      "path": "src/virtual_list.rs",
+      "old": "    /// Get the base scroll handle.",
+      "new": "    /// Restore an offset, cancelling a prior queued item jump.\n    pub fn restore_offset(&self, offset: Point<Pixels>) {\n        self.state.borrow_mut().deferred_scroll_to_item = None;\n        self.base_handle.set_offset(offset);\n    }\n\n    /// Get the base scroll handle."
     }
   ]
 }

@@ -131,6 +131,22 @@ impl ChatEditor {
             && self.state.error.is_none()
             && !self.closing
     }
+    pub(crate) fn navigation_key(&self) -> Option<&str> {
+        self.selected.as_deref()
+    }
+    pub(crate) fn browse_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.writable = false;
+        self.busy = false;
+        self.background_work = false;
+        self.thinking = false;
+        self.text.update(cx, |v, cx| v.set_value("", window, cx));
+        self.cwd.update(cx, |v, cx| v.set_value("", window, cx));
+        cx.notify();
+    }
+    pub(crate) fn has_navigation_draft(&self, key: &str) -> bool {
+        key.starts_with("new:") && self.cache.contains_key(key)
+    }
     pub(crate) fn new_drafts(&self) -> Vec<(String, String)> {
         self.cache
             .iter()
