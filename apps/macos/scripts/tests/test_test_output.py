@@ -51,7 +51,7 @@ REGRESSION_PARTITIONS = [
      "originalPendingStartRemainsCheckableWithoutAProposalAndOfflineActionsStayDisabled"],
     ["settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert"],
     ["visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheLastPosition", "visualDiscreteEventsRunInOrder",
-     "missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect",
+     "missionNavigationAndPaletteKeepCanonicalPinsForLocalAndCachedHistory",
      "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand", USAGE_PROJECTION,
      "usageDashboardLocalOnlyCacheAndPagesNeverAddCheckpointOrRepeatedTotals",
      "usageDashboardUnsupportedCapacityErrorsAndAmbiguousLocalAreNotZero",

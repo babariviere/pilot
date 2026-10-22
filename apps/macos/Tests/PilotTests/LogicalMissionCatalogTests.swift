@@ -283,11 +283,12 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     }
 }
 
-@Test @MainActor func missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect() async throws {
+@Test @MainActor func missionNavigationAndPaletteKeepCanonicalPinsForLocalAndCachedHistory() async throws {
     let model = AppModel()
     try model.registerLocal(logicalHome)
     model.client.loadFixture(projects: [], sessions: [])
     model.client.handle(.missions([logicalMission()]))
+    try loadClientFixture(model.client, host: logicalHome, into: model.hosts)
     let second = HostRef(hostId: "second", daemonId: "second", lineageId: "s1")
     for host in [logicalBox, second] {
         let client = PilotClient()
@@ -303,8 +304,11 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     model.openLogicalMission(local)
     let pinnedLocalKey = try #require(model.selectedMissionId)
     #expect(try HostResourceRef.decodeKey(pinnedLocalKey).host == logicalHome)
+    #expect(model.missionAvailable(model.missionRegistry.destination(local, model: model)))
     model.newSessionForm.executionHost = second
     let remote = try #require(model.missionRegistry.rows.first { $0.mission.home.matches(logicalBox) })
+    let remoteReference = model.missionRegistry.destination(remote, model: model)
+    #expect(!model.missionAvailable(remoteReference), "Saved history is not a live endpoint")
     model.openLogicalMission(remote, tab: .brief)
     #expect(model.hosts.selection?.host == logicalBox)
     #expect(model.newSessionForm.executionHost == second)
@@ -315,18 +319,24 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     #expect(entries.count == 3 && Set(entries.map { $0.item.id }).count == 3)
     #expect(entries.allSatisfy { !($0.detail ?? "").contains("Local") && !($0.detail ?? "").contains("second") })
     await model.hosts.disconnect(logicalBox)
-    try await logicalEventually { !model.missionAvailable(model.missionRegistry.destination(remote, model: model)) }
+    #expect(!model.missionAvailable(remoteReference))
     #expect(model.missionRegistry.rows.map(\.id) == ids)
     #expect(model.selectedLogicalMission?.id == remote.id)
     let replacement = PilotClient()
     replacement.loadFixture(projects: [], sessions: [])
-    replacement.handle(.missions([logicalMission()]))
+    replacement.handle(.missions([logicalMission(title: "Updated cached mission")]))
     try loadClientFixture(replacement, host: logicalBox, into: model.hosts)
-    try await logicalEventually { model.missionAvailable(model.missionRegistry.destination(remote, model: model)) }
+    // Replacing an immutable snapshot refreshes its data without reconnecting or retargeting it.
+    try await logicalEventually { model.missionRegistry.row(for: remoteReference)?.title == "Updated cached mission" }
+    #expect(!model.missionAvailable(remoteReference))
+    #expect(Set(model.missionRegistry.rows.map(\.id)) == Set(ids))
+    #expect(model.missionRegistry.destination(remote, model: model) == remoteReference)
     #expect(model.selectedLogicalMission?.id == remote.id)
     model.openMission(HostResourceRef(host: second, kind: .mission, localId: "same").storageKey)
     #expect(model.missionTab == .overview, "Switching missions resets tabs even with colliding IDs")
     #expect(model.hosts.selection?.host == second)
+    model.missionRegistry.stop()
+    await model.hosts.disconnectAll()
 }
 
 @Test @MainActor func replicaMissionRowOpensCanonicalReferenceNotExecutionHost() throws {
