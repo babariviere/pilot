@@ -20,3 +20,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test style
 # Actual native gestures over a faux isolated-reader channel, never Local actions.
 bash scripts/cargo.sh clippy --locked --features native-probes --test controls -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test controls
+# Real top scroll/selection with faux paged reads, never a real Local action.
+bash scripts/cargo.sh clippy --locked --features native-probes --test history -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test history

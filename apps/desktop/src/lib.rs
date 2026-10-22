@@ -16,6 +16,8 @@ pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
 pub use local_view::disclosure_probe::run_disclosure_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::history_probe::run_history_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};

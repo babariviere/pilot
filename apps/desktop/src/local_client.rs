@@ -204,7 +204,7 @@ pub(crate) struct LocalClient {
     commands: async_channel::Sender<Command>,
 }
 impl LocalClient {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic_commands() -> (Self, async_channel::Receiver<Command>) {
         let (commands, receiver) = async_channel::bounded(4);
         (Self { commands }, receiver)

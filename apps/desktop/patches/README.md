@@ -84,7 +84,7 @@ historical checksum is not the current image-policy specification checksum.
 ## Reader-controlled work disclosures
 
 `gpui-component-0.8.0.json` pins the original Component archive separately and
-contains thirteen exact edits across two files: nine to its message scroller
+contains seventeen exact edits across two files: thirteen to its message scroller
 and four for an opt-in `ListItem::hover_fill(false)`. The original
 `pause_following_tail(cx)` forwarding method remains available. A separate
 `hold_for_disclosure(cx)` records reader intent and preserves the logical anchor
@@ -102,6 +102,18 @@ Only explicit app-owned disclosure actions opt in. No default, framework version
 registry or global configuration is changed. Native production-root regressions
 cover header/icon positions, streaming, prepend, tall detail, remount, wheel and
 Latest; see `../evidence/disclosure-thinking.md`.
+
+Two additional edits expose a `MessageScrolled` event from the existing genuine
+list/bounce callbacks. Layout, remeasurement, reset, splice and decoration do not
+emit it. The app uses this event for bounded top-of-history reads, with an
+upward-wheel fallback when content fits and the bounce lets events bubble.
+History paging reuses the explicit anchor hold; no default scroll behavior or
+automatic network operation is added to the component itself.
+An additional read-only accessor lets the app identify an actual scrollbar drag
+at its measured start on pointer release. It is not a render-time boundary poll.
+Another bounded accessor reports existing unused tail space. The app retains
+that space while prepending into a short document, without adding a message row;
+genuine bottom scrolling, Latest or reset releases it before normal Tail use.
 
 ## Retained-layout cleanup
 

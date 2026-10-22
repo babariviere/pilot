@@ -8,7 +8,7 @@ use gpui_kit::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         input::{InputEvent, Textarea, TextareaState},
-        message_scroller::{MessageScroller, MessageScrollerState},
+        message_scroller::{MessageScrolled, MessageScroller, MessageScrollerState},
         text::{TextView, TextViewState},
     },
     div, px,
@@ -19,6 +19,8 @@ use crate::model::{Message, TICK_MS, Transcript};
 gpui_kit::actions!(fixture, [Quit, FocusComposer]);
 pub(crate) struct ArtifactOpen(pub(crate) crate::artifact_model::Reference);
 impl gpui_kit::EventEmitter<ArtifactOpen> for TranscriptView {}
+pub(crate) struct HistoryTop(pub(crate) u64);
+impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
 
 pub struct TranscriptView {
     transcript: Transcript,
@@ -30,6 +32,8 @@ pub struct TranscriptView {
     _subscriptions: Vec<Subscription>,
     stream_task: Option<Task<()>>,
     readonly: bool,
+    history_scope: u64,
+    history_slack: gpui_kit::Pixels,
     text_subscriptions: HashMap<u64, Subscription>,
     work_ui: crate::work_view::WorkUi,
     #[cfg(feature = "native-probes")]
@@ -109,14 +113,25 @@ impl TranscriptView {
                 },
             );
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let history_scroll = cx.subscribe(&scroller, |view, state, _: &MessageScrolled, cx| {
+            if state.read(cx).is_following_tail() && view.history_slack > px(0.) {
+                view.history_slack = px(0.);
+                cx.notify();
+            }
+            if view.readonly && !state.read(cx).is_following_tail() && view.at_history_top(cx) {
+                cx.emit(HistoryTop(view.history_scope));
+            }
+        });
         let mut view = Self {
             transcript,
             text_states: Vec::new(),
             scroller,
             composer,
-            _subscriptions: vec![subscription, scroll_subscription],
+            _subscriptions: vec![subscription, scroll_subscription, history_scroll],
             stream_task: None,
             readonly,
+            history_scope: 0,
+            history_slack: px(0.),
             text_subscriptions: HashMap::new(),
             work_ui: Default::default(),
             #[cfg(feature = "native-probes")]
@@ -181,6 +196,9 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         assert!(self.readonly);
+        if reset {
+            self.history_slack = px(0.);
+        }
         if !reset && self.transcript.messages() == rows.as_slice() {
             return;
         }
@@ -268,8 +286,50 @@ impl TranscriptView {
     }
 
     pub(crate) fn latest(&mut self, cx: &mut Context<Self>) {
+        self.history_slack = px(0.);
         self.scroller
             .update(cx, |state, cx| state.scroll_to_end(cx));
+        cx.notify();
+    }
+
+    pub(crate) fn history_scope(&mut self, generation: u64) {
+        if self.history_scope != generation {
+            self.history_slack = px(0.);
+        }
+        self.history_scope = generation;
+    }
+    fn at_history_top(&self, cx: &App) -> bool {
+        let state = self.scroller.read(cx);
+        let top = state.logical_scroll_top();
+        state.item_count() > 0 && top.item_ix == 0 && top.offset_in_item <= px(1.)
+    }
+    pub(crate) fn hold_for_history(&mut self, cx: &mut Context<Self>) {
+        if self.history_slack == px(0.) {
+            self.history_slack = self.scroller.read(cx).unused_tail_space();
+        }
+        self.scroller
+            .update(cx, |state, cx| state.hold_for_disclosure(cx));
+        cx.notify();
+    }
+    pub(crate) fn history_scrollbar_released(&mut self, cx: &mut Context<Self>) {
+        if !self.readonly || !self.scroller.read(cx).dragging_scrollbar_at_start() {
+            return;
+        }
+        let scope = self.history_scope;
+        let view = cx.weak_entity();
+        // Run after the scrollbar's own final offset/end-drag handler. A sparse
+        // unmeasured prefix must not leave its top at an arbitrary measured row.
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |view, cx| {
+                if view.history_scope != scope {
+                    return;
+                }
+                view.scroller.update(cx, |state, cx| {
+                    state.scroll_to_item(0, cx);
+                });
+                cx.emit(HistoryTop(scope));
+            });
+        });
     }
 
     fn append_text_states(&mut self, from: usize, cx: &mut Context<Self>) {
@@ -411,6 +471,27 @@ impl TranscriptView {
         self.render_count
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn history_probe_row(&self, id: u64) -> Entity<TextViewState> {
+        let ix = self
+            .transcript
+            .messages()
+            .iter()
+            .position(|row| row.id() == id)
+            .unwrap();
+        self.text_states[ix].as_ref().unwrap().clone()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn history_probe_anchor(&self, cx: &App) -> (usize, f32, bool, f32) {
+        let state = self.scroller.read(cx);
+        let top = state.logical_scroll_top();
+        (
+            top.item_ix,
+            f32::from(top.offset_in_item),
+            state.is_following_tail(),
+            f32::from(self.history_slack),
+        )
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn disclosure_probe_state(
         &self,
         id: u64,
@@ -521,7 +602,25 @@ impl Render for TranscriptView {
         let busy = self.transcript.is_streaming();
         let full = self.transcript.is_full();
         let weak = cx.weak_entity();
-        let viewport = div().id("viewport").flex_1().min_h_0().min_w_0();
+        let scope = self.history_scope;
+        let viewport = div()
+            .id("viewport")
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            // A fitting list lets wheel packets bubble instead of invoking the
+            // bounce callback. Only upward intent at the top requests history.
+            .on_scroll_wheel(cx.listener(
+                move |view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
+                    if view.readonly
+                        && view.history_scope == scope
+                        && event.delta.pixel_delta(px(20.)).y > px(0.)
+                        && view.at_history_top(cx)
+                    {
+                        cx.emit(HistoryTop(scope));
+                    }
+                },
+            ));
         #[cfg(any(test, feature = "native-probes"))]
         let viewport = {
             use gpui_kit::test::TestSupportExt;
@@ -531,7 +630,9 @@ impl Render for TranscriptView {
         // With Kit's default vertical list padding, pinned GPUI fails to resume
         // following after wheel-scrolling back to the bottom. Keep the list
         // itself unpadded; the existing row spacing remains unchanged.
-        let list_style = StyleRefinement::default().py_0();
+        // Retain only pre-existing short-document empty space while reading
+        // older history. Latest/genuine bottom/reset remove it before Tail.
+        let list_style = StyleRefinement::default().py_0().pb(self.history_slack);
         if self.readonly {
             return div()
                 .v_flex()

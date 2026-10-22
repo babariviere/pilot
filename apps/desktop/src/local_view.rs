@@ -3,6 +3,9 @@
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
+#[path = "history_probe.rs"]
+pub(crate) mod history_probe;
+#[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 use crate::{
@@ -185,6 +188,8 @@ pub struct LocalViewer {
     nav_chats: Arc<Vec<Chat>>,
     nav_drafts: Vec<(String, String)>,
     refreshing: bool,
+    earlier_attempt: Option<(u64, u64)>,
+    earlier_request: Option<(u64, u64, u64)>,
     details_open: bool,
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
@@ -607,6 +612,14 @@ impl LocalViewer {
                 cx.notify();
             },
         );
+        let history_events = cx.subscribe(
+            &transcript,
+            |view, _, event: &crate::transcript_view::HistoryTop, cx| {
+                if event.0 == view.generation {
+                    view.earlier(false, cx);
+                }
+            },
+        );
         Self {
             client,
             chats,
@@ -618,7 +631,7 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
-            _subscriptions: vec![subscription, editor_events, artifact_events],
+            _subscriptions: vec![subscription, editor_events, artifact_events, history_events],
             updates: None,
             writes: None,
             editor,
@@ -626,6 +639,8 @@ impl LocalViewer {
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
             refreshing: false,
+            earlier_attempt: None,
+            earlier_request: None,
             details_open: false,
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
@@ -656,6 +671,8 @@ impl LocalViewer {
             return;
         }
         self.generation = generation;
+        self.earlier_attempt = None;
+        self.earlier_request = None;
         self.refreshing = false;
         let key = format!("chat:{}", chat.id);
         self.editor.update(cx, |editor, cx| {
@@ -674,8 +691,10 @@ impl LocalViewer {
         self.state.queued = 0;
         self.state.thinking = false;
         self.rebuild_nav(window, cx);
-        self.transcript
-            .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
+        self.transcript.update(cx, |view, cx| {
+            view.history_scope(generation);
+            view.replace_readonly(Vec::new(), true, cx);
+        });
         cx.notify();
     }
 
@@ -686,10 +705,24 @@ impl LocalViewer {
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
         } else if state.generation == self.generation {
+            if self
+                .earlier_request
+                .is_some_and(|(generation, before, revision)| {
+                    generation != state.generation
+                        || state.cursor != Some(before)
+                        || state.page_revision > revision
+                        || !state.loaded
+                })
+            {
+                self.earlier_request = None;
+            }
+            // A coalesced publication from before the request is not completion.
+            state.page_busy |= self.earlier_request.is_some();
             let rows = std::mem::take(&mut state.rows);
             let reset = self.refreshing;
             self.refreshing = false;
             self.transcript.update(cx, |view, cx| {
+                view.history_scope(self.generation);
                 view.replace_readonly(rows, reset, cx);
                 if reset {
                     view.latest(cx);
@@ -732,6 +765,8 @@ impl LocalViewer {
         });
         self.refreshing = false;
         self.generation += 1;
+        self.earlier_attempt = None;
+        self.earlier_request = None;
         self.selected = None;
         self.chats.update(cx, |list, cx| {
             list.delegate_mut().opened = None;
@@ -746,8 +781,47 @@ impl LocalViewer {
                 generation: self.generation,
             });
         }
-        self.transcript
-            .update(cx, |view, cx| view.replace_readonly(Vec::new(), true, cx));
+        self.transcript.update(cx, |view, cx| {
+            view.history_scope(self.generation);
+            view.replace_readonly(Vec::new(), true, cx);
+        });
+    }
+    fn earlier(&mut self, manual: bool, cx: &mut Context<Self>) {
+        if self.earlier_request.is_some() && !manual {
+            // A fitting list's bounce may re-arm Tail during another upward
+            // wheel packet. Preserve that explicit reader intent while paging.
+            self.transcript
+                .update(cx, |view, cx| view.hold_for_history(cx));
+            return;
+        }
+        let Some(before) = self.state.cursor else {
+            return;
+        };
+        let key = (self.generation, before);
+        if self.selected.is_none()
+            || self.artifacts_open
+            || self.refreshing
+            || !self.state.loaded
+            || self.state.generation != self.generation
+            || self.state.page_busy
+            || self.earlier_request.is_some()
+            || (!manual && self.earlier_attempt == Some(key))
+        {
+            return;
+        }
+        if self.client.as_ref().is_some_and(|client| {
+            client.command(Command::Earlier {
+                before,
+                generation: self.generation,
+            })
+        }) {
+            self.earlier_attempt = Some(key);
+            self.earlier_request = Some((self.generation, before, self.state.page_revision));
+            self.state.page_busy = true;
+            self.transcript
+                .update(cx, |view, cx| view.hold_for_history(cx));
+            cx.notify();
+        }
     }
     fn latest(&mut self, cx: &mut Context<Self>) {
         if self.state.limited
@@ -759,6 +833,10 @@ impl LocalViewer {
                 generation,
             }) {
                 self.generation = generation;
+                self.earlier_attempt = None;
+                self.earlier_request = None;
+                self.transcript
+                    .update(cx, |view, _| view.history_scope(generation));
                 self.refreshing = true;
                 self.state.thinking = false;
                 self.editor
@@ -861,8 +939,20 @@ impl Render for LocalViewer {
         } else {
             "Images and links are disabled. Some structured content remains unsupported. Swift remains available."
         };
+        let history_status = if self.earlier_request.is_some() {
+            "Loading earlier messages…"
+        } else {
+            self.state.chat_status.as_str()
+        };
         div().id("desktop-root").test_support().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
+            // Capture above the transcript so releasing a dragged thumb in the
+            // header/sidebar still completes top-of-history navigation.
+            .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
+                if !view.artifacts_open && view.selected.is_some() {
+                    view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
+                }
+            }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::Quit,_,cx|{
                 if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
                 cx.stop_propagation();
@@ -897,16 +987,13 @@ impl Render for LocalViewer {
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
                             .child(Button::new("earlier").ghost().small().label("Earlier").disabled(self.state.cursor.is_none()||self.state.page_busy)
-                                .on_click(cx.listener(|view,_,_,cx|{
-                                    if let(Some(client),Some(before))=(&view.client,view.state.cursor)
-                                        &&client.command(Command::Earlier{before,generation:view.generation}){view.state.page_busy=true;cx.notify();}
-                                })))
+                                .on_click(cx.listener(|view,_,_,cx|view.earlier(true,cx))))
                             .child(Button::new("latest").ghost().small().label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
                                 .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
                                 .on_click(cx.listener(|view,_,_,cx|{view.artifacts_open = !view.artifacts_open;if !view.artifacts_open{view.artifacts.update(cx,|p,_|p.close());}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(format!("{}{}",self.state.chat_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
+                                .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(760.)).mx_auto()
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
                         .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
@@ -927,6 +1014,182 @@ impl Render for LocalViewer {
 mod refresh_tests {
     use super::*;
     use gpui_kit::{TestAppContext, WindowOptions};
+    #[gpui_kit::test]
+    fn top_history_admission_fences_busy_stale_failure_retry_and_exhaustion(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| {
+                    cx.new(|cx| LocalViewer::preview(PreviewState::Conversation, window, cx))
+                },
+            )
+            .unwrap()
+        });
+        let (client, commands) = LocalClient::synthetic_commands();
+        view.update(cx, |v, _| {
+            v.client = Some(client);
+            v.generation = 7;
+            v.state.generation = 7;
+            v.state.loaded = true;
+            v.state.cursor = Some(100);
+        });
+        let signal = |cx: &mut TestAppContext, generation| {
+            view.update(cx, |v, cx| {
+                v.transcript.update(cx, |_, cx| {
+                    cx.emit(crate::transcript_view::HistoryTop(generation))
+                })
+            });
+            cx.run_until_parked();
+        };
+        signal(cx, 6);
+        assert!(commands.try_recv().is_err());
+        for _ in 0..32 {
+            signal(cx, 7);
+        }
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Earlier {
+                before: 100,
+                generation: 7
+            })
+        ));
+        assert!(commands.try_recv().is_err());
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                let mut stale = v.state.clone();
+                stale.page_busy = false;
+                v.accept(stale, window, cx);
+                assert!(v.state.page_busy);
+                v.earlier(true, cx);
+            })
+        })
+        .unwrap();
+        signal(cx, 7);
+        assert!(
+            commands.try_recv().is_err(),
+            "stale idle projection is not page completion"
+        );
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                let mut error = v.state.clone();
+                error.page_busy = false;
+                error.page_revision += 1;
+                error.chat_status = "Synthetic read failure".into();
+                v.accept(error, window, cx);
+                assert!(!v.state.page_busy);
+            })
+        })
+        .unwrap();
+        for _ in 0..32 {
+            signal(cx, 7);
+        }
+        assert!(
+            commands.try_recv().is_err(),
+            "same-cursor failure cannot create retry storm"
+        );
+        view.update(cx, |v, cx| v.earlier(true, cx));
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Earlier {
+                before: 100,
+                generation: 7
+            })
+        ));
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                let mut done = v.state.clone();
+                done.page_busy = false;
+                done.page_revision += 1;
+                done.cursor = Some(76);
+                v.accept(done, window, cx);
+            })
+        })
+        .unwrap();
+        signal(cx, 7);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Earlier {
+                before: 76,
+                generation: 7
+            })
+        ));
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                let mut done = v.state.clone();
+                done.page_busy = false;
+                done.page_revision += 1;
+                done.cursor = None;
+                v.accept(done, window, cx);
+            })
+        })
+        .unwrap();
+        signal(cx, 7);
+        view.update(cx, |v, cx| v.earlier(true, cx));
+        assert!(commands.try_recv().is_err());
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                v.open(
+                    Chat {
+                        id: "other".into(),
+                        title: "Other".into(),
+                        state: "idle".into(),
+                        archived: false,
+                        local_draft: false,
+                        writable: false,
+                        busy: false,
+                        signal: None,
+                        background_work: false,
+                        cwd: String::new(),
+                    },
+                    window,
+                    cx,
+                );
+            })
+        })
+        .unwrap();
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Open { generation: 8, .. })
+        ));
+        signal(cx, 7);
+        signal(cx, 8);
+        assert!(
+            commands.try_recv().is_err(),
+            "no request while new chat is loading"
+        );
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                let mut fresh = v.state.clone();
+                fresh.generation = 8;
+                fresh.loaded = true;
+                fresh.page_busy = false;
+                fresh.cursor = Some(100);
+                v.accept(fresh, window, cx);
+            })
+        })
+        .unwrap();
+        signal(cx, 7);
+        assert!(commands.try_recv().is_err());
+        signal(cx, 8);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::Earlier {
+                before: 100,
+                generation: 8
+            })
+        ));
+        assert!(commands.try_recv().is_err());
+    }
     #[gpui_kit::test]
     fn publication_navigation_fences_other_owners_without_transport_fallback(
         cx: &mut TestAppContext,

@@ -1165,6 +1165,45 @@ mod tests {
         assert_eq!(model.cursor, Some(20));
     }
     #[test]
+    fn history_paging_stops_on_empty_nonprogress_and_overlapping_pages() {
+        let mut tail = entry(50, "tail");
+        tail["head"] = json!(50);
+        for entries in [
+            json!([]),
+            json!([entry(50, "duplicate")]),
+            json!([entry(60, "newer, not previous")]),
+        ] {
+            let mut model = LiveTranscript::default();
+            model.apply(&json!({"type":"snapshot","entries":[tail]}));
+            assert_eq!(model.cursor, Some(50));
+            model.page(50, &json!({"entries":entries,"more":true}));
+            assert_eq!(
+                model.cursor, None,
+                "server more=true must not repeat a nonprogressing cursor"
+            );
+            assert_eq!(model.rows().len(), 1);
+            model.page(
+                50,
+                &json!({"entries":[entry(40,"stale retry")],"more":true}),
+            );
+            assert_eq!(model.rows().len(), 1);
+        }
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[tail]}));
+        model.page(
+            50,
+            &json!({"entries":[entry(40,"older"),entry(50,"overlap")],"more":true}),
+        );
+        assert_eq!(model.cursor, Some(40));
+        assert_eq!(model.rows().len(), 2);
+        model.page(
+            40,
+            &json!({"entries":[entry(40,"overlap"),entry(50,"overlap")],"more":true}),
+        );
+        assert_eq!(model.cursor, None);
+        assert_eq!(model.rows().len(), 2);
+    }
+    #[test]
     fn streaming_promotes_identity_and_deduplicates_commit() {
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"message_start","message":{"role":"assistant","timestamp":12,"content":[{"type":"text","text":"日"}]}}));
