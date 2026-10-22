@@ -130,6 +130,11 @@ helper and keeps the last validated scene/state; Retry is fresh and explicit.
 `scripts/run.sh --local` prepares/builds the pinned helper but starts no VM until
 user Open. `scripts/check.sh` uses only native synthetic/faux-server tests.
 See [exact boundaries, checks and remaining work](evidence/native-visuals.md).
+The [bounded chart follow-on](evidence/chart-parity.md) adds signed stacked bars,
+explicit bar-domain clipping, positioned x-ticks/numeric scatter domain labels
+and Swift's visual palette. It retains unsupported placeholders for stacked
+areas, duplicate categorical grouping and non-bar clipping; it is not full
+artifact parity. Existing helper/security/provenance boundaries are unchanged.
 
 ### Conversation interface
 

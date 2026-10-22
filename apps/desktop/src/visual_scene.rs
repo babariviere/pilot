@@ -41,6 +41,7 @@ struct Check {
     canvases: Vec<(String, f64)>,
     nodes: usize,
     text: usize,
+    chart_points: usize,
     charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
 }
 fn object<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, Bad> {
@@ -120,6 +121,7 @@ impl Scene {
             canvases: Vec::new(),
             nodes: 0,
             text: 0,
+            chart_points: 0,
             charts: BTreeMap::new(),
         };
         c.node(&value["root"], "0", 0)?;
@@ -298,10 +300,18 @@ impl Check {
                 if v["stacked"] == true && !matches!(v["kind"].as_str(), Some("bar" | "area")) {
                     return Err("Invalid stacked chart");
                 }
-                self.charts.insert(
-                    path.into(),
-                    crate::visual_chart::Chart::parse(v).map(Arc::new),
-                );
+                let points = x.len() * v["series"].as_array().unwrap().len();
+                let plan = if points <= 2048 && self.chart_points + points > 4096 {
+                    Err(
+                        "Scene exceeds the native 4096-point chart-plan budget. Data/source retained.",
+                    )
+                } else {
+                    crate::visual_chart::Chart::parse(v).map(Arc::new)
+                };
+                if plan.is_ok() {
+                    self.chart_points += points;
+                }
+                self.charts.insert(path.into(), plan);
             }
             "rule" => {}
             "space" => {
@@ -426,6 +436,32 @@ impl Check {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn chart_plan_admission_bounds_aggregate_geometry_and_keeps_source_nodes() {
+        let chart = json!({"type":"chart","kind":"scatter","height":120,"x":(0..2000).collect::<Vec<_>>(),"series":[{"name":"Synthetic","values":vec![1;2000]}]});
+        let scene =
+            Scene::parse(json!({"api":1,"root":{"type":"column","children":vec![chart;5]}}))
+                .unwrap();
+        assert_eq!(scene.charts.len(), 5);
+        assert_eq!(scene.charts.values().filter(|v| v.is_ok()).count(), 2);
+        assert!(
+            scene.charts["0.4"]
+                .as_ref()
+                .unwrap_err()
+                .contains("4096-point")
+        );
+        assert_eq!(
+            scene.root["children"][4]["x"].as_array().unwrap().len(),
+            2000
+        );
+        // Unsupported plans do not consume geometry admission for later siblings.
+        let bad = json!({"type":"chart","kind":"area","height":120,"stacked":true,"x":["a"],"series":[{"name":"s","values":[1]}]});
+        let good = crate::visual_chart::synthetic_fixture(10).1["root"].clone();
+        let scene =
+            Scene::parse(json!({"api":1,"root":{"type":"column","children":[bad,good]}})).unwrap();
+        assert!(scene.charts["0.0"].is_err());
+        assert!(scene.charts["0.1"].is_ok());
+    }
     #[test]
     fn closed_schema_paths_limits_and_shader_siblings() {
         let scene=Scene::parse(json!({"api":1,"root":{"type":"column","children":[{"type":"text","runs":[{"text":"Kept"}]},{"type":"shader","height":80,"glsl":"preserved"},{"type":"toggle","id":"0.2","label":"Local state","value":false}]}})).unwrap();
