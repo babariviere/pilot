@@ -250,6 +250,7 @@ struct ArtifactViewerHeader: View {
                 .keyboardShortcut(.cancelAction)
                 .help("Close artifact")
                 .accessibilityLabel("Close artifact")
+                .background(ControlGeometry(id: "artifact-close"))
             VStack(alignment: .leading, spacing: 4) {
                 Text(state.revision?.title ?? reference.title).font(.headline).lineLimit(1)
                 HStack(spacing: 6) {
@@ -315,6 +316,7 @@ private struct ArtifactContent: View {
                             .padding(4)
                             .help("Open in the viewer")
                             .accessibilityLabel("Open \(reference.title) in the viewer")
+                            .background(ControlGeometry(id: "artifact-expand"))
                         }
                     }
             } else if let revision = state.revision {
@@ -343,6 +345,7 @@ private struct ArtifactContent: View {
                             .padding(8)
                             .help("Open in the viewer")
                             .accessibilityLabel("Open \(reference.title) in the viewer")
+                            .background(ControlGeometry(id: "artifact-expand"))
                         }
                     }
             }

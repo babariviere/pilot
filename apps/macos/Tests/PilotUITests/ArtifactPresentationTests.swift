@@ -1,4 +1,5 @@
 import AppKit
+import NativeTestSupport
 @testable import PilotCore
 import SwiftUI
 import Testing
@@ -28,33 +29,36 @@ func swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
     do {
         // Mount the restored SwiftUI card and its sheet, with a disconnected
         // owner so this regression cannot contact a daemon, account or artifact library.
-        try await settleArtifactSheet(window) {
+        try await settleArtifactSheet(window, step: "mount the inline expand control") {
             guard let content = window.contentView else { return false }
-            return artifactSheetButton(in: content, title: "Open \(reference.title) in the viewer") != nil
+            return artifactSheetControl(in: content, id: "artifact-expand")?.controlEnabled == true
         }
         for useEscape in [false, true, false] {
             let content = try #require(window.contentView)
-            let expand = try #require(artifactSheetButton(in: content, title: "Open \(reference.title) in the viewer"))
-            let opened = expand.accessibilityPerformPress()
-            #expect(opened)
-            try await settleArtifactSheet(window) { window.attachedSheet?.contentView != nil }
+            let expand = try #require(artifactSheetControl(in: content, id: "artifact-expand"))
+            try await NativeInput.click(expand)
+            try await settleArtifactSheet(window, step: "attach the expanded artifact sheet") {
+                window.attachedSheet?.contentView != nil
+            }
             let sheet = try #require(window.attachedSheet)
             let sheetContent = try #require(sheet.contentView)
-            // Wait for SwiftUI's accessibility/shortcut registration, not just its window.
-            try await settleArtifactSheet(window) {
-                artifactSheetButton(in: sheetContent, title: "Close artifact") != nil
+            try await settleArtifactSheet(window, step: "mount the sheet's Close control") {
+                artifactSheetControl(in: sheetContent, id: "artifact-close")?.controlEnabled == true
             }
             if useEscape {
                 let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
                     timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: sheet.windowNumber, context: nil,
                     characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
-                sheet.sendEvent(event)
+                // Exercise the sheet's registered production shortcut directly, without relying on
+                // the headless runner to grant a key window or route an application event.
+                try #require(sheet.performKeyEquivalent(with: event), "the sheet must handle its Escape shortcut")
             } else {
-                let close = try #require(artifactSheetButton(in: sheetContent, title: "Close artifact"))
-                let pressed = close.accessibilityPerformPress()
-                #expect(pressed)
+                let close = try #require(artifactSheetControl(in: sheetContent, id: "artifact-close"))
+                try await NativeInput.click(close)
             }
-            try await settleArtifactSheet(window) { window.attachedSheet == nil }
+            try await settleArtifactSheet(window, step: useEscape ? "dismiss with Escape" : "dismiss with Close") {
+                window.attachedSheet == nil
+            }
             #expect(window.isVisible, "dismiss only the viewer, not its presenting chat")
         }
     } catch {
@@ -64,17 +68,13 @@ func swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
     await closeArtifactFixture(window, hosts: hosts, directory: directory)
 }
 
-@MainActor private func artifactSheetButton(in element: Any, title: String, depth: Int = 0) -> NSAccessibilityProtocol? {
-    guard depth < 40, let accessible = element as? NSAccessibilityProtocol else { return nil }
-    if accessible.accessibilityRole() == .button,
-       [accessible.accessibilityTitle(), accessible.accessibilityLabel()].contains(title) { return accessible }
-    for child in accessible.accessibilityChildren() ?? [] {
-        if let match = artifactSheetButton(in: child, title: title, depth: depth + 1) { return match }
-    }
-    return nil
+@MainActor private func artifactSheetControl(in view: NSView, id: String) -> ControlGeometryView? {
+    NativeInput.views(in: view, of: ControlGeometryView.self).first { $0.identifier?.rawValue == id }
 }
 
-@MainActor private func settleArtifactSheet(_ window: NSWindow, until ready: () -> Bool) async throws {
+@MainActor private func settleArtifactSheet(_ window: NSWindow, step: String,
+                                          sourceLocation: SourceLocation = #_sourceLocation,
+                                          until ready: () -> Bool) async throws {
     for pass in 0..<150 {
         window.contentView?.layoutSubtreeIfNeeded()
         window.attachedSheet?.contentView?.layoutSubtreeIfNeeded()
@@ -82,7 +82,8 @@ func swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable() async throws {
         try await Task.sleep(for: .milliseconds(20))
         if pass >= 11, ready() { return }
     }
-    try #require(ready(), "the expanded artifact must open/close without trapping the chat")
+    try #require(ready(), Comment(rawValue: "Timed out waiting to \(step); attached sheet: \(window.attachedSheet != nil)"),
+                 sourceLocation: sourceLocation)
 }
 
 @MainActor private func closeArtifactFixture(_ window: NSWindow, hosts: ClientDirectory, directory: URL) async {
