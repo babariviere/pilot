@@ -157,6 +157,10 @@ Details reveals prototype limitations; capacity/error notices remain visible.
 See [interface verification and remaining gaps](evidence/interface.md).
 See [rounded surfaces and motion evidence](evidence/rounded-dither.md), including
 native light/dark/narrow/wide checks and remaining ancestor-rendering costs.
+The composer uses one continuous tray surface, Kit-owned text padding and a
+compact control row, with the single transient activity line just above it.
+See [composer layout correction](evidence/composer-layout.md) for native bounds,
+synthetic captures and interaction-preservation checks.
 This is not Home/Inbox/settings or full app parity. macOS is the current focus;
 Linux/Wayland verification is deferred, not a delivery gate or support claim.
 

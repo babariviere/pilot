@@ -15,9 +15,7 @@ use gpui_kit::{
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
         radio::RadioGroup,
     },
-    div,
-    prelude::FluentBuilder,
-    px,
+    div, px,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -518,7 +516,7 @@ impl ChatEditor {
 }
 
 impl Render for ChatEditor {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(key) = self.selected.clone() else {
             return div()
                 .px_3()
@@ -566,9 +564,6 @@ impl Render for ChatEditor {
             .bg(crate::appearance::tray(cx))
             .p_1()
             .gap_2()
-            .mx_6()
-            .mb_4()
-            .mt(px(6.))
             .rounded(px(crate::appearance::Radius::TRAY))
             .shadow(vec![gpui_kit::BoxShadow {
                 inset: false,
@@ -613,107 +608,105 @@ impl Render for ChatEditor {
                     ),
             );
         }
-        if let Some(label) = self.activity_label() {
-            let indicator = div()
-                .id("activity-indicator")
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(label);
-            #[cfg(any(test, feature = "native-probes"))]
-            let indicator = indicator.test_support();
-            footer = footer.child(indicator);
-        }
-        footer = footer.child(
-            div()
-                .id("composer-card")
-                .rounded(px(crate::appearance::Radius::CARD))
-                .bg(crate::appearance::card(cx))
-                .border_1()
-                .border_color(cx.theme().border)
-                .px(px(14.))
-                .py(px(12.))
-                .child(
-                    Textarea::new(&self.text)
-                        .appearance(false)
-                        .bordered(false)
-                        .readonly(!can_edit)
-                        .aria_label("Local chat message"),
-                ),
-        );
-        footer = footer.child(
-            div()
-                .h_flex()
-                .when(window.viewport_size().width < px(800.), |this| {
-                    this.flex_col().items_start()
-                })
-                .justify_between()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.closing {
-                            "Saving before closing…"
-                        } else if !self.writable {
-                            "This chat is read-only."
-                        } else if saved {
-                            "Saved privately · Enter to send"
-                        } else {
-                            "Saving draft…"
-                        }),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(
-                            Checkbox::new("follow-up")
-                                .rounded(px(crate::appearance::Radius::SMALL))
-                                .label("Follow-up")
-                                .checked(self.follow_up)
-                                .on_change(cx.listener(|view, next, _, cx| {
-                                    view.follow_up = *next;
-                                    cx.notify();
-                                })),
-                        )
-                        .child(
-                            Button::new("local-stop")
-                                .small()
-                                .ghost()
-                                .label("Stop")
-                                .disabled(blocked || is_new || !self.busy)
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    if view.selected.as_ref() == Some(&stop_key) {
-                                        view.submit(true, window, cx);
-                                    }
-                                })),
-                        )
-                        .child(
-                            Button::new("local-send")
-                                .primary()
-                                .label(if settled && !draft.text.is_empty() {
-                                    "Edit to resend"
-                                } else if is_new {
-                                    "Create chat"
-                                } else {
-                                    "Send"
-                                })
-                                .disabled(
-                                    blocked
-                                        || settled
-                                        || !draft.editable()
-                                        || draft.text.trim().is_empty()
-                                        || (is_new
-                                            && !std::path::Path::new(&draft.cwd).is_absolute()),
-                                )
-                                .on_click(cx.listener(move |view, _, window, cx| {
-                                    if view.selected.as_ref() == Some(&send_key) {
-                                        view.submit(false, window, cx);
-                                    }
-                                })),
-                        ),
-                ),
-        );
+        // Kit already owns the multiline editor's text padding. A second
+        // padded/outlined card made this look like two large nested boxes.
+        // Keep an opaque matching surface so dither stays behind the text.
+        let input = div()
+            .id("composer-input")
+            .w_full()
+            .min_w_0()
+            .rounded(px(crate::appearance::Radius::CARD))
+            .bg(crate::appearance::tray(cx))
+            .child(
+                Textarea::new(&self.text)
+                    .appearance(false)
+                    .bordered(false)
+                    .readonly(!can_edit)
+                    .aria_label("Local chat message"),
+            );
+        #[cfg(any(test, feature = "native-probes"))]
+        let input = input.test_support();
+        let controls = div()
+            .id("composer-controls")
+            .h_flex()
+            .w_full()
+            .min_w_0()
+            .justify_between()
+            .gap_2()
+            .px(px(6.))
+            .py(px(6.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.closing {
+                        "Saving before closing…"
+                    } else if !self.writable {
+                        "This chat is read-only."
+                    } else if saved {
+                        "Saved privately · Enter to send"
+                    } else {
+                        "Saving draft…"
+                    }),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .flex_shrink_0()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("follow-up")
+                            .rounded(px(crate::appearance::Radius::SMALL))
+                            .label("Follow-up")
+                            .checked(self.follow_up)
+                            .on_change(cx.listener(|view, next, _, cx| {
+                                view.follow_up = *next;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("local-stop")
+                            .small()
+                            .ghost()
+                            .label("Stop")
+                            .disabled(blocked || is_new || !self.busy)
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                if view.selected.as_ref() == Some(&stop_key) {
+                                    view.submit(true, window, cx);
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new("local-send")
+                            .primary()
+                            .small()
+                            .label(if settled && !draft.text.is_empty() {
+                                "Edit to resend"
+                            } else if is_new {
+                                "Create chat"
+                            } else {
+                                "Send"
+                            })
+                            .disabled(
+                                blocked
+                                    || settled
+                                    || !draft.editable()
+                                    || draft.text.trim().is_empty()
+                                    || (is_new && !std::path::Path::new(&draft.cwd).is_absolute()),
+                            )
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                if view.selected.as_ref() == Some(&send_key) {
+                                    view.submit(false, window, cx);
+                                }
+                            })),
+                    ),
+            );
+        #[cfg(any(test, feature = "native-probes"))]
+        let controls = controls.test_support();
+        footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
         if let Some(error) = self.error.or(self.state.error) {
             footer = footer.child(div().text_xs().text_color(cx.theme().danger).child(error));
         }
@@ -853,7 +846,19 @@ impl Render for ChatEditor {
                     ),
             );
         }
-        footer.into_any_element()
+        let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
+        if let Some(label) = self.activity_label() {
+            let indicator = div()
+                .id("activity-indicator")
+                .px(px(10.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label);
+            #[cfg(any(test, feature = "native-probes"))]
+            let indicator = indicator.test_support();
+            shell = shell.child(indicator);
+        }
+        shell.child(footer).into_any_element()
     }
 }
 

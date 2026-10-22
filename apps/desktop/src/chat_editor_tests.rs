@@ -31,6 +31,16 @@ fn setup(
     Entity<ChatEditor>,
     async_channel::Receiver<WriteCommand>,
 ) {
+    setup_width(cx, 960.)
+}
+fn setup_width(
+    cx: &mut TestAppContext,
+    width: f32,
+) -> (
+    gpui_kit::AnyWindowHandle,
+    Entity<ChatEditor>,
+    async_channel::Receiver<WriteCommand>,
+) {
     let (client, commands) = Interaction::recording();
     let book = book();
     cx.update(gpui_kit::init);
@@ -39,7 +49,7 @@ fn setup(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     Default::default(),
-                    size(px(960.), px(500.)),
+                    size(px(width), px(500.)),
                 ))),
                 show: false,
                 ..Default::default()
@@ -66,6 +76,93 @@ fn setup(
     });
     cx.run_until_parked();
     (handle, view, commands)
+}
+
+#[gpui_kit::test]
+fn compact_composer_keeps_controls_inside_and_text_live(cx: &mut TestAppContext) {
+    for width in [320., 472., 760.] {
+        let (handle, view, commands) = setup_width(cx, width);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let tray = window.find("composer-tray").bounds();
+            let input = window.find("composer-input").bounds();
+            let controls = window.find("composer-controls").bounds();
+            let stop = window.find("local-stop").bounds();
+            let send = window.find("local-send").bounds();
+            assert!(
+                tray.size.height <= px(88.),
+                "compact single-line tray: {tray:?}"
+            );
+            assert!(
+                input.size.height <= px(44.),
+                "no doubled text padding: {input:?}"
+            );
+            assert_eq!(
+                input.bottom(),
+                controls.top(),
+                "no extra gap between field and controls"
+            );
+            assert!(window.find("activity-indicator").bounds().bottom() < tray.top());
+            for rect in [input, controls, stop, send] {
+                assert!(
+                    rect.left() >= tray.left() && rect.right() <= tray.right(),
+                    "width {width}: {rect:?} outside {tray:?}"
+                );
+                assert!(rect.top() >= tray.top() && rect.bottom() <= tray.bottom());
+            }
+            assert_eq!(stop.center().y, send.center().y, "one compact control row");
+            window.input("Draft 👩‍💻 e\u{301} stays live", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                view.changed(cx);
+                assert_eq!(
+                    view.text.read(cx).value().as_ref(),
+                    "Draft 👩‍💻 e\u{301} stays live"
+                );
+                assert_eq!(view.cache["chat:a"].text, "Draft 👩‍💻 e\u{301} stays live");
+                assert!(view.cache["chat:a"].revision > 0);
+            });
+            view.update(cx, |view, cx| {
+                view.text.update(cx, |text, cx| {
+                    text.set_value("A long draft 👩‍💻 e\u{301}\n".repeat(40), window, cx)
+                });
+            });
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let tray = window.find("composer-tray").bounds();
+            let input = window.find("composer-input").bounds();
+            let controls = window.find("composer-controls").bounds();
+            assert!(
+                input.size.height > px(80.) && input.size.height <= px(160.),
+                "existing six-line growth cap: {input:?}"
+            );
+            assert!(tray.size.height <= px(210.));
+            assert_eq!(input.bottom(), controls.top());
+            assert!(controls.bottom() <= tray.bottom());
+            view.update(cx, |view, cx| {
+                view.changed(cx);
+                assert_eq!(
+                    view.cache["chat:a"].text,
+                    "A long draft 👩‍💻 e\u{301}\n".repeat(40)
+                );
+            });
+            window.remove_window();
+        })
+        .unwrap();
+        while let Ok(command) = commands.try_recv() {
+            assert!(
+                !matches!(command, WriteCommand::Submit { .. }),
+                "layout/typing must never submit"
+            );
+        }
+        cx.run_until_parked();
+    }
 }
 
 #[gpui_kit::test]
