@@ -35,6 +35,8 @@ impl LocalViewer {
         let search = self.chats.read(cx).query_input();
         if search.update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
+            || (matches!(self.page, Page::Inbox(_))
+                && !self.inbox.update(cx, |i, cx| i.prepare_jump(w, cx)))
         {
             return;
         }
