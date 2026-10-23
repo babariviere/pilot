@@ -62,6 +62,25 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             settle(cx, h);
+            if !baseline {
+                let glyphs = cx
+                    .update_window(h, |_, w, _| {
+                        [
+                            "nav-home-title-icon",
+                            "nav-inbox-title-icon",
+                            "nav-all-chats-title-icon",
+                        ]
+                        .map(|id| (id, w.find(id).bounds()))
+                    })
+                    .unwrap();
+                let image = cx.capture_screenshot(h).unwrap();
+                let scale = image.width() as f32 / width;
+                for (id, bounds) in glyphs {
+                    crate::icon_probe::assert_painted(bounds, scale, id, |x, y| {
+                        image.get_pixel(x, y).0
+                    });
+                }
+            }
             capture(
                 cx,
                 h,
@@ -89,11 +108,14 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                     for id in ["nav-home", "nav-inbox", "nav-all-chats"] {
                         let button = w.find(id).bounds();
                         let label = w.find(format!("{id}-title")).bounds();
+                        let icon = w.find(format!("{id}-title-icon")).bounds();
                         assert!(
-                            label.left() >= button.left()
-                                && label.left() - button.left() < px(12.)
+                            icon.left() >= button.left()
+                                && icon.left() - button.left() < px(12.)
+                                && icon.size == size(w.rem_size(), w.rem_size())
+                                && (label.left() - icon.right() - w.rem_size() * 0.5).abs() < px(0.5)
                                 && label.right() <= button.right(),
-                            "{id} label actually aligns left within mounted button"
+                            "{id} uses a painted-size leading slot and left-aligned label, not centered content"
                         );
                     }
                 }
@@ -149,9 +171,11 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 if !baseline {
                     let button = w.find("project-overview").bounds();
                     let label = w.find("project-overview-title").bounds();
+                    let icon = w.find("project-overview-title-icon").bounds();
                     assert!(
-                        label.left() >= button.left()
-                            && label.left() - button.left() < px(12.)
+                        icon.left() >= button.left()
+                            && icon.left() - button.left() < px(12.)
+                            && (label.left() - icon.right() - w.rem_size() * 0.5).abs() < px(0.5)
                             && label.right() <= button.right()
                     );
                 }

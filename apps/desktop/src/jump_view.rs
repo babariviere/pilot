@@ -1,4 +1,5 @@
 //! Ephemeral bounded search UI. Dropping it cancels work and releases metadata.
+use crate::app_icon::AppIcon;
 use crate::jump::{Catalog, Destination, Matches, Query, Snapshot};
 use gpui_kit::{
     App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement,
@@ -113,6 +114,13 @@ impl ListDelegate for JumpList {
         let e = self.entry(ix)?;
         let owner = self.owner.clone();
         let destination = e.destination.clone();
+        let icon = match &destination {
+            Destination::Home => AppIcon::Home,
+            Destination::Inbox => AppIcon::Inbox,
+            Destination::Chats | Destination::Chat(_) => AppIcon::Chats,
+            Destination::Overview(_) => AppIcon::Overview,
+            Destination::Project(_) => AppIcon::Project,
+        };
         let epoch = self.epoch;
         Some(
             ListItem::new(SharedString::from(format!("jump-{}", e.id)))
@@ -125,23 +133,31 @@ impl ListDelegate for JumpList {
                     div()
                         .id(SharedString::from(format!("jump-row-{}", e.id)))
                         .test_support()
-                        .v_flex()
+                        .h_flex()
+                        .gap_2()
                         .w_full()
                         .min_w_0()
                         .px_2()
                         .py_1()
+                        .child(icon.icon())
                         .child(
                             div()
-                                .truncate()
-                                .text_sm()
-                                .child(SharedString::from(e.title.clone())),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(e.detail.clone())),
+                                .v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_sm()
+                                        .child(SharedString::from(e.title.clone())),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(SharedString::from(e.detail.clone())),
+                                ),
                         ),
                 ),
         )

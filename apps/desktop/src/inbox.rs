@@ -1,5 +1,6 @@
 //! Bounded, read-only loaded-summary Inbox. No transport, authority or timers.
 use crate::{
+    app_icon::AppIcon,
     attention::Kind,
     local_model::{Chat, Project},
 };
@@ -154,9 +155,12 @@ impl ListDelegate for InboxList {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         div()
+            .h_flex()
+            .gap_2()
             .p_4()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
+            .child(AppIcon::Inbox.icon())
             .child(if self.loaded {
                 "No supported chat attention in these loaded summaries."
             } else {

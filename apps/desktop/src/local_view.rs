@@ -31,6 +31,7 @@ pub(crate) mod workbench_probe;
 mod workbench_view;
 use crate::{
     LocalOptions, TranscriptView,
+    app_icon::AppIcon,
     app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
     appearance::{self},
     chat_editor::{ChatEditor, EditorEvent},
@@ -1376,11 +1377,11 @@ impl Render for LocalViewer {
                         .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
-                            .child(Button::new("earlier").ghost().small().label("Earlier").disabled(self.state.cursor.is_none()||self.state.page_busy)
+                            .child(Button::new("earlier").ghost().small().label("Earlier").icon(AppIcon::Earlier.asset()).disabled(self.state.cursor.is_none()||self.state.page_busy)
                                 .on_click(cx.listener(|view,_,_,cx|view.earlier(true,cx))))
-                            .child(Button::new("latest").ghost().small().label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
+                            .child(Button::new("latest").ghost().small().icon(AppIcon::Latest.asset()).label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
                                 .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
-                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
+                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
                                 .on_click(cx.listener(|view,_,_,cx|{view.artifacts_open = !view.artifacts_open;if !view.artifacts_open{view.artifacts.update(cx,|p,_|p.close());}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
@@ -1393,7 +1394,7 @@ impl Render for LocalViewer {
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
                     .child(div().w_full().max_w(px(760.)).mx_auto().child(self.editor.clone()))
                     .child(div().v_flex().px_3().py_1().gap_1().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground)
-                        .child(Button::new("view-details").ghost().small().self_start().label(if self.details_open{"Hide details"}else{"Details"})
+                        .child(Button::new("view-details").ghost().small().self_start().icon(AppIcon::Info.asset()).label(if self.details_open{"Hide details"}else{"Details"})
                             .on_click(cx.listener(|view,_,_,cx|{view.details_open = !view.details_open;cx.notify();})))
                         .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
                         .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
