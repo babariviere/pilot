@@ -1240,6 +1240,12 @@ fn actual_security_framework_validates_whole_temporary_bundle_identity_version_a
         installer::MacPlatform.verify(&app, &other, "101.1", None),
         Err(Error::Signature)
     );
+    let mut wrong_team = trust();
+    wrong_team.code_requirement = "identifier \"com.example.synthetic.next\" and certificate leaf[subject.OU] = \"WRONGTEAM\"".into();
+    assert_eq!(
+        installer::MacPlatform.verify(&app, &wrong_team, "101.1", None),
+        Err(Error::Signature)
+    );
     fs::write(
         app.join("Contents/MacOS/updater-fixture"),
         b"tampered executable",
