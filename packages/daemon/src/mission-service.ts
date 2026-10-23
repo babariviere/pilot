@@ -454,8 +454,6 @@ export class MissionService {
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
 		const message = [draftMessage(mission.title), mission.goal, request.message?.trim()].filter(Boolean).join("\n\n");
-		if (message.length > 4000)
-			throw new Error("Opening message is too long (max 4000). Shorten the goal or context.");
 		const project = this.projects.require(mission.projectId);
 		const selection = await this.sessions.selectTaskModel(
 			project.path,
