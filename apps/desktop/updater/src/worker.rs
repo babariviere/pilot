@@ -19,6 +19,8 @@ enum Job {
     Download(u64, Candidate, Access, Cancellation),
     Prepare(u64, Safety),
     Commit(u64, Safety),
+    HelperStopped(u64, Error),
+    Shutdown,
 }
 impl Job {
     fn operation(&self) -> u64 {
@@ -27,13 +29,15 @@ impl Job {
             | Self::Download(id, ..)
             | Self::Prepare(id, ..)
             | Self::Commit(id, ..) => *id,
+            Self::HelperStopped(id, _) => *id,
+            Self::Shutdown => 0,
         }
     }
 }
 
 pub struct Worker {
     sender: Option<SyncSender<Job>>,
-    receiver: Receiver<Completion>,
+    receiver: Option<Receiver<Completion>>,
     access: Option<Access>,
     cancellation: Option<(u64, Cancellation)>,
     stopped: Arc<AtomicBool>,
@@ -52,24 +56,30 @@ impl Worker {
             })
             .ok_or(Error::Unconfigured)?
             .to_owned();
-        let (sender, jobs) = mpsc::sync_channel(1);
+        let (sender, jobs) = mpsc::sync_channel::<Job>(1);
         let (results, receiver) = mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
         let shutdown = stopped.clone();
+        let event_sender = sender.clone();
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
                 let mut verified = None;
                 let mut staged = None;
                 let mut prepared = None;
+                let mut helper_operation = None;
                 while let Ok(job) = jobs.recv() {
-                    if shutdown.load(Ordering::Acquire) {
+                    if shutdown.load(Ordering::Acquire) || matches!(job, Job::Shutdown) {
                         break;
+                    }
+                    if matches!(job, Job::HelperStopped(id, _) if helper_operation != Some(id)) {
+                        continue;
                     }
                     let operation = job.operation();
                     let result = (|| match job {
                         Job::Check(_, access, cancel) => {
                             prepared = None;
+                            helper_operation = None;
                             staged = None;
                             let release = Transport::new()?.discover(&trust, &access, &cancel)?;
                             let outcome = match &release {
@@ -107,15 +117,23 @@ impl Worker {
                             )?);
                             Ok(Outcome::Staged(candidate))
                         }
-                        Job::Prepare(_, safety) => {
+                        Job::Prepare(id, safety) => {
                             safety.validate()?;
                             if prepared.is_some() {
                                 return Err(Error::Busy);
                             }
                             MacPlatform.verify(&target, &trust, &trust.current_build, None)?;
+                            let sender = event_sender.clone();
+                            let stopped = shutdown.clone();
                             prepared = Some(PreparedExit::launch(
                                 staged.as_ref().ok_or(Error::Identity)?,
+                                move |error| {
+                                    if !stopped.load(Ordering::Acquire) {
+                                        let _ = sender.send(Job::HelperStopped(id, error));
+                                    }
+                                },
                             )?);
+                            helper_operation = Some(id);
                             Ok(Outcome::ExitPrepared)
                         }
                         Job::Commit(_, safety) => {
@@ -123,6 +141,12 @@ impl Worker {
                             prepared.as_mut().ok_or(Error::Identity)?.commit()?;
                             Ok(Outcome::ExitCommitted)
                         }
+                        Job::HelperStopped(_, error) => {
+                            prepared = None;
+                            helper_operation = None;
+                            Ok(Outcome::HelperStopped(error))
+                        }
+                        Job::Shutdown => unreachable!(),
                     })();
                     let outcome = match result {
                         Ok(outcome) => outcome,
@@ -143,7 +167,7 @@ impl Worker {
             .map_err(|_| Error::Native)?;
         Ok(Self {
             sender: Some(sender),
-            receiver,
+            receiver: Some(receiver),
             access: None,
             cancellation: None,
             stopped,
@@ -153,7 +177,7 @@ impl Worker {
         self.access = Some(access);
     }
     pub fn take_completion(&mut self) -> Option<Completion> {
-        let completion = self.receiver.try_recv().ok()?;
+        let completion = self.receiver.as_ref()?.try_recv().ok()?;
         self.cancellation = None;
         Some(completion)
     }
@@ -197,7 +221,10 @@ impl Backend for Worker {
         if let Some((_, cancel)) = self.cancellation.take() {
             cancel.cancel();
         }
-        self.sender = None;
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(Job::Shutdown);
+        }
+        self.receiver = None; // unblock any pending result send; never strand the worker
     }
 }
 impl Drop for Worker {
