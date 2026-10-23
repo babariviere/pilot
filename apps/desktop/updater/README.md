@@ -146,6 +146,10 @@ already acknowledged/fenced install intent; safety must be established before se
 
 Stages are private same-volume directories, permanent target lock files are never unlinked.
 Writable installation parents/unsafe ancestors are rejected. The parent directory is
+checked for macOS extended ACL write/delete/security grants, not just POSIX mode bits;
+only newly created private staging has inherited ACLs stripped. Existing user paths
+are never chmod/ACL-repaired by the installer. Reopened private stages refuse allow ACLs.
+The parent directory is
 held open through extraction and the target inode rechecked immediately before the
 swap; the retained/installed inode identities are checked afterwards too. Journal
 transitions use a separate private nonblocking lock. Relaunch intent is durable before

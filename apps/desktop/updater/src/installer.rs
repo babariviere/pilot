@@ -100,6 +100,7 @@ pub fn new_stage(
     ));
     fs::create_dir(&root).map_err(|_| Error::Filesystem)?;
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).map_err(|_| Error::Filesystem)?;
+    acl_policy(&root, 1)?; // owned newly-created stage only; never repair existing ACLs
     Ok((root, lock))
 }
 
@@ -156,6 +157,7 @@ fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
         return Err(Error::Identity);
     }
     let metadata = fs::symlink_metadata(target).map_err(|_| Error::Filesystem)?;
+    acl_policy(target, 0)?;
     validate_parents(target.parent().ok_or(Error::Filesystem)?)?;
     // Deliberately no privilege escalation or administrator-owned installation support.
     // SAFETY: geteuid is a pure process identity query.
@@ -175,6 +177,7 @@ fn validate_parents(parent: &Path) -> Result<(), Error> {
     // SAFETY: geteuid is a process identity query.
     let uid = unsafe { libc::geteuid() };
     for (index, ancestor) in parent.ancestors().enumerate() {
+        acl_policy(ancestor, 0)?;
         let metadata = fs::symlink_metadata(ancestor).map_err(|_| Error::Filesystem)?;
         let safe_sticky = index > 0 && metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
         if !metadata.is_dir()
@@ -485,6 +488,7 @@ fn journal_guard(root: &Path) -> Result<File, Error> {
 }
 
 fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
+    acl_policy(root, 2)?;
     if root.parent() != target.parent()
         || !root.file_name().is_some_and(|name| {
             name.to_str().is_some_and(|name| {
@@ -509,10 +513,30 @@ fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
     Ok(())
 }
 
+pub(crate) fn acl_policy(path: &Path, policy: i32) -> Result<(), Error> {
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|_| Error::Filesystem)?;
+        // SAFETY: live NUL-terminated path; policy1 is used only immediately after mkdir.
+        if unsafe { pnu_acl_policy(path.as_ptr(), policy) } {
+            Ok(())
+        } else {
+            Err(Error::Filesystem)
+        }
+    }
+    #[cfg(not(all(target_os = "macos", feature = "native-macos")))]
+    {
+        let _ = (path, policy);
+        Ok(())
+    } // portable fixture checks, no native installer enabled
+}
+
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub struct MacPlatform;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 unsafe extern "C" {
+    fn pnu_acl_policy(path: *const libc::c_char, policy: libc::c_int) -> bool;
     fn pnu_verify_bundle(
         path: *const libc::c_char,
         identifier: *const libc::c_char,

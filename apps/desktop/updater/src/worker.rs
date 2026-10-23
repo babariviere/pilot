@@ -209,10 +209,10 @@ impl Backend for Worker {
         self.send(Job::Commit(operation, safety))
     }
     fn cancel(&mut self, operation: u64) {
-        if let Some((id, cancel)) = &self.cancellation {
-            if *id == operation {
-                cancel.cancel();
-            }
+        if let Some((id, cancel)) = &self.cancellation
+            && *id == operation
+        {
+            cancel.cancel();
         }
     }
     fn teardown(&mut self) {
