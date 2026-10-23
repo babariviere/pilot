@@ -91,8 +91,19 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
             .within("step-toggle-call:a")
             .find("disclosure-text")
             .bounds();
+        let leading = window
+            .within("step-toggle-call:a")
+            .find("disclosure-leading")
+            .bounds();
+        // Small chevron + quarter-rem gap + inline kind icon consume two rem.
+        // Check actual slots, not a one-icon pixel bound or a wider allowance.
+        let rem = window.rem_size();
+        assert_eq!(leading.size.width, rem * 2.);
+        assert!((label.left() - leading.right() - rem * 0.25).abs() < px(0.1));
         assert!(
-            label.left() - button.left() < px(40.),
+            leading.left() >= button.left()
+                && leading.left() - button.left() < rem
+                && label.right() <= button.right(),
             "semantic work text must be leading-aligned, not centered in the row"
         );
         assert!(view.read(cx).scroller.read(cx).is_following_tail());

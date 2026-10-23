@@ -63,6 +63,16 @@ the import and six glyph-property additions reproduces the complete prior
 artifact view byte-for-byte, including every handler and controller.
 No complete native/full-suite or readiness result is claimed yet.
 
+The first combined gate stopped in the library suite (149 passed, one failed,
+two ignored) before native suites: a prior leading-text guard assumed one
+glyph and a fixed 40-pixel budget. Tool rows now contain a chevron plus a kind
+glyph. The replacement checks their actual two-rem leading slot, quarter-rem
+label gap, leading inset and label containment, rather than widening the bound.
+Lazy parsing, pointer expansion, exact Copy and hidden-update checks remain.
+Focused job `d276035b` passed strict checks, all five tool-work regressions and
+native multiframe disclosure/anchor/lifecycle cases. The corrected combined
+source requires a fresh final gate; the interrupted gate is not reused as one.
+
 The static glyph board proves actual SVG paint within mounted bounds for every
 mapped role at 680/1100, light/dark. It is not a production-root layout test.
 The production workbench probe separately checks navigation icon pixels,
