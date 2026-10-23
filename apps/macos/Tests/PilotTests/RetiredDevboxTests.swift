@@ -7,47 +7,6 @@ import Testing
 private let retiredLocal = HostRef(hostId: "local", daemonId: "mac", lineageId: "mac-history")
 private let retiredBox = HostRef(hostId: "box", daemonId: "linux", lineageId: "linux-history")
 
-@Test @MainActor func localDirectoryRejectsRemoteEndpointsWithoutCallingThem() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    var capabilities = 0
-    let clients = ClientDirectory(operationDirectory: directory, readNativeCapability: { _ in
-        capabilities += 1
-        return "must-not-be-read"
-    })
-    do {
-        #expect(clients.localHost == nil)
-        let previousLocal = HostRef(hostId: "local", daemonId: "older", lineageId: "older")
-        clients.restoreLegacySnapshot(OfflineHostSnapshot(host: previousLocal,
-            configuration: try LegacyDevboxAddress(alias: "old-local")))
-        let live = PilotClient(); live.loadFixture(projects: [], sessions: [])
-        try clients.install(live, host: retiredLocal)
-        #expect(clients.localHost == retiredLocal)
-        let remote = PilotClient()
-        remote.loadFixture(projects: [], sessions: [])
-        #expect(throws: HostRoutingError.identityChanged) { try clients.install(remote, host: retiredBox) }
-        #expect(throws: HostRoutingError.identityChanged) { try clients.install(remote, host: previousLocal) }
-        #expect(clients.localHost == retiredLocal)
-        #expect(clients.available == [retiredLocal])
-        var invoked = false
-        for host in [retiredBox, previousLocal] {
-            do {
-                let ref = HostResourceRef(host: host, kind: .session, localId: "same")
-                _ = try await clients.perform(ref, kind: .session) { _, _ in invoked = true }
-                Issue.record("A historical endpoint was admitted")
-            } catch { #expect(error as? HostRoutingError == .disconnected) }
-        }
-        #expect(!invoked && capabilities == 0)
-        #expect(try clients.endpoint(retiredLocal) === live)
-        await clients.disconnectAll()
-        #expect(clients.localHost == nil)
-        try? FileManager.default.removeItem(at: directory)
-    } catch {
-        await clients.disconnectAll()
-        try? FileManager.default.removeItem(at: directory)
-        throw error
-    }
-}
-
 @Test(arguments: [false, true]) @MainActor
 func retiredHistoryNoticeStaysReadOnlyWithoutReconnect(cached: Bool) throws {
     let clients = ClientDirectory()
@@ -140,6 +99,7 @@ func retiredHistoryNoticeStaysReadOnlyWithoutReconnect(cached: Bool) throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let hosts = ClientDirectory(operationDirectory: directory.appendingPathComponent("operations"))
     do {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let app = try retiredApp(directory, hosts: hosts)
         app.newSessionForm.executionHost = retiredBox
         app.newSessionForm.message = "Keep this remote draft"

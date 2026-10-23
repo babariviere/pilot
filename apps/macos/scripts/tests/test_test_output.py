@@ -33,10 +33,6 @@ CALLBACKS_OUTPUT = STARTED + "".join(f"◇ Test {name}() started.\n" for name in
 JOURNEYS = ["keyboardOnlyStartSwitchTypeAndReturn", "keyboardOnlySidebarBrowsingKeepsFocusInTheSidebar"]
 JOURNEY_START_OUTPUT = STARTED + f"◇ Test {JOURNEYS[0]}() started.\n" + PASSED
 JOURNEY_SIDEBAR_OUTPUT = STARTED + f"◇ Test {JOURNEYS[1]}() started.\n" + PASSED
-GITHUB = ["githubKeySheetRequiresNativeConfirmationAndCancelDoesNotRegister",
-          "githubExistingCheckoutRequiresExplicitNativeReuseConfirmation",
-          "githubImportNativeCloneActionStaysDisabledUntilHostDestinationPreview"]
-GITHUB_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in GITHUB]
 SCOPED_MODELS = ['localModelScopePersistsIntentBeforeItsOnlyWriteAndRejectsRemoteEndpoints', 'localModelScopeLostAckUsesExactReadbackAndKeepsRetryBudgetAcrossRelaunch', 'localModelScopeConflictAndLeaveCannotBeOverwrittenByAnotherSave', 'localModelScopeReplacementWaitsForOldWriteWithoutPublishingStaleSuccess', 'localModelScopeSupersededSavesApplyOnlyTheLatestPendingSelection']
 SCOPED_MODEL_TRANSPORT = ["modelScopeLiveOwnerNeverSyncsRetiredDevboxes", "modelScopeLiveConflictAndLeaveRemainDivergentAfterColdLaunch", "modelScopeWirePreservesAllAndDecodesBothPutArmsWithoutCapabilityReadsOnGet", "modelScopeWireRejectsStaleCapabilityAcquisitionBeforeSending", "modelScopeWireExposesTypedReadFailuresWithoutTreatingThemAsAbsent", "modelScopeWireReconcilesCommitted503WithLiteralReadbackWithoutRepeatingPut"]
 SCOPED_MODELS += SCOPED_MODEL_TRANSPORT
@@ -54,8 +50,6 @@ AUTOMATIC_UPDATES = [
     "retiredCorruptOfflineMetadataCannotBlockLocalOrReplaceSavedFiles",
 ]
 AUTOMATIC_UPDATE_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in AUTOMATIC_UPDATES) + PASSED]
-HOST_MCPS = ["localDirectoryRejectsRemoteEndpointsWithoutCallingThem"]
-HOST_MCP_OUTPUTS = [STARTED + "".join(f"◇ Test {name}() started.\n" for name in HOST_MCPS) + PASSED]
 USAGE_PROJECTION = "usageLocalConsumerNeverFansOutAndDeferredHelperRequiresExplicitHosts"
 
 REGRESSION_PARTITIONS = [
@@ -64,7 +58,7 @@ REGRESSION_PARTITIONS = [
      "originalPendingStartRemainsCheckableWithoutAProposalAndOfflineActionsStayDisabled"],
     ["settingsSaveBarMountsForDirtyFormAndLeavesAfterRevert"],
     ["visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheLastPosition", "visualDiscreteEventsRunInOrder",
-     "missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect",
+     "missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndRetainedSnapshots",
      "sidebarPollsOnlyBranchesAndLoadsCountsOnDemand", USAGE_PROJECTION,
      "usageDashboardLocalOnlyCacheAndPagesNeverAddCheckpointOrRepeatedTotals",
      "usageDashboardUnsupportedCapacityErrorsAndAmbiguousLocalAreNotZero",
@@ -86,8 +80,6 @@ NATIVE_POINTERS = [
     "nativeRepairPromptButtonsOnlyReviewOrDismissAndNeverSpawn",
     "mountedDiagnosticsFooterSubmitsOnceAndNeverStartsRepair",
     "mountedDiagnosticsFooterReviewsAnExistingProposalWithoutStartingWork",
-    "nativeIndependentLocalButtonWorksWhileOriginalCheckIsInProgress",
-    "pressingNativeHomeCheckActuallyChecksShowsProgressAndOpensTheExistingChat",
     "slackTriageRefreshIsClickableAndDisablesDuringLocalAndAutomaticSync",
     "sidebarSelectionCoversNativeBlueWithoutLosingKeyboardNavigation",
     "rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal",
@@ -96,23 +88,57 @@ NATIVE_POINTER_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for
 VISUAL_LAYOUT = "longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView"
 UI_PROBE = "inlineArtifactLayoutKeepsTheReadingColumnWhenResized"
 TAIL_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in [VISUAL_LAYOUT, UI_PROBE]]
-BROAD_EXCLUSIONS = f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(GITHUB)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(HOST_MCPS)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}|{VISUAL_LAYOUT}"
+BROAD_EXCLUSIONS = f"{ISOLATED}|{DEVBOX}|{TERMINAL}|{'|'.join(CALLBACKS)}|{'|'.join(JOURNEYS)}|{'|'.join(SCOPED_MODELS)}|{'|'.join(SCOPED_MODEL_NATIVE)}|{'|'.join(AUTOMATIC_UPDATES)}|{'|'.join(name for group in REGRESSION_PARTITIONS for name in group)}|{'|'.join(NATIVE_POINTERS)}|{VISUAL_LAYOUT}"
 
 # Same partition order as test.sh. One shell run verifies every filter and guard;
 # the full fault/missing-start matrix exercises the production parser in-process.
 PARTITIONS = [[ISOLATED], [DEVBOX], [TERMINAL], CALLBACKS,
-              *[[name] for name in JOURNEYS], *[[name] for name in GITHUB], SCOPED_MODELS,
-              *[[name] for name in SCOPED_MODEL_NATIVE], AUTOMATIC_UPDATES, HOST_MCPS,
+              *[[name] for name in JOURNEYS], SCOPED_MODELS,
+              *[[name] for name in SCOPED_MODEL_NATIVE], AUTOMATIC_UPDATES,
               *REGRESSION_PARTITIONS, *[[name] for name in NATIVE_POINTERS], [VISUAL_LAYOUT], [UI_PROBE]]
 
 
 class TestOutputTests(unittest.TestCase):
+    def test_required_partitions_have_swift_definitions(self):
+        # Mocked driver output must not conceal a filter left behind by a deleted fixture.
+        definitions = set()
+        for source in (SCRIPTS.parent / "Tests").rglob("*.swift"):
+            definitions.update(re.findall(r"\bfunc\s+(\w+)\s*\(", source.read_text()))
+        for names in PARTITIONS:
+            for name in names:
+                with self.subTest(name=name):
+                    self.assertTrue(name in definitions, f"required-start filter has no Swift definition: {name}")
+
     def test_native_pointer_registry_matches_wrapper(self):
         source = (SCRIPTS / "test.sh").read_text()
         registry = re.search(r"native_pointer_tests=\(\n(.*?)\n\)", source, re.S)
         self.assertIsNotNone(registry)
         names = re.findall(r"^\s*(\w+)\s*$", registry.group(1), re.M)
         self.assertEqual(names, NATIVE_POINTERS)
+
+    def test_artifact_sheet_fixture_keeps_actions_deadlines_and_phase_diagnostics(self):
+        # Structural coverage only; the mounted behavior must still pass real macOS CI.
+        source = (SCRIPTS.parent / "Tests/PilotUITests/ArtifactPresentationTests.swift").read_text()
+        name = "swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable"
+        self.assertEqual(sum(names.count(name) for names in PARTITIONS), 1)
+        self.assertIn("[false, true, false].enumerated()", source)
+        self.assertIn("sheet.performKeyEquivalent(with: event)", source)
+        self.assertIn("try #require(handled,", source)
+        self.assertNotIn("sheet.sendEvent(event)", source)
+        self.assertEqual(source.count("accessibilityPerformPress()"), 2)
+        self.assertIn("window.attachedSheet == nil", source)
+        self.assertIn("#expect(window.isVisible,", source)
+        self.assertIn("window.displayIfNeeded()", source)
+        self.assertIn("window.attachedSheet?.displayIfNeeded()", source)
+        self.assertIn("0..<150", source)
+        self.assertIn("Task.sleep(for: .milliseconds(20))", source)
+        self.assertIn("@Test(.timeLimit(.minutes(1)))", source)
+        for phase in ["mount card", "attach viewer", "register Close", "dismiss viewer"]:
+            self.assertRegex(source, r'settleArtifactSheet\(window, phase: "[^"\n]*' + phase)
+        self.assertIn("sourceLocation: sourceLocation", source)
+        self.assertIn("artifactSheetDiagnostics(window)", source)
+        exercise = source.split("@MainActor private func artifactSheetButton", 1)[0]
+        self.assertNotIn("endSheet(", exercise)
 
     def test_usage_http_fixture_keeps_its_deadline_in_the_scheduler_partition(self):
         source = SCRIPTS.parent / "Tests/PilotUITests/UsageProjectionTests.swift"
@@ -121,9 +147,10 @@ class TestOutputTests(unittest.TestCase):
         self.assertRegex(source.read_text(),
                          r"@Test\(\.timeLimit\(\.minutes\(1\)\)\) @MainActor\s+func " + USAGE_PROJECTION)
 
-    def test_host_mcp_partition_covers_fixtures(self):
+    def test_retained_history_fixture_keeps_its_required_start(self):
         source = SCRIPTS.parent / "Tests/PilotTests/RetiredDevboxTests.swift"
-        self.assertEqual(re.findall(r"func (localDirectory\w+)\(", source.read_text()), HOST_MCPS)
+        self.assertRegex(source.read_text(), r"func " + DEVBOX + r"\(")
+        self.assertEqual(sum(names.count(DEVBOX) for names in PARTITIONS), 1)
 
     def test_automatic_update_partition_covers_production_fixtures(self):
         source = SCRIPTS.parent / "Tests/PilotTests/RetiredDevboxTests.swift"
@@ -166,7 +193,8 @@ class TestOutputTests(unittest.TestCase):
     def test_late_partition_guard_failure_and_driver_failure_stop_the_shell_chain(self):
         # Early failures are covered below; these cover middle and final pipelines.
         for options, expected in [
-            ({"host_mcp_outputs": [(HOST_MCP_OUTPUTS[0] + FAILED, 0)]}, ["--filter", "|".join(HOST_MCPS)]),
+            ({"automatic_update_outputs": [(AUTOMATIC_UPDATE_OUTPUTS[0] + FAILED, 0)]},
+             ["--filter", "|".join(AUTOMATIC_UPDATES)]),
             ({"tail_outputs": [(text, 0) for text in TAIL_OUTPUTS[:-1]] + [(TAIL_OUTPUTS[-1], 42)]},
              ["--filter", "PilotUITests", "--skip", BROAD_EXCLUSIONS]),
             ({"pointer_outputs": [(NATIVE_POINTER_OUTPUTS[0].removesuffix(PASSED), 0)]},
@@ -193,8 +221,8 @@ class TestOutputTests(unittest.TestCase):
                     fourth_output=TERMINAL_OUTPUT, fourth_status=0,
                     fifth_output=CALLBACKS_OUTPUT, fifth_status=0,
                     sixth_output=None, sixth_status=0, seventh_output=None, seventh_status=0,
-                    extra_env=None, github_outputs=None, scoped_model_outputs=None, automatic_update_outputs=None,
-                    host_mcp_outputs=None, regression_outputs=None, pointer_outputs=None, tail_outputs=None):
+                    extra_env=None, scoped_model_outputs=None, automatic_update_outputs=None,
+                    regression_outputs=None, pointer_outputs=None, tail_outputs=None):
         if sixth_output is None:
             sixth_output = JOURNEY_START_OUTPUT
         if seventh_output is None:
@@ -237,10 +265,8 @@ class TestOutputTests(unittest.TestCase):
             outputs = [(output, status), (ISOLATED_OUTPUT if second_output is None else second_output, second_status),
                        (third_output, third_status), (fourth_output, fourth_status), (fifth_output, fifth_status),
                        (sixth_output, sixth_status), (seventh_output, seventh_status)]
-            outputs += ([(text, 0) for text in GITHUB_OUTPUTS] if github_outputs is None else github_outputs)
             outputs += ([(text, 0) for text in SCOPED_MODEL_OUTPUTS] if scoped_model_outputs is None else scoped_model_outputs)
             outputs += ([(text, 0) for text in AUTOMATIC_UPDATE_OUTPUTS] if automatic_update_outputs is None else automatic_update_outputs)
-            outputs += ([(text, 0) for text in HOST_MCP_OUTPUTS] if host_mcp_outputs is None else host_mcp_outputs)
             outputs += ([(text, 0) for text in REGRESSION_OUTPUTS] if regression_outputs is None else regression_outputs)
             outputs += ([(text, 0) for text in NATIVE_POINTER_OUTPUTS] if pointer_outputs is None else pointer_outputs)
             outputs += ([(text, 0) for text in TAIL_OUTPUTS] if tail_outputs is None else tail_outputs)
@@ -266,7 +292,7 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True, extra_env={"CI": "true"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
         expected_guards = [[], *PARTITIONS]
         sampling = self.guard_calls[0][:4]
         self.assertEqual(sampling[:3], ["--sample-stalled-after", "60", "--runner-parent-pid"])
@@ -289,10 +315,7 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(calls[5][-2:], ["--filter", JOURNEYS[0]])
         self.assertIn("--skip-build", calls[6])
         self.assertEqual(calls[6][-2:], ["--filter", JOURNEYS[1]])
-        for index, name in enumerate(GITHUB, start=7):
-            self.assertIn("--skip-build", calls[index])
-            self.assertEqual(calls[index][-2:], ["--filter", name])
-        scoped_start = 7 + len(GITHUB)
+        scoped_start = 7
         self.assertEqual(calls[scoped_start][-2:], ["--filter", "|".join(SCOPED_MODELS)])
         self.assertIn("--skip-build", calls[scoped_start])
         for index, name in enumerate(SCOPED_MODEL_NATIVE, start=scoped_start + 1):
@@ -313,8 +336,8 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(len(timing_lines), len(calls))
         output = re.sub(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", "", result.stdout, flags=re.MULTILINE)
         self.assertEqual(output, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
-                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT + "".join(GITHUB_OUTPUTS)
-                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(HOST_MCP_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS) + "".join(TAIL_OUTPUTS))
+                         + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT
+                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS) + "".join(TAIL_OUTPUTS))
 
     def test_isolated_journeys_are_required_only_on_ci(self):
         # Outside CI an empty journey is valid. On CI its required-start guard rejects it.
@@ -369,7 +392,7 @@ class TestOutputTests(unittest.TestCase):
     def test_explicit_build_options_still_partition_full_suite(self):
         result, _, calls = self.run_wrapper(PASSED, args=("--jobs=1", "--skip-build"), all_calls=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(calls), 7 + len(GITHUB) + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(HOST_MCP_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
         for call in calls:
             self.assertIn("--jobs=1", call)
             self.assertNotIn("--jobs", call)

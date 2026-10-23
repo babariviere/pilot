@@ -46,7 +46,11 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
     let choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
     #expect(choices.count == 2)
     #expect(Set(choices.map(\.id)).count == 2)
-    #expect(Set(choices.map(\.title)) == ["Repository · Local", "Repository · devbox"])
+    #expect(Set(choices.map(\.id)) == Set([local, remote].map {
+        HostResourceRef(host: $0, kind: .project, localId: project.id).storageKey
+    }))
+    // Non-Local fixtures retain an explicit alias, not a live devbox display name.
+    #expect(Set(choices.map(\.title)) == ["Repository · Local", "Repository · legacy-fixture"])
     let header = SlackTriageInboxHeader.header(total: 0, choices: choices)
     #expect(header.linkTitle == "Open triage" && header.link == nil && header.linkChoices.count == 2)
     for choice in header.linkChoices {
@@ -107,6 +111,14 @@ private let project = Project(id: "same", name: "Repository", path: "/repo",
     replacement.loadFixture(projects: [tools, duplicate], sessions: [])
     try loadClientFixture(replacement, host: remote, into: app.hosts)
     choices = SlackTriageInboxHeader.choices(hosts: app.hosts, model: app)
-    #expect(Set(choices.map(\.title)) == ["Dev tools", "Repository · Local", "repository · devbox"],
+    #expect(Set(choices.map(\.title)) == ["Dev tools", "Repository · Local", "repository · legacy-fixture"],
             "only duplicate names need hosts, including names differing only by case")
+    #expect(choices.count == 3 && Set(choices.map(\.id)).count == 3)
+    for choice in choices {
+        choice.action()
+        let ref = try HostResourceRef.decodeKey(choice.id)
+        let selected = try #require(app.selectedProjectId)
+        #expect(app.resourceRef(selected, kind: .project) == ref,
+                "adding an ambiguity label never changes the qualified destination")
+    }
 }
