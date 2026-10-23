@@ -227,8 +227,10 @@ explicit filter destinations. Counts describe loaded chat rows, never authoritat
 Inbox/approval totals. Opening rows uses the existing reader without mark-read,
 archive, status, merge or approval actions. Private review marks, other Inbox sources
 and actions remain in Swift. See [Inbox boundaries and checks](evidence/inbox.md).
-Home/dashboard, settings and full Inbox/app parity remain incomplete. macOS is the current focus;
-Linux/Wayland verification is deferred, not a delivery gate or support claim.
+Home/dashboard, settings and full Inbox/app parity remain incomplete. macOS is the current focus.
+Linux builds and launches on native Wayland; that verification covers the
+build, the link, the offscreen renderer and the visible window only, not a
+support claim. See [Linux Wayland verification](evidence/linux-wayland.md).
 
 ### Private rendered-UI capture
 
@@ -316,7 +318,19 @@ enables X11 build dependencies). This prototype does not install system packages
 It requires `WAYLAND_DISPLAY` and a reachable compositor socket, checks a real
 socket connection, and selects `WindowingModes::WAYLAND`. No X11 or XWayland
 fallback. An inherited `WAYLAND_SOCKET`-only launch is not supported in this proof.
-Linux prerequisites/linkage and real Wayland operation have not been verified here.
+
+When the distribution ships the X11 and xkbcommon runtime objects but not their
+development symlinks (`libxcb.so.1` without `libxcb.so`), the final link fails
+with `unable to find library -lxcb`. The package build script links a private
+directory of symlinks to the installed runtime objects inside Cargo's own
+`OUT_DIR` and adds it to the link search path, so the build works without root.
+The objects keep their original `SONAME`, so the runtime still loads the real
+system libraries. Installing the development packages remains the supported
+path (`libxcb-devel` and `libxkbcommon-devel` on Fedora, `libxcb1-dev` and
+`libxkbcommon-dev` on Debian, `libxcb` and `libxkbcommon` on Arch); the build
+prints the missing names and the package hints when it has to fall back. The
+build never writes outside Cargo's build directory and never installs anything.
+See [Linux Wayland verification](evidence/linux-wayland.md).
 
 Close the window or use Cmd/Ctrl-Q to flush Local drafts and exit. The synthetic
 fixture remains memory-only. This is not an installer or production lifecycle shell.
