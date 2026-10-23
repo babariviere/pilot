@@ -6,6 +6,8 @@ This is an experimental draft source checkpoint, not a merge-ready replacement.
 The synthetic fixture, input/selection fixes, bounded Local viewer and explicit
 Local create/send/Stop with private durable drafts are implemented.
 Compact tool/work presentation, adaptive light/dark chrome and a partial native visual reader are implemented.
+The Local viewer has native Appearance Settings with explicit private preference saves;
+the remaining Settings categories are unavailable, not simulated controls.
 The artifact reader remains incomplete, not a replacement/parity claim. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
@@ -13,7 +15,22 @@ Experimental Rust desktop, kept separate from the production Swift app.
 `pilot-desktop --local` uses the existing loopback API. Its user-driven write
 controls can create chats, send messages and Stop. The default launch remains a
 network-free synthetic transcript and memory-only local-echo composer, without
-disk state. No read-status/preferences writes, service installation, updater or default switch.
+disk state. No read-status writes, service installation, updater or default switch.
+
+### Appearance Settings
+
+In the Local viewer, use **Settings…** in the sidebar or **Cmd-comma**. The separate native
+window preserves the mounted chat, reader and composer, and refuses opening during marked
+text composition. Choose System, Light or Dark, then **Save changes** (or **Cmd-S**) to apply.
+Revert restores the last acknowledged choice. Unsaved, pending or unconfirmed saves must be
+resolved before managed close/quit; save errors keep the selection and offer retry.
+
+Preferences belong only to Next's private `settings/preferences-v1.json` under its own state
+directory, separate from Swift defaults and draft/delivery state. Opening/loading never
+creates the file. There is no automatic Swift import, credential access or daemon settings
+mutation. Synthetic viewers do not resolve or change production preferences. Updates and
+other missing categories state their gaps explicitly. See `docs/settings-parity.md` and
+`evidence/settings-screen.md` for ownership, supported behavior and qualified checks.
 
 ## Use real Local chats
 

@@ -1,0 +1,680 @@
+//! Real Settings feature, composed from the app's shared `ui` contract.
+//! The owner retains edits across window close; one bounded worker owns private I/O.
+use crate::{
+    settings_state::{
+        AppearancePreference, LoadedPreferences, Preferences, SettingsError, SettingsState,
+    },
+    settings_worker::{Command, SettingsWorker, Update},
+    ui::{self, Action, FieldLayout, FieldRow, Notice, ResourceLabel, Surface, Text, Tone},
+};
+use gpui_kit::{
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
+    Window, actions,
+    component::{
+        ActiveTheme, Disableable, IndexPath, Selectable, Sizable, StyledExt,
+        button::ButtonGroup,
+        list::{List, ListDelegate, ListEvent, ListItem, ListState},
+        scroll::ScrollableElement,
+    },
+    div,
+};
+use std::path::PathBuf;
+
+actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
+
+/// Non-rendering state owner retained by the Local window and any open Settings window.
+pub(crate) struct SettingsPreferences {
+    pub(super) state: SettingsState,
+    source: Option<Result<PathBuf, SettingsError>>,
+    worker: Option<SettingsWorker>,
+    updates: Option<Task<()>>,
+    generation: u64,
+    pub(super) category: Category,
+    close_notice: bool,
+}
+impl SettingsPreferences {
+    pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
+        Self {
+            state: SettingsState::default(),
+            source,
+            worker: None,
+            updates: None,
+            generation: 1,
+            category: Category::Appearance,
+            close_notice: false,
+        }
+    }
+    pub(crate) fn writable(&self) -> bool {
+        self.source.is_some() && self.state.loaded()
+    }
+    pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
+        if !self.state.begin_load() {
+            return;
+        }
+        match self.source.clone() {
+            None => {
+                self.state.finish_load(Ok(LoadedPreferences {
+                    preferences: Preferences::default(),
+                    persisted: false,
+                }));
+            }
+            Some(Err(error)) => {
+                self.state.finish_load(Err(error));
+            }
+            Some(Ok(root)) => {
+                if self.worker.is_none() {
+                    match SettingsWorker::start(root) {
+                        Err(error) => {
+                            self.state.finish_load(Err(error));
+                            cx.notify();
+                            return;
+                        }
+                        Ok((worker, updates)) => {
+                            self.worker = Some(worker);
+                            self.updates = Some(cx.spawn(async move |owner, cx| {
+                                while let Ok(update) = updates.recv().await {
+                                    if owner
+                                        .update(cx, |owner, cx| owner.accept(update, cx))
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                            }));
+                        }
+                    }
+                }
+                if let Err(error) = self
+                    .worker
+                    .as_ref()
+                    .unwrap()
+                    .command(Command::Load(self.generation))
+                {
+                    self.state.finish_load(Err(error));
+                }
+            }
+        }
+        cx.notify();
+    }
+    fn accept(&mut self, update: Update, cx: &mut Context<Self>) {
+        let committed = match update {
+            Update::Loaded(generation, result) if generation == self.generation => {
+                let preferences = result.as_ref().ok().map(|loaded| loaded.preferences);
+                self.state
+                    .finish_load(result)
+                    .then_some(preferences)
+                    .flatten()
+            }
+            Update::Saved(generation, request, result) if generation == self.generation => {
+                let success = result.is_ok();
+                (self.state.finish_save(request, result) && success)
+                    .then_some(request.preferences())
+            }
+            _ => return,
+        };
+        if let Some(preferences) = committed {
+            self.close_notice = false;
+            crate::appearance::commit_appearance(preferences.appearance, cx);
+        }
+        cx.notify();
+    }
+    pub(super) fn select(&mut self, appearance: AppearancePreference, cx: &mut Context<Self>) {
+        if self.writable() && self.state.set_appearance(appearance) {
+            cx.notify();
+        }
+    }
+    pub(super) fn save(&mut self, cx: &mut Context<Self>) {
+        if !self.writable() {
+            return;
+        }
+        let Some(request) = self.state.begin_save() else {
+            return;
+        };
+        let result = self
+            .worker
+            .as_ref()
+            .ok_or(SettingsError::Io)
+            .and_then(|worker| worker.command(Command::Save(self.generation, request)));
+        if let Err(error) = result {
+            self.state.finish_save(request, Err(error));
+        }
+        cx.notify();
+    }
+    fn revert(&mut self, cx: &mut Context<Self>) {
+        if self.state.revert() {
+            self.close_notice = false;
+            cx.notify();
+        }
+    }
+    /// Explicit recovery only. First click exposes the consequence; second confirms it.
+    fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.state.saving() || self.state.loading() || self.state.unconfirmed() {
+            return;
+        }
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("settings generation exhausted");
+        self.state = SettingsState::default();
+        self.load(cx);
+    }
+    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let ready = !self.state.saving() && !self.state.dirty() && !self.state.unconfirmed();
+        if !ready {
+            self.close_notice = true;
+            cx.notify();
+        }
+        ready
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Category {
+    Appearance,
+    Updates,
+    Availability,
+}
+impl Category {
+    const ALL: [Self; 3] = [Self::Appearance, Self::Updates, Self::Availability];
+    fn title(self) -> &'static str {
+        match self {
+            Self::Appearance => "Appearance",
+            Self::Updates => "Updates",
+            Self::Availability => "Other settings",
+        }
+    }
+    fn id(self) -> &'static str {
+        match self {
+            Self::Appearance => "settings-appearance",
+            Self::Updates => "settings-updates",
+            Self::Availability => "settings-availability",
+        }
+    }
+}
+struct Categories {
+    current: Category,
+    selected: Option<IndexPath>,
+}
+impl ListDelegate for Categories {
+    type Item = ListItem;
+    fn items_count(&self, _: usize, _: &App) -> usize {
+        Category::ALL.len()
+    }
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let category = Category::ALL.get(ix.row)?;
+        Some(
+            ListItem::new(category.id())
+                .confirmed(*category == self.current)
+                .child(ResourceLabel::new(category.title())),
+        )
+    }
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected = ix;
+        cx.notify();
+    }
+    fn perform_search(
+        &mut self,
+        _: &str,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        Task::ready(())
+    }
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        div()
+    }
+}
+
+pub(crate) enum SettingsEvent {
+    Quit,
+}
+/// One native Settings window. No project selection or canonical project mutations.
+pub(crate) struct SettingsView {
+    pub(super) preferences: Entity<SettingsPreferences>,
+    categories: Entity<ListState<Categories>>,
+    focus: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+    confirm_reload: bool,
+    #[cfg(feature = "native-probes")]
+    pub(super) render_count: u64,
+    #[cfg(feature = "native-probes")]
+    pub(super) long_labels: bool,
+}
+impl EventEmitter<SettingsEvent> for SettingsView {}
+impl Focusable for SettingsView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+impl SettingsView {
+    pub(crate) fn new(
+        preferences: Entity<SettingsPreferences>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let category = preferences.read(cx).category;
+        let categories = cx.new(|cx| {
+            ListState::new(
+                Categories {
+                    current: category,
+                    selected: None,
+                },
+                window,
+                cx,
+            )
+            .searchable(false)
+        });
+        categories.update(cx, |list, cx| {
+            list.set_selected_index(
+                Some(IndexPath::new(
+                    Category::ALL.iter().position(|c| *c == category).unwrap(),
+                )),
+                window,
+                cx,
+            )
+        });
+        let observed = cx.observe(&preferences, |_, _, cx| cx.notify());
+        let selected = cx.subscribe_in(&categories, window, |view, list, event, _, cx| {
+            if let ListEvent::Confirm(ix) = event
+                && let Some(category) = Category::ALL.get(ix.row).copied()
+            {
+                list.update(cx, |list, cx| {
+                    list.delegate_mut().current = category;
+                    cx.notify();
+                });
+                view.preferences.update(cx, |owner, cx| {
+                    owner.category = category;
+                    cx.notify();
+                });
+                view.confirm_reload = false;
+                cx.notify();
+            }
+        });
+        Self {
+            preferences,
+            categories,
+            focus: cx.focus_handle(),
+            _subscriptions: vec![observed, selected],
+            confirm_reload: false,
+            #[cfg(feature = "native-probes")]
+            render_count: 0,
+            #[cfg(feature = "native-probes")]
+            long_labels: false,
+        }
+    }
+    pub(crate) fn focus_categories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.categories
+            .update(cx, |list, cx| list.focus(window, cx));
+    }
+    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        self.preferences
+            .update(cx, |owner, cx| owner.request_close(cx))
+    }
+    fn appearance(&self, window: &Window, cx: &mut Context<Self>) -> gpui_kit::Div {
+        let owner = self.preferences.read(cx);
+        let current = owner.state.current().appearance;
+        let writable = owner.writable();
+        let disabled = !writable || owner.state.unconfirmed();
+        let label = "Appearance";
+        #[cfg(feature = "native-probes")]
+        let label = if self.long_labels {
+            "Appearance for conversations, code and every app-owned surface, including a deliberately long translated label 資料 👩‍💻"
+        } else {
+            label
+        };
+        let wide = window.viewport_size().width > gpui_kit::px(800.);
+        let options = [
+            ("settings-system", "System", AppearancePreference::System),
+            ("settings-light", "Light", AppearancePreference::Light),
+            ("settings-dark", "Dark", AppearancePreference::Dark),
+        ];
+        let controls = ButtonGroup::new("settings-theme-choice")
+            .small()
+            .outline()
+            .disabled(disabled)
+            .children(options.map(|(id, label, appearance)| {
+                let preferences = self.preferences.clone();
+                ui::action(id, label, Action::Secondary)
+                    .selected(current == appearance)
+                    .disabled(disabled)
+                    .accessibility_label(SharedString::from(format!("Appearance: {label}")))
+                    .on_click(move |_, _, cx| {
+                        preferences.update(cx, |owner, cx| owner.select(appearance, cx))
+                    })
+            }));
+        div().v_flex().gap(gpui_kit::px(ui::Space::SECTION))
+            .child(ui::header("settings-page-title", "Appearance", Text::Title)
+                .child(ui::text(Text::Caption, "Theme for this app. Changes apply only after Save.").text_color(cx.theme().muted_foreground)))
+            .child(FieldRow::new("settings-theme-field", label, controls)
+                .description("System follows macOS, including its automatic switching.")
+                .layout(if wide { FieldLayout::Inline } else { FieldLayout::Stacked }))
+            .child(div().v_flex().gap_3()
+                .child(ui::heading("settings-preview-heading", "Preview", Text::Headline))
+                .child(ui::surface(Surface::Tray, cx).p_3().rounded_lg().child(
+                    ui::surface(Surface::Card, cx).p_4().rounded_lg().v_flex().gap_3()
+                        .child(ui::text(Text::Caption, "Sample conversation").text_color(cx.theme().muted_foreground))
+                        .child(ui::text(Text::Body, "The change is ready to review. Existing behavior is preserved."))
+                        .child(ui::text(Text::Caption, "cargo test --locked").font_family(cx.theme().mono_font_family.clone()).text_color(cx.theme().muted_foreground)))))
+            .child(Notice::new("Font customization is not available yet.").tone(Tone::Quiet))
+    }
+    fn status(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
+        let owner = self.preferences.read(cx);
+        let state = &owner.state;
+        let status = if owner.source.is_none() {
+            "Synthetic viewer. Preferences are not read or written."
+        } else if state.loading() {
+            "Loading preferences…"
+        } else if state.saving() {
+            "Saving preferences…"
+        } else if state.unconfirmed() {
+            "Save is unconfirmed. Retry before making another save."
+        } else if state.dirty() {
+            "Unsaved changes"
+        } else if state.loaded() && state.committed().is_none() {
+            "Using System by default. No preference file has been written."
+        } else if state.persisted() {
+            "Appearance saved"
+        } else {
+            "Preferences unavailable"
+        };
+        let error = state.error();
+        let dirty = state.dirty();
+        let saving = state.saving();
+        let loading = state.loading();
+        let unconfirmed = state.unconfirmed();
+        let writable = owner.writable();
+        let source = owner.source.is_some();
+        let close_notice = owner.close_notice;
+        let mut panel = div().v_flex().gap_3().child(
+            ui::text(Text::Caption, status)
+                .id("settings-status")
+                .test_support()
+                .text_color(cx.theme().muted_foreground),
+        );
+        if let Some(error) = error {
+            panel = panel.child(Notice::new(error.message()).tone(Tone::Error));
+        }
+        if close_notice && (dirty || saving) && error.is_none() {
+            panel = panel.child(
+                Notice::new("Save or revert your appearance changes before closing.")
+                    .tone(Tone::Warning),
+            );
+        }
+        let owner = self.preferences.clone();
+        let reload = self.preferences.clone();
+        let save = self.preferences.clone();
+        let mut actions = div()
+            .h_flex()
+            .flex_wrap()
+            .gap_2()
+            .child(
+                ui::action("settings-revert", "Revert", Action::Secondary)
+                    .disabled(!writable || !dirty || saving || unconfirmed)
+                    .on_click(move |_, _, cx| owner.update(cx, |owner, cx| owner.revert(cx))),
+            )
+            .child(
+                ui::action(
+                    "settings-save",
+                    if error.is_some() {
+                        "Retry save"
+                    } else {
+                        "Save changes"
+                    },
+                    Action::Primary,
+                )
+                .loading(saving)
+                .disabled(!writable || !dirty || saving)
+                .tooltip("Save appearance changes (⌘S)")
+                .on_click(move |_, _, cx| save.update(cx, |owner, cx| owner.save(cx))),
+            );
+        if source && !loading && !saving && error.is_some() {
+            actions = actions.child(
+                ui::action(
+                    "settings-reload",
+                    if self.confirm_reload {
+                        "Discard edits and reload"
+                    } else {
+                        "Reload saved…"
+                    },
+                    Action::Quiet,
+                )
+                .disabled(unconfirmed)
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    if view.confirm_reload || !view.preferences.read(cx).state.dirty() {
+                        view.confirm_reload = false;
+                        reload.update(cx, |owner, cx| owner.reload(cx));
+                    } else {
+                        view.confirm_reload = true;
+                        cx.notify();
+                    }
+                })),
+            );
+        }
+        if self.confirm_reload {
+            panel = panel.child(
+                Notice::new("Reload discards your unsaved appearance selection.")
+                    .tone(Tone::Warning),
+            );
+        }
+        if self.preferences.read(cx).category == Category::Appearance || dirty || error.is_some() {
+            panel.child(actions)
+        } else {
+            panel
+        }
+    }
+}
+impl Render for SettingsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(feature = "native-probes")]
+        {
+            self.render_count += 1;
+        }
+        let category = self.preferences.read(cx).category;
+        let detail = match category {
+            Category::Appearance => self.appearance(window, cx).into_any_element(),
+            Category::Updates => div().v_flex().gap_4()
+                .child(ui::header("settings-page-title", "Updates", Text::Title))
+                .child(Notice::new("Updater integration is not available in this build.")
+                    .detail("The app-owned updater and packaging are separate work. No update checks, credentials, installs or restart controls are active here."))
+                .child(Notice::new("Appearance settings remain available.").tone(Tone::Quiet)).into_any_element(),
+            Category::Availability => div().v_flex().gap_4()
+                .child(ui::header("settings-page-title", "Other settings", Text::Title))
+                .child(Notice::new("These settings are not available in this app yet.")
+                    .detail("Notifications, Connections, Scoped models, Diagnostics, Energy and project editing remain in Swift. This app does not copy or change those preferences."))
+                .child(Notice::new("Embedded terminal support remains deferred. Project configuration and credentials keep their own authority.").tone(Tone::Quiet)).into_any_element(),
+        };
+        let status = self.status(cx);
+        div()
+            .id("settings-root")
+            .test_support()
+            .track_focus(&self.focus)
+            .key_context("Settings")
+            .size_full()
+            .h_flex()
+            .items_stretch()
+            .bg(Surface::Page.color(cx))
+            .text_color(cx.theme().foreground)
+            .on_action(cx.listener(|view, _: &CloseSettings, window, cx| {
+                if view.request_close(cx) {
+                    window.remove_window();
+                }
+            }))
+            .on_action(cx.listener(|view, _: &SaveSettings, _, cx| {
+                view.preferences.update(cx, |owner, cx| owner.save(cx));
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|_, _: &crate::transcript_view::Quit, _, cx| {
+                cx.emit(SettingsEvent::Quit);
+                cx.stop_propagation();
+            }))
+            .child(
+                ui::surface(Surface::Sidebar, cx)
+                    .id("settings-sidebar")
+                    .test_support()
+                    .v_flex()
+                    .w_40()
+                    .min_w_40()
+                    .h_full()
+                    .border_r_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        ui::text(Text::Caption, "This app")
+                            .p_3()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(div().flex_1().min_h_0().child(List::new(&self.categories)))
+                    .child(
+                        ui::text(Text::Small, "App preferences only")
+                            .p_3()
+                            .text_color(cx.theme().muted_foreground),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-detail")
+                    .test_support()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .h_full()
+                    .child(
+                        div()
+                            .id("settings-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .min_w_0()
+                            .overflow_y_scrollbar()
+                            .child(ui::page().child(detail)),
+                    )
+                    .child(
+                        div()
+                            .p_4()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .child(status),
+                    ),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::{
+        TestAppContext,
+        component::{Theme, ThemeMode},
+    };
+
+    #[gpui_kit::test]
+    fn replies_are_owner_generation_fenced_and_theme_follows_only_ack(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+            Theme::change(ThemeMode::Light, None, cx);
+        });
+        let owner =
+            cx.update(|cx| cx.new(|_| SettingsPreferences::new(Some(Err(SettingsError::Io)))));
+        owner.update(cx, |owner, cx| {
+            owner.state.begin_load();
+            owner.accept(
+                Update::Loaded(
+                    0,
+                    Ok(LoadedPreferences {
+                        preferences: Preferences {
+                            appearance: AppearancePreference::Dark,
+                        },
+                        persisted: true,
+                    }),
+                ),
+                cx,
+            );
+            assert!(owner.state.loading());
+            assert!(!cx.theme().is_dark());
+            owner.accept(
+                Update::Loaded(
+                    1,
+                    Ok(LoadedPreferences {
+                        preferences: Preferences::default(),
+                        persisted: false,
+                    }),
+                ),
+                cx,
+            );
+            assert!(owner.state.loaded());
+            // Fix the synthetic system observation for this explicit consumer test.
+            Theme::change(ThemeMode::Light, None, cx);
+            owner.select(AppearancePreference::Dark, cx);
+            let request = owner.state.begin_save().unwrap();
+            owner.select(AppearancePreference::Light, cx);
+            owner.accept(Update::Saved(0, request, Ok(())), cx);
+            assert!(owner.state.saving());
+            assert!(!cx.theme().is_dark());
+            owner.accept(
+                Update::Saved(1, request, Err(SettingsError::DurabilityUnknown)),
+                cx,
+            );
+            assert!(owner.state.unconfirmed());
+            assert!(!cx.theme().is_dark());
+            let generation = owner.generation;
+            owner.reload(cx);
+            assert_eq!(
+                generation, owner.generation,
+                "cannot discard an unconfirmed store/model pair"
+            );
+            let retry = owner.state.begin_save().unwrap();
+            assert_eq!(retry.preferences().appearance, AppearancePreference::Dark);
+            owner.accept(Update::Saved(1, retry, Ok(())), cx);
+            assert!(cx.theme().is_dark());
+            assert_eq!(
+                owner.state.current().appearance,
+                AppearancePreference::Light
+            );
+            assert!(owner.state.dirty());
+            Theme::change(ThemeMode::Light, None, cx);
+            owner.accept(Update::Saved(1, request, Ok(())), cx);
+            assert!(
+                !cx.theme().is_dark(),
+                "duplicate old receipt cannot apply a theme"
+            );
+        });
+    }
+    #[gpui_kit::test]
+    fn construction_and_synthetic_load_do_not_start_io_or_apply_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+            Theme::change(ThemeMode::Dark, None, cx);
+        });
+        let owner = cx.update(|cx| cx.new(|_| SettingsPreferences::new(None)));
+        owner.update(cx, |owner, cx| {
+            assert!(owner.worker.is_none());
+            assert!(owner.updates.is_none());
+            assert!(!owner.state.loaded());
+            owner.load(cx);
+            assert!(owner.state.loaded());
+            assert!(!owner.writable());
+            owner.select(AppearancePreference::Light, cx);
+            owner.save(cx);
+            assert!(!owner.state.dirty());
+            assert!(cx.theme().is_dark());
+            assert!(owner.worker.is_none());
+            assert!(owner.updates.is_none());
+        });
+    }
+}

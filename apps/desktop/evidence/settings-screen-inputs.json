@@ -1,0 +1,1907 @@
+{
+  "sourceCommit": "0bfea704bde7c6f82aff7bd894273516303d347a",
+  "verificationJob": "a0d4975f-2521-4da1-bf37-b1b4470e5366",
+  "scope": "Original pre-build input manifest and local synthetic offscreen captures. CI-only parent changes are qualified separately in settings-screen.md. No Linux, OS IME, visible pacing or release claim.",
+  "inputs": {
+    ".github/workflows/tests.yaml": "8be5ecad6e37e308249d15f155c4ec0c7a8bcf47ee3f7f1b8dbc348e11b44949",
+    "apps/desktop/Cargo.lock": "c2ed69e73723fb4318ea842349350a95336a745ef7c8f1e0628b457a9b0c291e",
+    "apps/desktop/Cargo.toml": "a69f9d03a26bf1d475b815f0a91fc8128301e12fbc16e046c56939e398f28a9f",
+    "apps/desktop/patches/gpui-base-0.8.0.json": "e841a77806be3fb86c9b2189f6420e438d0771a6f90d4acead1dceccde0b48e7",
+    "apps/desktop/patches/gpui-component-0.8.0.json": "df0d3f56231f2f23deb9b9fdabe86be7bed2a238e791d5f62247aaf3b6026390",
+    "apps/desktop/rust-toolchain.toml": "887f9be066a15585a2c583578e84b0fcb541126d81546276bad3d2ff00d61167",
+    "apps/desktop/scripts/bootstrap.sh": "cb2602da76b4cbd5c88d6e743c49d2d97ccdfbc9c650228d0b237dab7448abee",
+    "apps/desktop/scripts/cache-probe.py": "4bef1b0d299ea876668c2d8a7a181d04869a47dbf1b0647bd827ca328efa68e1",
+    "apps/desktop/scripts/capture.sh": "53bbe53ddfc2ca2eb6513fa4397afef9cbcc7921201ac78ad2fc62d5f9631f29",
+    "apps/desktop/scripts/cargo.sh": "f14d6f931fa61566557d2e620d258248a3d3661a46e625bd1ca24d5fd4352a65",
+    "apps/desktop/scripts/check.sh": "de0c676efc317aa8428912cade8d14f75dcd4da2135b107ee5481e896d411e9f",
+    "apps/desktop/scripts/ci.sh": "b071696a2ce81277a2ad8ca24b686ea76fdfaddc5e5cf5e56921119de18f436f",
+    "apps/desktop/scripts/measure-builds.py": "f32fd4a48902b89443eaefcb18a6810cd2b5a57125ef56e8b95aa4dc6af3b471",
+    "apps/desktop/scripts/measure-rendering.py": "a34a0e999493c759435bbabb98cfc7b1b41f379a99c3cdaedf79b7e4193ce5f5",
+    "apps/desktop/scripts/measure-scaling.py": "aa9a74d63cc070267cf57fd65bd343cb7938b3c5bebd5a7b59c12aa72ff6a34e",
+    "apps/desktop/scripts/prepare-patches.py": "9d8cb445d7fd78d4e2fef5fee74ddad3f08de7525de42e602ada75ac1fb0788a",
+    "apps/desktop/scripts/prepare-visual-worker.py": "e479b0640b76bd622aafa3f5e8e80466419db3faf22575f4b66251827f6192fe",
+    "apps/desktop/scripts/run.sh": "db9cd62af88b1ecc4ae3da7a7636da54f12609c4bba4180c45fcdc8c808dc513",
+    "apps/desktop/scripts/test_ci.py": "2b1725479c921f85b77ab269261f0d5a5e932b54f3b1e1690da4ba3d1b767a23",
+    "apps/desktop/scripts/test_measure_scaling.py": "0086bcd980db0258abcfd9544a977d8a010f4a93e1f86f295ec78db972f9b8c8",
+    "apps/desktop/scripts/validate-workflows.py": "10d1618b3366b2535ca4cbb740ba3b6d963233467ec2bf02f76cd8bd0203d15c",
+    "apps/desktop/src/app_icon.rs": "680f6eac20e342574422edb1d7377e21e8afc00e50daf16c3eb13d6dd863af3e",
+    "apps/desktop/src/app_shell.rs": "4c0b7e2197430b45d170a5415f4a811a9e77c045e80df344d235eda0c6e94859",
+    "apps/desktop/src/appearance.rs": "9d6aadc7407f1f7b7289cdfbc9f0574ea5c1d57a9406251bc9ff1dd43677cd49",
+    "apps/desktop/src/artifact_model.rs": "9c97af84df39599028d1543ae43cbb2cd0797cab60acfaf8fd8bd1641364e1ff",
+    "apps/desktop/src/artifact_slider_probe.rs": "65aed515492a63da0f9664db2e8d459fac7f27b0b652bbd01feb9f36617fd3d0",
+    "apps/desktop/src/artifact_view.rs": "bbed53baef5df2e96ac6f62157df398815332893408a05855d245c75dbc79e12",
+    "apps/desktop/src/artifact_worker.rs": "4a02416e4369efdb4eb526877855959661bb84df57d777a387d9156740ff4ae2",
+    "apps/desktop/src/attention.rs": "952dcb38c9dd17eaafe3e4b260a98cfc785e9aa036898b936b30a6af137d9099",
+    "apps/desktop/src/catalog_probe.rs": "f5ac4728ca14a026feea15a2426cb3de0ee9ed71c62bb1db1d64939fe6e2dc70",
+    "apps/desktop/src/chat_editor.rs": "4f87080a31af645bc9673ff381a8231b99731d1778a57c11cffe38c95a97d09a",
+    "apps/desktop/src/chat_editor_tests.rs": "5d58ef9347fb5a8b3231d06ec7881e3ce368a29fdfdd14914ed2d39f7ef8535d",
+    "apps/desktop/src/composer_tests.rs": "f50399a65c6e68c8156de42552f7719d5b2ca58193ef9c3b8a307c652647de99",
+    "apps/desktop/src/delivery_store.rs": "61430df33f861f237bf2394386b12b5fe06337d3f865d8c12a4ea239aed266fe",
+    "apps/desktop/src/delivery_store_tests.rs": "3488aa2b69984fb4a784a41c5b080fcf954c05bf8273ff01205fb8761669f6b7",
+    "apps/desktop/src/disclosure_probe.rs": "bf2b22bcb85d16ae52ae276b48aa3a134242253475ee103cdd3c547156946f00",
+    "apps/desktop/src/dither.rs": "6c8a59c73e92b9887972d94dbbe2e34c2ef61ad6bf5cfcf2e6b65130b181ac48",
+    "apps/desktop/src/dither_view.rs": "07341746adbb66c4954a21db25a61e848ce72325730901f2f7337770202b4013",
+    "apps/desktop/src/history_probe.rs": "ec7e6a0c2e78a364614f27d658f42490e06cc8031103044d06d05e9c2204b210",
+    "apps/desktop/src/icon_probe.rs": "d49754c74d314892e4c00d6e6cf04f89f40e41731d6c6572bd9b3b6e4f1cf810",
+    "apps/desktop/src/inbox.rs": "48f6cb7186c3f31d99f100b10e2170fea307cc9a9fc8860b1460353a26e79bac",
+    "apps/desktop/src/inbox_probe.rs": "792ea9092c7da17f7f9e7cd846d20c56fa4ec62f451365cca3ad720643de3d88",
+    "apps/desktop/src/interaction.rs": "8c5a1d5080cc35fc7d2204b1eed3c26df71bc33e462846d90185a3ce4f96355f",
+    "apps/desktop/src/interaction_tests.rs": "ed130c6772a58f90601820a04eab6d58ae811c24edb1c119222112b407f232bb",
+    "apps/desktop/src/jump.rs": "b4a244a848ca4407472a188e8da01c09085baa48abfb05e0654ec528ceea923d",
+    "apps/desktop/src/jump_navigation.rs": "7fd007e2c1899a1bdc4ee6fc06bcec39f55a9d80a0d0acb6747868b087a6dffb",
+    "apps/desktop/src/jump_probe.rs": "f083878956ff6119f45f15236e83a47f76445ef7a73b61297527237f53265a53",
+    "apps/desktop/src/jump_view.rs": "d475b55fe232baac47b24447d9c3015ccb9506aac27adcf040c2468491ca02cc",
+    "apps/desktop/src/lib.rs": "eabc655494cde3f806492018dcf2e934997c9ef46a85c1197d94559d84a673d6",
+    "apps/desktop/src/local_client.rs": "913a87d8612dae5a22666ea11da59a0216dcf496d5790e79d4d84600c80636ea",
+    "apps/desktop/src/local_model.rs": "b240439f91a5c64940654adde3ff367cd04dcce912b69197c81367398955b53a",
+    "apps/desktop/src/local_network_tests.rs": "0904da3dd29a4665f3c2ed60af0e8bbf0d97301e9aec895f318a41b4548bf38e",
+    "apps/desktop/src/local_view.rs": "ff9b279797fb128fabe74826ec577cd2d54f4f5459397b4a3c0c5916d65bd1ed",
+    "apps/desktop/src/main.rs": "fad1109d762a2667b18ae33f3a69d16c668988160856ce998ca76e81173f5450",
+    "apps/desktop/src/model.rs": "163cbd72f4f9818ad8af893492e0cb1af57ff4c6109e8db7a19ad85948450a56",
+    "apps/desktop/src/motion_probe.rs": "1ca6d1741e770ffde20149ed9ce6c212cb2026d24b68ea65948c926d47d59392",
+    "apps/desktop/src/navigation.rs": "082992461761cdd94f21f568cb8940357a3edbf9584282d133901981fe35bd3c",
+    "apps/desktop/src/navigation_probe.rs": "12c05a4e670a96f584369b5d41635da5e7710677a57c174cf65438871b206b53",
+    "apps/desktop/src/navigation_view.rs": "60b9f3a38e45c651e923c4bd2f58d457930b250fcc61722d9abce4266f6739ef",
+    "apps/desktop/src/reader_identity_tests.rs": "35ca8c74e64a35fef67658c8c839783ad5506297c4fc4d8b0b16ad8c82822085",
+    "apps/desktop/src/readonly_tests.rs": "013ebcdff247cfd567cd624a4f9acf3111c215175916487ba211409750ed5d44",
+    "apps/desktop/src/settings_probe.rs": "d18117dee301e6668c24f60e3c260c19c48cea37936090a5cfcb1d45e96b316d",
+    "apps/desktop/src/settings_state.rs": "342aa20de4061281e04ea9822111a38ebf3f3c4dd4d4dffc30a477afbdc4a8e5",
+    "apps/desktop/src/settings_view.rs": "ddcb735b121b2188dcdc71d4aee0eb72b8e6f9f0e70446cafc3a719924df2269",
+    "apps/desktop/src/settings_worker.rs": "6916884677280dd3318177e697de17d809bc1621d54de015cf6e3f0714376b56",
+    "apps/desktop/src/shell_probe.rs": "f7415940e21811586a9538ad3f33c370f56d2c2c3c5809f7b078839eb69cbfc8",
+    "apps/desktop/src/style_probe.rs": "9e224e9efe5617494f4c11c6801b4afad0333333c4241cfe976d9dedf97be587",
+    "apps/desktop/src/tool_presentation.rs": "00efe36b1550059ddf98cebf8bdcb163b1af68ae2a020c48a2fce4badf0089f2",
+    "apps/desktop/src/tool_presentation_tests.rs": "8c376f4653c455af2e076aaae4a9d529f167dc86be4de8fef837c00f5af4c32f",
+    "apps/desktop/src/transcript_view.rs": "a30fed2cb8ff53b1ddf50c7697f87f9584b58f9790ddbb0fa87ee8256a7d7439",
+    "apps/desktop/src/ui.rs": "a54e3be1da55b33a4b7ee285b288ba84dad7590d52f6fc2a1c8eb01edefe2b44",
+    "apps/desktop/src/visual_canvas_plan.rs": "ee044de4d687305f371957670b331277d1f1f1d17e66c0590aef6608ff3ba632",
+    "apps/desktop/src/visual_canvas_view.rs": "cb6bd3182ad79d216839fe3a767e34f52bc512016b3e1dc320e0ee9092ed5389",
+    "apps/desktop/src/visual_chart.rs": "0f44ce38b4e17961085f9086c27384a1228de5ef818dc964f2be41b998080d45",
+    "apps/desktop/src/visual_chart_view.rs": "64dcb2481466eea1d30f57b7431f81b10c1c7621e1305c1432e3715376250f95",
+    "apps/desktop/src/visual_drawing.rs": "cf69f2e3a8cb62db012fece1e1d0bdb36a89111a6f4436e56755286e61f4708b",
+    "apps/desktop/src/visual_runtime.rs": "0c734a8599862cba27e6b15b7ddfc559e879e6ab97cd3ea842849571d1f9ff64",
+    "apps/desktop/src/visual_scene.rs": "007ab9640605e2d552c9e4480847f3786012f9ea06f558358fb76f949e5b928e",
+    "apps/desktop/src/visual_session.rs": "3c485217fccff8c68696068d7bc81af66322518c9ed9603bba88bc70d6a1b7e4",
+    "apps/desktop/src/visual_slider.rs": "78bccff489922e40ecc05c3d2c7c1ae0007329d355ca77cc466fa798bbe92677",
+    "apps/desktop/src/visual_wire.rs": "42864a29191232138257b4fe4a3255fc0382a028c4581ab328a5acc6ab707bf7",
+    "apps/desktop/src/work_tests.rs": "ed72cafea85e6b299ae64d27c51e58c3eba6652ebea4e7a810dc81e693dd1955",
+    "apps/desktop/src/work_view.rs": "ec0b36ca2bf9452cef51e5937050dedf5badd69344126f9bce1cd185e594d510",
+    "apps/desktop/src/workbench_probe.rs": "00233452c5b9c13b3853a1f823d716cb3487ccf5cca0bf8d440a75a3599a40eb",
+    "apps/desktop/src/workbench_view.rs": "0c91dbcd0fbc374cba907aa1721457ee7845ed96a12a6f4eb06dd8301e5806b9",
+    "apps/desktop/tests/capture.rs": "8d166ebe7062af7f3887c5387f7424bc8d0cf4a17f5b00b1e3acd5282d820506",
+    "apps/desktop/tests/catalog.rs": "f6501a4221e14b9b6b6d7165e8b3a23048de7d0ff9785f0b280ea63bbdfcab2f",
+    "apps/desktop/tests/chrome.rs": "b7ba0d21c8c333d12e0118d667c2028855613f5e24f39ef9cd1b999c049c57fb",
+    "apps/desktop/tests/controls.rs": "6c2eaa67f3876e35ac768cfe59ee396bc9e2ce7ca3cf8faba3154ff8cdb189bc",
+    "apps/desktop/tests/disclosure.rs": "91b6b09d938eeb34d4dcd8c9febc645cee465b6b892f1898f825b5e59dc4053d",
+    "apps/desktop/tests/history.rs": "acbad63a848611d9c8ce6e22bec6891713680279db47d5e6270be30be3e7ebf9",
+    "apps/desktop/tests/icons.rs": "47828f5d4e9153b257ca07378209819cc602ec91cde7d56d8c0d1e3ab0d2fc54",
+    "apps/desktop/tests/inbox.rs": "a913a15ff9afb60382bcf90e62bac312f6adf5573eff5d5142639e8315108d77",
+    "apps/desktop/tests/jump.rs": "7d7fa52793387027a3806f25d85daf29f3438cc1d60f246a3a06c79688cbc129",
+    "apps/desktop/tests/motion.rs": "e7e9aa1e9c58c0283a3c67733420edde34fb1198b2bb09e4084c44ca6d450072",
+    "apps/desktop/tests/navigation.rs": "a9383399141a0ecd0918fb6fd9a694b8b028c5565d68ab387e9336281a6a995e",
+    "apps/desktop/tests/rendering.rs": "b5752c4a6e910517c194d54dd34435906d292ce9fe85a52c3190898058e11ab3",
+    "apps/desktop/tests/scaling.rs": "4e96e4fb6711555262c795a2499cd3b892dae1c28e4bc5a936a4358f054d16a5",
+    "apps/desktop/tests/settings.rs": "e7f6b2ff7666ca14373cda32ad948bcbbaf22e1e78b01d9d9bc2d10b4415d2b9",
+    "apps/desktop/tests/settings_state.rs": "24a5ed7484f1c8bb63b70425c85bff132537a1e258683dc3f522d0244950c065",
+    "apps/desktop/tests/shell.rs": "ea86feb24739df32b350943997517512089f88170e52057d2c8e60646be00f1c",
+    "apps/desktop/tests/style.rs": "a50c8dfe24da8afc2e35bfb876ced5c68fc7242001b6e80ceb1985511f3a3427",
+    "apps/desktop/tests/visuals.rs": "b6c1612a13ca1e2b7a318b4a7d1ffcabf6b7cb0691979b6921af09548fe2c7ed",
+    "apps/desktop/tests/workbench.rs": "6a802c53235805a1db8639baa216eb7c8f867c06c9b722f4962d0afa9ec1c52d",
+    "apps/desktop/visual-worker/Cargo.toml": "19f3621ba1ca151f038de938bb9bc8918e72033027d5e41a859532e3da76e4ec",
+    "apps/desktop/visual-worker/build.rs": "c53fb68e5b66675f42201041a771ae503c696603c05430694bd9a1fcc7cd728f",
+    "apps/desktop/visual-worker/engine.c": "c0a85f75002f1d58d2ebcc7d0e51bc81f3670c2416119bcbb8074bddcadc4013",
+    "apps/desktop/visual-worker/src/engine.rs": "a2d3b5fa56c8718c91abc4387983acfa4839b9e70554b116c5ed363a48f831a6",
+    "apps/desktop/visual-worker/src/isolation.rs": "4f48927f2e1317b49835926011fa9ac93b90870a18992fdcd5bd9e0d10474bb1",
+    "apps/desktop/visual-worker/src/main.rs": "1ebfd29827316898c9326e2416f2da41d84dbac859b57ac9aa5f1a65bb00ca56",
+    "apps/desktop/visual-worker/src/watchdog.rs": "c0b62d2c820ab12c4e2a759101f7983b70a6162ef19ed62a73c13ff85adbc104",
+    "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h": "63abe4cc72bb2081fb1109333766da5782c825652b0c197b19e4a299ca9310b6",
+    "apps/macos/Sources/PilotVisualEngine/pilot_visual_engine.c": "0eb0ed94beeef715058123668a2deadc10cdf0e805938ebeba37d9453c885874",
+    "packages/artifacts/src/image.test.ts": "1427b5d828ba2565e56e3c58caff4fc3b20f3c02eec8aba9e10b1ea36c899a08",
+    "packages/artifacts/src/image.ts": "75e3d34f233c16b2b6df75446aa074477326ff011d991dd8f8a01e6d508c8280",
+    "packages/artifacts/src/index.ts": "70dff7b007165fe2df3ee7b46eaf319b071536d49dc119058f39b65288effadd",
+    "packages/artifacts/src/preview.test.ts": "2cd88c5465f25c874b11e34fc8f8e17db33f49bd6cc11bdf5fe111db3b083d43",
+    "packages/artifacts/src/preview.ts": "f69162cb41de9e728cee35cfb5029ae45716626db18c6600de21135ecec9956b",
+    "packages/artifacts/src/render-lifecycle.test.ts": "ea0d688527ca1e99c1329d1424a14d3107d78a071c56329f17ea3c3e27f88941",
+    "packages/artifacts/src/render.test.ts": "965adb24b2503e8b293fe5ab91c37def5b77af133e88deb9e1365e5da6e125ca",
+    "packages/artifacts/src/render.ts": "a560b99e7d53b2565a1c52d1a3dde551257bc71771917695bfa408e3452fe7c3",
+    "packages/artifacts/src/shader-check-worker.ts": "408fe9980fe948d6768c29582334ddc48fba45988c31be9277e771acf4c3a331",
+    "packages/artifacts/src/shader.test.ts": "45c6cb608021f90c961702d48d779a91bfcb4d6dcda8fc097dd8ac801917333c",
+    "packages/artifacts/src/shader.ts": "b73be632d1463cc9dc2d6ba71be4a5215b30dd9df67d945cfd9a0d186effcb55",
+    "packages/artifacts/src/store.test.ts": "d0ba7008d831485d17a13f300f9b76f9453e8609ad52438ec5da1a67c3aeda69",
+    "packages/artifacts/src/store.ts": "e963ffc82989cc2c8576ae4cafb3a8ce917ca5fda36f5b64e8a4389e1b794d71",
+    "packages/artifacts/src/swiftui-renderer.swift": "28e7088218e6f992547943a646cc08506288a4e473f5348c524cb8d96e65f0c7",
+    "packages/artifacts/src/swiftui.test.ts": "88c5e13ac908bf60d0c1d8c089b477701993b0a14ee148a83bec935a87f68ca2",
+    "packages/artifacts/src/swiftui.ts": "bd430d4750872e29f9fb5add95a6f05ce5f0178b9305193017755d7d40b8202e",
+    "packages/artifacts/src/visual/check-worker.ts": "4f676768f10adcf34cc206d48fbbb06cf1bdc7ec698ce2f26fed5aa90c96e69c",
+    "packages/artifacts/src/visual/check.test.ts": "5ecb62ab1e8df69e9030740337f3ca06aaabac5b7a38e5d06aa4e52d2aeff6e8",
+    "packages/artifacts/src/visual/check.ts": "c02a21d0fe545c8b920e8d1f87b347f59ea8d2add103530232c97ce518c746cd",
+    "packages/artifacts/src/visual/conformance.ts": "f19dc1b3db49972993574c49e89015b82197bc020eba425836e496318928b156",
+    "packages/artifacts/src/visual/fixtures.test.ts": "11c48ac4baea04665512aaf712804a8b66eff6f4ea6256aea12c0657e5bd3891",
+    "packages/artifacts/src/visual/index.ts": "2f62929d1abb3cd64a29196543108584f66ec1a7a9d707c6b4e991fee12c6bd8",
+    "packages/artifacts/src/visual/metal.test.ts": "f23dc20f2eb043cf627c8e73b4bb86fb9d9528caeef502a347c8a18a63950f8c",
+    "packages/artifacts/src/visual/metal.ts": "f9eed6337259bec8e26a907777892810b4a8d910c340a5c6f56a1daec94dbc3c",
+    "packages/artifacts/src/visual/reference.test.ts": "4c3d8ba316e1fef96a9771a9a0f227cedae3b3d67f32e57b4c74b84bcf5214ed",
+    "packages/artifacts/src/visual/schema.ts": "821284b654962add764be31ef0f629bdec87cd57d0a69436755b5cd784c15ca1",
+    "packages/artifacts/src/visual/session.ts": "f918c38ee3d1ab30bf29c6a02a495a848f57ac6a42647f6dd49156bd8b25d2d7",
+    "packages/protocol/fixtures/visual/api-1.schema.json": "090bf2dc17ae80b50a611660b67c4160d80ba4e55183ceaa0a84410c8093d6cd",
+    "packages/protocol/fixtures/visual/conformance.json": "6c84a22ba6016f3510c4e3d8d1f50df38121a81ca2d7cf8852c820fc2034e085",
+    "packages/protocol/fixtures/visual/shaders.json": "b152fe1228980292a617d528f0bbe0e7063028b3aa2e9d152d79353d506e826b"
+  },
+  "captures": {
+    "1100-dark-appearance.png": {
+      "sha256": "d774165b1751c829790d4ea74eb04afa6c4b387884b88deb9335e7faea535d55",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-before-open.png": {
+      "sha256": "d91cb68ec087860894e6eb027d7e669abbe366eefe89cbc661a401ad87e19709",
+      "pixelSize": [
+        2200,
+        1520
+      ]
+    },
+    "1100-dark-loading-disabled.png": {
+      "sha256": "3bcd8d321b1e4280bf7b4e7a4b7b1a08b7b9746d67751d54d20f3578cdeecc07",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-long-label.png": {
+      "sha256": "99d96c1bebb225d482160ae1fa5f84d6f16d59263d040452961cd2de57aa5b60",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-missing-default.png": {
+      "sha256": "3a4561e4dbe3664944b93bbebac2bb28c90be171b2924b4e51db6ef122a03393",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-save-error.png": {
+      "sha256": "e719125a4b8f361c94c9f503f1603c12906aa553a2083cb5d68462ddf0dd5d18",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-saving-disabled.png": {
+      "sha256": "322e53273a596a00644f3b273163fba15da7e54f740b1ab5ef253dd57d6b2835",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-dark-updates-unavailable.png": {
+      "sha256": "37faa658a70ff0a3ff4aabcf2ac68ec76b1566d40db24b18981f91f52bf61762",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-appearance.png": {
+      "sha256": "1186581c76ccef4946d851b4ede1b02ef27d280bc07001dda370e2d5c93b42b1",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-before-open.png": {
+      "sha256": "658802f5d4d93e72bde8c2fb49fb9983b947cbfbb07a3fb773aeddbdce0767d6",
+      "pixelSize": [
+        2200,
+        1520
+      ]
+    },
+    "1100-light-loading-disabled.png": {
+      "sha256": "3b31c1471da455666e6d4ae93793c68df2f5aabf74f54a20585f194678890cb2",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-long-label.png": {
+      "sha256": "e069aec2dade3fe43f3afd5a37bf56a2b1efd525750d5d43b99d759eb002dddd",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-missing-default.png": {
+      "sha256": "168ec7380e539d036e87396f3ef1b1c0f8d31110d82bcdb9af36a7c2ff1f1c5d",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-save-error.png": {
+      "sha256": "16587a2b8d51c3b7776517820bb4b049b9acbe1f02de0c71a42e7d17ef84de76",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-saving-disabled.png": {
+      "sha256": "cfe289d17c176b0729021522f8f1d7def765445287d33be14182c0c1b5d33884",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "1100-light-updates-unavailable.png": {
+      "sha256": "ee0c064dcfdba1b18262390f8cc9c6ada4b2ded8bc3d4f852a12faefda969d58",
+      "pixelSize": [
+        2200,
+        1240
+      ]
+    },
+    "680-dark-appearance.png": {
+      "sha256": "fbc6dc412f38aa4c45904dfe39831ad5bde7056d1ba82ca23babd41a951b0cd6",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-before-open.png": {
+      "sha256": "4508404bd4e5ec1bcaf6959ef7b054cfd4396151ad3a9bfbef0c12fd96672fd6",
+      "pixelSize": [
+        1360,
+        1520
+      ]
+    },
+    "680-dark-loading-disabled.png": {
+      "sha256": "074849415b720ae8d577dab5c1f6327afa77c09ac4231d923fdfed5b74d33eed",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-long-label.png": {
+      "sha256": "b1bcac336ab6710bd71f7e131d76b43f918559c74cbd195f04d6dfba971ae9ac",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-missing-default.png": {
+      "sha256": "8c5bf17baa27108a270689efef4d3ecf55d03a834ea2673cb56149d8b8e6a21e",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-save-error.png": {
+      "sha256": "4f49f9f065ddecc8d76f10243eed26c2258f5c7ff7c1a3c64560a91db108833e",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-saving-disabled.png": {
+      "sha256": "7a03cd8676392c700daadbb383329f5c8aa7e4ddb9c73ac486b68fb9158d9e46",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-dark-updates-unavailable.png": {
+      "sha256": "47289dcb16b9b32ca97731ff9e494a221a619ff24702b10dc351181625b5787d",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-appearance.png": {
+      "sha256": "4325491021e525de66f15dbdf374c7334c4ada6b0cddf24eb67a133755ad88c1",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-before-open.png": {
+      "sha256": "96a32d4900937db52d48aa6c4dcb58f00831576bab9e11d3066fb84de9eb4ffd",
+      "pixelSize": [
+        1360,
+        1520
+      ]
+    },
+    "680-light-loading-disabled.png": {
+      "sha256": "d6a03116728e60bb2e32fabadb722a9a2045324bb01fdc0144db51e5c39003d2",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-long-label.png": {
+      "sha256": "aeed6547e59ee0e941529b92682ae35b7e81df6f490944b625a31d1891057f88",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-missing-default.png": {
+      "sha256": "ef0212fbd46af98475ceb9ae5a522ce61b9bd942e7475791ae2838ae623e5329",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-save-error.png": {
+      "sha256": "3baebe6db0225abbcf47814caa1664f7b48e49e9794a9328bc964a673f14ca91",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-saving-disabled.png": {
+      "sha256": "f27a7af5bbc2a356472c180d3d6537b206593fc4af4621be156c7e335e9669fa",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    },
+    "680-light-updates-unavailable.png": {
+      "sha256": "893625954e53f210be17b6a3633b051bf3c0ab531b24c120a20881e6f306f612",
+      "pixelSize": [
+        1360,
+        1240
+      ]
+    }
+  },
+  "restackVerification": {
+    "sourceCommit": "34c412b5b86400acdce043d954de1f2ecdf5356d",
+    "parentCommit": "3fab660e82d42122d94566b1ead15ce30926be12",
+    "verificationJob": "330c20af-b095-499f-8517-761a0b14aadf",
+    "scope": "Fresh focused macOS strict/model/controls mutation/catalog/Settings checks, not a repeated full suite or Linux pass. All authored Settings code unchanged.",
+    "inputs": {
+      ".github/workflows/tests.yaml": "4fd5217c22b52969cdc1125780b23748e7bcda8a4e212690ec4de6cf8ed580d0",
+      "apps/desktop/Cargo.lock": "c2ed69e73723fb4318ea842349350a95336a745ef7c8f1e0628b457a9b0c291e",
+      "apps/desktop/Cargo.toml": "a69f9d03a26bf1d475b815f0a91fc8128301e12fbc16e046c56939e398f28a9f",
+      "apps/desktop/patches/gpui-base-0.8.0.json": "e841a77806be3fb86c9b2189f6420e438d0771a6f90d4acead1dceccde0b48e7",
+      "apps/desktop/patches/gpui-component-0.8.0.json": "df0d3f56231f2f23deb9b9fdabe86be7bed2a238e791d5f62247aaf3b6026390",
+      "apps/desktop/rust-toolchain.toml": "887f9be066a15585a2c583578e84b0fcb541126d81546276bad3d2ff00d61167",
+      "apps/desktop/scripts/bootstrap.sh": "cb2602da76b4cbd5c88d6e743c49d2d97ccdfbc9c650228d0b237dab7448abee",
+      "apps/desktop/scripts/cache-probe.py": "4bef1b0d299ea876668c2d8a7a181d04869a47dbf1b0647bd827ca328efa68e1",
+      "apps/desktop/scripts/capture.sh": "53bbe53ddfc2ca2eb6513fa4397afef9cbcc7921201ac78ad2fc62d5f9631f29",
+      "apps/desktop/scripts/cargo.sh": "f14d6f931fa61566557d2e620d258248a3d3661a46e625bd1ca24d5fd4352a65",
+      "apps/desktop/scripts/check.sh": "de0c676efc317aa8428912cade8d14f75dcd4da2135b107ee5481e896d411e9f",
+      "apps/desktop/scripts/ci.sh": "0fca190f3df51157715b5f0cf647466fac5c850c1591d41b8c0fb912e0e00629",
+      "apps/desktop/scripts/measure-builds.py": "f32fd4a48902b89443eaefcb18a6810cd2b5a57125ef56e8b95aa4dc6af3b471",
+      "apps/desktop/scripts/measure-rendering.py": "a34a0e999493c759435bbabb98cfc7b1b41f379a99c3cdaedf79b7e4193ce5f5",
+      "apps/desktop/scripts/measure-scaling.py": "aa9a74d63cc070267cf57fd65bd343cb7938b3c5bebd5a7b59c12aa72ff6a34e",
+      "apps/desktop/scripts/prepare-patches.py": "9d8cb445d7fd78d4e2fef5fee74ddad3f08de7525de42e602ada75ac1fb0788a",
+      "apps/desktop/scripts/prepare-visual-worker.py": "e479b0640b76bd622aafa3f5e8e80466419db3faf22575f4b66251827f6192fe",
+      "apps/desktop/scripts/run.sh": "db9cd62af88b1ecc4ae3da7a7636da54f12609c4bba4180c45fcdc8c808dc513",
+      "apps/desktop/scripts/test_ci.py": "97b33b4f50fa99b2ea70cc18ad189a86642cf67443a33b5d3b122a3622bc161e",
+      "apps/desktop/scripts/test_measure_scaling.py": "0086bcd980db0258abcfd9544a977d8a010f4a93e1f86f295ec78db972f9b8c8",
+      "apps/desktop/scripts/validate-workflows.py": "10d1618b3366b2535ca4cbb740ba3b6d963233467ec2bf02f76cd8bd0203d15c",
+      "apps/desktop/src/app_icon.rs": "680f6eac20e342574422edb1d7377e21e8afc00e50daf16c3eb13d6dd863af3e",
+      "apps/desktop/src/app_shell.rs": "4c0b7e2197430b45d170a5415f4a811a9e77c045e80df344d235eda0c6e94859",
+      "apps/desktop/src/appearance.rs": "9d6aadc7407f1f7b7289cdfbc9f0574ea5c1d57a9406251bc9ff1dd43677cd49",
+      "apps/desktop/src/artifact_model.rs": "9c97af84df39599028d1543ae43cbb2cd0797cab60acfaf8fd8bd1641364e1ff",
+      "apps/desktop/src/artifact_slider_probe.rs": "4b2fc05b5802cf0fcfbe33cead2028b657d80b4a1180678ace6e43d701ba277d",
+      "apps/desktop/src/artifact_view.rs": "bbed53baef5df2e96ac6f62157df398815332893408a05855d245c75dbc79e12",
+      "apps/desktop/src/artifact_worker.rs": "4a02416e4369efdb4eb526877855959661bb84df57d777a387d9156740ff4ae2",
+      "apps/desktop/src/attention.rs": "952dcb38c9dd17eaafe3e4b260a98cfc785e9aa036898b936b30a6af137d9099",
+      "apps/desktop/src/catalog_probe.rs": "f5ac4728ca14a026feea15a2426cb3de0ee9ed71c62bb1db1d64939fe6e2dc70",
+      "apps/desktop/src/chat_editor.rs": "4f87080a31af645bc9673ff381a8231b99731d1778a57c11cffe38c95a97d09a",
+      "apps/desktop/src/chat_editor_tests.rs": "5d58ef9347fb5a8b3231d06ec7881e3ce368a29fdfdd14914ed2d39f7ef8535d",
+      "apps/desktop/src/composer_tests.rs": "f50399a65c6e68c8156de42552f7719d5b2ca58193ef9c3b8a307c652647de99",
+      "apps/desktop/src/delivery_store.rs": "61430df33f861f237bf2394386b12b5fe06337d3f865d8c12a4ea239aed266fe",
+      "apps/desktop/src/delivery_store_tests.rs": "3488aa2b69984fb4a784a41c5b080fcf954c05bf8273ff01205fb8761669f6b7",
+      "apps/desktop/src/disclosure_probe.rs": "bf2b22bcb85d16ae52ae276b48aa3a134242253475ee103cdd3c547156946f00",
+      "apps/desktop/src/dither.rs": "6c8a59c73e92b9887972d94dbbe2e34c2ef61ad6bf5cfcf2e6b65130b181ac48",
+      "apps/desktop/src/dither_view.rs": "07341746adbb66c4954a21db25a61e848ce72325730901f2f7337770202b4013",
+      "apps/desktop/src/history_probe.rs": "ec7e6a0c2e78a364614f27d658f42490e06cc8031103044d06d05e9c2204b210",
+      "apps/desktop/src/icon_probe.rs": "d49754c74d314892e4c00d6e6cf04f89f40e41731d6c6572bd9b3b6e4f1cf810",
+      "apps/desktop/src/inbox.rs": "48f6cb7186c3f31d99f100b10e2170fea307cc9a9fc8860b1460353a26e79bac",
+      "apps/desktop/src/inbox_probe.rs": "792ea9092c7da17f7f9e7cd846d20c56fa4ec62f451365cca3ad720643de3d88",
+      "apps/desktop/src/interaction.rs": "8c5a1d5080cc35fc7d2204b1eed3c26df71bc33e462846d90185a3ce4f96355f",
+      "apps/desktop/src/interaction_tests.rs": "ed130c6772a58f90601820a04eab6d58ae811c24edb1c119222112b407f232bb",
+      "apps/desktop/src/jump.rs": "b4a244a848ca4407472a188e8da01c09085baa48abfb05e0654ec528ceea923d",
+      "apps/desktop/src/jump_navigation.rs": "7fd007e2c1899a1bdc4ee6fc06bcec39f55a9d80a0d0acb6747868b087a6dffb",
+      "apps/desktop/src/jump_probe.rs": "f083878956ff6119f45f15236e83a47f76445ef7a73b61297527237f53265a53",
+      "apps/desktop/src/jump_view.rs": "d475b55fe232baac47b24447d9c3015ccb9506aac27adcf040c2468491ca02cc",
+      "apps/desktop/src/lib.rs": "eabc655494cde3f806492018dcf2e934997c9ef46a85c1197d94559d84a673d6",
+      "apps/desktop/src/local_client.rs": "913a87d8612dae5a22666ea11da59a0216dcf496d5790e79d4d84600c80636ea",
+      "apps/desktop/src/local_model.rs": "b240439f91a5c64940654adde3ff367cd04dcce912b69197c81367398955b53a",
+      "apps/desktop/src/local_network_tests.rs": "0904da3dd29a4665f3c2ed60af0e8bbf0d97301e9aec895f318a41b4548bf38e",
+      "apps/desktop/src/local_view.rs": "ff9b279797fb128fabe74826ec577cd2d54f4f5459397b4a3c0c5916d65bd1ed",
+      "apps/desktop/src/main.rs": "fad1109d762a2667b18ae33f3a69d16c668988160856ce998ca76e81173f5450",
+      "apps/desktop/src/model.rs": "163cbd72f4f9818ad8af893492e0cb1af57ff4c6109e8db7a19ad85948450a56",
+      "apps/desktop/src/motion_probe.rs": "1ca6d1741e770ffde20149ed9ce6c212cb2026d24b68ea65948c926d47d59392",
+      "apps/desktop/src/navigation.rs": "082992461761cdd94f21f568cb8940357a3edbf9584282d133901981fe35bd3c",
+      "apps/desktop/src/navigation_probe.rs": "12c05a4e670a96f584369b5d41635da5e7710677a57c174cf65438871b206b53",
+      "apps/desktop/src/navigation_view.rs": "60b9f3a38e45c651e923c4bd2f58d457930b250fcc61722d9abce4266f6739ef",
+      "apps/desktop/src/reader_identity_tests.rs": "35ca8c74e64a35fef67658c8c839783ad5506297c4fc4d8b0b16ad8c82822085",
+      "apps/desktop/src/readonly_tests.rs": "013ebcdff247cfd567cd624a4f9acf3111c215175916487ba211409750ed5d44",
+      "apps/desktop/src/settings_probe.rs": "d18117dee301e6668c24f60e3c260c19c48cea37936090a5cfcb1d45e96b316d",
+      "apps/desktop/src/settings_state.rs": "342aa20de4061281e04ea9822111a38ebf3f3c4dd4d4dffc30a477afbdc4a8e5",
+      "apps/desktop/src/settings_view.rs": "ddcb735b121b2188dcdc71d4aee0eb72b8e6f9f0e70446cafc3a719924df2269",
+      "apps/desktop/src/settings_worker.rs": "6916884677280dd3318177e697de17d809bc1621d54de015cf6e3f0714376b56",
+      "apps/desktop/src/shell_probe.rs": "f7415940e21811586a9538ad3f33c370f56d2c2c3c5809f7b078839eb69cbfc8",
+      "apps/desktop/src/style_probe.rs": "9e224e9efe5617494f4c11c6801b4afad0333333c4241cfe976d9dedf97be587",
+      "apps/desktop/src/tool_presentation.rs": "00efe36b1550059ddf98cebf8bdcb163b1af68ae2a020c48a2fce4badf0089f2",
+      "apps/desktop/src/tool_presentation_tests.rs": "8c376f4653c455af2e076aaae4a9d529f167dc86be4de8fef837c00f5af4c32f",
+      "apps/desktop/src/transcript_view.rs": "a30fed2cb8ff53b1ddf50c7697f87f9584b58f9790ddbb0fa87ee8256a7d7439",
+      "apps/desktop/src/ui.rs": "a54e3be1da55b33a4b7ee285b288ba84dad7590d52f6fc2a1c8eb01edefe2b44",
+      "apps/desktop/src/visual_canvas_plan.rs": "ee044de4d687305f371957670b331277d1f1f1d17e66c0590aef6608ff3ba632",
+      "apps/desktop/src/visual_canvas_view.rs": "cb6bd3182ad79d216839fe3a767e34f52bc512016b3e1dc320e0ee9092ed5389",
+      "apps/desktop/src/visual_chart.rs": "0f44ce38b4e17961085f9086c27384a1228de5ef818dc964f2be41b998080d45",
+      "apps/desktop/src/visual_chart_view.rs": "64dcb2481466eea1d30f57b7431f81b10c1c7621e1305c1432e3715376250f95",
+      "apps/desktop/src/visual_drawing.rs": "cf69f2e3a8cb62db012fece1e1d0bdb36a89111a6f4436e56755286e61f4708b",
+      "apps/desktop/src/visual_runtime.rs": "fd6b9d1f4c96ae0a44b4720e3b183d737ff747417faa3d597e8aa94ea2836dee",
+      "apps/desktop/src/visual_scene.rs": "007ab9640605e2d552c9e4480847f3786012f9ea06f558358fb76f949e5b928e",
+      "apps/desktop/src/visual_session.rs": "3c485217fccff8c68696068d7bc81af66322518c9ed9603bba88bc70d6a1b7e4",
+      "apps/desktop/src/visual_slider.rs": "78bccff489922e40ecc05c3d2c7c1ae0007329d355ca77cc466fa798bbe92677",
+      "apps/desktop/src/visual_wire.rs": "42864a29191232138257b4fe4a3255fc0382a028c4581ab328a5acc6ab707bf7",
+      "apps/desktop/src/work_tests.rs": "ed72cafea85e6b299ae64d27c51e58c3eba6652ebea4e7a810dc81e693dd1955",
+      "apps/desktop/src/work_view.rs": "ec0b36ca2bf9452cef51e5937050dedf5badd69344126f9bce1cd185e594d510",
+      "apps/desktop/src/workbench_probe.rs": "00233452c5b9c13b3853a1f823d716cb3487ccf5cca0bf8d440a75a3599a40eb",
+      "apps/desktop/src/workbench_view.rs": "0c91dbcd0fbc374cba907aa1721457ee7845ed96a12a6f4eb06dd8301e5806b9",
+      "apps/desktop/tests/capture.rs": "8d166ebe7062af7f3887c5387f7424bc8d0cf4a17f5b00b1e3acd5282d820506",
+      "apps/desktop/tests/catalog.rs": "f6501a4221e14b9b6b6d7165e8b3a23048de7d0ff9785f0b280ea63bbdfcab2f",
+      "apps/desktop/tests/chrome.rs": "b7ba0d21c8c333d12e0118d667c2028855613f5e24f39ef9cd1b999c049c57fb",
+      "apps/desktop/tests/controls.rs": "6c2eaa67f3876e35ac768cfe59ee396bc9e2ce7ca3cf8faba3154ff8cdb189bc",
+      "apps/desktop/tests/disclosure.rs": "91b6b09d938eeb34d4dcd8c9febc645cee465b6b892f1898f825b5e59dc4053d",
+      "apps/desktop/tests/history.rs": "acbad63a848611d9c8ce6e22bec6891713680279db47d5e6270be30be3e7ebf9",
+      "apps/desktop/tests/icons.rs": "47828f5d4e9153b257ca07378209819cc602ec91cde7d56d8c0d1e3ab0d2fc54",
+      "apps/desktop/tests/inbox.rs": "a913a15ff9afb60382bcf90e62bac312f6adf5573eff5d5142639e8315108d77",
+      "apps/desktop/tests/jump.rs": "7d7fa52793387027a3806f25d85daf29f3438cc1d60f246a3a06c79688cbc129",
+      "apps/desktop/tests/motion.rs": "e7e9aa1e9c58c0283a3c67733420edde34fb1198b2bb09e4084c44ca6d450072",
+      "apps/desktop/tests/navigation.rs": "a9383399141a0ecd0918fb6fd9a694b8b028c5565d68ab387e9336281a6a995e",
+      "apps/desktop/tests/rendering.rs": "b5752c4a6e910517c194d54dd34435906d292ce9fe85a52c3190898058e11ab3",
+      "apps/desktop/tests/scaling.rs": "4e96e4fb6711555262c795a2499cd3b892dae1c28e4bc5a936a4358f054d16a5",
+      "apps/desktop/tests/settings.rs": "e7f6b2ff7666ca14373cda32ad948bcbbaf22e1e78b01d9d9bc2d10b4415d2b9",
+      "apps/desktop/tests/settings_state.rs": "24a5ed7484f1c8bb63b70425c85bff132537a1e258683dc3f522d0244950c065",
+      "apps/desktop/tests/shell.rs": "ea86feb24739df32b350943997517512089f88170e52057d2c8e60646be00f1c",
+      "apps/desktop/tests/style.rs": "a50c8dfe24da8afc2e35bfb876ced5c68fc7242001b6e80ceb1985511f3a3427",
+      "apps/desktop/tests/visuals.rs": "b6c1612a13ca1e2b7a318b4a7d1ffcabf6b7cb0691979b6921af09548fe2c7ed",
+      "apps/desktop/tests/workbench.rs": "6a802c53235805a1db8639baa216eb7c8f867c06c9b722f4962d0afa9ec1c52d",
+      "apps/desktop/visual-worker/Cargo.toml": "19f3621ba1ca151f038de938bb9bc8918e72033027d5e41a859532e3da76e4ec",
+      "apps/desktop/visual-worker/build.rs": "c53fb68e5b66675f42201041a771ae503c696603c05430694bd9a1fcc7cd728f",
+      "apps/desktop/visual-worker/engine.c": "c0a85f75002f1d58d2ebcc7d0e51bc81f3670c2416119bcbb8074bddcadc4013",
+      "apps/desktop/visual-worker/src/engine.rs": "a2d3b5fa56c8718c91abc4387983acfa4839b9e70554b116c5ed363a48f831a6",
+      "apps/desktop/visual-worker/src/isolation.rs": "4f48927f2e1317b49835926011fa9ac93b90870a18992fdcd5bd9e0d10474bb1",
+      "apps/desktop/visual-worker/src/main.rs": "1ebfd29827316898c9326e2416f2da41d84dbac859b57ac9aa5f1a65bb00ca56",
+      "apps/desktop/visual-worker/src/watchdog.rs": "c0b62d2c820ab12c4e2a759101f7983b70a6162ef19ed62a73c13ff85adbc104",
+      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h": "63abe4cc72bb2081fb1109333766da5782c825652b0c197b19e4a299ca9310b6",
+      "apps/macos/Sources/PilotVisualEngine/pilot_visual_engine.c": "0eb0ed94beeef715058123668a2deadc10cdf0e805938ebeba37d9453c885874",
+      "packages/artifacts/src/image.test.ts": "1427b5d828ba2565e56e3c58caff4fc3b20f3c02eec8aba9e10b1ea36c899a08",
+      "packages/artifacts/src/image.ts": "75e3d34f233c16b2b6df75446aa074477326ff011d991dd8f8a01e6d508c8280",
+      "packages/artifacts/src/index.ts": "70dff7b007165fe2df3ee7b46eaf319b071536d49dc119058f39b65288effadd",
+      "packages/artifacts/src/preview.test.ts": "2cd88c5465f25c874b11e34fc8f8e17db33f49bd6cc11bdf5fe111db3b083d43",
+      "packages/artifacts/src/preview.ts": "f69162cb41de9e728cee35cfb5029ae45716626db18c6600de21135ecec9956b",
+      "packages/artifacts/src/render-lifecycle.test.ts": "ea0d688527ca1e99c1329d1424a14d3107d78a071c56329f17ea3c3e27f88941",
+      "packages/artifacts/src/render.test.ts": "965adb24b2503e8b293fe5ab91c37def5b77af133e88deb9e1365e5da6e125ca",
+      "packages/artifacts/src/render.ts": "a560b99e7d53b2565a1c52d1a3dde551257bc71771917695bfa408e3452fe7c3",
+      "packages/artifacts/src/shader-check-worker.ts": "408fe9980fe948d6768c29582334ddc48fba45988c31be9277e771acf4c3a331",
+      "packages/artifacts/src/shader.test.ts": "45c6cb608021f90c961702d48d779a91bfcb4d6dcda8fc097dd8ac801917333c",
+      "packages/artifacts/src/shader.ts": "b73be632d1463cc9dc2d6ba71be4a5215b30dd9df67d945cfd9a0d186effcb55",
+      "packages/artifacts/src/store.test.ts": "d0ba7008d831485d17a13f300f9b76f9453e8609ad52438ec5da1a67c3aeda69",
+      "packages/artifacts/src/store.ts": "e963ffc82989cc2c8576ae4cafb3a8ce917ca5fda36f5b64e8a4389e1b794d71",
+      "packages/artifacts/src/swiftui-renderer.swift": "28e7088218e6f992547943a646cc08506288a4e473f5348c524cb8d96e65f0c7",
+      "packages/artifacts/src/swiftui.test.ts": "88c5e13ac908bf60d0c1d8c089b477701993b0a14ee148a83bec935a87f68ca2",
+      "packages/artifacts/src/swiftui.ts": "bd430d4750872e29f9fb5add95a6f05ce5f0178b9305193017755d7d40b8202e",
+      "packages/artifacts/src/visual/check-worker.ts": "4f676768f10adcf34cc206d48fbbb06cf1bdc7ec698ce2f26fed5aa90c96e69c",
+      "packages/artifacts/src/visual/check.test.ts": "5ecb62ab1e8df69e9030740337f3ca06aaabac5b7a38e5d06aa4e52d2aeff6e8",
+      "packages/artifacts/src/visual/check.ts": "c02a21d0fe545c8b920e8d1f87b347f59ea8d2add103530232c97ce518c746cd",
+      "packages/artifacts/src/visual/conformance.ts": "f19dc1b3db49972993574c49e89015b82197bc020eba425836e496318928b156",
+      "packages/artifacts/src/visual/fixtures.test.ts": "11c48ac4baea04665512aaf712804a8b66eff6f4ea6256aea12c0657e5bd3891",
+      "packages/artifacts/src/visual/index.ts": "2f62929d1abb3cd64a29196543108584f66ec1a7a9d707c6b4e991fee12c6bd8",
+      "packages/artifacts/src/visual/metal.test.ts": "f23dc20f2eb043cf627c8e73b4bb86fb9d9528caeef502a347c8a18a63950f8c",
+      "packages/artifacts/src/visual/metal.ts": "f9eed6337259bec8e26a907777892810b4a8d910c340a5c6f56a1daec94dbc3c",
+      "packages/artifacts/src/visual/reference.test.ts": "4c3d8ba316e1fef96a9771a9a0f227cedae3b3d67f32e57b4c74b84bcf5214ed",
+      "packages/artifacts/src/visual/schema.ts": "821284b654962add764be31ef0f629bdec87cd57d0a69436755b5cd784c15ca1",
+      "packages/artifacts/src/visual/session.ts": "f918c38ee3d1ab30bf29c6a02a495a848f57ac6a42647f6dd49156bd8b25d2d7",
+      "packages/protocol/fixtures/visual/api-1.schema.json": "090bf2dc17ae80b50a611660b67c4160d80ba4e55183ceaa0a84410c8093d6cd",
+      "packages/protocol/fixtures/visual/conformance.json": "6c84a22ba6016f3510c4e3d8d1f50df38121a81ca2d7cf8852c820fc2034e085",
+      "packages/protocol/fixtures/visual/shaders.json": "b152fe1228980292a617d528f0bbe0e7063028b3aa2e9d152d79353d506e826b"
+    },
+    "captures": {
+      "1100-dark-appearance.png": {
+        "sha256": "d774165b1751c829790d4ea74eb04afa6c4b387884b88deb9335e7faea535d55",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-before-open.png": {
+        "sha256": "7d4d1e927d4fa9e540699ddf5837a4d046a10e8c01e5eef42cef544b9a9bb728",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-loading-disabled.png": {
+        "sha256": "3bcd8d321b1e4280bf7b4e7a4b7b1a08b7b9746d67751d54d20f3578cdeecc07",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-long-label.png": {
+        "sha256": "99d96c1bebb225d482160ae1fa5f84d6f16d59263d040452961cd2de57aa5b60",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-missing-default.png": {
+        "sha256": "3a4561e4dbe3664944b93bbebac2bb28c90be171b2924b4e51db6ef122a03393",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-save-error.png": {
+        "sha256": "e719125a4b8f361c94c9f503f1603c12906aa553a2083cb5d68462ddf0dd5d18",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-saving-disabled.png": {
+        "sha256": "322e53273a596a00644f3b273163fba15da7e54f740b1ab5ef253dd57d6b2835",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-updates-unavailable.png": {
+        "sha256": "37faa658a70ff0a3ff4aabcf2ac68ec76b1566d40db24b18981f91f52bf61762",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-appearance.png": {
+        "sha256": "1186581c76ccef4946d851b4ede1b02ef27d280bc07001dda370e2d5c93b42b1",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-before-open.png": {
+        "sha256": "80860827e026e349b05aa32317340f2b30537e1663bd041b467311018785dcfe",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-loading-disabled.png": {
+        "sha256": "3b31c1471da455666e6d4ae93793c68df2f5aabf74f54a20585f194678890cb2",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-long-label.png": {
+        "sha256": "e069aec2dade3fe43f3afd5a37bf56a2b1efd525750d5d43b99d759eb002dddd",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-missing-default.png": {
+        "sha256": "168ec7380e539d036e87396f3ef1b1c0f8d31110d82bcdb9af36a7c2ff1f1c5d",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-save-error.png": {
+        "sha256": "16587a2b8d51c3b7776517820bb4b049b9acbe1f02de0c71a42e7d17ef84de76",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-saving-disabled.png": {
+        "sha256": "cfe289d17c176b0729021522f8f1d7def765445287d33be14182c0c1b5d33884",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-updates-unavailable.png": {
+        "sha256": "ee0c064dcfdba1b18262390f8cc9c6ada4b2ded8bc3d4f852a12faefda969d58",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "680-dark-appearance.png": {
+        "sha256": "fbc6dc412f38aa4c45904dfe39831ad5bde7056d1ba82ca23babd41a951b0cd6",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-before-open.png": {
+        "sha256": "19bfce975672583d74f2d77319c7213a6325c3a013437dfb67004189d0bcc5cf",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-loading-disabled.png": {
+        "sha256": "074849415b720ae8d577dab5c1f6327afa77c09ac4231d923fdfed5b74d33eed",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-long-label.png": {
+        "sha256": "b1bcac336ab6710bd71f7e131d76b43f918559c74cbd195f04d6dfba971ae9ac",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-missing-default.png": {
+        "sha256": "8c5bf17baa27108a270689efef4d3ecf55d03a834ea2673cb56149d8b8e6a21e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-save-error.png": {
+        "sha256": "4f49f9f065ddecc8d76f10243eed26c2258f5c7ff7c1a3c64560a91db108833e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-saving-disabled.png": {
+        "sha256": "7a03cd8676392c700daadbb383329f5c8aa7e4ddb9c73ac486b68fb9158d9e46",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-updates-unavailable.png": {
+        "sha256": "47289dcb16b9b32ca97731ff9e494a221a619ff24702b10dc351181625b5787d",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-appearance.png": {
+        "sha256": "4325491021e525de66f15dbdf374c7334c4ada6b0cddf24eb67a133755ad88c1",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-before-open.png": {
+        "sha256": "96a32d4900937db52d48aa6c4dcb58f00831576bab9e11d3066fb84de9eb4ffd",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-loading-disabled.png": {
+        "sha256": "d6a03116728e60bb2e32fabadb722a9a2045324bb01fdc0144db51e5c39003d2",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-long-label.png": {
+        "sha256": "aeed6547e59ee0e941529b92682ae35b7e81df6f490944b625a31d1891057f88",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-missing-default.png": {
+        "sha256": "ef0212fbd46af98475ceb9ae5a522ce61b9bd942e7475791ae2838ae623e5329",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-save-error.png": {
+        "sha256": "3baebe6db0225abbcf47814caa1664f7b48e49e9794a9328bc964a673f14ca91",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-saving-disabled.png": {
+        "sha256": "f27a7af5bbc2a356472c180d3d6537b206593fc4af4621be156c7e335e9669fa",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-updates-unavailable.png": {
+        "sha256": "893625954e53f210be17b6a3633b051bf3c0ab531b24c120a20881e6f306f612",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      }
+    }
+  },
+  "finalParentVerification": {
+    "sourceCommit": "18e773c4e06779f03f7c3e521cdffde8fa86b9d2",
+    "parentCommit": "d709467d0b167cd8210d850ce518b8f56842586b",
+    "previousPublishedHead": "bb68ce58702efd35799f5716f3c6830759705345",
+    "previousConsolidatedHead": "b85157e849de43a87ea07d636339bda4fa87a64b",
+    "changedInputs": [
+      "apps/desktop/src/motion_probe.rs"
+    ],
+    "verificationJob": "f74f3b76-0065-41b6-8571-889c9bac97a0",
+    "verificationLogSha256": "45c7ddd79419c5ea8bbb4edaaee4dc7462d66391f23c19592d89cdfc4fea9608",
+    "scope": "Fresh frozen focused macOS combination: 50 light; fmt; strict all-target native-feature Clippy; 17 state, 4 worker, 2 owner, 1 committed-theme; native motion/catalog/Settings four size-theme cases. Not repeated full suite, Linux CI or visible motion/OS IME acceptance.",
+    "inputs": {
+      ".github/workflows/tests.yaml": "4fd5217c22b52969cdc1125780b23748e7bcda8a4e212690ec4de6cf8ed580d0",
+      "apps/desktop/Cargo.lock": "c2ed69e73723fb4318ea842349350a95336a745ef7c8f1e0628b457a9b0c291e",
+      "apps/desktop/Cargo.toml": "a69f9d03a26bf1d475b815f0a91fc8128301e12fbc16e046c56939e398f28a9f",
+      "apps/desktop/patches/gpui-base-0.8.0.json": "e841a77806be3fb86c9b2189f6420e438d0771a6f90d4acead1dceccde0b48e7",
+      "apps/desktop/patches/gpui-component-0.8.0.json": "df0d3f56231f2f23deb9b9fdabe86be7bed2a238e791d5f62247aaf3b6026390",
+      "apps/desktop/rust-toolchain.toml": "887f9be066a15585a2c583578e84b0fcb541126d81546276bad3d2ff00d61167",
+      "apps/desktop/scripts/bootstrap.sh": "cb2602da76b4cbd5c88d6e743c49d2d97ccdfbc9c650228d0b237dab7448abee",
+      "apps/desktop/scripts/cache-probe.py": "4bef1b0d299ea876668c2d8a7a181d04869a47dbf1b0647bd827ca328efa68e1",
+      "apps/desktop/scripts/capture.sh": "53bbe53ddfc2ca2eb6513fa4397afef9cbcc7921201ac78ad2fc62d5f9631f29",
+      "apps/desktop/scripts/cargo.sh": "f14d6f931fa61566557d2e620d258248a3d3661a46e625bd1ca24d5fd4352a65",
+      "apps/desktop/scripts/check.sh": "de0c676efc317aa8428912cade8d14f75dcd4da2135b107ee5481e896d411e9f",
+      "apps/desktop/scripts/ci.sh": "0fca190f3df51157715b5f0cf647466fac5c850c1591d41b8c0fb912e0e00629",
+      "apps/desktop/scripts/measure-builds.py": "f32fd4a48902b89443eaefcb18a6810cd2b5a57125ef56e8b95aa4dc6af3b471",
+      "apps/desktop/scripts/measure-rendering.py": "a34a0e999493c759435bbabb98cfc7b1b41f379a99c3cdaedf79b7e4193ce5f5",
+      "apps/desktop/scripts/measure-scaling.py": "aa9a74d63cc070267cf57fd65bd343cb7938b3c5bebd5a7b59c12aa72ff6a34e",
+      "apps/desktop/scripts/prepare-patches.py": "9d8cb445d7fd78d4e2fef5fee74ddad3f08de7525de42e602ada75ac1fb0788a",
+      "apps/desktop/scripts/prepare-visual-worker.py": "e479b0640b76bd622aafa3f5e8e80466419db3faf22575f4b66251827f6192fe",
+      "apps/desktop/scripts/run.sh": "db9cd62af88b1ecc4ae3da7a7636da54f12609c4bba4180c45fcdc8c808dc513",
+      "apps/desktop/scripts/test_ci.py": "97b33b4f50fa99b2ea70cc18ad189a86642cf67443a33b5d3b122a3622bc161e",
+      "apps/desktop/scripts/test_measure_scaling.py": "0086bcd980db0258abcfd9544a977d8a010f4a93e1f86f295ec78db972f9b8c8",
+      "apps/desktop/scripts/validate-workflows.py": "10d1618b3366b2535ca4cbb740ba3b6d963233467ec2bf02f76cd8bd0203d15c",
+      "apps/desktop/src/app_icon.rs": "680f6eac20e342574422edb1d7377e21e8afc00e50daf16c3eb13d6dd863af3e",
+      "apps/desktop/src/app_shell.rs": "4c0b7e2197430b45d170a5415f4a811a9e77c045e80df344d235eda0c6e94859",
+      "apps/desktop/src/appearance.rs": "9d6aadc7407f1f7b7289cdfbc9f0574ea5c1d57a9406251bc9ff1dd43677cd49",
+      "apps/desktop/src/artifact_model.rs": "9c97af84df39599028d1543ae43cbb2cd0797cab60acfaf8fd8bd1641364e1ff",
+      "apps/desktop/src/artifact_slider_probe.rs": "4b2fc05b5802cf0fcfbe33cead2028b657d80b4a1180678ace6e43d701ba277d",
+      "apps/desktop/src/artifact_view.rs": "bbed53baef5df2e96ac6f62157df398815332893408a05855d245c75dbc79e12",
+      "apps/desktop/src/artifact_worker.rs": "4a02416e4369efdb4eb526877855959661bb84df57d777a387d9156740ff4ae2",
+      "apps/desktop/src/attention.rs": "952dcb38c9dd17eaafe3e4b260a98cfc785e9aa036898b936b30a6af137d9099",
+      "apps/desktop/src/catalog_probe.rs": "f5ac4728ca14a026feea15a2426cb3de0ee9ed71c62bb1db1d64939fe6e2dc70",
+      "apps/desktop/src/chat_editor.rs": "4f87080a31af645bc9673ff381a8231b99731d1778a57c11cffe38c95a97d09a",
+      "apps/desktop/src/chat_editor_tests.rs": "5d58ef9347fb5a8b3231d06ec7881e3ce368a29fdfdd14914ed2d39f7ef8535d",
+      "apps/desktop/src/composer_tests.rs": "f50399a65c6e68c8156de42552f7719d5b2ca58193ef9c3b8a307c652647de99",
+      "apps/desktop/src/delivery_store.rs": "61430df33f861f237bf2394386b12b5fe06337d3f865d8c12a4ea239aed266fe",
+      "apps/desktop/src/delivery_store_tests.rs": "3488aa2b69984fb4a784a41c5b080fcf954c05bf8273ff01205fb8761669f6b7",
+      "apps/desktop/src/disclosure_probe.rs": "bf2b22bcb85d16ae52ae276b48aa3a134242253475ee103cdd3c547156946f00",
+      "apps/desktop/src/dither.rs": "6c8a59c73e92b9887972d94dbbe2e34c2ef61ad6bf5cfcf2e6b65130b181ac48",
+      "apps/desktop/src/dither_view.rs": "07341746adbb66c4954a21db25a61e848ce72325730901f2f7337770202b4013",
+      "apps/desktop/src/history_probe.rs": "ec7e6a0c2e78a364614f27d658f42490e06cc8031103044d06d05e9c2204b210",
+      "apps/desktop/src/icon_probe.rs": "d49754c74d314892e4c00d6e6cf04f89f40e41731d6c6572bd9b3b6e4f1cf810",
+      "apps/desktop/src/inbox.rs": "48f6cb7186c3f31d99f100b10e2170fea307cc9a9fc8860b1460353a26e79bac",
+      "apps/desktop/src/inbox_probe.rs": "792ea9092c7da17f7f9e7cd846d20c56fa4ec62f451365cca3ad720643de3d88",
+      "apps/desktop/src/interaction.rs": "8c5a1d5080cc35fc7d2204b1eed3c26df71bc33e462846d90185a3ce4f96355f",
+      "apps/desktop/src/interaction_tests.rs": "ed130c6772a58f90601820a04eab6d58ae811c24edb1c119222112b407f232bb",
+      "apps/desktop/src/jump.rs": "b4a244a848ca4407472a188e8da01c09085baa48abfb05e0654ec528ceea923d",
+      "apps/desktop/src/jump_navigation.rs": "7fd007e2c1899a1bdc4ee6fc06bcec39f55a9d80a0d0acb6747868b087a6dffb",
+      "apps/desktop/src/jump_probe.rs": "f083878956ff6119f45f15236e83a47f76445ef7a73b61297527237f53265a53",
+      "apps/desktop/src/jump_view.rs": "d475b55fe232baac47b24447d9c3015ccb9506aac27adcf040c2468491ca02cc",
+      "apps/desktop/src/lib.rs": "eabc655494cde3f806492018dcf2e934997c9ef46a85c1197d94559d84a673d6",
+      "apps/desktop/src/local_client.rs": "913a87d8612dae5a22666ea11da59a0216dcf496d5790e79d4d84600c80636ea",
+      "apps/desktop/src/local_model.rs": "b240439f91a5c64940654adde3ff367cd04dcce912b69197c81367398955b53a",
+      "apps/desktop/src/local_network_tests.rs": "0904da3dd29a4665f3c2ed60af0e8bbf0d97301e9aec895f318a41b4548bf38e",
+      "apps/desktop/src/local_view.rs": "ff9b279797fb128fabe74826ec577cd2d54f4f5459397b4a3c0c5916d65bd1ed",
+      "apps/desktop/src/main.rs": "fad1109d762a2667b18ae33f3a69d16c668988160856ce998ca76e81173f5450",
+      "apps/desktop/src/model.rs": "163cbd72f4f9818ad8af893492e0cb1af57ff4c6109e8db7a19ad85948450a56",
+      "apps/desktop/src/motion_probe.rs": "36ce688d40157acf564eca668189e0084b926269ef198685b283175ffb524137",
+      "apps/desktop/src/navigation.rs": "082992461761cdd94f21f568cb8940357a3edbf9584282d133901981fe35bd3c",
+      "apps/desktop/src/navigation_probe.rs": "12c05a4e670a96f584369b5d41635da5e7710677a57c174cf65438871b206b53",
+      "apps/desktop/src/navigation_view.rs": "60b9f3a38e45c651e923c4bd2f58d457930b250fcc61722d9abce4266f6739ef",
+      "apps/desktop/src/reader_identity_tests.rs": "35ca8c74e64a35fef67658c8c839783ad5506297c4fc4d8b0b16ad8c82822085",
+      "apps/desktop/src/readonly_tests.rs": "013ebcdff247cfd567cd624a4f9acf3111c215175916487ba211409750ed5d44",
+      "apps/desktop/src/settings_probe.rs": "d18117dee301e6668c24f60e3c260c19c48cea37936090a5cfcb1d45e96b316d",
+      "apps/desktop/src/settings_state.rs": "342aa20de4061281e04ea9822111a38ebf3f3c4dd4d4dffc30a477afbdc4a8e5",
+      "apps/desktop/src/settings_view.rs": "ddcb735b121b2188dcdc71d4aee0eb72b8e6f9f0e70446cafc3a719924df2269",
+      "apps/desktop/src/settings_worker.rs": "6916884677280dd3318177e697de17d809bc1621d54de015cf6e3f0714376b56",
+      "apps/desktop/src/shell_probe.rs": "f7415940e21811586a9538ad3f33c370f56d2c2c3c5809f7b078839eb69cbfc8",
+      "apps/desktop/src/style_probe.rs": "9e224e9efe5617494f4c11c6801b4afad0333333c4241cfe976d9dedf97be587",
+      "apps/desktop/src/tool_presentation.rs": "00efe36b1550059ddf98cebf8bdcb163b1af68ae2a020c48a2fce4badf0089f2",
+      "apps/desktop/src/tool_presentation_tests.rs": "8c376f4653c455af2e076aaae4a9d529f167dc86be4de8fef837c00f5af4c32f",
+      "apps/desktop/src/transcript_view.rs": "a30fed2cb8ff53b1ddf50c7697f87f9584b58f9790ddbb0fa87ee8256a7d7439",
+      "apps/desktop/src/ui.rs": "a54e3be1da55b33a4b7ee285b288ba84dad7590d52f6fc2a1c8eb01edefe2b44",
+      "apps/desktop/src/visual_canvas_plan.rs": "ee044de4d687305f371957670b331277d1f1f1d17e66c0590aef6608ff3ba632",
+      "apps/desktop/src/visual_canvas_view.rs": "cb6bd3182ad79d216839fe3a767e34f52bc512016b3e1dc320e0ee9092ed5389",
+      "apps/desktop/src/visual_chart.rs": "0f44ce38b4e17961085f9086c27384a1228de5ef818dc964f2be41b998080d45",
+      "apps/desktop/src/visual_chart_view.rs": "64dcb2481466eea1d30f57b7431f81b10c1c7621e1305c1432e3715376250f95",
+      "apps/desktop/src/visual_drawing.rs": "cf69f2e3a8cb62db012fece1e1d0bdb36a89111a6f4436e56755286e61f4708b",
+      "apps/desktop/src/visual_runtime.rs": "fd6b9d1f4c96ae0a44b4720e3b183d737ff747417faa3d597e8aa94ea2836dee",
+      "apps/desktop/src/visual_scene.rs": "007ab9640605e2d552c9e4480847f3786012f9ea06f558358fb76f949e5b928e",
+      "apps/desktop/src/visual_session.rs": "3c485217fccff8c68696068d7bc81af66322518c9ed9603bba88bc70d6a1b7e4",
+      "apps/desktop/src/visual_slider.rs": "78bccff489922e40ecc05c3d2c7c1ae0007329d355ca77cc466fa798bbe92677",
+      "apps/desktop/src/visual_wire.rs": "42864a29191232138257b4fe4a3255fc0382a028c4581ab328a5acc6ab707bf7",
+      "apps/desktop/src/work_tests.rs": "ed72cafea85e6b299ae64d27c51e58c3eba6652ebea4e7a810dc81e693dd1955",
+      "apps/desktop/src/work_view.rs": "ec0b36ca2bf9452cef51e5937050dedf5badd69344126f9bce1cd185e594d510",
+      "apps/desktop/src/workbench_probe.rs": "00233452c5b9c13b3853a1f823d716cb3487ccf5cca0bf8d440a75a3599a40eb",
+      "apps/desktop/src/workbench_view.rs": "0c91dbcd0fbc374cba907aa1721457ee7845ed96a12a6f4eb06dd8301e5806b9",
+      "apps/desktop/tests/capture.rs": "8d166ebe7062af7f3887c5387f7424bc8d0cf4a17f5b00b1e3acd5282d820506",
+      "apps/desktop/tests/catalog.rs": "f6501a4221e14b9b6b6d7165e8b3a23048de7d0ff9785f0b280ea63bbdfcab2f",
+      "apps/desktop/tests/chrome.rs": "b7ba0d21c8c333d12e0118d667c2028855613f5e24f39ef9cd1b999c049c57fb",
+      "apps/desktop/tests/controls.rs": "6c2eaa67f3876e35ac768cfe59ee396bc9e2ce7ca3cf8faba3154ff8cdb189bc",
+      "apps/desktop/tests/disclosure.rs": "91b6b09d938eeb34d4dcd8c9febc645cee465b6b892f1898f825b5e59dc4053d",
+      "apps/desktop/tests/history.rs": "acbad63a848611d9c8ce6e22bec6891713680279db47d5e6270be30be3e7ebf9",
+      "apps/desktop/tests/icons.rs": "47828f5d4e9153b257ca07378209819cc602ec91cde7d56d8c0d1e3ab0d2fc54",
+      "apps/desktop/tests/inbox.rs": "a913a15ff9afb60382bcf90e62bac312f6adf5573eff5d5142639e8315108d77",
+      "apps/desktop/tests/jump.rs": "7d7fa52793387027a3806f25d85daf29f3438cc1d60f246a3a06c79688cbc129",
+      "apps/desktop/tests/motion.rs": "e7e9aa1e9c58c0283a3c67733420edde34fb1198b2bb09e4084c44ca6d450072",
+      "apps/desktop/tests/navigation.rs": "a9383399141a0ecd0918fb6fd9a694b8b028c5565d68ab387e9336281a6a995e",
+      "apps/desktop/tests/rendering.rs": "b5752c4a6e910517c194d54dd34435906d292ce9fe85a52c3190898058e11ab3",
+      "apps/desktop/tests/scaling.rs": "4e96e4fb6711555262c795a2499cd3b892dae1c28e4bc5a936a4358f054d16a5",
+      "apps/desktop/tests/settings.rs": "e7f6b2ff7666ca14373cda32ad948bcbbaf22e1e78b01d9d9bc2d10b4415d2b9",
+      "apps/desktop/tests/settings_state.rs": "24a5ed7484f1c8bb63b70425c85bff132537a1e258683dc3f522d0244950c065",
+      "apps/desktop/tests/shell.rs": "ea86feb24739df32b350943997517512089f88170e52057d2c8e60646be00f1c",
+      "apps/desktop/tests/style.rs": "a50c8dfe24da8afc2e35bfb876ced5c68fc7242001b6e80ceb1985511f3a3427",
+      "apps/desktop/tests/visuals.rs": "b6c1612a13ca1e2b7a318b4a7d1ffcabf6b7cb0691979b6921af09548fe2c7ed",
+      "apps/desktop/tests/workbench.rs": "6a802c53235805a1db8639baa216eb7c8f867c06c9b722f4962d0afa9ec1c52d",
+      "apps/desktop/visual-worker/Cargo.toml": "19f3621ba1ca151f038de938bb9bc8918e72033027d5e41a859532e3da76e4ec",
+      "apps/desktop/visual-worker/build.rs": "c53fb68e5b66675f42201041a771ae503c696603c05430694bd9a1fcc7cd728f",
+      "apps/desktop/visual-worker/engine.c": "c0a85f75002f1d58d2ebcc7d0e51bc81f3670c2416119bcbb8074bddcadc4013",
+      "apps/desktop/visual-worker/src/engine.rs": "a2d3b5fa56c8718c91abc4387983acfa4839b9e70554b116c5ed363a48f831a6",
+      "apps/desktop/visual-worker/src/isolation.rs": "4f48927f2e1317b49835926011fa9ac93b90870a18992fdcd5bd9e0d10474bb1",
+      "apps/desktop/visual-worker/src/main.rs": "1ebfd29827316898c9326e2416f2da41d84dbac859b57ac9aa5f1a65bb00ca56",
+      "apps/desktop/visual-worker/src/watchdog.rs": "c0b62d2c820ab12c4e2a759101f7983b70a6162ef19ed62a73c13ff85adbc104",
+      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h": "63abe4cc72bb2081fb1109333766da5782c825652b0c197b19e4a299ca9310b6",
+      "apps/macos/Sources/PilotVisualEngine/pilot_visual_engine.c": "0eb0ed94beeef715058123668a2deadc10cdf0e805938ebeba37d9453c885874",
+      "packages/artifacts/src/image.test.ts": "1427b5d828ba2565e56e3c58caff4fc3b20f3c02eec8aba9e10b1ea36c899a08",
+      "packages/artifacts/src/image.ts": "75e3d34f233c16b2b6df75446aa074477326ff011d991dd8f8a01e6d508c8280",
+      "packages/artifacts/src/index.ts": "70dff7b007165fe2df3ee7b46eaf319b071536d49dc119058f39b65288effadd",
+      "packages/artifacts/src/preview.test.ts": "2cd88c5465f25c874b11e34fc8f8e17db33f49bd6cc11bdf5fe111db3b083d43",
+      "packages/artifacts/src/preview.ts": "f69162cb41de9e728cee35cfb5029ae45716626db18c6600de21135ecec9956b",
+      "packages/artifacts/src/render-lifecycle.test.ts": "ea0d688527ca1e99c1329d1424a14d3107d78a071c56329f17ea3c3e27f88941",
+      "packages/artifacts/src/render.test.ts": "965adb24b2503e8b293fe5ab91c37def5b77af133e88deb9e1365e5da6e125ca",
+      "packages/artifacts/src/render.ts": "a560b99e7d53b2565a1c52d1a3dde551257bc71771917695bfa408e3452fe7c3",
+      "packages/artifacts/src/shader-check-worker.ts": "408fe9980fe948d6768c29582334ddc48fba45988c31be9277e771acf4c3a331",
+      "packages/artifacts/src/shader.test.ts": "45c6cb608021f90c961702d48d779a91bfcb4d6dcda8fc097dd8ac801917333c",
+      "packages/artifacts/src/shader.ts": "b73be632d1463cc9dc2d6ba71be4a5215b30dd9df67d945cfd9a0d186effcb55",
+      "packages/artifacts/src/store.test.ts": "d0ba7008d831485d17a13f300f9b76f9453e8609ad52438ec5da1a67c3aeda69",
+      "packages/artifacts/src/store.ts": "e963ffc82989cc2c8576ae4cafb3a8ce917ca5fda36f5b64e8a4389e1b794d71",
+      "packages/artifacts/src/swiftui-renderer.swift": "28e7088218e6f992547943a646cc08506288a4e473f5348c524cb8d96e65f0c7",
+      "packages/artifacts/src/swiftui.test.ts": "88c5e13ac908bf60d0c1d8c089b477701993b0a14ee148a83bec935a87f68ca2",
+      "packages/artifacts/src/swiftui.ts": "bd430d4750872e29f9fb5add95a6f05ce5f0178b9305193017755d7d40b8202e",
+      "packages/artifacts/src/visual/check-worker.ts": "4f676768f10adcf34cc206d48fbbb06cf1bdc7ec698ce2f26fed5aa90c96e69c",
+      "packages/artifacts/src/visual/check.test.ts": "5ecb62ab1e8df69e9030740337f3ca06aaabac5b7a38e5d06aa4e52d2aeff6e8",
+      "packages/artifacts/src/visual/check.ts": "c02a21d0fe545c8b920e8d1f87b347f59ea8d2add103530232c97ce518c746cd",
+      "packages/artifacts/src/visual/conformance.ts": "f19dc1b3db49972993574c49e89015b82197bc020eba425836e496318928b156",
+      "packages/artifacts/src/visual/fixtures.test.ts": "11c48ac4baea04665512aaf712804a8b66eff6f4ea6256aea12c0657e5bd3891",
+      "packages/artifacts/src/visual/index.ts": "2f62929d1abb3cd64a29196543108584f66ec1a7a9d707c6b4e991fee12c6bd8",
+      "packages/artifacts/src/visual/metal.test.ts": "f23dc20f2eb043cf627c8e73b4bb86fb9d9528caeef502a347c8a18a63950f8c",
+      "packages/artifacts/src/visual/metal.ts": "f9eed6337259bec8e26a907777892810b4a8d910c340a5c6f56a1daec94dbc3c",
+      "packages/artifacts/src/visual/reference.test.ts": "4c3d8ba316e1fef96a9771a9a0f227cedae3b3d67f32e57b4c74b84bcf5214ed",
+      "packages/artifacts/src/visual/schema.ts": "821284b654962add764be31ef0f629bdec87cd57d0a69436755b5cd784c15ca1",
+      "packages/artifacts/src/visual/session.ts": "f918c38ee3d1ab30bf29c6a02a495a848f57ac6a42647f6dd49156bd8b25d2d7",
+      "packages/protocol/fixtures/visual/api-1.schema.json": "090bf2dc17ae80b50a611660b67c4160d80ba4e55183ceaa0a84410c8093d6cd",
+      "packages/protocol/fixtures/visual/conformance.json": "6c84a22ba6016f3510c4e3d8d1f50df38121a81ca2d7cf8852c820fc2034e085",
+      "packages/protocol/fixtures/visual/shaders.json": "b152fe1228980292a617d528f0bbe0e7063028b3aa2e9d152d79353d506e826b"
+    },
+    "captures": {
+      "1100-dark-appearance.png": {
+        "sha256": "d774165b1751c829790d4ea74eb04afa6c4b387884b88deb9335e7faea535d55",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-before-open.png": {
+        "sha256": "df4c6bbb0992b57ce14c5ac2b1795cb5df42875ffbfdd31d70b9bad96c7b55d6",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-loading-disabled.png": {
+        "sha256": "3bcd8d321b1e4280bf7b4e7a4b7b1a08b7b9746d67751d54d20f3578cdeecc07",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-long-label.png": {
+        "sha256": "99d96c1bebb225d482160ae1fa5f84d6f16d59263d040452961cd2de57aa5b60",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-missing-default.png": {
+        "sha256": "3a4561e4dbe3664944b93bbebac2bb28c90be171b2924b4e51db6ef122a03393",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-save-error.png": {
+        "sha256": "e719125a4b8f361c94c9f503f1603c12906aa553a2083cb5d68462ddf0dd5d18",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-saving-disabled.png": {
+        "sha256": "322e53273a596a00644f3b273163fba15da7e54f740b1ab5ef253dd57d6b2835",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-updates-unavailable.png": {
+        "sha256": "37faa658a70ff0a3ff4aabcf2ac68ec76b1566d40db24b18981f91f52bf61762",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-appearance.png": {
+        "sha256": "1186581c76ccef4946d851b4ede1b02ef27d280bc07001dda370e2d5c93b42b1",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-before-open.png": {
+        "sha256": "80860827e026e349b05aa32317340f2b30537e1663bd041b467311018785dcfe",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-loading-disabled.png": {
+        "sha256": "3b31c1471da455666e6d4ae93793c68df2f5aabf74f54a20585f194678890cb2",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-long-label.png": {
+        "sha256": "e069aec2dade3fe43f3afd5a37bf56a2b1efd525750d5d43b99d759eb002dddd",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-missing-default.png": {
+        "sha256": "168ec7380e539d036e87396f3ef1b1c0f8d31110d82bcdb9af36a7c2ff1f1c5d",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-save-error.png": {
+        "sha256": "16587a2b8d51c3b7776517820bb4b049b9acbe1f02de0c71a42e7d17ef84de76",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-saving-disabled.png": {
+        "sha256": "cfe289d17c176b0729021522f8f1d7def765445287d33be14182c0c1b5d33884",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-updates-unavailable.png": {
+        "sha256": "ee0c064dcfdba1b18262390f8cc9c6ada4b2ded8bc3d4f852a12faefda969d58",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "680-dark-appearance.png": {
+        "sha256": "fbc6dc412f38aa4c45904dfe39831ad5bde7056d1ba82ca23babd41a951b0cd6",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-before-open.png": {
+        "sha256": "4508404bd4e5ec1bcaf6959ef7b054cfd4396151ad3a9bfbef0c12fd96672fd6",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-loading-disabled.png": {
+        "sha256": "074849415b720ae8d577dab5c1f6327afa77c09ac4231d923fdfed5b74d33eed",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-long-label.png": {
+        "sha256": "b1bcac336ab6710bd71f7e131d76b43f918559c74cbd195f04d6dfba971ae9ac",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-missing-default.png": {
+        "sha256": "8c5bf17baa27108a270689efef4d3ecf55d03a834ea2673cb56149d8b8e6a21e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-save-error.png": {
+        "sha256": "4f49f9f065ddecc8d76f10243eed26c2258f5c7ff7c1a3c64560a91db108833e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-saving-disabled.png": {
+        "sha256": "7a03cd8676392c700daadbb383329f5c8aa7e4ddb9c73ac486b68fb9158d9e46",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-updates-unavailable.png": {
+        "sha256": "47289dcb16b9b32ca97731ff9e494a221a619ff24702b10dc351181625b5787d",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-appearance.png": {
+        "sha256": "4325491021e525de66f15dbdf374c7334c4ada6b0cddf24eb67a133755ad88c1",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-before-open.png": {
+        "sha256": "96a32d4900937db52d48aa6c4dcb58f00831576bab9e11d3066fb84de9eb4ffd",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-loading-disabled.png": {
+        "sha256": "d6a03116728e60bb2e32fabadb722a9a2045324bb01fdc0144db51e5c39003d2",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-long-label.png": {
+        "sha256": "aeed6547e59ee0e941529b92682ae35b7e81df6f490944b625a31d1891057f88",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-missing-default.png": {
+        "sha256": "ef0212fbd46af98475ceb9ae5a522ce61b9bd942e7475791ae2838ae623e5329",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-save-error.png": {
+        "sha256": "3baebe6db0225abbcf47814caa1664f7b48e49e9794a9328bc964a673f14ca91",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-saving-disabled.png": {
+        "sha256": "f27a7af5bbc2a356472c180d3d6537b206593fc4af4621be156c7e335e9669fa",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-updates-unavailable.png": {
+        "sha256": "893625954e53f210be17b6a3633b051bf3c0ab531b24c120a20881e6f306f612",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      }
+    },
+    "motionCaptures": {
+      "1100-dark-0.png": {
+        "sha256": "71255fdb68cd2724aa16b9485c156f5218a4d5fe0345d2588535bbdbd5ce978b",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-160.png": {
+        "sha256": "613e54555ba8616216b38eeda8eedb7994793cf8127358f15584702b6d87c28b",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-400.png": {
+        "sha256": "10694a63375e44b1733aca37054414be566e315eabfbd4005b4e966024ffb9c5",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-600.png": {
+        "sha256": "10694a63375e44b1733aca37054414be566e315eabfbd4005b4e966024ffb9c5",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-80.png": {
+        "sha256": "919833736ef9dedaac5d7210aaf9eaf6ff6cd67218c000d1404a85cc0335357c",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-instant.png": {
+        "sha256": "10694a63375e44b1733aca37054414be566e315eabfbd4005b4e966024ffb9c5",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-0.png": {
+        "sha256": "b51db69ada7f331fd58497c069f7c42febe86ab46897bf44b03b9dfc23021dbf",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-160.png": {
+        "sha256": "4e8935b2ee1a096b9ea053a87d6d8568cb2845d1795c3e746ac66baf4b1f9b0b",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-400.png": {
+        "sha256": "f389c4322181a445966dad8e675729bb8f29708346e614769629181950af68b9",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-600.png": {
+        "sha256": "f389c4322181a445966dad8e675729bb8f29708346e614769629181950af68b9",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-80.png": {
+        "sha256": "7bbf5f4587a5ee3497d03330d789eedea3363516dc78ea9dd20ee5da86ec8b7d",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-instant.png": {
+        "sha256": "f389c4322181a445966dad8e675729bb8f29708346e614769629181950af68b9",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "680-dark-0.png": {
+        "sha256": "b05ead2803913eb8a9c670fc9a07ebe719dba6a189ac2eb4f434c3357cda75ea",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-160.png": {
+        "sha256": "4f98afe9ed95306042d3c78aecec09dc0e8d248ed384fcd978e11e4ae323e447",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-400.png": {
+        "sha256": "9b4cd3d697887c03ba002d66ce13b190555e74b51e6baa67dd4294f4b1bfb42d",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-600.png": {
+        "sha256": "9b4cd3d697887c03ba002d66ce13b190555e74b51e6baa67dd4294f4b1bfb42d",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-80.png": {
+        "sha256": "8a29b0720d811dfe13609797c7422e4ebd9c853acf07f6ddf1984bccae660efb",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-instant.png": {
+        "sha256": "9b4cd3d697887c03ba002d66ce13b190555e74b51e6baa67dd4294f4b1bfb42d",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-0.png": {
+        "sha256": "fcfdc2c82ff435ff4a150e43d74631512efaf127f70c1ddeab67a73875bcb391",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-160.png": {
+        "sha256": "28f6b2dd17da65c8557a7f107326a665d0ce9f5a1c745f877d70ce6c55c2fe1b",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-400.png": {
+        "sha256": "54d9fd5fed2bb6f9271324af5851328113c63cfbaede76d7feccaabd53275b33",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-600.png": {
+        "sha256": "54d9fd5fed2bb6f9271324af5851328113c63cfbaede76d7feccaabd53275b33",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-80.png": {
+        "sha256": "cc488ce7437763a685fd1dc5ecf7e2e1406eb91c5daa351f9ce2fa32fea2d417",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-instant.png": {
+        "sha256": "54d9fd5fed2bb6f9271324af5851328113c63cfbaede76d7feccaabd53275b33",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      }
+    },
+    "motionObservations": [
+      {
+        "width": 680.0,
+        "mode": "light",
+        "readback_end_ms": [
+          -1,
+          181,
+          281,
+          498,
+          689
+        ],
+        "draw_start_ms": [
+          -84,
+          95,
+          193,
+          411,
+          604
+        ],
+        "draw_and_readback_ms": [
+          83,
+          85,
+          87,
+          86,
+          84
+        ],
+        "baseline_before_append": true,
+        "intermediate_pixels": 3690,
+        "appended_word_mask_pixels": 3690,
+        "existing_prefix_pixels_unchanged": true,
+        "negative_control_native_initial_full_intermediate_pixels": 0,
+        "png_encoding_after_sampling": true
+      },
+      {
+        "width": 680.0,
+        "mode": "light",
+        "actual_sample_ms": [
+          -1,
+          181,
+          281,
+          498,
+          689
+        ],
+        "intermediate_pixels": 3690,
+        "idle_transcript_renders": 0,
+        "message_geometry_and_entity_retained": true,
+        "exact_copy": true,
+        "native_production_root": true,
+        "visible_smoothness_proof": false
+      },
+      {
+        "width": 680.0,
+        "mode": "dark",
+        "readback_end_ms": [
+          -1,
+          177,
+          273,
+          520,
+          686
+        ],
+        "draw_start_ms": [
+          -86,
+          94,
+          189,
+          414,
+          602
+        ],
+        "draw_and_readback_ms": [
+          85,
+          82,
+          84,
+          106,
+          83
+        ],
+        "baseline_before_append": true,
+        "intermediate_pixels": 3618,
+        "appended_word_mask_pixels": 3618,
+        "existing_prefix_pixels_unchanged": true,
+        "negative_control_native_initial_full_intermediate_pixels": 0,
+        "png_encoding_after_sampling": true
+      },
+      {
+        "width": 680.0,
+        "mode": "dark",
+        "actual_sample_ms": [
+          -1,
+          177,
+          273,
+          520,
+          686
+        ],
+        "intermediate_pixels": 3618,
+        "idle_transcript_renders": 0,
+        "message_geometry_and_entity_retained": true,
+        "exact_copy": true,
+        "native_production_root": true,
+        "visible_smoothness_proof": false
+      },
+      {
+        "width": 1100.0,
+        "mode": "light",
+        "readback_end_ms": [
+          -1,
+          230,
+          398,
+          559,
+          755
+        ],
+        "draw_start_ms": [
+          -133,
+          95,
+          244,
+          408,
+          603
+        ],
+        "draw_and_readback_ms": [
+          132,
+          135,
+          153,
+          151,
+          151
+        ],
+        "baseline_before_append": true,
+        "intermediate_pixels": 3682,
+        "appended_word_mask_pixels": 3690,
+        "existing_prefix_pixels_unchanged": true,
+        "negative_control_native_initial_full_intermediate_pixels": 0,
+        "png_encoding_after_sampling": true
+      },
+      {
+        "width": 1100.0,
+        "mode": "light",
+        "actual_sample_ms": [
+          -1,
+          230,
+          398,
+          559,
+          755
+        ],
+        "intermediate_pixels": 3682,
+        "idle_transcript_renders": 0,
+        "message_geometry_and_entity_retained": true,
+        "exact_copy": true,
+        "native_production_root": true,
+        "visible_smoothness_proof": false
+      },
+      {
+        "width": 1100.0,
+        "mode": "dark",
+        "readback_end_ms": [
+          -1,
+          227,
+          380,
+          538,
+          737
+        ],
+        "draw_start_ms": [
+          -136,
+          94,
+          240,
+          407,
+          605
+        ],
+        "draw_and_readback_ms": [
+          134,
+          133,
+          140,
+          130,
+          132
+        ],
+        "baseline_before_append": true,
+        "intermediate_pixels": 3607,
+        "appended_word_mask_pixels": 3618,
+        "existing_prefix_pixels_unchanged": true,
+        "negative_control_native_initial_full_intermediate_pixels": 0,
+        "png_encoding_after_sampling": true
+      },
+      {
+        "width": 1100.0,
+        "mode": "dark",
+        "actual_sample_ms": [
+          -1,
+          227,
+          380,
+          538,
+          737
+        ],
+        "intermediate_pixels": 3607,
+        "idle_transcript_renders": 0,
+        "message_geometry_and_entity_retained": true,
+        "exact_copy": true,
+        "native_production_root": true,
+        "visible_smoothness_proof": false
+      }
+    ],
+    "publishedRewrite": "Only owned feature and evidence consolidated; original bb68/b851 receipt content above remains historical, not re-labelled as a run on the final commit."
+  },
+  "stackConflictVerification": {
+    "sourceCommit": "644f1694bf9cf57a0ab87b3837a6344f01afeb12",
+    "parentCommit": "8176409163ed3f26ca902b38b09dcddc5f47c76b",
+    "previousPublishedHead": "698c94c4528eb6f230169bf482bb56d185211f32",
+    "changedInputs": [
+      "apps/desktop/src/app_shell.rs",
+      "apps/desktop/src/disclosure_probe.rs",
+      "apps/desktop/src/inbox.rs",
+      "apps/desktop/src/inbox_probe.rs",
+      "apps/desktop/src/shell_probe.rs",
+      "apps/desktop/src/tool_presentation.rs",
+      "apps/desktop/src/tool_presentation_tests.rs",
+      "apps/desktop/src/work_tests.rs",
+      "apps/desktop/src/work_view.rs"
+    ],
+    "parentFeaturePatchSha256": "6a40f2db32bbfd9826469f1b160cb9c9a5f12bbd7ef1f3eb27f80d0773fe8cef",
+    "verificationJob": "29d055ef-e633-42b5-b88c-b6f7784da7f4",
+    "verificationLogSha256": "4cc67a5fd03e2beec28124a8127f98b124452cdb207f46edfe462891da8ad3fd",
+    "scope": "Fresh frozen exact817 plus Settings:50 light contracts,fmt,strict native-feature all-target Clippy,53 focused Rust tests,native disclosure720 samples+28 semantic-work states,shell/Inbox/Settings four size-theme flows. Not repeated full suite,new motion pass,Linux/Swift or inherited-parent CI transfer.",
+    "inputs": {
+      ".github/workflows/tests.yaml": "4fd5217c22b52969cdc1125780b23748e7bcda8a4e212690ec4de6cf8ed580d0",
+      "apps/desktop/Cargo.lock": "c2ed69e73723fb4318ea842349350a95336a745ef7c8f1e0628b457a9b0c291e",
+      "apps/desktop/Cargo.toml": "a69f9d03a26bf1d475b815f0a91fc8128301e12fbc16e046c56939e398f28a9f",
+      "apps/desktop/patches/gpui-base-0.8.0.json": "e841a77806be3fb86c9b2189f6420e438d0771a6f90d4acead1dceccde0b48e7",
+      "apps/desktop/patches/gpui-component-0.8.0.json": "df0d3f56231f2f23deb9b9fdabe86be7bed2a238e791d5f62247aaf3b6026390",
+      "apps/desktop/rust-toolchain.toml": "887f9be066a15585a2c583578e84b0fcb541126d81546276bad3d2ff00d61167",
+      "apps/desktop/scripts/bootstrap.sh": "cb2602da76b4cbd5c88d6e743c49d2d97ccdfbc9c650228d0b237dab7448abee",
+      "apps/desktop/scripts/cache-probe.py": "4bef1b0d299ea876668c2d8a7a181d04869a47dbf1b0647bd827ca328efa68e1",
+      "apps/desktop/scripts/capture.sh": "53bbe53ddfc2ca2eb6513fa4397afef9cbcc7921201ac78ad2fc62d5f9631f29",
+      "apps/desktop/scripts/cargo.sh": "f14d6f931fa61566557d2e620d258248a3d3661a46e625bd1ca24d5fd4352a65",
+      "apps/desktop/scripts/check.sh": "de0c676efc317aa8428912cade8d14f75dcd4da2135b107ee5481e896d411e9f",
+      "apps/desktop/scripts/ci.sh": "0fca190f3df51157715b5f0cf647466fac5c850c1591d41b8c0fb912e0e00629",
+      "apps/desktop/scripts/measure-builds.py": "f32fd4a48902b89443eaefcb18a6810cd2b5a57125ef56e8b95aa4dc6af3b471",
+      "apps/desktop/scripts/measure-rendering.py": "a34a0e999493c759435bbabb98cfc7b1b41f379a99c3cdaedf79b7e4193ce5f5",
+      "apps/desktop/scripts/measure-scaling.py": "aa9a74d63cc070267cf57fd65bd343cb7938b3c5bebd5a7b59c12aa72ff6a34e",
+      "apps/desktop/scripts/prepare-patches.py": "9d8cb445d7fd78d4e2fef5fee74ddad3f08de7525de42e602ada75ac1fb0788a",
+      "apps/desktop/scripts/prepare-visual-worker.py": "e479b0640b76bd622aafa3f5e8e80466419db3faf22575f4b66251827f6192fe",
+      "apps/desktop/scripts/run.sh": "db9cd62af88b1ecc4ae3da7a7636da54f12609c4bba4180c45fcdc8c808dc513",
+      "apps/desktop/scripts/test_ci.py": "97b33b4f50fa99b2ea70cc18ad189a86642cf67443a33b5d3b122a3622bc161e",
+      "apps/desktop/scripts/test_measure_scaling.py": "0086bcd980db0258abcfd9544a977d8a010f4a93e1f86f295ec78db972f9b8c8",
+      "apps/desktop/scripts/validate-workflows.py": "10d1618b3366b2535ca4cbb740ba3b6d963233467ec2bf02f76cd8bd0203d15c",
+      "apps/desktop/src/app_icon.rs": "680f6eac20e342574422edb1d7377e21e8afc00e50daf16c3eb13d6dd863af3e",
+      "apps/desktop/src/app_shell.rs": "7bf66e2911846e20a82d81810658e7dc2e7fd860ebc1708bfcc92229debc667a",
+      "apps/desktop/src/appearance.rs": "9d6aadc7407f1f7b7289cdfbc9f0574ea5c1d57a9406251bc9ff1dd43677cd49",
+      "apps/desktop/src/artifact_model.rs": "9c97af84df39599028d1543ae43cbb2cd0797cab60acfaf8fd8bd1641364e1ff",
+      "apps/desktop/src/artifact_slider_probe.rs": "4b2fc05b5802cf0fcfbe33cead2028b657d80b4a1180678ace6e43d701ba277d",
+      "apps/desktop/src/artifact_view.rs": "bbed53baef5df2e96ac6f62157df398815332893408a05855d245c75dbc79e12",
+      "apps/desktop/src/artifact_worker.rs": "4a02416e4369efdb4eb526877855959661bb84df57d777a387d9156740ff4ae2",
+      "apps/desktop/src/attention.rs": "952dcb38c9dd17eaafe3e4b260a98cfc785e9aa036898b936b30a6af137d9099",
+      "apps/desktop/src/catalog_probe.rs": "f5ac4728ca14a026feea15a2426cb3de0ee9ed71c62bb1db1d64939fe6e2dc70",
+      "apps/desktop/src/chat_editor.rs": "4f87080a31af645bc9673ff381a8231b99731d1778a57c11cffe38c95a97d09a",
+      "apps/desktop/src/chat_editor_tests.rs": "5d58ef9347fb5a8b3231d06ec7881e3ce368a29fdfdd14914ed2d39f7ef8535d",
+      "apps/desktop/src/composer_tests.rs": "f50399a65c6e68c8156de42552f7719d5b2ca58193ef9c3b8a307c652647de99",
+      "apps/desktop/src/delivery_store.rs": "61430df33f861f237bf2394386b12b5fe06337d3f865d8c12a4ea239aed266fe",
+      "apps/desktop/src/delivery_store_tests.rs": "3488aa2b69984fb4a784a41c5b080fcf954c05bf8273ff01205fb8761669f6b7",
+      "apps/desktop/src/disclosure_probe.rs": "e647f048337eae289aad89486234ec27849a213937dbe89340303726dbef08e7",
+      "apps/desktop/src/dither.rs": "6c8a59c73e92b9887972d94dbbe2e34c2ef61ad6bf5cfcf2e6b65130b181ac48",
+      "apps/desktop/src/dither_view.rs": "07341746adbb66c4954a21db25a61e848ce72325730901f2f7337770202b4013",
+      "apps/desktop/src/history_probe.rs": "ec7e6a0c2e78a364614f27d658f42490e06cc8031103044d06d05e9c2204b210",
+      "apps/desktop/src/icon_probe.rs": "d49754c74d314892e4c00d6e6cf04f89f40e41731d6c6572bd9b3b6e4f1cf810",
+      "apps/desktop/src/inbox.rs": "de23fce579f64252c3ce3bb7302bfad46ba13fd18715a9dc8897a3087c9a93af",
+      "apps/desktop/src/inbox_probe.rs": "708e126084935f24579a2c498a0003de43a1be7665cc24560ccf4d21c00ddd9b",
+      "apps/desktop/src/interaction.rs": "8c5a1d5080cc35fc7d2204b1eed3c26df71bc33e462846d90185a3ce4f96355f",
+      "apps/desktop/src/interaction_tests.rs": "ed130c6772a58f90601820a04eab6d58ae811c24edb1c119222112b407f232bb",
+      "apps/desktop/src/jump.rs": "b4a244a848ca4407472a188e8da01c09085baa48abfb05e0654ec528ceea923d",
+      "apps/desktop/src/jump_navigation.rs": "7fd007e2c1899a1bdc4ee6fc06bcec39f55a9d80a0d0acb6747868b087a6dffb",
+      "apps/desktop/src/jump_probe.rs": "f083878956ff6119f45f15236e83a47f76445ef7a73b61297527237f53265a53",
+      "apps/desktop/src/jump_view.rs": "d475b55fe232baac47b24447d9c3015ccb9506aac27adcf040c2468491ca02cc",
+      "apps/desktop/src/lib.rs": "eabc655494cde3f806492018dcf2e934997c9ef46a85c1197d94559d84a673d6",
+      "apps/desktop/src/local_client.rs": "913a87d8612dae5a22666ea11da59a0216dcf496d5790e79d4d84600c80636ea",
+      "apps/desktop/src/local_model.rs": "b240439f91a5c64940654adde3ff367cd04dcce912b69197c81367398955b53a",
+      "apps/desktop/src/local_network_tests.rs": "0904da3dd29a4665f3c2ed60af0e8bbf0d97301e9aec895f318a41b4548bf38e",
+      "apps/desktop/src/local_view.rs": "ff9b279797fb128fabe74826ec577cd2d54f4f5459397b4a3c0c5916d65bd1ed",
+      "apps/desktop/src/main.rs": "fad1109d762a2667b18ae33f3a69d16c668988160856ce998ca76e81173f5450",
+      "apps/desktop/src/model.rs": "163cbd72f4f9818ad8af893492e0cb1af57ff4c6109e8db7a19ad85948450a56",
+      "apps/desktop/src/motion_probe.rs": "36ce688d40157acf564eca668189e0084b926269ef198685b283175ffb524137",
+      "apps/desktop/src/navigation.rs": "082992461761cdd94f21f568cb8940357a3edbf9584282d133901981fe35bd3c",
+      "apps/desktop/src/navigation_probe.rs": "12c05a4e670a96f584369b5d41635da5e7710677a57c174cf65438871b206b53",
+      "apps/desktop/src/navigation_view.rs": "60b9f3a38e45c651e923c4bd2f58d457930b250fcc61722d9abce4266f6739ef",
+      "apps/desktop/src/reader_identity_tests.rs": "35ca8c74e64a35fef67658c8c839783ad5506297c4fc4d8b0b16ad8c82822085",
+      "apps/desktop/src/readonly_tests.rs": "013ebcdff247cfd567cd624a4f9acf3111c215175916487ba211409750ed5d44",
+      "apps/desktop/src/settings_probe.rs": "d18117dee301e6668c24f60e3c260c19c48cea37936090a5cfcb1d45e96b316d",
+      "apps/desktop/src/settings_state.rs": "342aa20de4061281e04ea9822111a38ebf3f3c4dd4d4dffc30a477afbdc4a8e5",
+      "apps/desktop/src/settings_view.rs": "ddcb735b121b2188dcdc71d4aee0eb72b8e6f9f0e70446cafc3a719924df2269",
+      "apps/desktop/src/settings_worker.rs": "6916884677280dd3318177e697de17d809bc1621d54de015cf6e3f0714376b56",
+      "apps/desktop/src/shell_probe.rs": "800975b8b1f3f639b6a2e15a78dd4c91a85d42f3da26819336d7696381773303",
+      "apps/desktop/src/style_probe.rs": "9e224e9efe5617494f4c11c6801b4afad0333333c4241cfe976d9dedf97be587",
+      "apps/desktop/src/tool_presentation.rs": "1083ee6b4eb2046721dc6f0bbff5824d0f0325469c42d3e070043f84425deba6",
+      "apps/desktop/src/tool_presentation_tests.rs": "0396f9e4ad2cccb169f3cdbfd881dc8946aaa0c53e830a6d863d3490df3c067a",
+      "apps/desktop/src/transcript_view.rs": "a30fed2cb8ff53b1ddf50c7697f87f9584b58f9790ddbb0fa87ee8256a7d7439",
+      "apps/desktop/src/ui.rs": "a54e3be1da55b33a4b7ee285b288ba84dad7590d52f6fc2a1c8eb01edefe2b44",
+      "apps/desktop/src/visual_canvas_plan.rs": "ee044de4d687305f371957670b331277d1f1f1d17e66c0590aef6608ff3ba632",
+      "apps/desktop/src/visual_canvas_view.rs": "cb6bd3182ad79d216839fe3a767e34f52bc512016b3e1dc320e0ee9092ed5389",
+      "apps/desktop/src/visual_chart.rs": "0f44ce38b4e17961085f9086c27384a1228de5ef818dc964f2be41b998080d45",
+      "apps/desktop/src/visual_chart_view.rs": "64dcb2481466eea1d30f57b7431f81b10c1c7621e1305c1432e3715376250f95",
+      "apps/desktop/src/visual_drawing.rs": "cf69f2e3a8cb62db012fece1e1d0bdb36a89111a6f4436e56755286e61f4708b",
+      "apps/desktop/src/visual_runtime.rs": "fd6b9d1f4c96ae0a44b4720e3b183d737ff747417faa3d597e8aa94ea2836dee",
+      "apps/desktop/src/visual_scene.rs": "007ab9640605e2d552c9e4480847f3786012f9ea06f558358fb76f949e5b928e",
+      "apps/desktop/src/visual_session.rs": "3c485217fccff8c68696068d7bc81af66322518c9ed9603bba88bc70d6a1b7e4",
+      "apps/desktop/src/visual_slider.rs": "78bccff489922e40ecc05c3d2c7c1ae0007329d355ca77cc466fa798bbe92677",
+      "apps/desktop/src/visual_wire.rs": "42864a29191232138257b4fe4a3255fc0382a028c4581ab328a5acc6ab707bf7",
+      "apps/desktop/src/work_tests.rs": "aec4bdb87058b24893e7033c85e06b125ab3856aecc7c554980b6bb7ade17194",
+      "apps/desktop/src/work_view.rs": "17a7e50bd3af14abbcdf1b581452e842a0503e521fc6b7a4f6a7550d6df437d1",
+      "apps/desktop/src/workbench_probe.rs": "00233452c5b9c13b3853a1f823d716cb3487ccf5cca0bf8d440a75a3599a40eb",
+      "apps/desktop/src/workbench_view.rs": "0c91dbcd0fbc374cba907aa1721457ee7845ed96a12a6f4eb06dd8301e5806b9",
+      "apps/desktop/tests/capture.rs": "8d166ebe7062af7f3887c5387f7424bc8d0cf4a17f5b00b1e3acd5282d820506",
+      "apps/desktop/tests/catalog.rs": "f6501a4221e14b9b6b6d7165e8b3a23048de7d0ff9785f0b280ea63bbdfcab2f",
+      "apps/desktop/tests/chrome.rs": "b7ba0d21c8c333d12e0118d667c2028855613f5e24f39ef9cd1b999c049c57fb",
+      "apps/desktop/tests/controls.rs": "6c2eaa67f3876e35ac768cfe59ee396bc9e2ce7ca3cf8faba3154ff8cdb189bc",
+      "apps/desktop/tests/disclosure.rs": "91b6b09d938eeb34d4dcd8c9febc645cee465b6b892f1898f825b5e59dc4053d",
+      "apps/desktop/tests/history.rs": "acbad63a848611d9c8ce6e22bec6891713680279db47d5e6270be30be3e7ebf9",
+      "apps/desktop/tests/icons.rs": "47828f5d4e9153b257ca07378209819cc602ec91cde7d56d8c0d1e3ab0d2fc54",
+      "apps/desktop/tests/inbox.rs": "a913a15ff9afb60382bcf90e62bac312f6adf5573eff5d5142639e8315108d77",
+      "apps/desktop/tests/jump.rs": "7d7fa52793387027a3806f25d85daf29f3438cc1d60f246a3a06c79688cbc129",
+      "apps/desktop/tests/motion.rs": "e7e9aa1e9c58c0283a3c67733420edde34fb1198b2bb09e4084c44ca6d450072",
+      "apps/desktop/tests/navigation.rs": "a9383399141a0ecd0918fb6fd9a694b8b028c5565d68ab387e9336281a6a995e",
+      "apps/desktop/tests/rendering.rs": "b5752c4a6e910517c194d54dd34435906d292ce9fe85a52c3190898058e11ab3",
+      "apps/desktop/tests/scaling.rs": "4e96e4fb6711555262c795a2499cd3b892dae1c28e4bc5a936a4358f054d16a5",
+      "apps/desktop/tests/settings.rs": "e7f6b2ff7666ca14373cda32ad948bcbbaf22e1e78b01d9d9bc2d10b4415d2b9",
+      "apps/desktop/tests/settings_state.rs": "24a5ed7484f1c8bb63b70425c85bff132537a1e258683dc3f522d0244950c065",
+      "apps/desktop/tests/shell.rs": "ea86feb24739df32b350943997517512089f88170e52057d2c8e60646be00f1c",
+      "apps/desktop/tests/style.rs": "a50c8dfe24da8afc2e35bfb876ced5c68fc7242001b6e80ceb1985511f3a3427",
+      "apps/desktop/tests/visuals.rs": "b6c1612a13ca1e2b7a318b4a7d1ffcabf6b7cb0691979b6921af09548fe2c7ed",
+      "apps/desktop/tests/workbench.rs": "6a802c53235805a1db8639baa216eb7c8f867c06c9b722f4962d0afa9ec1c52d",
+      "apps/desktop/visual-worker/Cargo.toml": "19f3621ba1ca151f038de938bb9bc8918e72033027d5e41a859532e3da76e4ec",
+      "apps/desktop/visual-worker/build.rs": "c53fb68e5b66675f42201041a771ae503c696603c05430694bd9a1fcc7cd728f",
+      "apps/desktop/visual-worker/engine.c": "c0a85f75002f1d58d2ebcc7d0e51bc81f3670c2416119bcbb8074bddcadc4013",
+      "apps/desktop/visual-worker/src/engine.rs": "a2d3b5fa56c8718c91abc4387983acfa4839b9e70554b116c5ed363a48f831a6",
+      "apps/desktop/visual-worker/src/isolation.rs": "4f48927f2e1317b49835926011fa9ac93b90870a18992fdcd5bd9e0d10474bb1",
+      "apps/desktop/visual-worker/src/main.rs": "1ebfd29827316898c9326e2416f2da41d84dbac859b57ac9aa5f1a65bb00ca56",
+      "apps/desktop/visual-worker/src/watchdog.rs": "c0b62d2c820ab12c4e2a759101f7983b70a6162ef19ed62a73c13ff85adbc104",
+      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h": "63abe4cc72bb2081fb1109333766da5782c825652b0c197b19e4a299ca9310b6",
+      "apps/macos/Sources/PilotVisualEngine/pilot_visual_engine.c": "0eb0ed94beeef715058123668a2deadc10cdf0e805938ebeba37d9453c885874",
+      "packages/artifacts/src/image.test.ts": "1427b5d828ba2565e56e3c58caff4fc3b20f3c02eec8aba9e10b1ea36c899a08",
+      "packages/artifacts/src/image.ts": "75e3d34f233c16b2b6df75446aa074477326ff011d991dd8f8a01e6d508c8280",
+      "packages/artifacts/src/index.ts": "70dff7b007165fe2df3ee7b46eaf319b071536d49dc119058f39b65288effadd",
+      "packages/artifacts/src/preview.test.ts": "2cd88c5465f25c874b11e34fc8f8e17db33f49bd6cc11bdf5fe111db3b083d43",
+      "packages/artifacts/src/preview.ts": "f69162cb41de9e728cee35cfb5029ae45716626db18c6600de21135ecec9956b",
+      "packages/artifacts/src/render-lifecycle.test.ts": "ea0d688527ca1e99c1329d1424a14d3107d78a071c56329f17ea3c3e27f88941",
+      "packages/artifacts/src/render.test.ts": "965adb24b2503e8b293fe5ab91c37def5b77af133e88deb9e1365e5da6e125ca",
+      "packages/artifacts/src/render.ts": "a560b99e7d53b2565a1c52d1a3dde551257bc71771917695bfa408e3452fe7c3",
+      "packages/artifacts/src/shader-check-worker.ts": "408fe9980fe948d6768c29582334ddc48fba45988c31be9277e771acf4c3a331",
+      "packages/artifacts/src/shader.test.ts": "45c6cb608021f90c961702d48d779a91bfcb4d6dcda8fc097dd8ac801917333c",
+      "packages/artifacts/src/shader.ts": "b73be632d1463cc9dc2d6ba71be4a5215b30dd9df67d945cfd9a0d186effcb55",
+      "packages/artifacts/src/store.test.ts": "d0ba7008d831485d17a13f300f9b76f9453e8609ad52438ec5da1a67c3aeda69",
+      "packages/artifacts/src/store.ts": "e963ffc82989cc2c8576ae4cafb3a8ce917ca5fda36f5b64e8a4389e1b794d71",
+      "packages/artifacts/src/swiftui-renderer.swift": "28e7088218e6f992547943a646cc08506288a4e473f5348c524cb8d96e65f0c7",
+      "packages/artifacts/src/swiftui.test.ts": "88c5e13ac908bf60d0c1d8c089b477701993b0a14ee148a83bec935a87f68ca2",
+      "packages/artifacts/src/swiftui.ts": "bd430d4750872e29f9fb5add95a6f05ce5f0178b9305193017755d7d40b8202e",
+      "packages/artifacts/src/visual/check-worker.ts": "4f676768f10adcf34cc206d48fbbb06cf1bdc7ec698ce2f26fed5aa90c96e69c",
+      "packages/artifacts/src/visual/check.test.ts": "5ecb62ab1e8df69e9030740337f3ca06aaabac5b7a38e5d06aa4e52d2aeff6e8",
+      "packages/artifacts/src/visual/check.ts": "c02a21d0fe545c8b920e8d1f87b347f59ea8d2add103530232c97ce518c746cd",
+      "packages/artifacts/src/visual/conformance.ts": "f19dc1b3db49972993574c49e89015b82197bc020eba425836e496318928b156",
+      "packages/artifacts/src/visual/fixtures.test.ts": "11c48ac4baea04665512aaf712804a8b66eff6f4ea6256aea12c0657e5bd3891",
+      "packages/artifacts/src/visual/index.ts": "2f62929d1abb3cd64a29196543108584f66ec1a7a9d707c6b4e991fee12c6bd8",
+      "packages/artifacts/src/visual/metal.test.ts": "f23dc20f2eb043cf627c8e73b4bb86fb9d9528caeef502a347c8a18a63950f8c",
+      "packages/artifacts/src/visual/metal.ts": "f9eed6337259bec8e26a907777892810b4a8d910c340a5c6f56a1daec94dbc3c",
+      "packages/artifacts/src/visual/reference.test.ts": "4c3d8ba316e1fef96a9771a9a0f227cedae3b3d67f32e57b4c74b84bcf5214ed",
+      "packages/artifacts/src/visual/schema.ts": "821284b654962add764be31ef0f629bdec87cd57d0a69436755b5cd784c15ca1",
+      "packages/artifacts/src/visual/session.ts": "f918c38ee3d1ab30bf29c6a02a495a848f57ac6a42647f6dd49156bd8b25d2d7",
+      "packages/protocol/fixtures/visual/api-1.schema.json": "090bf2dc17ae80b50a611660b67c4160d80ba4e55183ceaa0a84410c8093d6cd",
+      "packages/protocol/fixtures/visual/conformance.json": "6c84a22ba6016f3510c4e3d8d1f50df38121a81ca2d7cf8852c820fc2034e085",
+      "packages/protocol/fixtures/visual/shaders.json": "b152fe1228980292a617d528f0bbe0e7063028b3aa2e9d152d79353d506e826b"
+    },
+    "captures": {
+      "1100-dark-appearance.png": {
+        "sha256": "d774165b1751c829790d4ea74eb04afa6c4b387884b88deb9335e7faea535d55",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-before-open.png": {
+        "sha256": "eccbc8a0f02bf73e040a3779d572f7321e9b24c26908a3b7e73b3757deeb8aed",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-dark-loading-disabled.png": {
+        "sha256": "3bcd8d321b1e4280bf7b4e7a4b7b1a08b7b9746d67751d54d20f3578cdeecc07",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-long-label.png": {
+        "sha256": "99d96c1bebb225d482160ae1fa5f84d6f16d59263d040452961cd2de57aa5b60",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-missing-default.png": {
+        "sha256": "3a4561e4dbe3664944b93bbebac2bb28c90be171b2924b4e51db6ef122a03393",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-save-error.png": {
+        "sha256": "e719125a4b8f361c94c9f503f1603c12906aa553a2083cb5d68462ddf0dd5d18",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-saving-disabled.png": {
+        "sha256": "322e53273a596a00644f3b273163fba15da7e54f740b1ab5ef253dd57d6b2835",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-dark-updates-unavailable.png": {
+        "sha256": "37faa658a70ff0a3ff4aabcf2ac68ec76b1566d40db24b18981f91f52bf61762",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-appearance.png": {
+        "sha256": "1186581c76ccef4946d851b4ede1b02ef27d280bc07001dda370e2d5c93b42b1",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-before-open.png": {
+        "sha256": "12ee96688eac5d58f668efe68811513dfe267b1577b1d81984582e8d197fd074",
+        "pixelSize": [
+          2200,
+          1520
+        ]
+      },
+      "1100-light-loading-disabled.png": {
+        "sha256": "3b31c1471da455666e6d4ae93793c68df2f5aabf74f54a20585f194678890cb2",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-long-label.png": {
+        "sha256": "e069aec2dade3fe43f3afd5a37bf56a2b1efd525750d5d43b99d759eb002dddd",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-missing-default.png": {
+        "sha256": "168ec7380e539d036e87396f3ef1b1c0f8d31110d82bcdb9af36a7c2ff1f1c5d",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-save-error.png": {
+        "sha256": "16587a2b8d51c3b7776517820bb4b049b9acbe1f02de0c71a42e7d17ef84de76",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-saving-disabled.png": {
+        "sha256": "cfe289d17c176b0729021522f8f1d7def765445287d33be14182c0c1b5d33884",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "1100-light-updates-unavailable.png": {
+        "sha256": "ee0c064dcfdba1b18262390f8cc9c6ada4b2ded8bc3d4f852a12faefda969d58",
+        "pixelSize": [
+          2200,
+          1240
+        ]
+      },
+      "680-dark-appearance.png": {
+        "sha256": "fbc6dc412f38aa4c45904dfe39831ad5bde7056d1ba82ca23babd41a951b0cd6",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-before-open.png": {
+        "sha256": "b084a5c04afc5917b22b4813b7f49f2f98918f718a104d7a177375b9b46af41e",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-dark-loading-disabled.png": {
+        "sha256": "074849415b720ae8d577dab5c1f6327afa77c09ac4231d923fdfed5b74d33eed",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-long-label.png": {
+        "sha256": "b1bcac336ab6710bd71f7e131d76b43f918559c74cbd195f04d6dfba971ae9ac",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-missing-default.png": {
+        "sha256": "8c5bf17baa27108a270689efef4d3ecf55d03a834ea2673cb56149d8b8e6a21e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-save-error.png": {
+        "sha256": "4f49f9f065ddecc8d76f10243eed26c2258f5c7ff7c1a3c64560a91db108833e",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-saving-disabled.png": {
+        "sha256": "7a03cd8676392c700daadbb383329f5c8aa7e4ddb9c73ac486b68fb9158d9e46",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-dark-updates-unavailable.png": {
+        "sha256": "47289dcb16b9b32ca97731ff9e494a221a619ff24702b10dc351181625b5787d",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-appearance.png": {
+        "sha256": "4325491021e525de66f15dbdf374c7334c4ada6b0cddf24eb67a133755ad88c1",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-before-open.png": {
+        "sha256": "2ec1098c558c00339b0bd60499db86a03790e4d489e632f28659fa86f79e577a",
+        "pixelSize": [
+          1360,
+          1520
+        ]
+      },
+      "680-light-loading-disabled.png": {
+        "sha256": "d6a03116728e60bb2e32fabadb722a9a2045324bb01fdc0144db51e5c39003d2",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-long-label.png": {
+        "sha256": "aeed6547e59ee0e941529b92682ae35b7e81df6f490944b625a31d1891057f88",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-missing-default.png": {
+        "sha256": "ef0212fbd46af98475ceb9ae5a522ce61b9bd942e7475791ae2838ae623e5329",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-save-error.png": {
+        "sha256": "3baebe6db0225abbcf47814caa1664f7b48e49e9794a9328bc964a673f14ca91",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-saving-disabled.png": {
+        "sha256": "f27a7af5bbc2a356472c180d3d6537b206593fc4af4621be156c7e335e9669fa",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      },
+      "680-light-updates-unavailable.png": {
+        "sha256": "893625954e53f210be17b6a3633b051bf3c0ab531b24c120a20881e6f306f612",
+        "pixelSize": [
+          1360,
+          1240
+        ]
+      }
+    },
+    "focusedRustTests": {
+      "settings_state": 17,
+      "settings_worker": 4,
+      "settings_view": 2,
+      "committed_theme": 1,
+      "work_tests_filter": 12,
+      "tool_presentation": 11,
+      "inbox": 3,
+      "workbench": 3
+    },
+    "workTestsFilterQualification": "12 includes six transcript work tests and six private faux-socket local_client network_tests matching the substring.",
+    "disclosureSamples": 720,
+    "semanticWorkNativeStates": 28,
+    "visualQualification": "680 Light and1100 Dark Appearance PNG bytes identical to actual f74 captures already visually inspected.",
+    "publicationQualification": "Only owned evidence amended afterward into the same one-feature commit; compiled inputs exact. Previous receipts remain historical."
+  }
+}

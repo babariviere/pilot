@@ -22,6 +22,9 @@ pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]
 mod navigation_view;
 #[cfg(feature = "native-probes")]
+#[path = "settings_probe.rs"]
+pub(crate) mod settings_probe;
+#[cfg(feature = "native-probes")]
 #[path = "shell_probe.rs"]
 pub(crate) mod shell_probe;
 #[cfg(feature = "native-probes")]
@@ -217,6 +220,13 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    settings: Entity<crate::settings_view::SettingsPreferences>,
+    settings_window: Option<gpui_kit::AnyWindowHandle>,
+    settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
+    settings_return: Option<gpui_kit::FocusHandle>,
+    settings_events: Vec<Subscription>,
+    #[cfg(feature = "native-probes")]
+    settings_fixture_size: Option<gpui_kit::Size<gpui_kit::Pixels>>,
     projects_open: bool,
     jump: Option<Entity<crate::jump_view::JumpPalette>>,
     jump_subscription: Option<Subscription>,
@@ -268,12 +278,33 @@ impl LocalViewer {
             KeyBinding::new("secondary-2", ShowAllChats, None),
             KeyBinding::new("secondary-[", NavigateBack, None),
             KeyBinding::new("secondary-]", NavigateForward, None),
+            KeyBinding::new("secondary-,", crate::settings_view::OpenSettings, None),
+            KeyBinding::new(
+                "secondary-w",
+                crate::settings_view::CloseSettings,
+                Some("Settings"),
+            ),
+            KeyBinding::new(
+                "secondary-s",
+                crate::settings_view::SaveSettings,
+                Some("Settings"),
+            ),
+            KeyBinding::new(
+                "escape",
+                crate::settings_view::CloseSettings,
+                Some("Settings"),
+            ),
         ]);
     }
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
+        let root = Store::default_path()
+            .map(|root| root.join("settings"))
+            .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
+        view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
+        view.settings.update(cx, |owner, cx| owner.load(cx));
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
         view.navigation_seeded = true;
@@ -308,6 +339,12 @@ impl LocalViewer {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |view, cx| {
+                if !view
+                    .settings
+                    .update(cx, |owner, cx| owner.request_close(cx))
+                {
+                    return false;
+                }
                 view.editor
                     .update(cx, |editor, cx| editor.request_close(cx))
             })
@@ -777,7 +814,16 @@ impl LocalViewer {
             },
         );
         let (navigation, scope_states, reader_marks) = Self::navigation_state();
+        let settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(None));
+        settings.update(cx, |owner, cx| owner.load(cx));
         Self {
+            settings,
+            settings_window: None,
+            settings_pane: None,
+            settings_return: None,
+            settings_events: Vec::new(),
+            #[cfg(feature = "native-probes")]
+            settings_fixture_size: None,
             navigation,
             navigation_seeded: false,
             restoring_navigation: false,
@@ -1353,8 +1399,9 @@ impl Render for LocalViewer {
                 }
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::Quit,_,cx|{
-                if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
                 cx.stop_propagation();
+                if !view.settings.update(cx,|owner,cx|owner.request_close(cx)){return;}
+                if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
                 if view.jump.is_some(){return;}
@@ -1362,6 +1409,7 @@ impl Render for LocalViewer {
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
             .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
+            .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))

@@ -1,8 +1,35 @@
 //! Portable chrome tokens from Swift Theme.swift / DitherCorner.swift.
 //! Bounded app-owned dither motion is implemented in dither_view, without shaders.
+use crate::settings_state::AppearancePreference;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use gpui_kit::{App, AssetSource, SharedString, Window};
 use std::{borrow::Cow, rc::Rc};
+
+#[derive(Clone, Copy, Default)]
+struct CommittedAppearance(AppearancePreference);
+impl gpui_kit::Global for CommittedAppearance {}
+
+fn follows_system(cx: &App) -> bool {
+    cx.try_global::<CommittedAppearance>()
+        .is_none_or(|policy| policy.0 == AppearancePreference::System)
+}
+/// Only a successfully loaded or durably acknowledged preference reaches this hook.
+/// Theme::change updates Kit's tokens/Base projection and refreshes existing windows.
+pub(crate) fn commit_appearance(preference: AppearancePreference, cx: &mut App) {
+    cx.set_global(CommittedAppearance(preference));
+    // GPUI owns the macOS NSApplication override. Clear it for System rather than
+    // pinning the OS's current color; no Swift defaults or host configuration change.
+    cx.set_window_appearance(match preference {
+        AppearancePreference::System => None,
+        AppearancePreference::Light => Some(gpui_kit::WindowAppearance::Light),
+        AppearancePreference::Dark => Some(gpui_kit::WindowAppearance::Dark),
+    });
+    match preference {
+        AppearancePreference::System => Theme::sync_system_appearance(None, cx),
+        AppearancePreference::Light => Theme::change(ThemeMode::Light, None, cx),
+        AppearancePreference::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
+}
 
 /// Swift Theme.Radius, picked by surface role rather than arbitrary size.
 pub struct Radius;
@@ -154,6 +181,7 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
     })
 }
 pub fn init_appearance(cx: &mut App) {
+    cx.set_global(CommittedAppearance::default());
     crate::dither_view::prepare(cx);
     Theme::update(cx, |theme| {
         let mut light = (*config(false)).clone();
@@ -167,11 +195,17 @@ pub fn init_appearance(cx: &mut App) {
     });
     Theme::sync_system_appearance(None, cx);
 }
-/// Subscription belongs to this window. No polling or persisted appearance override.
+/// Subscription belongs to this window; a committed manual choice ignores OS changes.
 pub fn follow_appearance(window: &mut Window, cx: &mut App) {
-    Theme::sync_system_appearance(Some(window), cx);
+    if follows_system(cx) {
+        Theme::sync_system_appearance(Some(window), cx);
+    }
     window
-        .observe_window_appearance(|window, cx| Theme::sync_system_appearance(Some(window), cx))
+        .observe_window_appearance(|window, cx| {
+            if follows_system(cx) {
+                Theme::sync_system_appearance(Some(window), cx);
+            }
+        })
         .detach();
 }
 pub(crate) fn selected(cx: &App) -> gpui_kit::Hsla {
@@ -202,6 +236,23 @@ impl AssetSource for ChromeAssets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui_kit::test]
+    fn committed_manual_policy_persists_until_system_is_explicit(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            init_appearance(cx);
+            commit_appearance(AppearancePreference::Light, cx);
+            assert!(!cx.theme().is_dark());
+            assert!(!follows_system(cx));
+            commit_appearance(AppearancePreference::Dark, cx);
+            assert!(cx.theme().is_dark());
+            assert!(!follows_system(cx));
+            commit_appearance(AppearancePreference::System, cx);
+            assert!(follows_system(cx));
+        });
+    }
     #[test]
     fn shell_roles_leave_global_type_and_surface_metrics_unchanged() {
         assert_eq!(
