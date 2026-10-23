@@ -16,6 +16,7 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Page {
     Home,
+    Inbox(Option<String>),
     Project(String),
     Chat,
 }

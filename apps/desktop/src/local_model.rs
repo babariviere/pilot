@@ -100,6 +100,7 @@ mod project_tests {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) attention: Option<crate::attention::Attention>,
     pub(crate) id: String,
     pub(crate) title: String,
     pub(crate) state: String,
@@ -141,6 +142,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     }
     let (signal, background_work) = decoration(value);
     Some(Chat {
+        attention: crate::attention::project(value, signal),
         id: id.into(),
         title: bounded(value["title"].as_str().unwrap_or("Untitled chat"), 240),
         state: bounded(value["state"].as_str().unwrap_or("unknown"), 40),

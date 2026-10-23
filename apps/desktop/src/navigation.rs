@@ -5,6 +5,7 @@ pub(crate) const SCOPE_CAP: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
     Home,
+    Inbox(Option<String>),
     Project(String),
     Chat(String),
     Draft(String),

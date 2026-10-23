@@ -6,6 +6,9 @@ pub(crate) mod disclosure_probe;
 #[path = "history_probe.rs"]
 pub(crate) mod history_probe;
 #[cfg(feature = "native-probes")]
+#[path = "inbox_probe.rs"]
+pub(crate) mod inbox_probe;
+#[cfg(feature = "native-probes")]
 #[path = "navigation_probe.rs"]
 pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]
@@ -208,6 +211,7 @@ pub struct LocalViewer {
     project_scope: Option<String>,
     projects: Entity<ListState<ProjectList>>,
     overview: Entity<Overview>,
+    inbox: Entity<crate::inbox::Inbox>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
     pending_transcript: Option<(Vec<Message>, bool)>,
     nav_error: Option<&'static str>,
@@ -312,6 +316,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                attention: None,
             },
             Chat {
                 id: "synthetic-two".into(),
@@ -325,6 +330,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                attention: None,
             },
             Chat {
                 id: "synthetic-archive".into(),
@@ -338,6 +344,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                attention: None,
             },
         ]);
         view.chats.update(cx, |list, cx| {
@@ -496,6 +503,7 @@ impl LocalViewer {
             background_work: false,
             cwd: String::new(),
             project_id: None,
+            attention: None,
         });
         view.state.chats = Arc::new(chats);
         let mut rows = vec![Message::live(
@@ -594,6 +602,35 @@ impl LocalViewer {
         let projects =
             cx.new(|cx| ListState::new(ProjectList::new(), window, cx).searchable(false));
         let overview = cx.new(|_| Overview::new());
+        let inbox = cx.new(|cx| crate::inbox::Inbox::new(window, cx));
+        let inbox_events = cx.subscribe_in(
+            &inbox,
+            window,
+            |view, _, event: &crate::inbox::InboxEvent, window, cx| {
+                if !matches!(view.page, Page::Inbox(_)) {
+                    return;
+                }
+                match event {
+                    crate::inbox::InboxEvent::Chat(id) => {
+                        if let Some(chat) = view.state.chats.iter().find(|c| &c.id == id).cloned() {
+                            view.open(chat, window, cx);
+                        }
+                    }
+                    crate::inbox::InboxEvent::Filter(filter) => {
+                        if filter
+                            .as_ref()
+                            .is_some_and(|id| !view.state.projects.iter().any(|p| &p.id == id))
+                        {
+                            view.inbox.update(cx, |v, cx| v.restore_filter(window, cx));
+                            view.nav_error = Some("That project is no longer available.");
+                            cx.notify();
+                            return;
+                        }
+                        view.show_inbox(filter.clone(), window, cx);
+                    }
+                }
+            },
+        );
         let project_events = cx.subscribe_in(&projects, window, |view, list, event, window, cx| {
             if let ListEvent::Confirm(ix) = event
                 && let Some(id) = list.read(cx).delegate().at(*ix).map(|p| p.id.clone())
@@ -661,6 +698,7 @@ impl LocalViewer {
                             background_work: false,
                             cwd: String::new(),
                             project_id: None,
+                            attention: None,
                         },
                         window,
                         cx,
@@ -716,6 +754,7 @@ impl LocalViewer {
             project_scope: None,
             projects,
             overview,
+            inbox,
             nav_projects: Arc::new(Vec::new()),
             pending_transcript: None,
             nav_error: None,
@@ -736,6 +775,7 @@ impl LocalViewer {
                 history_events,
                 project_events,
                 shell_events,
+                inbox_events,
             ],
             updates: None,
             writes: None,
@@ -1085,8 +1125,41 @@ impl LocalViewer {
         self.chats.update(cx, |list, cx| list.focus(window, cx));
         self.did_navigate(cx);
     }
+    fn show_inbox(&mut self, filter: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        if filter
+            .as_ref()
+            .is_some_and(|id| !crate::local_model::valid_id(id))
+        {
+            return;
+        }
+        if !self.prepare_navigation(window, cx) {
+            self.inbox.update(cx, |v, cx| v.restore_filter(window, cx));
+            return;
+        }
+        self.leave_artifacts(cx);
+        self.page = Page::Inbox(filter);
+        self.nav_error = None;
+        self.rebuild_nav(window, cx);
+        self.inbox.update(cx, |v, cx| v.focus(window, cx));
+        self.did_navigate(cx);
+    }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page != Page::Chat {
+        if let Page::Inbox(filter) = &self.page {
+            self.inbox.update(cx, |view, cx| {
+                view.sync(
+                    crate::inbox::InboxInput {
+                        chats: self.state.chats.clone(),
+                        projects: self.state.projects.clone(),
+                        filter: filter.clone(),
+                        loaded: self.state.list_loaded,
+                        projects_error: self.state.projects_error.is_some(),
+                    },
+                    window,
+                    cx,
+                )
+            });
+        }
+        if matches!(self.page, Page::Home | Page::Project(_)) {
             self.overview.update(cx, |view, cx| {
                 view.sync(
                     OverviewInput {
@@ -1155,6 +1228,7 @@ impl LocalViewer {
                     background_work: false,
                     cwd: String::new(),
                     project_id: None,
+                    attention: None,
                 })
                 .collect();
             all.extend(self.state.chats.iter().cloned());
@@ -1259,6 +1333,8 @@ impl Render for LocalViewer {
                             .child(Button::new("nav-forward").ghost().small().label("Forward").tooltip("Forward (⌘])").disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx)))))
                         .child(Button::new("nav-home").ghost().small().w_full().accessibility_label("Home").child(div().w_full().min_w_0().truncate().child("Home")).selected(self.page==Page::Home)
                             .on_click(cx.listener(|view,_,window,cx|view.show_home(window,cx))))
+                        .child(Button::new("nav-inbox").ghost().small().w_full().accessibility_label("Inbox").child(div().w_full().min_w_0().truncate().child("Inbox")).selected(matches!(self.page,Page::Inbox(_)))
+                            .on_click(cx.listener(|view,_,window,cx|view.show_inbox(view.project_scope.clone(),window,cx))))
                         .child(Button::new("nav-all-chats").ghost().small().w_full().accessibility_label("All chats").child(div().w_full().min_w_0().truncate().child("All chats")).selected(self.page==Page::Chat&&self.project_scope.is_none())
                             .on_click(cx.listener(|view,_,window,cx|view.show_chats(window,cx)))))
                     .when(self.state.projects_loaded||self.state.projects_error.is_some(),|this|this.child(div().v_flex().px_3().pb_2().gap_1()
@@ -1275,7 +1351,10 @@ impl Render for LocalViewer {
                             .on_click(cx.listener(|view,_,_,_|{if let Some(client)=&view.client{client.command(Command::Reconnect);}})))))
             )
             .child(
-                if self.page!=Page::Chat {
+                if matches!(self.page,Page::Inbox(_)) {
+                    div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                        .child(self.inbox.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else if self.page!=Page::Chat {
                     div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else {
@@ -1451,6 +1530,7 @@ mod refresh_tests {
                         background_work: false,
                         cwd: String::new(),
                         project_id: None,
+                        attention: None,
                     },
                     window,
                     cx,
