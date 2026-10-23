@@ -2,6 +2,8 @@
 mod chat_editor;
 mod delivery_store;
 mod interaction;
+mod jump;
+mod jump_view;
 mod local_client;
 mod local_model;
 mod local_view;
@@ -22,6 +24,8 @@ pub use local_view::disclosure_probe::run_disclosure_probe;
 pub use local_view::history_probe::run_history_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::inbox_probe::run_inbox_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::jump_probe::run_jump_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]

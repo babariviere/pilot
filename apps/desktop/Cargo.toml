@@ -102,3 +102,9 @@ name = "inbox"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "jump"
+harness = false
+test = false
+required-features = ["native-probes"]
