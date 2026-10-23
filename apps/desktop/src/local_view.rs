@@ -8,6 +8,11 @@ pub(crate) mod history_probe;
 #[cfg(feature = "native-probes")]
 #[path = "inbox_probe.rs"]
 pub(crate) mod inbox_probe;
+#[path = "jump_navigation.rs"]
+mod jump_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "jump_probe.rs"]
+pub(crate) mod jump_probe;
 #[cfg(feature = "native-probes")]
 #[path = "navigation_probe.rs"]
 pub(crate) mod navigation_probe;
@@ -59,7 +64,8 @@ gpui_kit::actions!(
         GoHome,
         ShowAllChats,
         NavigateBack,
-        NavigateForward
+        NavigateForward,
+        ToggleJump
     ]
 );
 #[derive(Clone, Copy)]
@@ -201,6 +207,9 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    jump: Option<Entity<crate::jump_view::JumpPalette>>,
+    jump_subscription: Option<Subscription>,
+    jump_return: Option<gpui_kit::FocusHandle>,
     navigation: crate::navigation::History,
     navigation_seeded: bool,
     restoring_navigation: bool,
@@ -242,6 +251,7 @@ pub struct LocalViewer {
 impl LocalViewer {
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
+            KeyBinding::new("secondary-k", ToggleJump, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
             KeyBinding::new("secondary-2", ShowAllChats, None),
@@ -755,6 +765,9 @@ impl LocalViewer {
             projects,
             overview,
             inbox,
+            jump: None,
+            jump_subscription: None,
+            jump_return: None,
             nav_projects: Arc::new(Vec::new()),
             pending_transcript: None,
             nav_error: None,
@@ -1144,6 +1157,10 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(palette) = &self.jump {
+            let source = self.jump_source();
+            palette.update(cx, |v, cx| v.sync(source, window, cx));
+        }
         if let Page::Inbox(filter) = &self.page {
             self.inbox.update(cx, |view, cx| {
                 view.sync(
@@ -1292,8 +1309,17 @@ impl Render for LocalViewer {
         } else {
             self.state.chat_status.as_str()
         };
-        div().id("desktop-root").test_support().h_flex().items_stretch().size_full().min_w_0()
+        div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
+            .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
+                if let Some(palette)=v.jump.clone() {
+                    let marked=palette.update(cx,|p,cx|p.marked(w,cx));
+                    let key=e.keystroke.key.as_str();
+                    let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
+                    if key=="tab" || (marked && (matches!(key,"enter"|"escape") || (modified && key=="k"))) || (modified && !matches!(key,"c"|"v"|"x"|"a"|"k"|"q")) {cx.stop_propagation();}
+                }
+            }))
+            .on_action(cx.listener(|v,_:&ToggleJump,w,cx|{v.toggle_jump(w,cx);cx.stop_propagation();}))
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
@@ -1336,7 +1362,8 @@ impl Render for LocalViewer {
                         .child(Button::new("nav-inbox").ghost().small().w_full().accessibility_label("Inbox").child(div().w_full().min_w_0().truncate().child("Inbox")).selected(matches!(self.page,Page::Inbox(_)))
                             .on_click(cx.listener(|view,_,window,cx|view.show_inbox(view.project_scope.clone(),window,cx))))
                         .child(Button::new("nav-all-chats").ghost().small().w_full().accessibility_label("All chats").child(div().w_full().min_w_0().truncate().child("All chats")).selected(self.page==Page::Chat&&self.project_scope.is_none())
-                            .on_click(cx.listener(|view,_,window,cx|view.show_chats(window,cx)))))
+                            .on_click(cx.listener(|view,_,window,cx|view.show_chats(window,cx))))
+                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("⌘K Jump to…")))
                     .when(self.state.projects_loaded||self.state.projects_error.is_some(),|this|this.child(div().v_flex().px_3().pb_2().gap_1()
                         .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Projects"))
                         .when(!self.state.projects.is_empty(),|this|this.child(div().h(px((self.state.projects.len().min(5) as f32*30.).min(f32::from(window.viewport_size().height)*0.22).max(30.))).w_full().min_h_0()
@@ -1387,6 +1414,7 @@ impl Render for LocalViewer {
                         .into_any_element()
                 }
             )
+            .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
     }
 }
 #[cfg(test)]

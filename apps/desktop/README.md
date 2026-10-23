@@ -150,7 +150,17 @@ never run in the UI process, and pending values are not canonical writes.
 The Local browser uses the app's soft light/dark palette, follows system
 appearance, keeps a compact adaptive sidebar and centers a bounded reading
 column. Neutral selection identifies the opened chat independently of search.
-Cmd/Ctrl-F focuses chat search. Swift-style 4/6/8/10/12/14-point radii shape small
+Cmd/Ctrl-F focuses chat search.
+Cmd/Ctrl-K opens a read-only resource jump palette over loaded pages, projects
+and chats. Search is case/diacritic/width folded, grouped and bounded to six
+matches per group. Empty search offers pages, projects and recent writable
+nonarchived chats; explicit search also finds retained/archived chats. Arrow keys
+choose, Return opens, Escape or Cmd/Ctrl-K closes and restores focus. No actions
+or background reads run from search; explicit chat opens use the existing Local
+subscription contract. Catalog/search work runs off the UI thread only while
+open; closing releases it. See [jump evidence](evidence/jump.md).
+
+Swift-style 4/6/8/10/12/14-point radii shape small
 controls, rows, controls, cards, user bubbles and composer trays. Native 2-point
 Bayer corners ripple while working (half-speed for background jobs), breathe
 for needs-you and stay steady for failed/ready states. Hover recedes over 300 ms;
