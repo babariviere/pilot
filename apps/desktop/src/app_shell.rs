@@ -167,6 +167,31 @@ pub(crate) struct Overview {
     pub(crate) renders: u64,
 }
 impl EventEmitter<ShellEvent> for Overview {}
+/// Loaded public row context only. Never infer ownership from a shared folder.
+/// Work is bounded by the existing visible-row and project-catalog limits.
+fn chat_row_detail(chat: &Chat, projects: &[Project], include_project: bool) -> String {
+    let reason = chat
+        .attention
+        .as_ref()
+        .map(|a| a.label.as_str())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| chat.signal_label());
+    if !include_project {
+        return reason.to_owned();
+    }
+    let project = chat
+        .project_id
+        .as_ref()
+        .map(|id| {
+            projects
+                .iter()
+                .find(|p| &p.id == id)
+                .map(|p| p.name.as_str())
+                .unwrap_or("Project unavailable")
+        })
+        .unwrap_or("No project");
+    format!("{project} · {reason}")
+}
 impl Overview {
     pub(crate) fn new() -> Self {
         Self {
@@ -264,6 +289,8 @@ impl Overview {
     fn chat_row(&self, ix: usize, prefix: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let chat = &self.chats[ix];
         let id = chat.id.clone();
+        let detail = chat_row_detail(chat, &self.projects, self.project.is_none());
+        let label = SharedString::from(format!("{} · {detail}", chat.title));
         Button::new(SharedString::from(format!("{prefix}-{id}")))
             .ghost()
             .small()
@@ -271,32 +298,13 @@ impl Overview {
             .justify_start()
             .min_w_0()
             .overflow_hidden()
-            .accessibility_label(SharedString::from(format!(
-                "{} · {}",
-                chat.title,
-                chat.signal_label()
-            )))
+            .accessibility_label(label.clone())
+            .tooltip(label)
             .h(px(crate::appearance::Space::ROW))
             .rounded(px(crate::appearance::Radius::ROW))
             .child(
-                div()
-                    .v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap(px(crate::appearance::Space::META))
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(crate::appearance::TextRole::BODY))
-                            .child(SharedString::from(chat.title.clone())),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(crate::appearance::TextRole::CAPTION))
-                            .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(chat.signal_label().to_owned())),
-                    ),
+                crate::ui::ResourceLabel::new(SharedString::from(chat.title.clone()))
+                    .detail(SharedString::from(detail)),
             )
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Chat(id.clone()))))
     }
@@ -566,6 +574,142 @@ impl Render for Overview {
 #[cfg(test)]
 mod workbench_tests {
     use super::*;
+    use serde_json::json;
+    fn context_projects() -> Vec<Project> {
+        vec![
+            Project {
+                id: "a".into(),
+                name: "Atlas".into(),
+                path: "/synthetic/shared".into(),
+            },
+            Project {
+                id: "ab".into(),
+                name: "Boreal".into(),
+                path: "/synthetic/shared".into(),
+            },
+        ]
+    }
+    #[test]
+    fn row_context_uses_exact_project_and_public_reason_not_the_shared_folder() {
+        let projects = context_projects();
+        let mut chat=crate::local_model::chat(&json!({"id":"c","title":"synthetic","projectId":"ab","cwd":"/synthetic/shared","state":"idle","outcome":"question","attentionReason":{"kind":"asks","detail":"Choose 日本語 👩‍💻 region"}})).unwrap();
+        assert_eq!(
+            chat_row_detail(&chat, &projects, true),
+            "Boreal · Asks: Choose 日本語 👩‍💻 region"
+        );
+        assert_eq!(
+            chat_row_detail(&chat, &projects, false),
+            "Asks: Choose 日本語 👩‍💻 region"
+        );
+        for id in ["absent", "A"] {
+            chat.project_id = Some(id.into());
+            assert!(chat_row_detail(&chat, &projects, true).starts_with("Project unavailable · "));
+        }
+        chat.project_id = None;
+        assert!(chat_row_detail(&chat, &projects, true).starts_with("No project · "));
+        chat.attention = None;
+        chat.signal = Some(crate::dither::Signal::Working);
+        chat.background_work = true;
+        assert_eq!(
+            chat_row_detail(&chat, &projects, false),
+            "Working in background"
+        );
+        chat.signal = None;
+        assert_eq!(
+            chat_row_detail(&chat, &projects, false),
+            chat.signal_label(),
+            "unknown/quiet fallback is not an invented completion"
+        );
+    }
+    #[gpui_kit::test]
+    fn home_row_context_preserves_mounted_frame_and_exact_pointer_activation(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::{
+            AppContext, Bounds, WindowBounds, WindowOptions, size, test::TestWindowExt,
+        };
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        for width in [496., 868.] {
+            let projects = Arc::new(context_projects());
+            let chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"canonical-ab","title":"A long synthetic row 日本語 ".repeat(16),"projectId":"ab","state":"idle","attentionReason":{"kind":"asks","detail":"Keep this question attached to its exact chat"}})).unwrap()]);
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1000.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |_, cx| {
+                        cx.new(|cx| {
+                            let mut v = Overview::new();
+                            v.sync(
+                                OverviewInput {
+                                    projects,
+                                    chats,
+                                    project: None,
+                                    projects_loaded: true,
+                                    chats_loaded: true,
+                                    error: None,
+                                },
+                                cx,
+                            );
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded = events.clone();
+            let _subscription = cx.update(|cx| {
+                cx.subscribe(&v, move |_, event: &ShellEvent, _| {
+                    if let ShellEvent::Chat(id) = event {
+                        recorded.borrow_mut().push(id.clone());
+                    }
+                })
+            });
+            cx.run_until_parked();
+            cx.update_window(h, |_, w, cx| {
+                w.draw(cx).clear(cx);
+                let row = w.find("home-chat-canonical-ab").bounds();
+                let title = w
+                    .within("home-chat-canonical-ab")
+                    .find("resource-title")
+                    .bounds();
+                let detail = w
+                    .within("home-chat-canonical-ab")
+                    .find("resource-detail")
+                    .bounds();
+                assert_eq!(row.size.height, px(crate::appearance::Space::ROW));
+                assert!(title.size.width > px(0.) && detail.size.width > px(0.));
+                assert_eq!(title.left(), detail.left());
+                assert!(
+                    title.left() >= row.left()
+                        && title.left() - row.left() < px(crate::appearance::Space::SIDEBAR)
+                );
+                assert!(title.right() <= row.right() && detail.right() <= row.right());
+                assert!(
+                    w.within("home-chat-canonical-ab")
+                        .try_find("resource-icon")
+                        .is_none()
+                );
+                w.click("home-chat-canonical-ab", cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            assert_eq!(&*events.borrow(), &["canonical-ab".to_string()]);
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
     #[test]
     fn counts_name_loaded_scope_and_omit_quiet_zero_activity() {
         assert_eq!(Counts::default().line(), "0 loaded chats");
