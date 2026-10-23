@@ -228,6 +228,9 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("{}-{}.png", width as u32, mode.name())))
                     .unwrap();
             }
+            cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("project-a", cx))
                 .unwrap();
             settle(cx, h);

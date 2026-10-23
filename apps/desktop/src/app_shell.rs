@@ -49,10 +49,21 @@ impl Counts {
         self.ready += usize::from(c.signal == Some(Signal::Ready));
     }
     fn line(self) -> String {
-        format!(
-            "{} loaded chats · {} working · {} need you · {} ready to merge",
-            self.chats, self.working, self.attention, self.ready
-        )
+        let mut parts = vec![format!(
+            "{} loaded chat{}",
+            self.chats,
+            if self.chats == 1 { "" } else { "s" }
+        )];
+        if self.working > 0 {
+            parts.push(format!("{} working", self.working));
+        }
+        if self.attention > 0 {
+            parts.push(format!("{} need you", self.attention));
+        }
+        if self.ready > 0 {
+            parts.push(format!("{} ready to merge", self.ready));
+        }
+        parts.join(" · ")
     }
 }
 
@@ -92,7 +103,7 @@ impl ListDelegate for ProjectList {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_sm()
+                        .text_size(px(crate::appearance::TextRole::BODY))
                         .text_color(cx.theme().foreground)
                         .child(SharedString::from(p.name.clone())),
                 ),
@@ -253,16 +264,27 @@ impl Overview {
                 chat.title,
                 chat.signal_label()
             )))
+            .h(px(crate::appearance::Space::ROW))
+            .rounded(px(crate::appearance::Radius::ROW))
             .child(
                 div()
+                    .v_flex()
                     .w_full()
                     .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(format!(
-                        "{} · {}",
-                        chat.title,
-                        chat.signal_label()
-                    ))),
+                    .gap(px(crate::appearance::Space::META))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(crate::appearance::TextRole::BODY))
+                            .child(SharedString::from(chat.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(px(crate::appearance::TextRole::CAPTION))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(SharedString::from(chat.signal_label().to_owned())),
+                    ),
             )
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Chat(id.clone()))))
     }
@@ -275,8 +297,149 @@ impl Overview {
         cx.notify();
     }
 }
+impl Overview {
+    fn heading(&self, id: &'static str, title: &'static str) -> impl IntoElement {
+        div()
+            .id(id)
+            .test_support()
+            .text_size(px(crate::appearance::TextRole::HEADLINE))
+            .font_semibold()
+            .child(title)
+    }
+    fn projects_section(&self, w: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::appearance::{Space, TextRole};
+        let mut section = div()
+            .v_flex()
+            .gap(px(Space::CONTROL))
+            .child(self.heading("home-projects-heading", "Projects"));
+        if self.projects.is_empty() {
+            section = section.child(
+                div()
+                    .text_size(px(TextRole::BODY))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if !self.projects_loaded {
+                        "Loading Local projects…"
+                    } else {
+                        "No projects configured. Existing chats remain in All chats."
+                    }),
+            );
+        }
+        for ix in &self.project_rows {
+            let p = &self.projects[*ix];
+            let id = p.id.clone();
+            let counts = self.counts.get(&id).copied().unwrap_or_default();
+            section = section.child(
+                Button::new(SharedString::from(format!("home-project-{id}")))
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .min_w_0()
+                    .justify_start()
+                    .overflow_hidden()
+                    .h(px(Space::ROW))
+                    .rounded(px(crate::appearance::Radius::ROW))
+                    .border_b(crate::appearance::hairline(w))
+                    .border_color(cx.theme().border)
+                    .accessibility_label(SharedString::from(format!(
+                        "{} · {}",
+                        p.name,
+                        counts.line()
+                    )))
+                    .child(
+                        div()
+                            .v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap(px(Space::META))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("overview-project-title-{id}")))
+                                    .test_support()
+                                    .w_full()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(TextRole::BODY))
+                                    .font_medium()
+                                    .child(SharedString::from(p.name.clone())),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(TextRole::CAPTION))
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(if self.chats_loaded {
+                                        counts.line()
+                                    } else {
+                                        "Loading chat activity…".into()
+                                    })),
+                            ),
+                    )
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Project(id.clone()))),
+                    ),
+            );
+        }
+        if self.projects.len() > 8 {
+            section = section.child(
+                div()
+                    .text_size(px(TextRole::CAPTION))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("All projects are available from the sidebar scope chooser."),
+            );
+        }
+        section
+    }
+    fn chat_section(&self, w: &Window, working: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::appearance::{Space, TextRole};
+        let (id, title, prefix, rows) = if working {
+            (
+                "home-working-heading",
+                "Working now",
+                "home-working",
+                &self.working,
+            )
+        } else {
+            (
+                "home-recent-heading",
+                "Recent chats",
+                "home-chat",
+                &self.visible,
+            )
+        };
+        let mut section = div()
+            .v_flex()
+            .gap(px(Space::CONTROL))
+            .child(self.heading(id, title));
+        if rows.is_empty() {
+            section = section.child(
+                div()
+                    .text_size(px(TextRole::BODY))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if !self.chats_loaded {
+                        "Loading Local chats…"
+                    } else if working {
+                        "No working chats in this view."
+                    } else {
+                        "No loaded chats in this view."
+                    }),
+            );
+        }
+        for ix in rows {
+            section = section.child(
+                div()
+                    .border_b(crate::appearance::hairline(w))
+                    .border_color(cx.theme().border)
+                    .child(self.chat_row(*ix, prefix, cx)),
+            );
+        }
+        section
+    }
+}
 impl Render for Overview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::appearance::{Space, TextRole};
         #[cfg(feature = "native-probes")]
         {
             self.renders += 1;
@@ -297,164 +460,86 @@ impl Render for Overview {
             .as_ref()
             .map(|id| self.counts.get(id).copied().unwrap_or_default())
             .unwrap_or(self.totals);
-        let mut body = div()
-            .v_flex()
-            .gap_4()
-            .p_6()
-            .w_full()
-            .min_w_0()
-            .max_w(px(760.))
-            .mx_auto()
-            .child(
-                div()
-                    .text_2xl()
-                    .font_semibold()
-                    .child(SharedString::from(title.to_owned())),
-            );
+        let mut header = div().v_flex().gap(px(Space::META)).child(
+            div()
+                .id("overview-title")
+                .test_support()
+                .truncate()
+                .text_size(px(if self.project.is_none() {
+                    TextRole::DISPLAY
+                } else {
+                    TextRole::TITLE
+                }))
+                .font_semibold()
+                .child(SharedString::from(title.to_owned())),
+        );
         if let Some(p) = project {
-            body = body.child(
+            header = header.child(
                 div()
-                    .text_xs()
                     .truncate()
+                    .text_size(px(TextRole::CAPTION))
                     .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(p.path.clone())),
             );
         }
+        if self.project.is_none() {
+            header = header.child(
+                div()
+                    .text_size(px(TextRole::LABEL))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Across all projects"),
+            );
+        }
+        header = header
+            .child(
+                div()
+                    .id("home-loaded-qualifier")
+                    .test_support()
+                    .text_size(px(TextRole::CAPTION))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Local · loaded chat summaries only"),
+            )
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(TextRole::BODY))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.chats_loaded {
+                        counts.line()
+                    } else {
+                        "Loading Local chats…".into()
+                    }),
+            );
         if let Some(error) = self.error {
-            body = body.child(div().text_sm().text_color(cx.theme().danger).child(error));
+            header = header.child(
+                div()
+                    .truncate()
+                    .text_size(px(TextRole::BODY))
+                    .text_color(cx.theme().danger)
+                    .child(error),
+            );
         }
-        body = body.child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(if self.chats_loaded {
-                    counts.line()
-                } else {
-                    "Loading Local chats…".into()
-                }),
-        );
+        let mut body = div()
+            .v_flex()
+            .gap(px(Space::SECTION))
+            .p(px(Space::HOME))
+            .w_full()
+            .min_w_0()
+            .max_w(px(760.))
+            .mx_auto()
+            .child(header);
         if self.project.is_some() && project.is_none() {
-            body = body.child(div().text_sm().child(if self.projects_loaded {
-                "This project is not in the current catalog. Its folder and chats are unchanged."
-            } else {
-                "Waiting for the Local project catalog…"
-            }));
+            body=body.child(div().text_size(px(TextRole::BODY)).child(if self.projects_loaded {"This project is not in the current catalog. Its folder and chats are unchanged."}else{"Waiting for the Local project catalog…"}));
         } else {
-            body = body.child(div().font_semibold().child("Working now"));
-            if self.working.is_empty() {
-                body = body.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.chats_loaded {
-                            "No working chats in this view."
-                        } else {
-                            "Loading…"
-                        }),
-                );
-            }
-            for ix in &self.working {
-                body = body.child(self.chat_row(*ix, "home-working", cx));
-            }
             if self.project.is_none() {
-                body = body.child(div().font_semibold().child("Projects"));
-                if !self.projects_loaded {
-                    body = body.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Loading Local projects…"),
-                    );
-                } else if self.projects.is_empty() {
-                    body = body.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("No projects configured. Existing chats remain in All chats."),
-                    );
-                }
-                for ix in &self.project_rows {
-                    let p = &self.projects[*ix];
-                    let id = p.id.clone();
-                    let c = self.counts.get(&id).copied().unwrap_or_default();
-                    body = body.child(
-                        Button::new(SharedString::from(format!("home-project-{id}")))
-                            .ghost()
-                            .small()
-                            .w_full()
-                            .justify_start()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .h(px(42.))
-                            .accessibility_label(SharedString::from(format!(
-                                "{} · {}",
-                                p.name,
-                                c.line()
-                            )))
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "overview-project-title-{id}"
-                                            )))
-                                            .test_support()
-                                            .w_full()
-                                            .min_w_0()
-                                            .truncate()
-                                            .child(SharedString::from(p.name.clone())),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(SharedString::from(if self.chats_loaded {
-                                                c.line()
-                                            } else {
-                                                "Loading chat activity…".into()
-                                            })),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(ShellEvent::Project(id.clone()))
-                            })),
-                    );
-                }
-                if self.projects.len() > 8 {
-                    body = body.child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("All projects are available in the sidebar."),
-                    );
-                }
+                body = body.child(self.projects_section(w, cx));
             }
-            body = body.child(div().font_semibold().child("Chats"));
-            for ix in &self.visible {
-                body = body.child(self.chat_row(*ix, "home-chat", cx));
-            }
-            if self.visible.is_empty() {
-                body = body.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if self.chats_loaded {
-                            "No loaded chats in this view."
-                        } else {
-                            "Loading Local chats…"
-                        }),
-                );
-            }
+            body = body
+                .child(self.chat_section(w, true, cx))
+                .child(self.chat_section(w, false, cx));
         }
-        body=body.child(Button::new("home-all-chats").ghost().small().self_start().label("All chats")
-            .on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Loaded Local chat activity, not full dashboard totals. Missions, Inbox and project settings remain available in Swift."));
+        body=body.child(Button::new("home-all-chats").ghost().small().self_start().label("All chats").on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))))
+            .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Loaded Local activity, not full dashboard totals. Full Inbox, missions and project settings remain available in Swift."));
         div()
             .v_flex()
             .size_full()
@@ -464,5 +549,40 @@ impl Render for Overview {
             .id("overview-scroll")
             .with_scroll_handle(&self.scroll)
             .child(body)
+    }
+}
+#[cfg(test)]
+mod workbench_tests {
+    use super::*;
+    #[test]
+    fn counts_name_loaded_scope_and_omit_quiet_zero_activity() {
+        assert_eq!(Counts::default().line(), "0 loaded chats");
+        assert_eq!(
+            Counts {
+                chats: 1,
+                ..Default::default()
+            }
+            .line(),
+            "1 loaded chat"
+        );
+        assert_eq!(
+            Counts {
+                chats: 4,
+                working: 1,
+                attention: 2,
+                ready: 0
+            }
+            .line(),
+            "4 loaded chats · 1 working · 2 need you"
+        );
+        assert_eq!(
+            Counts {
+                chats: 3,
+                ready: 1,
+                ..Default::default()
+            }
+            .line(),
+            "3 loaded chats · 1 ready to merge"
+        );
     }
 }

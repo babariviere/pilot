@@ -185,6 +185,9 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             let sidebar_y =
                 cx.update(|cx| f32::from(v.read(cx).chats.read(cx).scroll_handle().offset().y));
             assert!(sidebar_y < -50.);
+            cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 let query = v.read(cx).chats.read(cx).query_input();
                 query.update(cx, |q, cx| q.set_value(" AtLaS ", w, cx));
@@ -207,6 +210,9 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             let overview_b_y = cx.update(|cx| v.read(cx).overview.read(cx).scroll_position());
             assert!(overview_b_y < -10.);
+            cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("project-a", cx))
                 .unwrap();
             settle(cx, h);
@@ -241,6 +247,9 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
                 reads.try_recv().is_err(),
                 "same current owner/scope navigation must not reconnect or fetch history"
             );
+            cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("project-b", cx))
                 .unwrap();
             settle(cx, h);

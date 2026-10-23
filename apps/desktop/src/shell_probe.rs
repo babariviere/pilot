@@ -197,6 +197,9 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("{}-{}-home.png", width as u32, mode.name())))
                     .unwrap();
             }
+            cx.update_window(handle, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, handle);
             cx.update_window(handle, |_, window, cx| {
                 window.click("project-project-b", cx)
             })
