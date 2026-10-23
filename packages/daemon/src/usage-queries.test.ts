@@ -17,6 +17,78 @@ const FROM = Math.floor(NOW / DAY) * DAY;
 const base: UsageAnalyticsQuery = { version: 1, from: FROM, to: FROM + DAY, view: "summary" };
 const OTHER = "99999999-9999-4999-8999-999999999999";
 
+test("breakdown metric sorting ranks all groups before paging, ties by identity and puts unknown/overflow last", async () => {
+	const f = await setup();
+	try {
+		for (let i = 0; i < 24; i++) {
+			const chatId = `11111111-1111-4111-8111-${String(i).padStart(12, "0")}`;
+			const value = i === 23 ? Number.MAX_SAFE_INTEGER : (i % 5) * 100;
+			const row = f.row(`sort:${i}`, {
+				completedAt: FROM + i,
+				attribution: { chatId },
+				cost: i === 22 ? undefined : { ...original.cost!, estimatedUsdMicros: value },
+				tokens:
+					i === 22
+						? undefined
+						: {
+								...original.tokens!,
+								input: value,
+								output: value,
+								cacheRead: value,
+								reasoning: undefined,
+								reasoningStatus: "unavailable",
+							},
+				requests: i === 22 ? undefined : value,
+				durationMs: i === 22 ? undefined : value,
+			});
+			assert.equal(f.disk.put(row, NOW), "stored");
+			if (i === 23) assert.equal(f.disk.put({ ...row, operationId: "sort:overflow" }, NOW), "stored");
+		}
+		const query: UsageAnalyticsQuery = { ...base, view: "breakdown", dimension: "chat" };
+		const all = f.disk.analytics(query, NOW);
+		for (const sort of ["estimatedUsdMicros", "input", "output", "cacheRead", "requests", "durationMs"] as const) {
+			for (const direction of ["asc", "desc"] as const) {
+				const expected = [...all.groups]
+					.sort((a, b) => {
+						const av = a.aggregate.metrics[sort].value,
+							bv = b.aggregate.metrics[sort].value;
+						if (av === undefined && bv !== undefined) return 1;
+						if (bv === undefined && av !== undefined) return -1;
+						return (
+							(av === undefined || bv === undefined ? 0 : (av - bv) * (direction === "asc" ? 1 : -1)) ||
+							a.key.localeCompare(b.key)
+						);
+					})
+					.map((g) => g.key);
+				const keys: string[] = [];
+				let after: string | undefined;
+				for (let page = 0; page < 10; page++) {
+					const result = f.disk.analytics({ ...query, sort, direction, limit: 3, after }, NOW);
+					assert.deepEqual(result.total, all.total);
+					keys.push(...result.groups.map((g) => g.key));
+					after = result.next;
+					if (!after) break;
+				}
+				assert.equal(after, undefined);
+				assert.deepEqual(keys, expected, `${sort} ${direction}`);
+			}
+		}
+		const next = f.disk.analytics({ ...query, sort: "input", limit: 1 }, NOW).next;
+		assert.ok(next);
+		for (const change of [{ sort: "output" }, { direction: "asc" }, { filters: { purpose: "title" } }] as const)
+			assert.throws(() => f.disk.analytics({ ...query, sort: "input", after: next, ...change }, NOW), /cursor/);
+		for (const invalid of [
+			{ ...query, sort: "data" },
+			{ ...base, sort: "input" },
+			{ ...query, direction: "asc" },
+			{ ...query, sort: "input", direction: "sideways" },
+		])
+			assert.throws(() => usageAnalyticsQuery(invalid));
+	} finally {
+		await f.close();
+	}
+});
+
 async function setup() {
 	const home = await mkdtemp(join(tmpdir(), "usage-queries-"));
 	const disk = new UsageHistoryDisk(join(home, "accounting", "usage-history.sqlite"), NOW);

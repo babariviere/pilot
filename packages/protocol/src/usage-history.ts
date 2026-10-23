@@ -101,6 +101,9 @@ export interface UsageAnalyticsQuery {
 	filters?: UsageQueryFilters;
 	view: "summary" | "breakdown" | "buckets";
 	dimension?: UsageDimension;
+	/** Breakdown known subtotals, across all matching groups. Missing/overflow values sort last. */
+	sort?: "estimatedUsdMicros" | "input" | "output" | "cacheRead" | "requests" | "durationMs";
+	direction?: "asc" | "desc";
 	bucketMs?: 3600000 | 86400000;
 	limit?: number;
 	after?: string;

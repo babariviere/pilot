@@ -134,3 +134,31 @@ runner tests, locked builds and engine-symbol separation passed. The helper has
 no Rust unit tests; existing `block0.1.6` warning remains. This is local author
 evidence, not a claim that repository CI runs Cargo/native checks or full
 Inbox/platform/performance/user acceptance.
+
+## Current main integration after navigation and persistence merges
+
+The preceding136-test checkpoint was assessed against the navigation parent,
+not the subsequently updated main. Once those dependencies were user-merged,
+the existing Inbox head conflicted with actual main. Old-head green checks did
+not establish that integration boundary.
+
+One justified ordinary merge now retains published Inbox head
+`9d7ed25039ed3eccfbb434e4bc4a6c5b48f9422c` and actual main
+`f666beed7c1397d1aa38c4abcd90aca9512e0132`. Seven add/add conflicts were resolved
+per file from the actual main version plus the corresponding original Inbox
+delta, not by replacing main with an older desktop tree. Worker/store, worker
+tests, canonical model/tool/transcript/reader regressions, native navigation
+probe, lockfile and patch specs are byte-identical to main. The complete diff
+against main remains16 Inbox-only desktop files, with no outside-desktop change.
+Private unfinished palette work is not included.
+
+Focused worker checks passed: **14 passed,1 ignored**, including first-poll
+disconnection/final-save failure and explicit failed-Close no-spin cases.
+Focused8 navigation and4 Inbox scenes passed. The complete combined macOS gate
+also passed: **145 library tests passed,2 ignored**, strict all-target native/
+app/helper checks and the entire existing fixture/browser/chrome/visual/
+disclosure/style/composer/slider/history/Home/navigation/Inbox matrix. Four
+mocked Python runner tests, locked app/helper builds and engine-symbol separation
+passed. This is local author evidence, not a repository Cargo-CI claim, visible
+performance/OS IME/platform acceptance or full app parity. Existing exclusions,
+partial loaded-summary coverage and the `block0.1.6` notice remain unchanged.

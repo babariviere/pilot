@@ -89,7 +89,7 @@ impl Draft {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Intent {
     pub(crate) id: String,
@@ -100,7 +100,7 @@ pub(crate) struct Intent {
     pub(crate) state: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Book {
     schema_version: u32,
@@ -419,6 +419,12 @@ impl Store {
         let mut next = self.book.clone();
         let result = apply(&mut next)?;
         next.validate(&self.book.host)?;
+        // Stale edits, duplicate receipts and fenced cleanup can be semantic
+        // no-ops. The current book is already durable; do not encode/fsync it
+        // again. Keep validation and the I/O fault fence above this fast path.
+        if next == self.book {
+            return Ok(result);
+        }
         let bytes = serde_json::to_vec(&next).map_err(|_| "Cannot encode private state")?;
         if bytes.len() > STATE_CAP {
             return Err("Private state is full. Nothing was discarded.");

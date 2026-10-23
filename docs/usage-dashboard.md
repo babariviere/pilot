@@ -18,16 +18,25 @@ change. No storage backend, routing, inference or provider polling changes are p
   absent is Unknown, explicit zero stays zero, unsafe sums say Overflow. Cache efficiency is
   `cacheRead / (input + cacheRead)`, unavailable with missing/incomplete classes or zero denominator.
 - One daily UTC trend shows known input + output subtotals, not cache or reasoning added again.
+  The token axis uses readable k/M labels and a zero baseline. The domain covers full UTC days,
+  including the partial current day, so its bar stays inside the plot rather than overlapping labels.
   Missing buckets/classes are unknown, not zero. The chart includes accessible dates/values and text
   explaining partial coverage. It does not interpolate gaps or invent pre-capture usage.
 - Foldable project, canonical mission, chat, physical serving model and purpose breakdowns group the
   same dated requests. Purpose includes background title/triage/classification/memory/compaction work,
   plus ordinary agents and follow-ups. Do not add amounts across sections. One disclosure is active
   at a time; its choice is remembered. The first ten groups are cached for the active scope only.
+- Breakdowns default to highest estimated cost first. Sort by cost, input, output, cache reads,
+  requests or observed duration, lowest or highest first. Sorting covers all matching groups before
+  paging, with identity as a stable tie-breaker. Unknown/overflow subtotals stay last in either direction;
+  partial known subtotals retain their labels. Changing order clears breakdown caches and paging cursors.
 - Select a group to inspect its exact scope, including explicit missing attribution. Requests are
   content-free records: numeric usage, outcome, physical model, original source/operation and canonical
   attribution. Existing virtual provenance is shown only when recorded, not inferred or routed.
-  IDs remain visible if no local display name is available. All Local work clears the filter.
+  Current project, chat (including archived chats) and mission names come from the already-loaded Local
+  catalogs, not transcripts or stored ledger titles. Missions resolve only against their exact canonical
+  home/lineage. Request rows also show these names; IDs remain in expanded provenance/tooltips, or as a
+  fallback when a name is unavailable. All Local work clears the filter.
 - Reconciliation shows retained checkpoints **independent of selected dates**. Their amounts may
   overlap requests or one another. They never enter summaries, trends or breakdowns. Records replace
   the current page, 25 at a time; no page totals or checkpoint values are accumulated.
@@ -72,6 +81,29 @@ VoiceOver; the chart has spoken values, and color is never the only coverage sig
 quota behavior, canonical provenance and unrelated host navigation are preserved.
 
 ## Verification and limits
+
+### Names, sorting and chart follow-up (2026-10-23)
+
+The daemon query suite covers every metric/direction, ties spanning pages, explicit zero, unknown and
+overflow-last ordering, scope/order cursor fences and the fixed statement-cache bound. The HTTP suite
+checks sorted reads and invalid sorting fields. Native fixtures cover archived titles, canonical mission
+homes/lineages, named record attribution, sort/cursor/cache replacement and actual chart pixels at
+420/900 widths in both appearances. These are synthetic checks, not live-account usage validation.
+The native test build also exposed an existing missing `@testable import PilotCore` in
+`ArtifactPresentationTests.swift`; only that fixture import was corrected to unblock verification.
+The production mounted-control/pixel matrix passed locally in all four width/appearance combinations.
+The wrapper also passed 13 focused presentation/model/Local-transport tests (14 native tests total).
+The accompanying artifact is a static mock, not a production capture. Full suites and packaging remain CI checks.
+
+An offscreen run of the unchanged `scripts/bench/usage-queries.mjs` on 50,000 faux rows, with queued
+replacement writes, compared the parent source and this change: ordinary breakdown median/p95
+375/449 ms versus 312/441 ms; response sizes were unchanged and event-loop p99 was 4.37/3.84 ms.
+This is one serial pair during native compilation, not a speedup or acceptance-gate claim. A separate
+temporary probe added chat identities and ranked cost reads: 20,000 rows, 900 dated chat groups,
+12 samples, 85/101 ms median/p95 and a 12.6 KB response. The original 50,000-row supplemental seed
+hit the existing SQLite byte cap, so the workload was reduced without raising any storage limit.
+The existing 50 ms query target and 16 MiB memory gate remain unresolved; no installed-daemon,
+interactive/streaming GUI or release/packaging performance acceptance is claimed.
 
 - `UsageDashboardPresentationTests`: UTC/DST/custom bounds, unknown/zero/partial/overflow, cache
   denominator, reasoning subset and exact canonical/missing group filters.

@@ -125,6 +125,15 @@ Buckets use zero-padded 16-digit UTC epoch-millisecond keys, convertible to a sa
 chronologically. Supported widths are one hour or one day; the first bucket can start before `from`,
 but only matching requests contribute. Omitted buckets are no observed evidence, not proven zero spend.
 
+Breakdowns optionally accept `sort`: `estimatedUsdMicros`, `input`, `output`, `cacheRead`, `requests`
+or `durationMs`, and `direction`: `asc` or `desc` (default `desc` when sorting). Sorting is performed
+inside the worker on known aggregate subtotals **before** limiting the page; missing/overflow values
+come last in either direction, and canonical key breaks ties. With no sort, canonical-key order is
+unchanged. Sort/direction are invalid for summaries/buckets; direction requires sort. Cursors bind
+the sort and direction as well as the scope, and carry the last subtotal/key. Live corrections can
+still move groups between pages, so refresh to reread a changed ranking. Native display names are
+decorations from existing Local catalogs, not accounting fields or a query ordering key.
+
 ## Transport and resource bounds
 
 Existing loopback/origin and SSH-forward boundaries apply. Two read-only, `Cache-Control: no-store` GETs:

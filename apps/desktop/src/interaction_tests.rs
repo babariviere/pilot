@@ -360,3 +360,461 @@ async fn uncertain_stop_is_not_replayed_by_check_retry_or_local_acknowledgement(
     );
     assert_eq!(daemon.seen.lock().unwrap().stops, 1);
 }
+
+#[test]
+fn autosave_keeps_short_bursts_fast_and_sustained_edits_bounded() {
+    let start = tokio::time::Instant::now();
+    let ms = |n| start + Duration::from_millis(n);
+    let mut save = Autosave::default();
+    assert!(save.deadline.is_none());
+    save.edited(start);
+    assert_eq!(save.deadline, Some(ms(250)));
+    save.edited(ms(100));
+    assert_eq!(save.deadline, Some(ms(350)));
+    for n in [200, 400, 600, 800, 990] {
+        save.edited(ms(n));
+        assert_eq!(save.deadline, Some(ms((n + 250).min(1000))));
+    }
+    // Commands and timer flushes both start a fresh bounded batch.
+    save = Autosave::default();
+    save.edited(ms(1100));
+    assert_eq!(save.deadline, Some(ms(1350)));
+}
+
+#[test]
+fn failed_flush_retains_latest_mailbox_input_and_fences_further_writes() {
+    let temp = Temp::new();
+    let options = LocalOptions::synthetic(1);
+    let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), draft(1, "committed"))]))
+        .unwrap();
+    let edits = Mutex::new(BTreeMap::from([(
+        "chat:a".into(),
+        draft(3, "latest unsaved"),
+    )]));
+    store.fail_write = true;
+    assert!(flush(&mut store, &edits).is_err());
+    assert_eq!(edits.lock().unwrap()["chat:a"].revision, 3);
+    assert_eq!(store.book.drafts["chat:a"].revision, 1);
+    assert!(flush(&mut store, &edits).is_err());
+    assert_eq!(edits.lock().unwrap()["chat:a"].text, "latest unsaved");
+    drop(store);
+    assert_eq!(
+        Store::open(temp.0.clone(), options.host())
+            .unwrap()
+            .book
+            .drafts["chat:a"]
+            .text,
+        "committed"
+    );
+}
+
+#[tokio::test]
+async fn queued_close_bypasses_the_autosave_deadline() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    // A ready Close must flush without waiting for any autosave timer.
+    let temp = Temp::new();
+    let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let (commands, receiver) = async_channel::bounded(8);
+    let (wake, wake_receiver) = async_channel::bounded(1);
+    let (close, close_receiver) = async_channel::bounded(1);
+    let (updates, output) = async_channel::bounded(1);
+    let edits = Arc::new(Mutex::new(BTreeMap::from([(
+        "chat:a".into(),
+        draft(1, "close now"),
+    )])));
+    wake.try_send(()).unwrap();
+    close.try_send(()).unwrap();
+    let task = tokio::spawn(run(
+        daemon.options.clone(),
+        Ok(store),
+        WorkerChannels {
+            commands: receiver,
+            wake: wake_receiver,
+            edits,
+            updates,
+            replace: output.clone(),
+            close: close_receiver,
+        },
+    ));
+    task.await.unwrap();
+    assert!(output.recv().await.unwrap().flushed);
+    drop(commands);
+    let restored = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    assert_eq!(restored.book.drafts["chat:a"].text, "close now");
+    assert!(daemon.seen.lock().unwrap().requests.is_empty());
+}
+
+#[tokio::test]
+async fn disconnected_clients_exit_in_one_poll_even_when_the_final_save_fails() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for mode in ["healthy", "write-failure", "faulted", "failed-open"] {
+        let options = LocalOptions::synthetic(1); // No network commands.
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), draft(1, "committed"))]))
+            .unwrap();
+        let committed = fs::read(temp.0.join("state-v1.json")).unwrap();
+        let store = match mode {
+            "failed-open" => {
+                drop(store);
+                fs::write(temp.0.join("state-v1.json"), b"{corrupt").unwrap();
+                let result = Store::open(temp.0.clone(), options.host());
+                assert!(result.is_err());
+                result
+            }
+            "write-failure" | "faulted" => {
+                store.fail_write = true;
+                if mode == "faulted" {
+                    assert!(
+                        store
+                            .save_edits(BTreeMap::from([("chat:a".into(), draft(2, "failed"))]))
+                            .is_err()
+                    );
+                    assert!(store.is_faulted());
+                }
+                Ok(store)
+            }
+            _ => Ok(store),
+        };
+        let (commands, receiver) = async_channel::bounded(8);
+        let (wake, wake_receiver) = async_channel::bounded(1);
+        let (close, close_receiver) = async_channel::bounded(1);
+        let (updates, output) = async_channel::bounded(1);
+        let edits = Arc::new(Mutex::new(BTreeMap::from([(
+            "chat:a".into(),
+            draft(3, "latest unsaved"),
+        )])));
+        drop((commands, wake, close));
+        let mut worker = std::pin::pin!(run(
+            options.clone(),
+            store,
+            WorkerChannels {
+                commands: receiver,
+                wake: wake_receiver,
+                edits: edits.clone(),
+                updates,
+                replace: output.clone(),
+                close: close_receiver,
+            }
+        ));
+        // No wall-clock timeout or scheduler luck: disconnected close must be a
+        // terminal branch, not an endless series of ready failed-Close requests.
+        assert!(
+            matches!(
+                worker
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Ready(())
+            ),
+            "{mode}"
+        );
+        assert!(
+            !output.try_recv().unwrap().flushed,
+            "disconnection must not invent a save acknowledgment: {mode}"
+        );
+        if mode == "healthy" {
+            assert!(edits.lock().unwrap().is_empty());
+            let restored = Store::open(temp.0.clone(), options.host()).unwrap();
+            assert_eq!(restored.book.drafts["chat:a"].revision, 3);
+        } else {
+            assert_eq!(edits.lock().unwrap()["chat:a"].text, "latest unsaved");
+            assert_eq!(
+                fs::read(temp.0.join("state-v1.json")).unwrap(),
+                if mode == "failed-open" {
+                    b"{corrupt".to_vec()
+                } else {
+                    committed
+                }
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_failed_close_reports_error_waits_without_spinning_and_then_disconnects() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for failed_open in [false, true] {
+        let options = LocalOptions::synthetic(1);
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), draft(1, "committed"))]))
+            .unwrap();
+        let store = if failed_open {
+            drop(store);
+            fs::write(temp.0.join("state-v1.json"), b"{corrupt").unwrap();
+            let result = Store::open(temp.0.clone(), options.host());
+            assert!(result.is_err());
+            result
+        } else {
+            store.fail_write = true;
+            Ok(store)
+        };
+        let (commands, receiver) = async_channel::bounded(8);
+        let (wake, wake_receiver) = async_channel::bounded(1);
+        let (close, close_receiver) = async_channel::bounded(1);
+        let (updates, output) = async_channel::bounded(1);
+        let edits = Arc::new(Mutex::new(BTreeMap::from([(
+            "chat:a".into(),
+            draft(2, "keep unsaved input"),
+        )])));
+        close.try_send(()).unwrap();
+        let mut worker = std::pin::pin!(run(
+            options,
+            store,
+            WorkerChannels {
+                commands: receiver,
+                wake: wake_receiver,
+                edits: edits.clone(),
+                updates,
+                replace: output.clone(),
+                close: close_receiver,
+            }
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Pending));
+        let error = output.try_recv().unwrap();
+        assert!(error.error.is_some());
+        assert!(!error.flushed);
+        assert_eq!(edits.lock().unwrap()["chat:a"].text, "keep unsaved input");
+        // Live clients must have time to inspect/copy the error, not be forced
+        // closed or busy-looped merely because their explicit save failed.
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(matches!(
+            output.try_recv(),
+            Err(async_channel::TryRecvError::Empty)
+        ));
+        drop((commands, wake, close));
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Ready(())));
+        assert!(output.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn queued_command_flushes_in_its_first_poll_without_waiting_for_a_timer() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    let options = LocalOptions::synthetic(1); // No network work is requested.
+    let temp = Temp::new();
+    let store = Store::open(temp.0.clone(), options.host()).unwrap();
+    let (commands, receiver) = async_channel::bounded(8);
+    let (wake, wake_receiver) = async_channel::bounded(1);
+    let (_close, close_receiver) = async_channel::bounded(1);
+    let (updates, output) = async_channel::bounded(1);
+    let edits = Arc::new(Mutex::new(BTreeMap::from([(
+        "chat:a".into(),
+        draft(1, "save before action"),
+    )])));
+    wake.try_send(()).unwrap();
+    commands
+        .try_send(WriteCommand::RetireEmpty {
+            key: "chat:a".into(),
+            revision: 0,
+        })
+        .unwrap();
+    let mut worker = std::pin::pin!(run(
+        options.clone(),
+        Ok(store),
+        WorkerChannels {
+            commands: receiver,
+            wake: wake_receiver,
+            edits,
+            updates,
+            replace: output.clone(),
+            close: close_receiver,
+        }
+    ));
+    assert!(matches!(
+        worker
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    let status = output.try_recv().unwrap();
+    assert_eq!(
+        status.book.unwrap().drafts["chat:a"].text,
+        "save before action"
+    );
+    let disk: Book =
+        serde_json::from_slice(&fs::read(temp.0.join("state-v1.json")).unwrap()).unwrap();
+    assert_eq!(disk.drafts["chat:a"].revision, 1);
+}
+
+#[tokio::test]
+async fn sustained_edits_autosave_before_idle_and_close_flushes_the_latest() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let (commands, receiver) = async_channel::bounded(8);
+    let (wake, wake_receiver) = async_channel::bounded(1);
+    let (close, close_receiver) = async_channel::bounded(1);
+    let (updates_tx, updates) = async_channel::bounded(1);
+    let edits = Arc::new(Mutex::new(BTreeMap::new()));
+    let client = Interaction {
+        commands,
+        edits: edits.clone(),
+        wake,
+        close,
+    };
+    let worker = tokio::spawn(run(
+        daemon.options.clone(),
+        Store::open(temp.0.clone(), daemon.options.host()),
+        WorkerChannels {
+            commands: receiver,
+            wake: wake_receiver,
+            edits,
+            updates: updates_tx,
+            replace: updates.clone(),
+            close: close_receiver,
+        },
+    ));
+    until(&updates, |s| s.book.is_some()).await;
+    let latest = Arc::new(AtomicU64::new(0));
+    let recorded = latest.clone();
+    let writer = client.clone();
+    let producer = tokio::spawn(async move {
+        for revision in 1..=200 {
+            assert!(writer.edit(
+                "chat:a".into(),
+                draft(revision, "synthetic sustained input")
+            ));
+            recorded.store(revision, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+    let saved = until(&updates, |s| {
+        s.book
+            .as_ref()
+            .is_some_and(|b| b.drafts.contains_key("chat:a"))
+    })
+    .await;
+    assert!(
+        !producer.is_finished(),
+        "autosave must not wait until continuous typing ends"
+    );
+    assert!(saved.book.as_ref().unwrap().drafts["chat:a"].revision > 1);
+    let disk: Book =
+        serde_json::from_slice(&fs::read(temp.0.join("state-v1.json")).unwrap()).unwrap();
+    assert!(
+        disk.drafts["chat:a"].revision >= saved.book.as_ref().unwrap().drafts["chat:a"].revision
+    );
+    producer.abort();
+    let _ = producer.await;
+    let final_revision = latest.load(Ordering::SeqCst) + 1;
+    assert!(client.edit(
+        "chat:a".into(),
+        draft(final_revision, "final unsaved input")
+    ));
+    assert!(client.command(WriteCommand::Close));
+    let closed = until(&updates, |s| s.flushed).await;
+    assert_eq!(
+        closed.book.unwrap().drafts["chat:a"].revision,
+        final_revision
+    );
+    drop(client);
+    // Join before reopening: channel/status delivery alone does not guarantee
+    // that the worker has dropped the persistent ownership lock yet.
+    worker.await.unwrap();
+    let restored = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    assert_eq!(restored.book.drafts["chat:a"].text, "final unsaved input");
+    assert_eq!(restored.book.drafts["chat:a"].revision, final_revision);
+    assert!(daemon.seen.lock().unwrap().requests.is_empty());
+}
+
+#[test]
+#[ignore = "explicit isolated synthetic autosave disk replay, not real-time or GUI evidence"]
+fn coalesced_snapshot_writer_workload() {
+    use crate::delivery_store::{DRAFT_CAP, TEXT_CAP};
+    use std::os::unix::fs::MetadataExt;
+    struct Observation {
+        writes: u64,
+        bytes: u64,
+        elapsed: Duration,
+    }
+    let replay = |legacy: bool| {
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), LocalOptions::synthetic(1).host()).unwrap();
+        let text = "x".repeat(TEXT_CAP);
+        store
+            .save_edits(
+                (0..DRAFT_CAP)
+                    .map(|i| (format!("chat:synthetic-{i}"), draft(1, &text)))
+                    .collect(),
+            )
+            .unwrap();
+        let edits = Mutex::new(BTreeMap::new());
+        let mut writes = 0;
+        let mut bytes = 0;
+        let mut persist = |store: &mut Store| {
+            let path = temp.0.join("state-v1.json");
+            let before = fs::metadata(&path).unwrap().ino();
+            flush(store, &edits).unwrap();
+            let after = fs::metadata(path).unwrap();
+            if before != after.ino() {
+                writes += 1;
+                bytes += after.len();
+            }
+        };
+        let start = tokio::time::Instant::now();
+        let wall = std::time::Instant::now();
+        let mut autosave = Autosave::default();
+        // Identical 10 logical seconds of sustained 20 Hz edits. Advance a
+        // logical clock, but actually serialize/fsync/rename every due snapshot.
+        for tick in 0..200 {
+            let now = start + Duration::from_millis(tick * 50);
+            if autosave.deadline.is_some_and(|due| due <= now) {
+                persist(&mut store);
+                autosave = Autosave::default();
+            }
+            edits
+                .lock()
+                .unwrap()
+                .insert("chat:synthetic-0".into(), draft(tick + 2, &text));
+            if legacy {
+                // Exact previous first-edit + 250ms fixed batching policy.
+                autosave
+                    .deadline
+                    .get_or_insert(now + Duration::from_millis(250));
+            } else {
+                autosave.edited(now);
+            }
+        }
+        // Normal close always saves the latest input, even before an idle timer.
+        persist(&mut store);
+        let elapsed = wall.elapsed();
+        assert_eq!(store.book.drafts["chat:synthetic-0"].revision, 201);
+        drop(store);
+        let restored = Store::open(temp.0.clone(), LocalOptions::synthetic(1).host()).unwrap();
+        assert_eq!(restored.book.drafts["chat:synthetic-0"].revision, 201);
+        assert_eq!(restored.book.drafts["chat:synthetic-0"].text, text);
+        Observation {
+            writes,
+            bytes,
+            elapsed,
+        }
+    };
+    let before = replay(true);
+    let after = replay(false);
+    assert_eq!(before.writes, 40);
+    assert_eq!(after.writes, 10);
+    assert!(after.bytes * 3 < before.bytes);
+    for (label, observation) in [("legacy250ms", before), ("idle250ms/max1s", after)] {
+        eprintln!(
+            "Synthetic 128x32KiB / 10 logical seconds / 200 edits {label}: {} atomic replacements; {} encoded bytes; {:.3} ms actual replay wall",
+            observation.writes,
+            observation.bytes,
+            observation.elapsed.as_secs_f64() * 1000.
+        );
+    }
+}

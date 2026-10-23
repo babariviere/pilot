@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.63.0](https://github.com/babariviere/pilot/compare/v1.62.2...v1.63.0) (2026-10-23)
+
+
+### Features
+
+* **desktop:** add bounded native artifact viewer ([3f69060](https://github.com/babariviere/pilot/commit/3f69060021c54884efe2d1856698188435cd559e))
+* **desktop:** add durable Local chat interactions ([ab7fa07](https://github.com/babariviere/pilot/commit/ab7fa078f45be8599e9605271becbcacf67a6928))
+* **desktop:** add Home and project chat navigation ([1a93f26](https://github.com/babariviere/pilot/commit/1a93f26e5ba2453130306d00b6a74208273f3723))
+* **desktop:** capture read-only views and refine tool layout ([3fbaa8f](https://github.com/babariviere/pilot/commit/3fbaa8f71f664df65c60fab789c40d06fa7ed562))
+* **desktop:** checkpoint native transcript prototype ([5d61690](https://github.com/babariviere/pilot/commit/5d61690b87b6f1f87c761c9e384f6b76d897dd9a))
+* **desktop:** coalesce native visual slider input ([def4226](https://github.com/babariviere/pilot/commit/def42269d2ff0cf60ec8bd6b7bf2399e19954eb9))
+* **desktop:** isolate native visual runtime foundation ([03207ea](https://github.com/babariviere/pilot/commit/03207ead7360607f3ce902f8618419e34447c2d5))
+* **desktop:** load earlier history on top scroll ([b03b48d](https://github.com/babariviere/pilot/commit/b03b48d8a41595c6a2e1694825a43fc63313f072))
+* **desktop:** open pinned artifact publications ([cd7116d](https://github.com/babariviere/pilot/commit/cd7116de35886ae7ad612d17b95725793eab1349))
+* **desktop:** paint isolated bounded static canvases ([054956b](https://github.com/babariviere/pilot/commit/054956b826313540a29647e703339d586f618303))
+* **desktop:** refine conversation chrome and static dither ([eccbf16](https://github.com/babariviere/pilot/commit/eccbf16d14df591281b07ff95937abc9971cd3f4))
+* **desktop:** render bounded grouped tool work ([3a66f89](https://github.com/babariviere/pilot/commit/3a66f897c79e5e4332658b9f5ef0548677007f89))
+* **desktop:** render bounded signed charts and axis ticks ([f5e6eb3](https://github.com/babariviere/pilot/commit/f5e6eb37ac7a8b53005c4253f20b631600a957b1))
+
+
+### Bug Fixes
+
+* **deps:** update dependency motion to v14.5.0 ([e003e65](https://github.com/babariviere/pilot/commit/e003e6530a4cf979b5fa8642a0b818854d136c07))
+* **deps:** update opentelemetry-js monorepo ([0ecec2b](https://github.com/babariviere/pilot/commit/0ecec2b30bc0e260118a6fdcfcc0b4e0de908708))
+* **desktop:** preserve disclosure anchors and thinking activity ([0797da6](https://github.com/babariviere/pilot/commit/0797da6aafcaa4b5581c329eb826ea6c56330304))
+* **desktop:** simplify composer framing and spacing ([bfd56dd](https://github.com/babariviere/pilot/commit/bfd56dd38340889ed5fa27b8cbd18ba944d282ee))
+* **usage:** show names, sort breakdowns and contain chart bars ([9d50a7b](https://github.com/babariviere/pilot/commit/9d50a7be6d3464940c7f9ebbfa76e12c921fee84))
+
+
+### Performance Improvements
+
+* **desktop:** skip redundant retained-layout sweeps ([cf2c86a](https://github.com/babariviere/pilot/commit/cf2c86abf8519a8f00b74785cfe2c1fce4cdc32b))
+
 ## [1.62.2](https://github.com/babariviere/pilot/compare/v1.62.1...v1.62.2) (2026-10-21)
 
 
