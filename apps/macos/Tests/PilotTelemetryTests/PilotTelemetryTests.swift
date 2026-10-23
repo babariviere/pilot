@@ -98,17 +98,133 @@ private final class FailingSpanExporter: SpanExporter, @unchecked Sendable {
 private final class CapturingHTTPClient: HTTPClient, @unchecked Sendable {
     private let lock = NSLock()
     private var value: URLRequest?
-    var request: URLRequest? { lock.withLock { value } }
+    private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
+    private var completedCallbacks = 0
+    var pendingReceiptCount: Int { lock.withLock { observers.count } }
+    var completedCallbackCount: Int { lock.withLock { completedCallbacks } }
+
+    func waitForRequest(timeout: TimeInterval) async -> URLRequest? {
+        guard !Task.isCancelled else { return nil }
+        let id = UUID()
+        let (notifications, notification) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingOldest(1))
+        let early = lock.withLock { () -> URLRequest? in
+            if let value { return value }
+            observers[id] = notification
+            return nil
+        }
+        if let early { notification.finish(); return early }
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.setEventHandler { notification.finish() }
+        timer.schedule(deadline: .now() + max(0, timeout))
+        timer.resume()
+        defer {
+            timer.cancel()
+            lock.withLock { observers[id] = nil }
+            notification.finish()
+        }
+        var iterator = notifications.makeAsyncIterator()
+        _ = await iterator.next()
+        guard !Task.isCancelled else { return nil }
+        // Delivery and expiry can both wake the waiter. The stored receipt, not
+        // which notification won, decides whether an actual request arrived.
+        return lock.withLock { value }
+    }
+
+    private func capture(_ request: URLRequest) {
+        let notifications = lock.withLock { () -> [AsyncStream<Void>.Continuation] in
+            value = request
+            let pending = Array(observers.values)
+            observers.removeAll()
+            return pending
+        }
+        for notification in notifications {
+            notification.yield(())
+            notification.finish()
+        }
+    }
 
     func send(request: URLRequest, completion: @escaping (Result<HTTPURLResponse, Error>) -> Void) {
-        lock.withLock { value = request }
+        capture(request)
         completion(.success(HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!))
+        lock.withLock { completedCallbacks += 1 }
     }
 
     func send(request: URLRequest) async throws -> HTTPURLResponse {
-        lock.withLock { value = request }
+        capture(request)
         return HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
     }
+}
+
+@Test func capturingHTTPClientReceiptIsBoundedAndRetainsEarlyDelivery() async throws {
+    let client = CapturingHTTPClient()
+    let absent = await client.waitForRequest(timeout: 0)
+    #expect(absent == nil, "absence must expire rather than wait indefinitely")
+    let sent = URLRequest(url: URL(string: "http://127.0.0.1:4318/fixture")!)
+    client.send(request: sent) { result in
+        #expect((try? result.get().statusCode) == 200)
+    }
+    let receipt = await client.waitForRequest(timeout: 0)
+    let received = try #require(receipt, "keep a receipt delivered before the waiter")
+    #expect(received.url == sent.url)
+}
+
+@Test func capturingHTTPClientReceiptObservesQueuedCallbackDelivery() async throws {
+    let client = CapturingHTTPClient()
+    let sent = URLRequest(url: URL(string: "http://127.0.0.1:4318/fixture")!)
+    let sender = DispatchGroup()
+    sender.enter()
+    DispatchQueue.global(qos: .utility).async {
+        defer { sender.leave() }
+        client.send(request: sent) { _ in }
+    }
+    let receipt = await client.waitForRequest(timeout: pilotSwiftSpanExportTimeout)
+    // Suspending for completion leaves executor workers free to run the queued
+    // sender. A blocking group wait here would reintroduce the same starvation.
+    let (completions, completion) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingOldest(1))
+    sender.notify(queue: .global(qos: .utility)) { completion.finish() }
+    let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+    timer.setEventHandler { completion.finish() }
+    timer.schedule(deadline: .now() + pilotSwiftSpanExportTimeout)
+    timer.resume()
+    var iterator = completions.makeAsyncIterator()
+    _ = await iterator.next()
+    timer.cancel()
+    completion.finish()
+    #expect(client.completedCallbackCount == 1, "the queued callback completed exactly once")
+    let received = try #require(receipt, "observe delivery on the callback API without polling")
+    #expect(received.url == sent.url)
+}
+
+@Test func capturingHTTPClientReceiptObservesAsyncDelivery() async throws {
+    let client = CapturingHTTPClient()
+    let sent = URLRequest(url: URL(string: "http://127.0.0.1:4318/fixture")!)
+    let response = try await client.send(request: sent)
+    #expect(response.statusCode == 200)
+    let receipt = await client.waitForRequest(timeout: 0)
+    let received = try #require(receipt)
+    #expect(received.url == sent.url)
+}
+
+@Test func capturingHTTPClientReceiptAbsenceExpiresAndRemovesItsObserver() async {
+    let client = CapturingHTTPClient()
+    let receipt = await client.waitForRequest(timeout: 0.02)
+    #expect(receipt == nil, "a real positive absence deadline must finish without a request")
+    #expect(client.pendingReceiptCount == 0, "expiry releases the receipt subscription")
+}
+
+@Test func capturingHTTPClientReceiptCancellationDoesNotPoisonLaterDelivery() async throws {
+    let client = CapturingHTTPClient()
+    let waiter = Task { await client.waitForRequest(timeout: pilotSwiftSpanExportTimeout) }
+    waiter.cancel()
+    let cancelled = await waiter.value
+    #expect(cancelled == nil, "cancellation must not manufacture a request")
+    #expect(client.pendingReceiptCount == 0, "cancellation releases the receipt subscription")
+    let sent = URLRequest(url: URL(string: "http://127.0.0.1:4318/fixture")!)
+    let response = try await client.send(request: sent)
+    #expect(response.statusCode == 200)
+    let receipt = await client.waitForRequest(timeout: 0)
+    let received = try #require(receipt, "a cancelled observer must not finish subsequent observations")
+    #expect(received.url == sent.url)
 }
 
 private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfiguration {
@@ -315,13 +431,19 @@ private func configuration(exporter: any SpanExporter) -> PilotTelemetryConfigur
         endpoint: URL(string: "http://127.0.0.1:4318/v1/traces")!, httpClient: client
     ))
     telemetry.startSpan(.chatOpen, attributes: [.operation(.chatOpen)]).finish()
+    // This is a wire/privacy test, not a flush-latency test. Public flush is
+    // bounded and may return before an HTTP send; the SDK can also cancel a
+    // queued force-flush operation at its deadline. Observe ordinary batch
+    // delivery at the faux sink first, without changing production deadlines.
+    let receipt = await client.waitForRequest(timeout: pilotSwiftSpanScheduleDelay + pilotSwiftSpanExportTimeout)
     await telemetry.flush()
-    let request = client.request
-    #expect(request?.value(forHTTPHeaderField: "content-type") == "application/x-protobuf")
-    #expect(request?.value(forHTTPHeaderField: "authorization") == nil)
-    #expect((request?.httpBody?.count ?? 0) > 0)
-    #expect(request?.httpBody?.range(of: Data("pilot.chat.open".utf8)) != nil)
+    // Clean up even when the receipt is absent and the following require throws.
     await telemetry.shutdown()
+    let request = try #require(receipt, "the fake HTTP client must observe an actual OTLP export request")
+    #expect(request.value(forHTTPHeaderField: "content-type") == "application/x-protobuf")
+    #expect(request.value(forHTTPHeaderField: "authorization") == nil)
+    #expect((request.httpBody?.count ?? 0) > 0)
+    #expect(request.httpBody?.range(of: Data("pilot.chat.open".utf8)) != nil)
 }
 
 @Test func swiftOTLPEndpointsRejectUnsafeConfiguration() throws {
