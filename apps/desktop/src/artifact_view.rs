@@ -3,6 +3,7 @@
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
 use crate::{
+    app_icon::AppIcon,
     LocalOptions,
     artifact_model::Reference,
     artifact_worker::{Command, Snapshot, Worker},
@@ -1127,6 +1128,7 @@ impl Render for ArtifactPane {
                     let label = format!("{} · {} · r{}", r.title, r.kind, r.revision);
                     Button::new(("artifact-card", i))
                         .ghost()
+                        .icon(AppIcon::Artifacts.asset())
                         .label(SharedString::from(label))
                         .on_click(cx.listener(move |view, _, window, cx| {
                             if generation == view.generation && view.reference.is_none() {
@@ -1155,6 +1157,7 @@ impl Render for ArtifactPane {
                         .ghost()
                         .small()
                         .label("All artifacts")
+                        .icon(AppIcon::Artifacts.asset())
                         .on_click(cx.listener(move |v, _, _, cx| {
                             if v.generation != generation {
                                 return;
@@ -1208,6 +1211,7 @@ impl Render for ArtifactPane {
                         .ghost()
                         .small()
                         .label("Retry in fresh worker")
+                        .icon(AppIcon::Retry.asset())
                         .disabled(self.busy)
                         .on_click(cx.listener(move |v, _, window, cx| {
                             if generation == v.generation && !v.busy && v.snapshot.error.is_some() {
@@ -1235,6 +1239,7 @@ impl Render for ArtifactPane {
                             .ghost()
                             .small()
                             .label("Previous revision")
+                            .icon(AppIcon::Back.asset())
                             .disabled(reference.revision <= 1 || self.busy)
                             .on_click(cx.listener(move |v, _, window, cx| {
                                 if v.generation != generation || v.busy {
@@ -1250,6 +1255,7 @@ impl Render for ArtifactPane {
                             .ghost()
                             .small()
                             .label(if self.source { "Hide source" } else { "Source" })
+                            .icon(AppIcon::Source.asset())
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 if v.generation != generation {
                                     return;
@@ -1263,6 +1269,7 @@ impl Render for ArtifactPane {
                             .ghost()
                             .small()
                             .label("Copy source")
+                            .icon(AppIcon::Copy.asset())
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 if v.generation == generation {
                                     cx.write_to_clipboard(ClipboardItem::new_string(

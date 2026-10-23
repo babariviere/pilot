@@ -40,6 +40,7 @@ app_icons! {
     Send => ArrowUp,
     Stop => Square,
     Artifacts => Layers,
+    Source => CodeXml,
     Earlier => ArrowUp,
     Latest => ArrowDown,
     Read => FileText,

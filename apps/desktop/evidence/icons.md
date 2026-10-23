@@ -41,17 +41,23 @@ steppers and stored artifact content are not app-chrome icon replacements.
 Finished tools gain no checkmark. Notes and private reasoning gain no icon or
 new exposure. Unknown/question and archive glyphs are not embedded speculatively.
 
-Artifact-pane internal chrome remains pending ownership coordination. App-wide
-finishing is separate. This file is not a complete-parity or acceptance claim.
+Artifact-pane gallery, back, retry, previous revision, source and copy controls
+also receive glyph properties only, after ownership coordination. Their labels,
+callbacks, generation/eligibility fences, controller and runtime stay unchanged.
+App-wide finishing is separate. This is not a complete-parity/acceptance claim.
 
 ## Verification plan and current limitations
 
-This is an implementation checkpoint, not completed verification. The first
-strict pass found a missing InteractiveElement import in the new native probe
-and an unnecessary IconNamed test import. Both were corrected; the bounded
-strict/static recheck passed: all-target native-probe Clippy, the asset unit
-test and formatting. Native paint, geometry, captures and final
-suite results must be recorded before publication/readiness.
+The first strict pass found a missing InteractiveElement probe import and an
+unnecessary IconNamed test import. Both were corrected; all-target native-probe
+Clippy, the static asset test and formatting passed. Frozen initial source
+`59d2ba3ed7097100999454384f4c1fca8511b95c` passed focused job `f773ee0f`:
+all 26 initial roles actually painted at 680/1100 light/dark, plus four production
+workbench scenes with real icon pixels, label/slot bounds and all existing
+navigation/preedit/draft/reader/no-write assertions. Synthetic Home/chat/scope
+captures were inspected; raw images and logs stay ignored. The later six
+artifact-chrome glyph properties and Source alias still require the final gate.
+No complete native/full-suite or readiness result is claimed yet.
 
 The static glyph board proves actual SVG paint within mounted bounds for every
 mapped role at 680/1100, light/dark. It is not a production-root layout test.
