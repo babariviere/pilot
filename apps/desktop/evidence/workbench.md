@@ -61,7 +61,12 @@ locked builds and engine-symbol isolation. The new workbench target runs with
 the optional baseline environment flag removed, so normal verification cannot
 silently skip its new layout/interaction assertions. A subsequent user-requested
 rebase onto current main requires its own integration check; this result is not
-claimed for changed main inputs.
+claimed for changed main inputs. Publication continues as a dependent stack on
+`57d77827dc2e6a76cf3372bfb94b0397145d0685`, the Inbox branch after merging the
+palette. That parent tree is byte-identical to `a24a8675`; replaying only the
+private shell commits onto it preserves the complete shell tree byte-for-byte.
+The published production/test/build inputs remain identical to the frozen
+source; additional skill, instructions and evidence files are not build inputs.
 
 ```sh
 cd apps/desktop
