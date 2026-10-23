@@ -30,7 +30,7 @@ reasoning, canonical write or inferred authority is involved in building/search.
   are checked before activation. Pointer closures capture the rendered destination
   and ticket, not a changing index. Refresh retains keyboard identity or clears
   a missing selection, never selecting its replacement by row number.
-- Opening refuses editor/folder/sidebar-search preedit. Palette preedit refuses
+- Opening refuses editor/folder/sidebar-search and active Inbox project-picker preedit. Palette preedit refuses
   Enter, Escape, toggle and pointer navigation before focus can change. Ordinary
   typing and clipboard shortcuts stay native; Tab stays in its sole search focus.
   Existing guarded navigation captures draft/reader state only on an explicit
@@ -62,9 +62,10 @@ write commands,1259-entry/18-match capacity and entity release after close.
 Search input is driven natively, not by assuming `set_value` emits Change.
 Empty-section measurement and accepted-versus-requested query selection have
 defensive guards; preedit is captured in the action phase before Input Escape
-can unmark it. These source fixes add no dependency patch or global timer.
+can unmark it. The initial palette source added no dependency patch or global
+timer. The picker correction below adds an explicit, exact-source Select seam.
 
-The final complete macOS gate passed on frozen source
+The initial complete macOS gate passed on frozen source
 `08a6da7f78cd23b7d5354b18419dfe07f13c3946`: **147 library tests passed,2 ignored**,
 strict all-target/native/app/helper, the entire existing fixture/browser/chrome/
 visual/disclosure/style/composer/slider/history/Home/navigation/Inbox matrix and
@@ -72,6 +73,44 @@ all4 palette scenes. Four mocked Python runner tests, locked app/helper builds
 and engine-symbol separation passed. The helper has no Rust unit tests; the
 existing `block0.1.6` future-compatibility notice remains. Earlier failing
 diagnostic iterations are superseded, not counted as successful evidence.
+
+## Inbox picker opening boundary
+
+Correction source is frozen at `ffb2ed2725b5e20b4a2c65323042028411b69316`.
+Before creating/focusing the palette, the active Inbox checks its actual Select
+search input. Marked text refuses navigation without changing focus, text,
+marked range or selection. After composition ends, explicit navigation retires
+only the transient picker popup/query, restores the committed selection cursor
+and focuses its mounted trigger before saving the palette's return focus.
+The existing synchronous palette focus path is unchanged. No deferred-focus
+callback, timer, global key-dispatch or default Select blur behavior is added.
+
+Kit0.8 keeps that input private, so the tracked component patch adds a small
+read-only input accessor and an explicitly called `prepare_navigation` method.
+It has24 exact edits; original archive checksum/version and the base29-edit
+patch are unchanged. Component spec SHA-256:
+`df0d3f56231f2f23deb9b9fdabe86be7bed2a238e791d5f62247aaf3b6026390`.
+Generated/registry sources are not edited or committed. No lockfile or worker,
+store, canonical reader/transcript, backend, Swift or shell-design change is
+part of this correction.
+
+Strict all-target/native checks and all four strengthened native palette scenes
+passed at680/1100pt in light/dark. The real mounted searchable picker owns focus;
+synthetic preedit followed by Cmd-K creates no palette. After settling, exact
+text, marked range, focus, actual filter value, draft, reader entity and history
+cursor remain unchanged, with no faux read or canonical write. After unmarking,
+native search/Command-K hands focus to the palette; existing per-key IME,
+stale-source pointer, capacity and release assertions still pass. Removing only
+the Inbox opening guard intentionally fails the new pre-blur refusal assertion.
+The guard was restored before the final gate. The complete gate passed on the
+frozen correction source: **147 library tests passed,2 ignored**, strict
+all-target/native/app/helper checks and the entire native matrix, including all
+four strengthened palette and all four Inbox scenes. Four mocked Python tests,
+locked app/helper builds and app/helper engine-symbol isolation passed. The
+existing `block0.1.6` warning remains. This synthetic regression is not OS IME
+or visible performance acceptance.
+
+## Visual evidence and remaining gaps
 
 Actual production GPUI synthetic680light/1100dark frames were inspected for
 readability, rounded containment and unclipped resource rows/footer. The captures
