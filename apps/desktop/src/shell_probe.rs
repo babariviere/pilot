@@ -139,14 +139,18 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 assert!(window.try_find("home-project-project-b").is_some());
                 let button = window.find("home-project-project-a").bounds();
                 let label = window.find("overview-project-title-project-a").bounds();
+                let icon = window.find("overview-project-icon-project-a").bounds();
                 assert!(
                     label.left() >= button.left()
                         && label.right() <= button.right()
                         && label.right() <= main.right()
                 );
                 assert!(
-                    f32::from(label.left() - button.left()) < 12.,
-                    "project labels must actually align left, not just their button root"
+                    icon.left() >= button.left()
+                        && f32::from(icon.left() - button.left()) < 12.
+                        && icon.size.width == window.rem_size()
+                        && (label.left() - icon.right() - window.rem_size() * 0.5).abs() < px(0.1),
+                    "project icon must lead at the original inset with an exact half-rem label gap"
                 );
                 window.click("home-project-project-a", cx);
             })
