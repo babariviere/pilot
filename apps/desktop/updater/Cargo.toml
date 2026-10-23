@@ -3,6 +3,7 @@ name = "pilot-desktop-updater"
 version = "0.1.0"
 edition = "2024"
 publish = false
+autotests = false
 
 # Deliberately independent until the desktop owner registers the path dependency.
 [workspace]
@@ -10,6 +11,22 @@ publish = false
 [features]
 default = []
 native-macos = []
+
+[dependencies]
+base64 = "=0.22.1"
+libc = "=0.2.191"
+reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
+ring = "=0.17.14"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+url = "=2.5.8"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[[bin]]
+name = "pilot-desktop-update-helper"
+path = "src/bin/update-helper.rs"
+required-features = ["native-macos"]
 
 [profile.dev]
 debug = 0
