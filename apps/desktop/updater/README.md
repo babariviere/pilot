@@ -157,6 +157,10 @@ swap; the retained/installed inode identities are checked afterwards too. Journa
 transitions use a separate private nonblocking lock. Relaunch intent is durable before
 launch, so fast startup acknowledgement cannot be overwritten by a later helper write.
 The old app is retained after swap. Journals/archives/backups are not automatically cleaned
+after publication. At most two retained transactions per install parent are admitted;
+further preparation requires explicit recovery/cleanup. Fresh failed preparations with
+no ready/pending journal are discarded by their owning worker, never committed evidence.
+Directories are scanned with a4096-entry cap. Backups
 or retried; `recovery_phase` is read-only. A failed swap leaves the original in place.
 Failed relaunch retains both bundles and reports RecoveryRequired. No automatic rollback
 is claimed. If a crash happens between swap and journal update, target inode mismatch

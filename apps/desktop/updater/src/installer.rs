@@ -90,6 +90,28 @@ pub fn new_stage(
     validate_target(target, trust)?;
     platform.verify(target, trust, &trust.current_build, None)?;
     let lock = lock_target(target)?;
+    // Retain at most two transactions (including backups/crash evidence). Do not
+    // silently garbage-collect an ambiguous or committed installation to make room.
+    let mut retained = 0;
+    for (scanned, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
+        .map_err(|_| Error::Filesystem)?
+        .enumerate()
+    {
+        if scanned >= 4096 {
+            return Err(Error::RecoveryRequired);
+        }
+        let entry = entry.map_err(|_| Error::Filesystem)?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(".pilot-next-update-"))
+        {
+            retained += 1;
+            if retained >= 2 {
+                return Err(Error::RecoveryRequired);
+            }
+        }
+    }
     let mut random = [0; 16];
     SystemRandom::new()
         .fill(&mut random)
@@ -571,6 +593,25 @@ pub(crate) fn acl_policy(path: &Path, policy: i32) -> Result<(), Error> {
         let _ = (path, policy);
         Ok(())
     } // portable fixture checks, no native installer enabled
+}
+
+/// Only a freshly created, still-unpublished failed preparation may be discarded.
+/// Durable ready/pending/committed transactions are always retained for explicit recovery.
+pub(crate) fn discard_incomplete(root: &Path, target: &Path) -> Result<(), Error> {
+    validate_root(root, target)?;
+    if root
+        .join("journal.json")
+        .try_exists()
+        .map_err(|_| Error::Filesystem)?
+        || root
+            .join("journal.pending")
+            .try_exists()
+            .map_err(|_| Error::Filesystem)?
+    {
+        return Err(Error::RecoveryRequired);
+    }
+    fs::remove_dir_all(root).map_err(|_| Error::Filesystem)?;
+    sync_directory(root.parent().ok_or(Error::Filesystem)?)
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
