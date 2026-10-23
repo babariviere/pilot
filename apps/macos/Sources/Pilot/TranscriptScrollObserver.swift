@@ -14,8 +14,6 @@ final class TranscriptScrollState: ObservableObject {
     /// SwiftUI's scrollTo can target an estimated position in the lazy history instead, thousands of points
     /// away, so following never uses it while content streams.
     var pinBottom: (() -> Void)?
-    /// Installed by the opt-in native transcript. Focus remains a page-region action, not row selection.
-    var focusTranscript: (() -> Bool)?
     lazy var messageToggled: () -> Void = { [weak self] in
         self?.follow.pauseFollowing()
         self?.onMessageToggled?()

@@ -19,6 +19,7 @@ fn rows(first: u64) -> Vec<Message> {
                     "Keep the bounded source and a stable reading position. ".repeat(10)
                 ),
             )
+            .anchored(crate::model::ReaderKey::model(id, 0, None))
         })
         .collect()
 }
@@ -51,6 +52,10 @@ fn publish(
     settle(cx, h);
 }
 pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_CANONICAL_READER_ONLY").is_some() {
+        canonical_reader_navigation(cx);
+        return;
+    }
     let captures = std::env::var_os("PILOT_NEXT_NAVIGATION_DIR").map(std::path::PathBuf::from);
     if let Some(d) = &captures {
         std::fs::create_dir_all(d).unwrap();
@@ -331,7 +336,7 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
                     v.reader_marks.put(
                         "other".into(),
                         crate::navigation::ReadingMark {
-                            message: 999_999,
+                            message: Some(crate::model::ReaderKey::model(999_999, 0, None)),
                             offset: 0.,
                             following: false,
                         },
@@ -446,6 +451,220 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             println!(
                 "{}",
                 json!({"width":width,"mode":mode.name(),"bounded_navigation":true,"native_back_forward_keys":true,"scope_query_case_archive_scroll_and_last_chat":true,"textarea_and_search_preedit_fences":true,"same_owner_transcript_cursor_entity_retained":true,"cross_owner_reader_mark_generation_fenced":true,"no_restoration_history_fetch":true,"full_queue_cursor_transaction":true,"new_navigation_truncates_forward":true,"draft_slot_reused_no_submit":true,"canonical_write_commands":0,"native_offscreen":true})
+            );
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+    canonical_reader_navigation(cx);
+}
+
+/// Actual reducer -> fresh Open, including allocation collision and missing key.
+fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
+    use crate::{local_model::LiveTranscript, model::ReaderKey};
+    fn entry(id: u64, label: &str) -> serde_json::Value {
+        json!({"id":id,"head":id,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden synthetic"},{"type":"text","text":format!("{label}\n\n{}","A stable canonical reader position, not a render allocation.\n\n".repeat(80))}]}]})
+    }
+    fn snapshot(values: Vec<serde_json::Value>) -> Vec<Message> {
+        let mut r = LiveTranscript::default();
+        r.apply(&json!({"type":"snapshot","entries":values}));
+        r.rows()
+    }
+    fn publish(
+        cx: &mut HeadlessAppContext,
+        h: gpui_kit::AnyWindowHandle,
+        v: &Entity<LocalViewer>,
+        generation: u64,
+        rows: Vec<Message>,
+    ) {
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                let mut s = v.state.clone();
+                s.rows = rows;
+                s.loaded = true;
+                s.generation = generation;
+                s.cursor = None;
+                s.chat_status = "Synthetic fresh reducer".into();
+                v.accept(s, w, cx);
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (client, reads) = LocalClient::synthetic_commands();
+            let (writer, writes) = Interaction::recording();
+            let initial = snapshot(vec![entry(20, "OLD canonical entry20")]);
+            let old_render = initial[0].id();
+            let canonical = ReaderKey::model(20, 0, Some(1));
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(600.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                            v.client = Some(client);
+                            v.writer = Some(writer.clone());
+                            v.editor
+                                .update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                            v.generation = 10;
+                            v.state.generation = 10;
+                            v.state.loaded = true;
+                            v.state.cursor = None;
+                            v.state.chats = Arc::new(
+                                ["synthetic", "other"]
+                                    .into_iter()
+                                    .map(|id| {
+                                        crate::local_model::chat(
+                                            &json!({"id":id,"title":id,"state":"idle"}),
+                                        )
+                                        .unwrap()
+                                    })
+                                    .collect(),
+                            );
+                            v.transcript.update(cx, |t, cx| {
+                                t.history_scope(10);
+                                t.replace_readonly(initial, true, cx);
+                            });
+                            v.rebuild_nav(w, cx);
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.scroll(
+                    "viewport",
+                    ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                    cx,
+                )
+            })
+            .unwrap();
+            settle(cx, h);
+            let saved = cx.update(|cx| v.read(cx).transcript.read(cx).reading_mark(cx).unwrap());
+            assert_eq!(saved.message, Some(canonical.clone()));
+            assert!(!saved.following);
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let other = v
+                        .state
+                        .chats
+                        .iter()
+                        .find(|c| c.id == "other")
+                        .unwrap()
+                        .clone();
+                    assert!(v.open(other, w, cx));
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(matches!(reads.try_recv(),Ok(Command::Open{id,generation:11}) if id=="other"));
+            publish(cx, h, &v, 11, snapshot(vec![entry(90, "OTHER owner")]));
+            cx.update_window(h, |_, w, cx| w.click("nav-back", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(
+                matches!(reads.try_recv(),Ok(Command::Open{id,generation:12}) if id=="synthetic")
+            );
+            let fresh = snapshot(vec![
+                entry(20, "OLD canonical entry20"),
+                entry(30, "NEW appended entry30"),
+            ]);
+            let correct = fresh
+                .iter()
+                .find(|m| m.matches_reader(&canonical))
+                .unwrap()
+                .id();
+            assert_ne!(correct, old_render);
+            assert_eq!(
+                fresh
+                    .iter()
+                    .find(|m| m.source().starts_with("NEW"))
+                    .unwrap()
+                    .id(),
+                old_render
+            );
+            publish(cx, h, &v, 12, fresh);
+            cx.update_window(h, |_, w, cx| {
+                let mark = v.read(cx).transcript.read(cx).reading_mark(cx).unwrap();
+                assert_eq!(mark.message, saved.message);
+                assert!(!mark.following);
+                assert!((mark.offset - saved.offset).abs() <= 2.);
+                assert!(v.read(cx).nav_error.is_none());
+                assert!(w.try_find(("copy-source", correct)).is_some());
+                w.click(("copy-source", correct), cx);
+                assert!(
+                    cx.read_from_clipboard()
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .starts_with("OLD canonical entry20"),
+                    "actual rendered old source, never the new colliding allocation"
+                );
+            })
+            .unwrap();
+            assert!(reads.try_recv().is_err());
+            assert!(writes.try_recv().is_err());
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let other = v
+                        .state
+                        .chats
+                        .iter()
+                        .find(|c| c.id == "other")
+                        .unwrap()
+                        .clone();
+                    assert!(v.open(other, w, cx));
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(matches!(
+                reads.try_recv(),
+                Ok(Command::Open { generation: 13, .. })
+            ));
+            publish(cx, h, &v, 13, snapshot(vec![entry(90, "OTHER owner")]));
+            cx.update_window(h, |_, w, cx| w.click("nav-back", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(
+                reads.try_recv(),
+                Ok(Command::Open { generation: 14, .. })
+            ));
+            let missing = snapshot(vec![entry(30, "NEW appended entry30")]);
+            assert_eq!(missing[0].id(), old_render);
+            publish(cx, h, &v, 14, missing);
+            cx.update(|cx| {
+                assert!(v.read(cx).nav_error.is_some());
+                assert!(v.read(cx).pending_reader.is_none());
+                assert_ne!(
+                    v.read(cx)
+                        .transcript
+                        .read(cx)
+                        .reading_mark(cx)
+                        .unwrap()
+                        .message,
+                    Some(canonical)
+                );
+            });
+            assert!(reads.try_recv().is_err(), "no restoration paging/draining");
+            assert!(writes.try_recv().is_err());
+            println!(
+                "{}",
+                json!({"width":width,"mode":mode.name(),"canonical_reader_fresh_open":true,"actual_reducer":true,"thinking_text_allocation_collision":true,"native_copy_proves_old_source":true,"missing_canonical_marker_no_numeric_fallback":true,"owner_generation_fences":true,"transcript_cache":false,"automatic_history_reads":0,"canonical_writes":0})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

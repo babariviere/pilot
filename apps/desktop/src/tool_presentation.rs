@@ -262,6 +262,7 @@ pub(crate) enum Step {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Work {
+    pub(crate) readers: Vec<crate::model::ReaderKey>,
     pub(crate) id: u64,
     pub(crate) steps: Vec<Step>,
     pub(crate) title: String,
@@ -500,9 +501,16 @@ impl Tools {
         };
         let tail = run.split_off(last + 1);
         let mut steps = Vec::new();
+        let mut readers = Vec::new();
+        let mut reader_seen = BTreeSet::new();
         let mut anchor = None;
         let mut first = None;
         for row in run.drain(..) {
+            if let Some(key) = row.reader_key()
+                && reader_seen.insert(key.clone())
+            {
+                readers.push(key);
+            }
             if row.source() != "[No text content]" && !row.source().is_empty() {
                 steps.push(Step::Note {
                     id: row.id(),
@@ -596,6 +604,7 @@ impl Tools {
                 parts.join(", ")
             );
             rows.push(Message::work(Arc::new(Work {
+                readers,
                 id,
                 steps,
                 title,

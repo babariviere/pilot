@@ -115,3 +115,22 @@ no Rust unit tests. Existing `block0.1.6` future-compatibility notice remains.
 Earlier failing diagnostic iterations are superseded by this exit0 full gate.
 No dependency/spec/lockfile changes; the existing exact patch specifications
 are unchanged.
+
+## Corrected reader-parent integration
+
+The original130-test checkpoint preceded the canonical reader-marker correction;
+its green results did not prove that parent boundary. This update is one ordinary
+merge retaining the published Inbox head `054ef4a7f45cf0a129b2628dee69138620e03499`
+and corrected navigation parent `e0f434c20676a5ea47289d1c617f7aedec002765`.
+The exact original Inbox feature delta is preserved on the corrected parent,
+without source changes outside desktop or rewriting the published child.
+
+The complete combined macOS gate passed: **136 library tests passed,1 ignored**,
+strict all-target/native/app/helper, native fixture/browser,16 chrome/56 visual
+scenes,720 disclosure frames, rounded/dither/composer/slider,8 history scenes,
+4 Home scenes plus capacity, all8 navigation scenes (including4 actual-reducer
+fresh-Open/copy/missing-marker cases) and all4 Inbox scenes. Four mocked Python
+runner tests, locked builds and engine-symbol separation passed. The helper has
+no Rust unit tests; existing `block0.1.6` warning remains. This is local author
+evidence, not a claim that repository CI runs Cargo/native checks or full
+Inbox/platform/performance/user acceptance.

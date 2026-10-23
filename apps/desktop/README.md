@@ -179,7 +179,7 @@ The project sidebar restores its last valid chat or Overview, search/archive
 filter and scroll positions (up to64 scopes). An explicit Overview button and
 Home project cards still open Overview. Current-chat history stays retained in
 its one retained transcript; switching back from another chat uses the Local
-reader and a bounded message-position token, never a transcript cache or silent
+reader and a bounded canonical entry/model/block or tool-call position token, never a transcript cache or silent
 history drain. Preedit and refused reads cannot advance history, and draft
 destinations reuse existing slots without replaying sends. See
 [navigation boundaries and verification](evidence/navigation.md).

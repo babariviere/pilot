@@ -83,6 +83,7 @@ scheduler_regressions='visualSliderDragsCoalesceToOneHandlerInFlightEndingAtTheL
 # Synthetic pointer tracking pumps nested AppKit loops. Another fixture can order/close
 # a window during that loop and steal the event. Give each real-input test its own process.
 native_pointer_tests=(
+	swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable
 	usageDashboardMountedControlsReadLocalRangesFoldAndPageInBothAppearances
 	diagnoseSetupSubmitsReasonOrBlankThroughMountedControls
 	diagnoseReasonBoundsApplyToButtonAndKeyboardAndCancelStartsNothing

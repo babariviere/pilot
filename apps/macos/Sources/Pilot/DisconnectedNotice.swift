@@ -1,7 +1,7 @@
 import PilotCore
 import SwiftUI
 
-/// Shared copy for both transcript renderers. Retired histories never offer a live action.
+/// Retired histories never offer a live action.
 struct DisconnectedHistoryMessage {
     let title: String
     let detail: String

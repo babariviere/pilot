@@ -111,9 +111,9 @@ pub(crate) struct ScopeState {
     pub(crate) sidebar_y: f32,
     pub(crate) overview_y: f32,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ReadingMark {
-    pub(crate) message: u64,
+    pub(crate) message: Option<crate::model::ReaderKey>,
     pub(crate) offset: f32,
     pub(crate) following: bool,
 }

@@ -87,7 +87,7 @@ struct MarkdownView: View {
     }
 }
 
-struct BlockView: View, Equatable {
+private struct BlockView: View, Equatable {
     @Environment(\.pilotFonts) private var fonts
     @Environment(\.messageTextFade) private var fade
     let block: PreparedMarkdownBlock

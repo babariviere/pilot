@@ -231,11 +231,7 @@ private struct FooterChat: View {
         views(DiagnosticRepairActionAnchorView.self).first { $0.role == role }
     }
     func transcriptScrollView() throws -> NSScrollView {
-        // Follow the same renderer policy as the production ChatView. Do not mistake an editor's
-        // scroll view for the transcript or force the legacy path merely to satisfy this fixture.
-        if NativeTranscriptFlag.enabled {
-            return try #require(views(NativeTranscriptScrollView.self).first)
-        }
+        // Find the restored SwiftUI transcript, not the composer's editor scroll view.
         let observer = try #require(views(ScrollObserverView.self).first)
         return try #require(observer.enclosingScrollView)
     }

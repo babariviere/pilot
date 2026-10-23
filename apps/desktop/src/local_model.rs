@@ -355,33 +355,26 @@ impl LiveTranscript {
                 if let Some(id) = block["id"].as_str()
                     && let Some(key) = self.tools.key(id)
                 {
-                    rows.push(Message::tool_ref(key, id));
+                    rows.push(canonical_row(
+                        Message::tool_ref(key, id),
+                        entry,
+                        Some(block_ix),
+                    ));
                 } else {
-                    rows.push(Message::live(
-                        key,
-                        "assistant".into(),
-                        "[Tool metadata unavailable or exceeds capacity]".into(),
+                    let row_key = self.block_key(key, block_ix, entry);
+                    rows.push(canonical_row(
+                        Message::live(
+                            row_key,
+                            "assistant".into(),
+                            "[Tool metadata unavailable or exceeds capacity]".into(),
+                        ),
+                        entry,
+                        Some(block_ix),
                     ));
                 }
                 continue;
             }
-            let row_key = if block_ix == 0 {
-                key
-            } else if let Some((id, model_ix)) = entry {
-                if let Some(key) = self.block_aliases.get(&(id, model_ix, block_ix)) {
-                    *key
-                } else {
-                    let key = self.key();
-                    self.block_aliases.insert((id, model_ix, block_ix), key);
-                    key
-                }
-            } else if let Some(key) = self.live_block_keys.get(&block_ix) {
-                *key
-            } else {
-                let key = self.key();
-                self.live_block_keys.insert(block_ix, key);
-                key
-            };
+            let row_key = self.block_key(key, block_ix, entry);
             #[cfg(test)]
             {
                 self.assistant_message_builds += 1;
@@ -396,12 +389,40 @@ impl LiveTranscript {
                 },
             );
             if row.source() != "[No text content]" {
-                rows.push(row);
+                rows.push(canonical_row(
+                    row,
+                    entry,
+                    if value["viewerCollapsed"] == true {
+                        None
+                    } else {
+                        Some(block_ix)
+                    },
+                ));
             }
         }
         rows
     }
 
+    fn block_key(&mut self, key: u64, block_ix: usize, entry: Option<(u64, usize)>) -> u64 {
+        if block_ix == 0 {
+            return key;
+        }
+        if let Some((id, model)) = entry {
+            if let Some(key) = self.block_aliases.get(&(id, model, block_ix)) {
+                return *key;
+            }
+            let key = self.key();
+            self.block_aliases.insert((id, model, block_ix), key);
+            key
+        } else {
+            if let Some(key) = self.live_block_keys.get(&block_ix) {
+                return *key;
+            }
+            let key = self.key();
+            self.live_block_keys.insert(block_ix, key);
+            key
+        }
+    }
     fn entry(&mut self, entry: &Value, promote: Option<u64>) {
         let Some(id) = entry["id"].as_u64().filter(|id| *id < (1 << 53)) else {
             return;
@@ -430,6 +451,7 @@ impl LiveTranscript {
             }
         } else if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
             for (ix, value) in models.iter().take(32).enumerate() {
+                let first_row = rows.len();
                 if ix == 0
                     && let Some(key) = promote
                 {
@@ -491,6 +513,13 @@ impl LiveTranscript {
                         rows.push(row);
                     }
                 }
+                if role != "assistant" {
+                    for row in &mut rows[first_row..] {
+                        *row = row
+                            .clone()
+                            .anchored(crate::model::ReaderKey::model(id, ix, None));
+                    }
+                }
             }
             if models.len() > 32 {
                 self.unsupported += 1;
@@ -513,6 +542,15 @@ impl LiveTranscript {
         {
             self.limited = true;
             return;
+        }
+        for row in &mut rows {
+            if row.reader_key().is_none() {
+                *row = row.clone().anchored(crate::model::ReaderKey::Entry {
+                    entry: id,
+                    model: None,
+                    block: None,
+                });
+            }
         }
         self.entries.insert(id, rows);
     }
@@ -873,10 +911,19 @@ fn active_thinking(value: &Value) -> bool {
         .is_some_and(|block| block["type"] == "thinking")
 }
 
+fn canonical_row(row: Message, entry: Option<(u64, usize)>, block: Option<usize>) -> Message {
+    if let Some((entry, model)) = entry {
+        row.anchored(crate::model::ReaderKey::model(entry, model, block))
+    } else {
+        row
+    }
+}
 fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
     let mut content = Vec::new();
     let mut bytes = omitted_reasoning_bytes;
+    let mut collapsed = value["viewerCollapsed"] == true;
     if let Some(text) = value["content"].as_str() {
+        collapsed |= text.len() > MESSAGE_CAP;
         content.push(serde_json::json!({"type":"text","text":if text.len()<=MESSAGE_CAP {text} else {"[Message exceeds 1 MiB viewer limit]"}}));
     } else if let Some(blocks) = value["content"].as_array() {
         for block in blocks.iter().take(256) {
@@ -907,11 +954,12 @@ fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
                 };
                 bytes += encoded.len().min(crate::tool_presentation::ARG_CAP);
                 if bytes <= MESSAGE_CAP {
-                    content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().map(|id|bounded(id,256)),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
+                    content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
                     continue;
                 }
             }
             if bytes > MESSAGE_CAP {
+                collapsed = true;
                 content.clear();
                 content.push(serde_json::json!({"type":"text","text":"[Message exceeds 1 MiB viewer limit]"}));
                 break;
@@ -919,7 +967,11 @@ fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
             content.push(serde_json::json!({"type":kind,field:text}));
         }
     }
-    serde_json::json!({"role":"assistant","timestamp":value["timestamp"].as_u64(),"content":content})
+    let mut result = serde_json::json!({"role":"assistant","timestamp":value["timestamp"].as_u64(),"content":content});
+    if collapsed {
+        result["viewerCollapsed"] = serde_json::Value::Bool(true);
+    }
+    result
 }
 
 fn message(id: u64, value: &Value, label: &str) -> Message {

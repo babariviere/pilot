@@ -9,8 +9,7 @@ code diff, pull request or artifact. Agents keep working when you close the app.
 Pilot is local-first. It uses your existing pi models, authentication and configuration, with a local
 daemon managing sessions independently of the SwiftUI app.
 
-Chat uses reused AppKit transcript rows by default inside the SwiftUI shell. A legacy SwiftUI renderer
-remains available through an explicit local override; see [transcript renderer settings](apps/macos/README.md#pilot-for-macos).
+Chat uses the SwiftUI transcript. The AppKit transcript transition has been reverted.
 
 [Get started](#get-started) · [Working with Pilot](#working-with-pilot) · [Development](#development)
 
