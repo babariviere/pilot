@@ -187,7 +187,14 @@ reader and a bounded canonical entry/model/block or tool-call position token, ne
 history drain. Preedit and refused reads cannot advance history, and draft
 destinations reuse existing slots without replaying sends. See
 [navigation boundaries and verification](evidence/navigation.md).
-Home/dashboard, Inbox, settings and full app parity remain incomplete. macOS is the current focus;
+Inbox provides a bounded read-only view of attention in loaded Local chat summaries,
+with Needs you and Ready to merge groups and a searchable exact-project filter.
+The filter starts from the current project on fresh entry; Back/Forward restores
+explicit filter destinations. Counts describe loaded chat rows, never authoritative
+Inbox/approval totals. Opening rows uses the existing reader without mark-read,
+archive, status, merge or approval actions. Private review marks, other Inbox sources
+and actions remain in Swift. See [Inbox boundaries and checks](evidence/inbox.md).
+Home/dashboard, settings and full Inbox/app parity remain incomplete. macOS is the current focus;
 Linux/Wayland verification is deferred, not a delivery gate or support claim.
 
 ### Private rendered-UI capture
