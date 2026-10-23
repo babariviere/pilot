@@ -1,7 +1,7 @@
 //! Native production root, synthetic summaries and faux channels only.
 use super::*;
 use gpui_kit::{
-    Bounds, EntityInputHandler, HeadlessAppContext, WindowBounds, WindowOptions,
+    Bounds, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
     size,
     test::TestWindowExt,
@@ -93,6 +93,10 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                 );
                 assert!(v.read(cx).jump.as_ref().unwrap().read(cx).probe(cx).2);
                 let q = query(&v, cx);
+                assert!(
+                    q.focus_handle(cx).is_focused(w),
+                    "palette search must own focus"
+                );
                 let before = w.focused(cx);
                 w.press("tab", cx);
                 w.press("shift-tab", cx);
@@ -140,11 +144,81 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update(|cx| assert_eq!(v.read(cx).page, Page::Inbox(Some("a".into()))));
             assert!(reads.try_recv().is_err());
-            cx.update_window(h, |_, w, cx| w.press("secondary-k", cx))
+            // The real searchable Select owns a fourth input. Palette opening
+            // must refuse before focus loss can run Select::on_blur and clear it.
+            cx.update_window(h, |_, w, cx| w.click("inbox-project-filter", cx))
+                .unwrap();
+            settle(cx, h);
+            let picker = cx.update(|cx| v.read(cx).inbox.read(cx).probe_picker_query(cx));
+            let (picker_focus, picker_mark) = cx
+                .update_window(h, |_, w, cx| {
+                    assert!(
+                        picker.focus_handle(cx).is_focused(w),
+                        "mounted picker search must really own focus"
+                    );
+                    let mark = picker.update(cx, |q, cx| {
+                        q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
+                        q.marked_text_range(w, cx)
+                    });
+                    assert!(mark.is_some());
+                    assert_eq!(
+                        v.read(cx).inbox.read(cx).probe_picker_value(cx).as_deref(),
+                        Some("a")
+                    );
+                    let focus = w.focused(cx);
+                    w.press("secondary-k", cx);
+                    assert!(
+                        v.read(cx).jump.is_none(),
+                        "picker preedit refuses palette before blur"
+                    );
+                    (focus, mark)
+                })
                 .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
+                assert!(v.read(cx).jump.is_none());
+                assert_eq!(w.focused(cx), picker_focus);
+                picker.update(cx, |q, cx| {
+                    assert_eq!(q.value().as_ref(), "にほん");
+                    assert_eq!(q.marked_text_range(w, cx), picker_mark);
+                    q.unmark_text(w, cx);
+                });
+                assert_eq!(v.read(cx).page, Page::Inbox(Some("a".into())));
+                assert_eq!(
+                    v.read(cx).inbox.read(cx).probe_picker_value(cx).as_deref(),
+                    Some("a")
+                );
+                assert_eq!(v.read(cx).transcript.entity_id(), transcript);
+                assert_eq!(v.read(cx).state.cursor, Some(100));
+                assert_eq!(
+                    v.read(cx).editor.read(cx).shell_probe().2.unwrap().text,
+                    "Keep 👩‍💻 e\u{301}"
+                );
+                assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+                w.press("secondary-a", cx);
+                w.input("Boreal", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-k", cx);
+                assert!(
+                    v.read(cx).jump.is_some(),
+                    "unmarked picker does not disable Cmd-K"
+                );
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
                 let q = query(&v, cx);
+                assert!(
+                    q.focus_handle(cx).is_focused(w),
+                    "palette search owns focus after picker handoff"
+                );
+                assert_eq!(
+                    v.read(cx).inbox.read(cx).probe_picker_value(cx).as_deref(),
+                    Some("a")
+                );
                 q.update(cx, |q, cx| {
                     q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
                 });
