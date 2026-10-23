@@ -248,7 +248,16 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
     loop {
         let command = tokio::select! {
             biased;
-            _=close.recv()=>{closing=true;Some(WriteCommand::Close)},
+            signal=close.recv()=>match signal {
+                Ok(())=>{closing=true;Some(WriteCommand::Close)},
+                Err(_)=>{
+                    // The last client disappeared, not another explicit Close.
+                    // A failed final save must neither acknowledge durability nor
+                    // keep this permanently-ready branch spinning/starving exit.
+                    if let Ok(store)=&mut store {let _=flush(store,&edits);}
+                    break;
+                }
+            },
             command=commands.recv()=>match command {Ok(command)=>Some(command),Err(_)=>{
                 if let Ok(store)=&mut store {let _=flush(store,&edits);}break;
             }},

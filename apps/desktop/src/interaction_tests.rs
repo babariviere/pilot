@@ -447,6 +447,159 @@ async fn queued_close_bypasses_the_autosave_deadline() {
 }
 
 #[tokio::test]
+async fn disconnected_clients_exit_in_one_poll_even_when_the_final_save_fails() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for mode in ["healthy", "write-failure", "faulted", "failed-open"] {
+        let options = LocalOptions::synthetic(1); // No network commands.
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), draft(1, "committed"))]))
+            .unwrap();
+        let committed = fs::read(temp.0.join("state-v1.json")).unwrap();
+        let store = match mode {
+            "failed-open" => {
+                drop(store);
+                fs::write(temp.0.join("state-v1.json"), b"{corrupt").unwrap();
+                let result = Store::open(temp.0.clone(), options.host());
+                assert!(result.is_err());
+                result
+            }
+            "write-failure" | "faulted" => {
+                store.fail_write = true;
+                if mode == "faulted" {
+                    assert!(
+                        store
+                            .save_edits(BTreeMap::from([("chat:a".into(), draft(2, "failed"))]))
+                            .is_err()
+                    );
+                    assert!(store.is_faulted());
+                }
+                Ok(store)
+            }
+            _ => Ok(store),
+        };
+        let (commands, receiver) = async_channel::bounded(8);
+        let (wake, wake_receiver) = async_channel::bounded(1);
+        let (close, close_receiver) = async_channel::bounded(1);
+        let (updates, output) = async_channel::bounded(1);
+        let edits = Arc::new(Mutex::new(BTreeMap::from([(
+            "chat:a".into(),
+            draft(3, "latest unsaved"),
+        )])));
+        drop((commands, wake, close));
+        let mut worker = std::pin::pin!(run(
+            options.clone(),
+            store,
+            WorkerChannels {
+                commands: receiver,
+                wake: wake_receiver,
+                edits: edits.clone(),
+                updates,
+                replace: output.clone(),
+                close: close_receiver,
+            }
+        ));
+        // No wall-clock timeout or scheduler luck: disconnected close must be a
+        // terminal branch, not an endless series of ready failed-Close requests.
+        assert!(
+            matches!(
+                worker
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Ready(())
+            ),
+            "{mode}"
+        );
+        assert!(
+            !output.try_recv().unwrap().flushed,
+            "disconnection must not invent a save acknowledgment: {mode}"
+        );
+        if mode == "healthy" {
+            assert!(edits.lock().unwrap().is_empty());
+            let restored = Store::open(temp.0.clone(), options.host()).unwrap();
+            assert_eq!(restored.book.drafts["chat:a"].revision, 3);
+        } else {
+            assert_eq!(edits.lock().unwrap()["chat:a"].text, "latest unsaved");
+            assert_eq!(
+                fs::read(temp.0.join("state-v1.json")).unwrap(),
+                if mode == "failed-open" {
+                    b"{corrupt".to_vec()
+                } else {
+                    committed
+                }
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_failed_close_reports_error_waits_without_spinning_and_then_disconnects() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Waker},
+    };
+    for failed_open in [false, true] {
+        let options = LocalOptions::synthetic(1);
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), draft(1, "committed"))]))
+            .unwrap();
+        let store = if failed_open {
+            drop(store);
+            fs::write(temp.0.join("state-v1.json"), b"{corrupt").unwrap();
+            let result = Store::open(temp.0.clone(), options.host());
+            assert!(result.is_err());
+            result
+        } else {
+            store.fail_write = true;
+            Ok(store)
+        };
+        let (commands, receiver) = async_channel::bounded(8);
+        let (wake, wake_receiver) = async_channel::bounded(1);
+        let (close, close_receiver) = async_channel::bounded(1);
+        let (updates, output) = async_channel::bounded(1);
+        let edits = Arc::new(Mutex::new(BTreeMap::from([(
+            "chat:a".into(),
+            draft(2, "keep unsaved input"),
+        )])));
+        close.try_send(()).unwrap();
+        let mut worker = std::pin::pin!(run(
+            options,
+            store,
+            WorkerChannels {
+                commands: receiver,
+                wake: wake_receiver,
+                edits: edits.clone(),
+                updates,
+                replace: output.clone(),
+                close: close_receiver,
+            }
+        ));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Pending));
+        let error = output.try_recv().unwrap();
+        assert!(error.error.is_some());
+        assert!(!error.flushed);
+        assert_eq!(edits.lock().unwrap()["chat:a"].text, "keep unsaved input");
+        // Live clients must have time to inspect/copy the error, not be forced
+        // closed or busy-looped merely because their explicit save failed.
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Pending));
+        assert!(matches!(
+            output.try_recv(),
+            Err(async_channel::TryRecvError::Empty)
+        ));
+        drop((commands, wake, close));
+        assert!(matches!(worker.as_mut().poll(&mut cx), Poll::Ready(())));
+        assert!(output.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn queued_command_flushes_in_its_first_poll_without_waiting_for_a_timer() {
     use std::{
         future::Future,
