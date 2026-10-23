@@ -108,3 +108,9 @@ name = "jump"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "workbench"
+harness = false
+test = false
+required-features = ["native-probes"]
