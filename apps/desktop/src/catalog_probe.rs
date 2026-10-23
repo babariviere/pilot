@@ -9,8 +9,8 @@ use gpui_kit::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     TestSupportExt, Window, WindowBounds, WindowOptions,
     component::{
-        ActiveTheme, Button, ButtonVariants, Disableable, Selectable, Sizable, StyledExt, Theme,
-        ThemeMode,
+        ActiveTheme, Disableable, Selectable, Sizable, StyledExt, Theme, ThemeMode,
+        button::{Button, ButtonVariants},
         input::{Input, InputEvent, InputState},
     },
     div, px, size,

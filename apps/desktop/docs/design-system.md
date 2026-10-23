@@ -97,7 +97,7 @@ These patterns are compiled in `catalog_probe.rs::Catalogue::render`.
 
 ```rust
 use crate::ui::{self, Action, FieldRow, FieldLayout, IconRole, ResourceLabel};
-use gpui_kit::component::{Button, ButtonVariants, Sizable, input::Input};
+use gpui_kit::component::{Sizable, button::{Button, ButtonVariants}, input::Input};
 
 ui::action("catalog-primary", "Run example", Action::Primary)
     .on_click(cx.listener(|this, _, _, cx| this.clicked(cx)));
