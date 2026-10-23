@@ -24,6 +24,9 @@ pub(crate) mod shell_probe;
 #[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
+#[cfg(feature = "native-probes")]
+#[path = "workbench_probe.rs"]
+pub(crate) mod workbench_probe;
 use crate::{
     LocalOptions, TranscriptView,
     app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
