@@ -64,7 +64,24 @@ Empty-section measurement and accepted-versus-requested query selection have
 defensive guards; preedit is captured in the action phase before Input Escape
 can unmark it. These source fixes add no dependency patch or global timer.
 
-The final full gate is pending; no delivery/ready claim yet. Native scenes
+The final complete macOS gate passed on frozen source
+`08a6da7f78cd23b7d5354b18419dfe07f13c3946`: **147 library tests passed,2 ignored**,
+strict all-target/native/app/helper, the entire existing fixture/browser/chrome/
+visual/disclosure/style/composer/slider/history/Home/navigation/Inbox matrix and
+all4 palette scenes. Four mocked Python runner tests, locked app/helper builds
+and engine-symbol separation passed. The helper has no Rust unit tests; the
+existing `block0.1.6` future-compatibility notice remains. Earlier failing
+diagnostic iterations are superseded, not counted as successful evidence.
+
+Actual production GPUI synthetic680light/1100dark frames were inspected for
+readability, rounded containment and unclipped resource rows/footer. The captures
+are from the same native fixture; optional `PILOT_NEXT_JUMP_DIR` output remains
+ignored and is never a real/private capture. This is not the separate SwiftUI
+mock, motion acceptance or a measured CPU/RSS improvement. Source/catalog work
+is bounded and off-thread, but large-data counts and cleanup checks do not prove
+performance parity. No full replacement/ready-by-CI claim is made.
+
+Native scenes
 exercise the production root at680/1100pt, light/dark, and never open a visible
 window or access real Local/private state. The separate SwiftUI artifact is a
 labelled static reference, not GPUI/rendering or acceptance evidence. Offscreen
