@@ -11,6 +11,11 @@ mod local_model;
 mod local_view;
 mod model;
 mod navigation;
+mod settings_state;
+mod settings_view;
+mod settings_worker;
+#[cfg(feature = "native-probes")]
+pub use local_view::settings_probe::run_settings_probe;
 #[cfg(test)]
 mod reader_identity_tests;
 mod tool_presentation;

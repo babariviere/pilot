@@ -7,6 +7,8 @@ bash scripts/cargo.sh fmt --all -- --check
 bash scripts/cargo.sh clippy -p pilot-visual-worker --locked --all-targets -- -D warnings
 bash scripts/cargo.sh clippy --all-targets --locked -- -D warnings
 bash scripts/cargo.sh test --lib --locked -- --test-threads=1
+# Pure preferences validation/durability, path-import harness, no production state.
+bash scripts/cargo.sh test --test settings_state --locked -- --test-threads=1
 # Native offscreen renderer, not a visible app or scrolling benchmark.
 bash scripts/cargo.sh test --test rendering --locked
 bash scripts/cargo.sh test --test chrome --locked
@@ -46,3 +48,6 @@ env -u PILOT_NEXT_WORKBENCH_BASELINE bash scripts/cargo.sh test --locked --featu
 # Reusable presentation contracts with actual Kit controls, synthetic state only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test catalog -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test catalog
+# Actual Settings window/Appearance preferences, private fixtures and guarded entry only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test settings -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test settings

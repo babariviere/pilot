@@ -1,6 +1,8 @@
 # Settings parity and ownership
 
-This is an inventory and isolated foundation, **not a reachable Settings UI or full Swift parity**.
+This inventory began with the isolated preferences foundation. Its integration adds a real
+native Appearance Settings window to the Local viewer, **not full Swift Settings parity**.
+Integration verification and exact source/evidence are in `../evidence/settings-screen.md`.
 Audited source baseline: `5bd2498d2cd71fc3b4f864620c31deff2576c2a3`.
 No production preferences, daemon endpoints or real account data were accessed.
 
@@ -9,18 +11,19 @@ No production preferences, daemon endpoints or real account data were accessed.
 `apps/macos/Sources/Pilot/Settings.swift` defines eight general categories and exact-project
 pages (`SettingsTab`, `SettingsView`). The removed-project fallback does not select a different
 project. Its reusable page/section/row/save-bar views are Swift views, not GPUI components.
-Next has no Settings route at this baseline. `app_shell.rs` only points to Swift for project
-settings; `appearance.rs::{init_appearance,follow_appearance}` installs the app palettes and
-follows OS appearance without a persisted override.
+Next had no Settings route at that audited baseline. The integration now opens a native
+Settings window from the sidebar or Cmd-comma, keeping the Local conversation mounted.
+`app_shell.rs` still points to Swift for project editing. The appearance owner applies only
+successfully loaded/default or acknowledged committed choices, with conditional OS following.
 
-Status terms: **foundation supported** means typed state/storage exists here but is unwired;
+Status terms: **supported** means the integration implements real behavior;
 **missing** means no corresponding Next Settings behavior; **separate** means implementation
 belongs to another authorized owner, not this preferences slice; **deferred** means deliberately
 excluded from the current implementation scope. Separate work does not block core Settings.
 
 | Swift category / actual capability | Next status | Storage and authority owner |
 | --- | --- | --- |
-| Appearance: System / Light / Dark, automatic system switching | Foundation supported; current app follows System only. No new theme application yet. | Swift `AppSettings.appearance` uses `UserDefaults.standard` key `appearance` and `NSApp.appearance`. Next owns its separate preferences file described below, not Swift defaults. |
+| Appearance: System / Light / Dark, automatic system switching | Supported in the native Local Settings window, explicit Save/Revert/retry. Successful load/save acknowledgment applies the committed theme; System resumes OS following. Managed close/quit protects unsaved or unconfirmed changes. | Swift `AppSettings.appearance` uses `UserDefaults.standard` key `appearance` and `NSApp.appearance`. Next owns its separate preferences file described below, not Swift defaults. |
 | Appearance: chat font family/11–22pt; code/tool mono family/9–20pt; live preview; Restore Defaults resets fonts only | Missing. Do not label the new appearance choice as font parity or duplicate Swift's font reset. | Swift `AppSettings` font keys in UserDefaults; font inventory comes from NSFontManager. A later Next implementation needs its own typed preferences and real renderer adoption. |
 | Notifications: optional PR-ready notification; Needs you attention remains visible regardless | Missing preference/OS notification integration, not a fake checkbox. Existing Next attention UI is not notification parity. | Swift `notifyWhenPRReady` default false in UserDefaults; OS notification delivery/application lifecycle is separate. |
 | Connections: global pi MCP status, invalid config count, check again, browser sign-in/cancel/re-sign-in | Missing; sensitive operations outside this foundation. No credential import or invented endpoint. | `ConnectionSettings.swift`, `HostMcpActions.swift`: daemon-managed Local MCP observations/actions, pi MCP config/sign-in storage. Not Next-owned preferences. |
@@ -44,7 +47,8 @@ Existing `src/delivery_store.rs::Store::default_path` selects macOS
 `${XDG_STATE_HOME:-~/.local/state}/pilot-next`). Its `state-v1.json` and `owner.lock` belong to
 draft/delivery durability. Do not modify or reuse that lock for Settings. Existing `appearance.rs`
 owns theme application/OS observation, and the shared `ui` components own presentation contracts.
-This module does not import either, create a second component layer, or register in `lib.rs`.
+The pure foundation imports neither. The integration registers it with a bounded background
+owner and a real Settings view composed from the shared `ui` components, not a second layer.
 
 `SettingsStore::new(explicit_root)` only stores a path. Future integration should supply a
 dedicated **`settings` subdirectory** of the Next-owned state root above, after resolving an
@@ -87,7 +91,8 @@ schema. No theme changes occur while constructing, loading, editing or saving it
 2. On a successful missing load, `loaded=true`, `current=System`, `committed=None`, `dirty=false`,
    `persisted=false`. Loaded existing data has a real committed baseline. `set_appearance` is a
    pure edit. Apply System/Light/Dark through the existing appearance owner later, not inside
-   components/storage; keep OS following conditional on System. That wiring is still missing.
+   components/storage; keep OS following conditional on System. The integration supplies that
+   committed-only wiring through the appearance owner and existing GPUI native appearance API.
 3. Explicit Save calls `begin_save()`. It returns at most one opaque `SaveRequest`, with a
    captured `preferences()` payload. Run `store.save(payload)` off-thread, then pass the same
    receipt/result to `finish_save`. Duplicate/stale receipts in that state are ignored; newer
@@ -106,12 +111,13 @@ schema. No theme changes occur while constructing, loading, editing or saving it
    A fresh process can read the actually visible valid snapshot normally. No autosave/service,
    automatic recovery overwrite or updater restart policy is introduced.
 
-## Next UI acceptance, still outstanding
+## Integration acceptance and remaining parity
 
-The future UI must consume the shared design system, not copy Swift widgets or add another
-component layer. It needs a discoverable native Settings route/Cmd-comma, category/focus state,
+The integration consumes the shared design system, not copied Swift widgets or another
+component layer. Its native Settings window/Cmd-comma entry, category/focus state,
 coherent detail widths, real supported controls and readable explicit gaps. Test 680/1100
 light/dark, long labels, loading/saving/error/disabled states, pointer/keyboard/IME, preedit/draft
 preservation, reader anchoring and exact removed-project identity. Ground before/after in actual
-GPUI renders; static captures do not prove motion. This foundation supplies none of that route,
-theme wiring, UI evidence or acceptance, and it must not be presented as full Settings parity.
+GPUI renders; static captures do not prove motion. Check the integration evidence ledger for
+what actually passed, not this checklist as an implied success. The pure foundation alone did
+not supply UI evidence or acceptance, and the integration is still not full Settings parity.

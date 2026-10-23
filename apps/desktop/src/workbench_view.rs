@@ -5,6 +5,82 @@ use crate::appearance::{Space, TextRole};
 use gpui_kit::EntityInputHandler;
 
 impl LocalViewer {
+    pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Same IME/search/picker guard as existing native navigation. Opening a separate
+        // window never unmounts or retargets the transcript, composer or draft selection.
+        if !self.project_choices_ready(window, cx) {
+            return;
+        }
+        if let Some(handle) = self.settings_window
+            && handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+        {
+            return;
+        }
+        let preferences = self.settings.clone();
+        let initial_size = gpui_kit::size(px(780.), px(620.));
+        #[cfg(feature = "native-probes")]
+        let initial_size = self.settings_fixture_size.unwrap_or(initial_size);
+        let result = gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(
+                    gpui_kit::Bounds::centered(None, initial_size, cx),
+                )),
+                window_min_size: Some(gpui_kit::size(px(640.), px(440.))),
+                ..Default::default()
+            },
+            cx,
+            |window, cx| {
+                crate::appearance::follow_appearance(window, cx);
+                window.set_window_title("Settings");
+                let pane =
+                    cx.new(|cx| crate::settings_view::SettingsView::new(preferences, window, cx));
+                pane.update(cx, |pane, cx| pane.focus_categories(window, cx));
+                let weak = pane.downgrade();
+                window.on_window_should_close(cx, move |_, cx| {
+                    weak.update(cx, |pane, cx| pane.request_close(cx))
+                        .unwrap_or(true)
+                });
+                pane
+            },
+        );
+        match result {
+            Err(_) => {
+                self.nav_error = Some("Settings could not be opened. Try again.");
+                cx.notify();
+            }
+            Ok((handle, pane)) => {
+                self.settings_return = window.focused(cx);
+                self.settings_window = Some(handle);
+                self.settings_pane = Some(pane.downgrade());
+                self.settings_events = vec![
+                    cx.subscribe(&pane, |view, _, event, cx| match event {
+                        crate::settings_view::SettingsEvent::Quit => {
+                            if view
+                                .settings
+                                .update(cx, |owner, cx| owner.request_close(cx))
+                                && view
+                                    .editor
+                                    .update(cx, |editor, cx| editor.request_close(cx))
+                            {
+                                cx.quit();
+                            }
+                        }
+                    }),
+                    cx.observe_release_in(&pane, window, |view, _, window, cx| {
+                        view.settings_window = None;
+                        view.settings_pane = None;
+                        if let Some(focus) = view.settings_return.take() {
+                            focus.focus(window, cx);
+                        }
+                        cx.notify();
+                    }),
+                ];
+                cx.notify();
+            }
+        }
+    }
     pub(super) fn project_choices_ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.jump.is_some() {
             return false;
@@ -86,6 +162,9 @@ impl LocalViewer {
                 .child(Checkbox::new("archives").label("Include archived").checked(archived).on_change(cx.listener(|v,checked,_,cx|v.chats.update(cx,|l,cx|{l.delegate_mut().archived = *checked;l.delegate_mut().filter();cx.notify();}))))
                 .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child(SharedString::from(format!("Chats · {count} shown")))))
             .child(div().id("chat-list-pane").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+            .child(crate::ui::action("open-settings", "Settings…", crate::ui::Action::Quiet)
+                .w_full().justify_start().accessibility_label("Settings (Command-comma)")
+                .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx))))
             .when_some(self.nav_error,|this,error|this.child(div().p(px(Space::SIDEBAR)).text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(error)))
             .children((!healthy).then(||div().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL)).border_t(appearance::hairline(w)).border_color(cx.theme().border)
                 .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
