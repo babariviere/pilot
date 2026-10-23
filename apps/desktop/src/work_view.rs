@@ -1,5 +1,6 @@
 //! Presentation only. Hidden argument/output parsers are never built or updated.
 use crate::{
+    app_icon::AppIcon,
     tool_presentation::{Status, Step, Work},
     transcript_view::TranscriptView,
 };
@@ -82,7 +83,7 @@ fn step_id(step: &Step) -> String {
         Step::Note { id, .. } => format!("note:{id}"),
     }
 }
-fn disclosure(id: SharedString, title: String, open: bool) -> Button {
+fn disclosure(id: SharedString, title: String, open: bool, icon: Option<AppIcon>) -> Button {
     Button::new(id)
         .ghost()
         .small()
@@ -103,6 +104,7 @@ fn disclosure(id: SharedString, title: String, open: bool) -> Button {
                     })
                     .small(),
                 )
+                .when_some(icon, |this, icon| this.child(icon.inline()))
                 .child(
                     div()
                         .id("disclosure-text")
@@ -292,6 +294,7 @@ impl Render for WorkView {
                     }
                 ),
                 open,
+                None,
             )
             .on_click(cx.listener(|view, _, _, cx| {
                 let open = !view.open();
@@ -452,6 +455,7 @@ impl StepView {
                             .ghost()
                             .small()
                             .label("Copy shown text")
+                            .icon(AppIcon::Copy.asset())
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     source.as_ref().clone(),
@@ -524,11 +528,25 @@ impl Render for StepView {
                 false,
             ),
         };
+        let icon = match &self.step {
+            Step::Tool(_) if error => Some(AppIcon::Error),
+            Step::Tool(tool) => Some(match tool.kind {
+                crate::tool_presentation::Kind::Read => AppIcon::Read,
+                crate::tool_presentation::Kind::Edit => AppIcon::Edit,
+                crate::tool_presentation::Kind::Command => AppIcon::Command,
+                crate::tool_presentation::Kind::Script => AppIcon::Script,
+                crate::tool_presentation::Kind::Search => AppIcon::Search,
+                crate::tool_presentation::Kind::Fetch => AppIcon::Fetch,
+                crate::tool_presentation::Kind::Other => AppIcon::Tool,
+            }),
+            Step::Note { .. } => None,
+        };
         let mut root = div().v_flex().gap_2().min_w_0().w_full().child(
             disclosure(
                 SharedString::from(format!("step-toggle-{id}")),
                 title,
                 self.open,
+                icon,
             )
             .text_color(if error {
                 cx.theme().danger

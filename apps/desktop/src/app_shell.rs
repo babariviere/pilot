@@ -1,4 +1,5 @@
 //! Bounded Local app-shell projections. No I/O, authority or canonical writes.
+use crate::app_icon::AppIcon;
 use crate::local_model::{Chat, Project};
 use gpui_kit::{
     App, Context, EventEmitter, InteractiveElement, IntoElement, ParentElement, Render,
@@ -103,11 +104,20 @@ impl ListDelegate for ProjectList {
                 .confirmed(self.selected.as_ref() == Some(&p.id))
                 .child(
                     div()
+                        .h_flex()
+                        .w_full()
                         .min_w_0()
-                        .truncate()
+                        .gap_2()
                         .text_size(px(crate::appearance::TextRole::BODY))
                         .text_color(cx.theme().foreground)
-                        .child(SharedString::from(p.name.clone())),
+                        .child(AppIcon::Project.icon())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(SharedString::from(p.name.clone())),
+                        ),
                 ),
         )
     }
@@ -349,33 +359,50 @@ impl Overview {
                     )))
                     .child(
                         div()
-                            .v_flex()
+                            .h_flex()
                             .w_full()
                             .min_w_0()
-                            .gap(px(Space::META))
+                            .gap_2()
                             .child(
                                 div()
-                                    .id(SharedString::from(format!("overview-project-title-{id}")))
+                                    .id(SharedString::from(format!("overview-project-icon-{id}")))
                                     .test_support()
-                                    .w_full()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(px(TextRole::BODY))
-                                    .font_medium()
-                                    .child(SharedString::from(p.name.clone())),
+                                    .size_4()
+                                    .flex_shrink_0()
+                                    .child(AppIcon::Project.icon()),
                             )
                             .child(
                                 div()
-                                    .w_full()
+                                    .v_flex()
+                                    .flex_1()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_size(px(TextRole::CAPTION))
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(if self.chats_loaded {
-                                        counts.line()
-                                    } else {
-                                        "Loading chat activity…".into()
-                                    })),
+                                    .gap(px(Space::META))
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "overview-project-title-{id}"
+                                            )))
+                                            .test_support()
+                                            .w_full()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(TextRole::BODY))
+                                            .font_medium()
+                                            .child(SharedString::from(p.name.clone())),
+                                    )
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(px(TextRole::CAPTION))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(SharedString::from(if self.chats_loaded {
+                                                counts.line()
+                                            } else {
+                                                "Loading chat activity…".into()
+                                            })),
+                                    ),
                             ),
                     )
                     .on_click(

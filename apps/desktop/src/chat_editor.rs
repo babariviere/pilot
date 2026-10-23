@@ -1,5 +1,6 @@
 //! Local composer UI. Durable ownership lives in the private interaction worker.
 use crate::{
+    app_icon::AppIcon,
     delivery_store::{DRAFT_CAP, Draft, TEXT_CAP},
     interaction::{Interaction, WriteCommand, WriteState},
 };
@@ -732,6 +733,7 @@ impl Render for ChatEditor {
                             .small()
                             .ghost()
                             .label("Stop")
+                            .icon(AppIcon::Stop.asset())
                             .disabled(blocked || is_new || !self.busy)
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 if view.selected.as_ref() == Some(&stop_key) {
@@ -743,6 +745,7 @@ impl Render for ChatEditor {
                         Button::new("local-send")
                             .primary()
                             .small()
+                            .icon(AppIcon::Send.asset())
                             .label(if settled && !draft.text.is_empty() {
                                 "Edit to resend"
                             } else if is_new {
@@ -786,6 +789,7 @@ impl Render for ChatEditor {
                         Button::new("check-delivery")
                             .small()
                             .label("Check")
+                            .icon(AppIcon::Retry.asset())
                             .disabled(intent.operation.is_none())
                             .on_click(cx.listener(move |view, _, _, _| {
                                 if let Some(client) = &view.client {
@@ -800,6 +804,7 @@ impl Render for ChatEditor {
                         Button::new("retry-delivery")
                             .small()
                             .label("Retry same intent")
+                            .icon(AppIcon::Retry.asset())
                             .disabled(intent.operation.is_none() || intent.state == "pending")
                             .on_click(cx.listener(move |view, _, _, _| {
                                 if let Some(client) = &view.client {
@@ -814,6 +819,7 @@ impl Render for ChatEditor {
                         Button::new("dismiss-stop")
                             .small()
                             .label("Acknowledge Stop uncertainty")
+                            .icon(AppIcon::Info.asset())
                             .disabled(intent.operation.is_some())
                             .on_click(cx.listener(move |view, _, _, _| {
                                 if let Some(client) = &view.client {
@@ -862,6 +868,7 @@ impl Render for ChatEditor {
                 Button::new("open-created")
                     .small()
                     .label("Open created chat (draft stays here)")
+                    .icon(AppIcon::Chats.asset())
                     .on_click(cx.listener(move |_, _, _, cx| {
                         cx.emit(EditorEvent::OpenCreated {
                             key: key.clone(),
@@ -883,6 +890,7 @@ impl Render for ChatEditor {
                         Button::new("copy-recovered")
                             .small()
                             .label("Copy recovered text")
+                            .icon(AppIcon::Copy.asset())
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 if let Some(draft) = view.cache.get(&copy_key) {
                                     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
@@ -895,6 +903,7 @@ impl Render for ChatEditor {
                         Button::new("remove-recovered")
                             .small()
                             .label("Remove recovered text")
+                            .icon(AppIcon::Close.asset())
                             .on_click(cx.listener(move |view, _, _, _| {
                                 if let Some(client) = &view.client {
                                     client.command(WriteCommand::ClearRecovery {

@@ -37,7 +37,12 @@ pub use local_view::workbench_probe::run_workbench_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
+mod app_icon;
 mod app_shell;
+#[cfg(feature = "native-probes")]
+mod icon_probe;
+#[cfg(feature = "native-probes")]
+pub use icon_probe::run_icon_probe;
 mod appearance;
 mod artifact_model;
 mod artifact_view;

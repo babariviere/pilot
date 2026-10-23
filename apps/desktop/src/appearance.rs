@@ -181,14 +181,22 @@ pub(crate) fn selected(cx: &App) -> gpui_kit::Hsla {
         gpui_kit::rgba(0x0000000f).into()
     }
 }
-/// Embedded Kit icons only. Dither frames are trusted app-owned native cells.
+/// Selected static app glyphs plus Kit's embedded primitive icons. No external fallback.
 pub struct ChromeAssets;
 impl AssetSource for ChromeAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
-        gpui_kit::assets::Assets.load(path)
+        if let Some(bytes) = crate::app_icon::AppIconAssets.load(path)? {
+            Ok(Some(bytes))
+        } else {
+            gpui_kit::assets::Assets.load(path)
+        }
     }
     fn list(&self, path: &str) -> gpui_kit::Result<Vec<SharedString>> {
-        gpui_kit::assets::Assets.list(path)
+        let mut paths = crate::app_icon::AppIconAssets.list(path)?;
+        paths.extend(gpui_kit::assets::Assets.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
     }
 }
 #[cfg(test)]
