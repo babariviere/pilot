@@ -68,6 +68,22 @@ impl Counts {
     }
 }
 
+/// Display-only context shared by the project row's text, tooltip and label.
+/// An unloaded activity projection is not a confirmed zero count.
+fn project_row_context(
+    project: &Project,
+    counts: Counts,
+    chats_loaded: bool,
+) -> (SharedString, SharedString) {
+    let detail = if chats_loaded {
+        counts.line()
+    } else {
+        "Loading chat activity…".into()
+    };
+    let label = SharedString::from(format!("{} · {detail}", project.name));
+    (detail.into(), label)
+}
+
 pub(crate) struct ProjectList {
     pub(crate) all: Arc<Vec<Project>>,
     pub(crate) empty_label: &'static str,
@@ -343,6 +359,7 @@ impl Overview {
             let p = &self.projects[*ix];
             let id = p.id.clone();
             let counts = self.counts.get(&id).copied().unwrap_or_default();
+            let (detail, label) = project_row_context(p, counts, self.chats_loaded);
             section = section.child(
                 Button::new(SharedString::from(format!("home-project-{id}")))
                     .ghost()
@@ -355,58 +372,12 @@ impl Overview {
                     .rounded(px(crate::appearance::Radius::ROW))
                     .border_b(crate::appearance::hairline(w))
                     .border_color(cx.theme().border)
-                    .accessibility_label(SharedString::from(format!(
-                        "{} · {}",
-                        p.name,
-                        counts.line()
-                    )))
+                    .accessibility_label(label.clone())
+                    .tooltip(label)
                     .child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("overview-project-icon-{id}")))
-                                    .test_support()
-                                    .size_4()
-                                    .flex_shrink_0()
-                                    .child(AppIcon::Project.icon()),
-                            )
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .gap(px(Space::META))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "overview-project-title-{id}"
-                                            )))
-                                            .test_support()
-                                            .w_full()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(TextRole::BODY))
-                                            .font_medium()
-                                            .child(SharedString::from(p.name.clone())),
-                                    )
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(px(TextRole::CAPTION))
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(SharedString::from(if self.chats_loaded {
-                                                counts.line()
-                                            } else {
-                                                "Loading chat activity…".into()
-                                            })),
-                                    ),
-                            ),
+                        crate::ui::ResourceLabel::new(SharedString::from(p.name.clone()))
+                            .detail(detail)
+                            .icon(crate::ui::IconRole::Project),
                     )
                     .on_click(
                         cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Project(id.clone()))),
@@ -588,6 +559,152 @@ mod workbench_tests {
                 path: "/synthetic/shared".into(),
             },
         ]
+    }
+    #[test]
+    fn project_context_never_turns_loading_into_zero_and_preserves_full_text() {
+        let project = Project {
+            name: "Long synthetic project 日本語 👩‍💻 e\u{301} ".repeat(20),
+            ..context_projects().remove(0)
+        };
+        let counts = Counts {
+            chats: 4,
+            working: 1,
+            attention: 2,
+            ready: 1,
+        };
+        for counts in [Counts::default(), counts] {
+            let (detail, label) = project_row_context(&project, counts, false);
+            assert_eq!(detail.as_ref(), "Loading chat activity…");
+            assert_eq!(
+                label.as_ref(),
+                format!("{} · Loading chat activity…", project.name)
+            );
+            assert!(!label.contains("loaded chat"));
+        }
+        let (detail, label) = project_row_context(&project, counts, true);
+        assert_eq!(
+            detail.as_ref(),
+            "4 loaded chats · 1 working · 2 need you · 1 ready to merge"
+        );
+        assert_eq!(label.as_ref(), format!("{} · {detail}", project.name));
+        assert_eq!(
+            project_row_context(&project, Counts::default(), true)
+                .0
+                .as_ref(),
+            "0 loaded chats"
+        );
+    }
+    #[gpui_kit::test]
+    fn shared_project_rows_preserve_geometry_and_exact_keyboard_pointer_events(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::{
+            AppContext, Bounds, WindowBounds, WindowOptions,
+            component::{Theme, ThemeMode},
+            size,
+            test::TestWindowExt,
+        };
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        for width in [496., 868.] {
+            for mode in [ThemeMode::Light, ThemeMode::Dark] {
+                for loaded in [false, true] {
+                    cx.update(|cx| Theme::change(mode, None, cx));
+                    let mut projects = context_projects();
+                    for p in &mut projects {
+                        p.name
+                            .push_str(&" 日本語 👩‍💻 long synthetic project".repeat(20));
+                    }
+                    let chats = Arc::new(vec![crate::local_model::chat(&json!({"id":"canonical-ab","title":"Synthetic work","projectId":"ab","cwd":"/synthetic/shared","state":"working"})).unwrap()]);
+                    let (h, v) = cx.update(|cx| {
+                        gpui_kit::open_window(
+                            WindowOptions {
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                    Default::default(),
+                                    size(px(width), px(1000.)),
+                                ))),
+                                show: false,
+                                focus: false,
+                                ..Default::default()
+                            },
+                            cx,
+                            |_, cx| {
+                                cx.new(|cx| {
+                                    let mut v = Overview::new();
+                                    v.sync(
+                                        OverviewInput {
+                                            projects: Arc::new(projects),
+                                            chats,
+                                            project: None,
+                                            projects_loaded: true,
+                                            chats_loaded: loaded,
+                                            error: None,
+                                        },
+                                        cx,
+                                    );
+                                    v
+                                })
+                            },
+                        )
+                        .unwrap()
+                    });
+                    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+                    let recorded = events.clone();
+                    let _subscription = cx.update(|cx| {
+                        cx.subscribe(&v, move |_, event: &ShellEvent, _| {
+                            if let ShellEvent::Project(id) = event {
+                                recorded.borrow_mut().push(id.clone());
+                            }
+                        })
+                    });
+                    cx.run_until_parked();
+                    cx.update_window(h, |_, w, cx| {
+                        w.draw(cx).clear(cx);
+                        for id in ["a", "ab"] {
+                            let owner = format!("home-project-{id}");
+                            let row = w.find(owner.clone()).bounds();
+                            let title = w.within(owner.clone()).find("resource-title").bounds();
+                            let detail = w.within(owner.clone()).find("resource-detail").bounds();
+                            let icon = w.within(owner).find("resource-icon").bounds();
+                            assert_eq!(row.size.height, px(crate::appearance::Space::ROW));
+                            assert_eq!(icon.size, size(w.rem_size(), w.rem_size()));
+                            assert!(
+                                icon.left() >= row.left()
+                                    && icon.left() - row.left()
+                                        < px(crate::appearance::Space::SIDEBAR)
+                            );
+                            assert!(
+                                (title.left()
+                                    - icon.right()
+                                    - px(crate::appearance::Space::CONTROL))
+                                .abs()
+                                    < px(0.1)
+                            );
+                            assert_eq!(title.left(), detail.left());
+                            assert!(title.right() <= row.right() && detail.right() <= row.right());
+                            assert!(title.top() >= row.top() && detail.bottom() <= row.bottom());
+                        }
+                        w.focus_next(cx);
+                        w.press("space", cx);
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    assert_eq!(
+                        &*events.borrow(),
+                        &["ab".to_string()],
+                        "native keyboard activates exact first ranked project, not same-folder a"
+                    );
+                    cx.update_window(h, |_, w, cx| w.click("home-project-a", cx))
+                        .unwrap();
+                    cx.run_until_parked();
+                    assert_eq!(&*events.borrow(), &["ab".to_string(), "a".to_string()]);
+                    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+                    cx.run_until_parked();
+                }
+            }
+        }
     }
     #[test]
     fn row_context_uses_exact_project_and_public_reason_not_the_shared_folder() {
