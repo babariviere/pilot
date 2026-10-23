@@ -424,7 +424,7 @@ fn corrupt_and_truncated_download_never_survive_as_a_verified_artifact() {
     }
 }
 #[test]
-fn archive_traversal_other_bundle_and_duplicate_file_are_rejected() {
+fn archive_traversal_and_other_bundle_are_rejected() {
     for name in [
         "../outside",
         "/absolute",
@@ -447,6 +447,105 @@ fn archive_traversal_other_bundle_and_duplicate_file_are_rejected() {
         );
         assert!(!temp.0.join("outside").exists());
     }
+}
+#[test]
+fn admitted_normal_and_zip64_entries_preserve_bytes_modes_and_internal_symlinks() {
+    for zip64 in [false, true] {
+        let temp = Temp::new();
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        if zip64 {
+            writer.set_raw_zip64_extensible_data_sector(vec![0; 8].into_boxed_slice());
+        }
+        writer
+            .set_comment("opaque PK\u{5}\u{6} archive comment")
+            .unwrap();
+        writer
+            .add_directory(
+                "Pilot Next.app/Contents/",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer
+            .start_file(
+                "Pilot Next.app/Contents/file",
+                zip::write::SimpleFileOptions::default()
+                    .large_file(zip64)
+                    .unix_permissions(0o755),
+            )
+            .unwrap();
+        writer.write_all(b"valid payload").unwrap();
+        writer
+            .add_symlink(
+                "Pilot Next.app/Contents/link",
+                "file",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        let path = temp.0.join("archive.zip");
+        fs::write(&path, writer.finish().unwrap().into_inner()).unwrap();
+        let bundle = archive::extract(
+            &path,
+            &temp.0.join("payload"),
+            "Pilot Next.app",
+            &Default::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(bundle.join("Contents/file")).unwrap(),
+            b"valid payload"
+        );
+        assert_eq!(
+            fs::read(bundle.join("Contents/link")).unwrap(),
+            b"valid payload"
+        );
+        assert_eq!(
+            fs::read_link(bundle.join("Contents/link")).unwrap(),
+            Path::new("file")
+        );
+        assert_eq!(
+            fs::metadata(bundle.join("Contents/file"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+    }
+}
+#[test]
+fn cancelled_archive_admission_does_not_create_staging() {
+    let temp = Temp::new();
+    let path = temp.0.join("archive.zip");
+    fs::write(&path, archive()).unwrap();
+    let cancel = transport::Cancellation::default();
+    cancel.cancel();
+    let destination = temp.0.join("payload");
+    assert_eq!(
+        archive::extract(&path, &destination, "Pilot Next.app", &cancel),
+        Err(Error::Cancelled)
+    );
+    assert!(!destination.exists());
+}
+#[test]
+fn genuine_duplicate_central_records_fail_before_creating_staging() {
+    let mut bytes = zip_files(&[("Pilot Next.app/Contents/file", b"payload")]);
+    let end = bytes.len() - 22;
+    let start = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;
+    let duplicate = bytes[start..end].to_vec();
+    bytes.splice(end..end, duplicate.iter().copied());
+    let end = bytes.len() - 22;
+    bytes[end + 8..end + 12].copy_from_slice(&[2, 0, 2, 0]);
+    bytes[end + 12..end + 16].copy_from_slice(&((2 * duplicate.len()) as u32).to_le_bytes());
+    assert_eq!(zip::ZipArchive::new(Cursor::new(&bytes)).unwrap().len(), 1);
+    let temp = Temp::new();
+    let path = temp.0.join("archive.zip");
+    fs::write(&path, bytes).unwrap();
+    let destination = temp.0.join("payload");
+    assert_eq!(
+        archive::extract(&path, &destination, "Pilot Next.app", &Default::default()),
+        Err(Error::Archive)
+    );
+    assert!(!destination.exists());
 }
 #[test]
 fn archive_symlinks_cannot_escape_or_redirect_extraction_writes() {

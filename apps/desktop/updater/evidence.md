@@ -61,6 +61,52 @@ lifetime, helper-status recovery, ACLs and stopped-state event fencing) were fix
 and covered by focused regressions. Source review is not additional runtime evidence.
 This evidence-file update is documentation-only; compiled inputs are unchanged.
 
+## ZIP pre-index admission correction
+
+The original post-index `len()` check did not bound eager zip8.6 allocation or raw
+records: the library builds its index before returning and silently deduplicates names.
+This is an authenticated archive availability/resource-admission correction, not a
+signature bypass or RCE fix. No merged implementation history was rewritten.
+
+Frozen input `33f4243828d92cd608fe7c4b534ef1ef8e233ce9` passed local job
+`67418563-7dcd-4569-81c2-07f1b0dfe431` (exit0). The harness
+`/tmp/updater-check-zip-admission-retry/run.sh` used the real repository Swift/native
+verification slot, mbx1.26.0 CPU2/4GiB, existing Rust1.98.1, macOS15 deployment
+and isolated `updater/target/check`. All compiled release configuration was unset.
+A full 17-file SHA256 manifest was printed before compilation and checked unchanged
+at the end. This subsequent evidence-only fold does not change compiled inputs.
+
+Passed: formatting, locked/offline strict all-target Clippy with `native-macos`,
+8 focused admission tests, then **50/50 full standalone tests** (39 existing plus
+11 new, none ignored), helper build and unconfigured helper exit1. Full unit execution
+was0.93s, not a performance/production-lifecycle claim. The first attempt
+`2acaf0d0-c2ca-4a40-afb1-a19ac70a7f74` failed a caused `manual_range_contains`
+Clippy lint before any tests. The ordinary range expression was corrected without
+suppression and the entire harness rerun. Neither invocation mutated frozen source.
+
+New fixtures deliberately emit raw duplicate central records and establish the pinned
+library sees only one deduplicated entry at2/30,000/30,001 raw records. Checked preflight
+rejects duplicates before indexing. Separate cases cover exactly30,000 unique ZIP32/64
+records,30,001 rejection, underdeclared raw records, file/directory aliases, forged huge
+ZIP64 count/size/offset/record-size fields, malformed/truncated/multidisk footer data,
+footer changes between admission and snapshot, cooperative cancellation before reads,
+during snapshot and before indexing, alternative-footer seek rejection and metadata
+read-work exhaustion. Extraction tests cover genuine duplicate rejection before staging,
+cancel before staging, normal and ZIP64 entry/footer/extensible metadata, opaque archive
+comments containing footer signatures, executable mode, exact payload bytes and safe
+internal symlinks. Existing traversal/escaping-link, signature/identity/native Security,
+ACL/install/durability/helper/controller regressions all remain and passed.
+
+Admission caps raw records at30,000 and directory metadata at64MiB before library indexing,
+with a bounded metadata snapshot/read budget and cancellation on index reads/seeks.
+Only canonical single-disk archives with contiguous central/footer records and absolute
+offsets are supported, not self-extracting or trailing-junk containers. Maintained ZIP
+APIs still own decompression, extra-field interpretation and CRC. The public metadata
+reuse API binds the checked snapshot's original offsets to the same open file; its
+semantic safety precondition is documented at the call. This is standalone component
+qualification only. Shared CI does not currently register this separate crate, and
+this correction neither wires nor enables live update/install/restart.
+
 ## Acceptance gaps
 
 - No production credentials/key/feed/release, signing secrets, real installed app or

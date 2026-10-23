@@ -8,7 +8,7 @@ use std::{
 };
 
 pub const MAX_EXPANDED: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_ENTRIES: usize = 30_000;
+mod admission;
 
 pub fn extract(
     archive: &Path,
@@ -21,10 +21,7 @@ pub fn extract(
         .custom_flags(libc::O_NOFOLLOW)
         .open(archive)
         .map_err(|_| Error::Filesystem)?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|_| Error::Archive)?;
-    if zip.len() > MAX_ENTRIES {
-        return Err(Error::Archive);
-    }
+    let mut zip = admission::index(file, cancel)?;
     fs::create_dir(destination).map_err(|_| Error::Filesystem)?;
     fs::set_permissions(destination, fs::Permissions::from_mode(0o700))
         .map_err(|_| Error::Filesystem)?;
