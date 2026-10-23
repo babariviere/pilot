@@ -9,6 +9,69 @@ use gpui_kit::{
 };
 use std::time::Instant;
 
+fn luma(p: &[u8; 4]) -> i32 {
+    i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2])
+}
+
+fn appended_word_mask(first: &[[u8; 4]], last: &[[u8; 4]], row_width: usize) -> Vec<bool> {
+    assert_eq!(first.len(), last.len());
+    assert_eq!(first.len() % row_width, 0);
+    first
+        .chunks_exact(row_width)
+        .zip(last.chunks_exact(row_width))
+        .flat_map(|(before, after)| {
+            // This single unwrapped line ends in blank background. Existing
+            // PREFIX ink must remain pixel-identical; sample only new ink
+            // appearing over its previous background, never a shifted prefix.
+            let background = before.last().unwrap();
+            assert_eq!(
+                Some(background),
+                after.last(),
+                "line must retain blank margin"
+            );
+            before.iter().zip(after).map(move |(a, b)| {
+                let prefix_ink = (luma(a) - luma(background)).abs() > 12;
+                if prefix_ink {
+                    assert_eq!(a, b, "existing PREFIX glyphs must not move or fade");
+                }
+                !prefix_ink && (luma(a) - luma(b)).abs() > 48
+            })
+        })
+        .collect()
+}
+
+fn intermediate_pixels(
+    first: &[[u8; 4]],
+    middle: &[&[[u8; 4]]],
+    last: &[[u8; 4]],
+    mask: &[bool],
+) -> usize {
+    assert_eq!(first.len(), last.len());
+    assert_eq!(first.len(), mask.len());
+    assert!(middle.iter().all(|frame| frame.len() == first.len()));
+    first
+        .iter()
+        .zip(last)
+        .enumerate()
+        .filter(|(i, (a, b))| {
+            let (a, b) = (luma(a), luma(b));
+            mask[*i]
+                && (a - b).abs() > 48
+                && middle.iter().any(|pixels| {
+                    let m = luma(&pixels[*i]);
+                    m > a.min(b) + 12 && m < a.max(b) - 12
+                })
+        })
+        .count()
+}
+fn relative_ms(at: Instant, start: Instant) -> i128 {
+    if at >= start {
+        at.duration_since(start).as_millis() as i128
+    } else {
+        -(start.duration_since(at).as_millis() as i128)
+    }
+}
+
 pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
     const ID: u64 = 30_000_001;
     const PREFIX: &str = "Streaming:";
@@ -40,7 +103,7 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                                 v.title = "Synthetic word-fade phases".into();
                                 v.transcript.update(cx, |t, cx| {
                                     t.replace_readonly(
-                                        vec![Message::live(ID, "assistant".into(), PREFIX.into())],
+                                        vec![Message::live(ID, "assistant".into(), FULL.into())],
                                         true,
                                         cx,
                                     )
@@ -64,9 +127,70 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
             let identity = text.entity_id();
-            // Warm renderer/readback before starting the unchanged 280 ms fade.
-            // PNG encoding must never consume the interval being sampled.
-            drop(cx.capture_screenshot(h).unwrap());
+            // Warm the actual final text's layout, glyph atlas and full-size
+            // GPU/readback, not just PREFIX. Initial text does not append/fade.
+            // Replacing it with its shorter PREFIX clears prior fade segments
+            // through Kit's normal set_text semantics, retaining this entity.
+            let instant_image = cx
+                .update_window(h, |_, w, _| w.render_to_image().unwrap())
+                .unwrap();
+            cx.update(|cx| {
+                v.read(cx).transcript.clone().update(cx, |t, cx| {
+                    t.replace_readonly(
+                        vec![Message::live(ID, "assistant".into(), PREFIX.into())],
+                        false,
+                        cx,
+                    )
+                })
+            });
+            cx.run_until_parked();
+            let baseline = cx
+                .update_window(h, |_, w, cx| {
+                    let paint = Instant::now();
+                    w.draw(cx).clear(cx);
+                    assert_eq!(w.find(("copy-source", ID)).bounds(), header);
+                    assert_eq!(
+                        v.read(cx)
+                            .transcript
+                            .read(cx)
+                            .history_probe_row(ID)
+                            .entity_id(),
+                        identity
+                    );
+                    assert!(v.read(cx).text_parsers_ready(cx));
+                    let image = w.render_to_image().unwrap();
+                    (paint, Instant::now(), image)
+                })
+                .unwrap();
+            // The zero-opacity endpoint is a REAL prefix-only native image,
+            // captured before the append. Do not spend that readback inside
+            // the unchanged 280ms production fade, or encode PNGs in it.
+            macro_rules! region_pixels {
+                ($image:expr) => {{
+                    let image = &$image;
+                    let scale = image.width() as f32 / width;
+                    let mut pixels = Vec::new();
+                    for y in ((f32::from(header.bottom()) + 1.) * scale) as u32
+                        ..((f32::from(header.bottom()) + 36.) * scale) as u32
+                    {
+                        for x in (f32::from(viewport.left()) * scale) as u32
+                            ..(f32::from(viewport.right()) * scale) as u32
+                        {
+                            pixels.push(image.get_pixel(x, y).0);
+                        }
+                    }
+                    pixels
+                }};
+            }
+            let scale = baseline.2.width() as f32 / width;
+            let region_width = ((f32::from(viewport.right()) * scale) as u32
+                - (f32::from(viewport.left()) * scale) as u32)
+                as usize;
+            let mut frames = vec![(baseline.0, baseline.1, region_pixels!(baseline.2))];
+            let mut snapshots = Vec::new();
+            if captures.is_some() {
+                snapshots.push((0, baseline.2));
+            }
             let started = Instant::now();
             cx.update(|cx| {
                 v.read(cx).transcript.clone().update(cx, |t, cx| {
@@ -78,10 +202,8 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 })
             });
             cx.run_until_parked();
-            let mut frames = Vec::new();
-            let mut snapshots = Vec::new();
             let mut previous = 0;
-            for target in [0u64, 80, 160, 400, 600] {
+            for target in [80u64, 160, 400, 600] {
                 let remaining = Duration::from_millis(target).saturating_sub(started.elapsed());
                 // The framework fade uses Instant, not the fake executor clock.
                 // Bounded test-only wall time samples actual paint; no app clock.
@@ -89,66 +211,67 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 cx.advance_clock(Duration::from_millis(target - previous));
                 previous = target;
                 cx.run_until_parked();
-                cx.update_window(h, |_, w, cx| {
-                    w.draw(cx).clear(cx);
-                    assert_eq!(
-                        w.find(("copy-source", ID)).bounds(),
-                        header,
-                        "word fade must not move its message"
-                    );
-                    let t = v.read(cx).transcript.read(cx);
-                    assert_eq!(t.history_probe_row(ID).entity_id(), identity);
-                    assert!(v.read(cx).text_parsers_ready(cx));
-                })
-                .unwrap();
-                let image = cx.capture_screenshot(h).unwrap();
-                let scale = image.width() as f32 / width;
-                let mut pixels = Vec::new();
-                for y in ((f32::from(header.bottom()) + 1.) * scale) as u32
-                    ..((f32::from(header.bottom()) + 36.) * scale) as u32
-                {
-                    for x in (f32::from(viewport.left()) * scale) as u32
-                        ..(f32::from(viewport.right()) * scale) as u32
-                    {
-                        pixels.push(image.get_pixel(x, y).0);
-                    }
-                }
-                frames.push((started.elapsed().as_millis(), pixels));
+                // One update for paint + readback. capture_screenshot in a
+                // second update would flush/draw the dirty window again.
+                let (paint, captured, image) = cx
+                    .update_window(h, |_, w, cx| {
+                        let paint = Instant::now();
+                        w.draw(cx).clear(cx);
+                        assert_eq!(
+                            w.find(("copy-source", ID)).bounds(),
+                            header,
+                            "word fade must not move its message"
+                        );
+                        let t = v.read(cx).transcript.read(cx);
+                        assert_eq!(t.history_probe_row(ID).entity_id(), identity);
+                        assert!(v.read(cx).text_parsers_ready(cx));
+                        let image = w.render_to_image().unwrap();
+                        (paint, Instant::now(), image)
+                    })
+                    .unwrap();
+                frames.push((paint, captured, region_pixels!(image)));
                 if captures.is_some() {
                     snapshots.push((target, image));
                 }
             }
-            let first = &frames[0].1;
-            let last = &frames[4].1;
+            let first = &frames[0].2;
+            let last = &frames[4].2;
             assert_eq!(
-                frames[3].1, *last,
+                frames[3].2, *last,
                 "default fade must settle without further changes"
             );
-            let luma = |p: &[u8; 4]| i32::from(p[0]) + i32::from(p[1]) + i32::from(p[2]);
-            let intermediate = first
-                .iter()
-                .zip(last)
-                .enumerate()
-                .filter(|(i, (a, b))| {
-                    let (a, b) = (luma(a), luma(b));
-                    (a - b).abs() > 48
-                        && frames[1..3].iter().any(|(_, p)| {
-                            let m = luma(&p[*i]);
-                            m > a.min(b) + 12 && m < a.max(b) - 12
-                        })
-                })
-                .count();
+            let mask = appended_word_mask(first, last, region_width);
+            let middle = [&frames[1].2[..], &frames[2].2[..]];
+            let intermediate = intermediate_pixels(first, &middle, last, &mask);
+            // Executed instant-appearance negative control: initial FULL was
+            // genuinely rendered by the SAME production entity before any
+            // append. Initial text has no fade segments. Retain that actual
+            // native image, not a substituted endpoint or fabricated pixels.
+            let instant_pixels = region_pixels!(instant_image);
+            assert_eq!(instant_pixels, *last, "initial FULL must appear settled");
+            let instant_intermediate = intermediate_pixels(first, &[&instant_pixels], last, &mask);
+            assert_eq!(
+                instant_intermediate, 0,
+                "instant appearance must fail the positive oracle"
+            );
             println!(
                 "{}",
-                serde_json::json!({"width":width,"mode":mode.name(),"actual_phase_ms":frames.iter().map(|(t,_)|*t).collect::<Vec<_>>(),"intermediate_pixels":intermediate,"png_encoding_after_sampling":true})
+                serde_json::json!({"width":width,"mode":mode.name(),"readback_end_ms":frames.iter().map(|(_,t,_)|relative_ms(*t,started)).collect::<Vec<_>>(),"draw_start_ms":frames.iter().map(|(t,_,_)|relative_ms(*t,started)).collect::<Vec<_>>(),"draw_and_readback_ms":frames.iter().map(|(paint,end,_)|end.duration_since(*paint).as_millis()).collect::<Vec<_>>(),"baseline_before_append":true,"intermediate_pixels":intermediate,"appended_word_mask_pixels":mask.iter().filter(|v|**v).count(),"existing_prefix_pixels_unchanged":true,"negative_control_native_initial_full_intermediate_pixels":instant_intermediate,"png_encoding_after_sampling":true})
             );
             if let Some(dir) = &captures {
+                instant_image
+                    .save(dir.join(format!("{}-{}-instant.png", width as u32, mode.name())))
+                    .unwrap();
                 for (target, image) in snapshots {
                     image
                         .save(dir.join(format!("{}-{}-{target}.png", width as u32, mode.name())))
                         .unwrap();
                 }
             }
+            assert!(
+                frames[1..3].iter().any(|(paint, _, _)| paint.duration_since(started) < Duration::from_millis(280)),
+                "host sampling limit: no post-append paint began inside the unchanged 280ms fade; timings above are not a native motion pass"
+            );
             assert!(
                 intermediate > 5,
                 "new words must paint intermediate opacity, not jump between endpoints"
@@ -183,7 +306,7 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             println!(
                 "{}",
-                serde_json::json!({"width":width,"mode":mode.name(),"actual_sample_ms":frames.iter().map(|(t,_)|*t).collect::<Vec<_>>(),"intermediate_pixels":intermediate,"idle_transcript_renders":0,"message_geometry_and_entity_retained":true,"exact_copy":true,"native_production_root":true,"visible_smoothness_proof":false})
+                serde_json::json!({"width":width,"mode":mode.name(),"actual_sample_ms":frames.iter().map(|(_,t,_)|relative_ms(*t,started)).collect::<Vec<_>>(),"intermediate_pixels":intermediate,"idle_transcript_renders":0,"message_geometry_and_entity_retained":true,"exact_copy":true,"native_production_root":true,"visible_smoothness_proof":false})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

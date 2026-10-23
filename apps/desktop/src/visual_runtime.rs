@@ -358,6 +358,30 @@ fn verify_sandbox(pid: u32, _: &Path) -> bool {
 fn verify_sandbox(_: u32, _: &Path) -> bool {
     false
 }
+#[cfg(all(test, not(target_os = "macos")))]
+mod unsupported_platform_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn source_execution_refuses_unvalidated_platform_before_starting_worker() {
+        let error = match Process::start().await {
+            Ok(mut process) => {
+                process.stop().await;
+                panic!("unvalidated platform must not start a visual worker");
+            }
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, "unavailable");
+        assert_eq!(
+            error.message,
+            "Native source execution is disabled until this platform's confinement is validated. Source remains available."
+        );
+        assert_eq!(error.line, None);
+        assert_eq!(error.limit, None);
+        assert_eq!(SLOTS.available_permits(), 2);
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
