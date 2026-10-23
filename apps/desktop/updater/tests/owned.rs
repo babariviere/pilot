@@ -1197,6 +1197,49 @@ fn existing_object_without_extended_acl_is_not_a_missing_path() {
     );
 }
 
+#[test]
+fn retained_transaction_bound_and_unpublished_cleanup_never_erase_ready_state() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    let (root, lock) = installer::new_stage(&target, &trust(), &FakePlatform::default()).unwrap();
+    fs::write(root.join("partial.zip"), b"failed preparation").unwrap();
+    installer::discard_incomplete(&root, &target).unwrap();
+    drop(lock);
+    assert!(!root.exists());
+    let stage = fixture_stage_in_existing_target(&target);
+    assert_eq!(
+        installer::discard_incomplete(stage.root(), &target),
+        Err(Error::RecoveryRequired)
+    );
+    let other = target
+        .parent()
+        .unwrap()
+        .join(".pilot-next-update-retained-evidence");
+    fs::create_dir(other).unwrap();
+    drop(stage);
+    assert!(matches!(
+        installer::new_stage(&target, &trust(), &FakePlatform::default()),
+        Err(Error::RecoveryRequired)
+    ));
+}
+
+fn fixture_stage_in_existing_target(target: &Path) -> installer::Staged {
+    let bytes = archive();
+    let manifest = verified(&bytes);
+    let (root, lock) = installer::new_stage(target, &trust(), &FakePlatform::default()).unwrap();
+    fs::write(root.join("archive.zip"), &bytes).unwrap();
+    installer::finish_stage(
+        root,
+        target.to_owned(),
+        lock,
+        manifest,
+        &trust(),
+        &FakePlatform::default(),
+        &Default::default(),
+    )
+    .unwrap()
+}
+
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 fn signed_bundle(root: &Path, build: &str) -> PathBuf {
     let app = root.join("Pilot Next.app");

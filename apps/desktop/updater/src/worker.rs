@@ -99,22 +99,34 @@ impl Worker {
                             let target: PathBuf =
                                 target.canonicalize().map_err(|_| Error::Filesystem)?;
                             let (root, lock) = installer::new_stage(&target, &trust, &MacPlatform)?;
-                            Transport::new()?.download(
-                                release,
-                                &trust,
-                                &access,
-                                &root.join("archive.zip"),
-                                &cancel,
-                            )?;
-                            staged = Some(installer::finish_stage(
-                                root,
-                                target,
-                                lock,
-                                release.clone(),
-                                &trust,
-                                &MacPlatform,
-                                &cancel,
-                            )?);
+                            let preparation = (|| {
+                                Transport::new()?.download(
+                                    release,
+                                    &trust,
+                                    &access,
+                                    &root.join("archive.zip"),
+                                    &cancel,
+                                )?;
+                                installer::finish_stage(
+                                    root.clone(),
+                                    target.clone(),
+                                    lock,
+                                    release.clone(),
+                                    &trust,
+                                    &MacPlatform,
+                                    &cancel,
+                                )
+                            })();
+                            match preparation {
+                                Ok(stage) => staged = Some(stage),
+                                Err(error) => {
+                                    // Never erase a durable/pending journal on failure.
+                                    if installer::discard_incomplete(&root, &target).is_err() {
+                                        return Err(Error::RecoveryRequired);
+                                    }
+                                    return Err(error);
+                                }
+                            }
                             Ok(Outcome::Staged(candidate))
                         }
                         Job::Prepare(id, safety) => {
