@@ -160,8 +160,8 @@ The old app is retained after swap. Journals/archives/backups are not automatica
 after publication. At most two retained transactions per install parent are admitted;
 further preparation requires explicit recovery/cleanup. Fresh failed preparations with
 no ready/pending journal are discarded by their owning worker, never committed evidence.
-Directories are scanned with a4096-entry cap. Backups
-or retried; `recovery_phase` is read-only. A failed swap leaves the original in place.
+Directories are scanned with a4096-entry cap. Retained transactions are never blindly
+retried; `recovery_phase` is read-only. A failed swap leaves the original in place.
 Failed relaunch retains both bundles and reports RecoveryRequired. No automatic rollback
 is claimed. If a crash happens between swap and journal update, target inode mismatch
 refuses a blind second swap. A pending journal write refuses further mutation.
