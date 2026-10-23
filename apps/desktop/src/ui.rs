@@ -368,6 +368,6 @@ mod tests {
             [26., 22., 15., 13., 12., 11., 10.]
         );
         assert_eq!(Space::HOME, Space::SECTION);
-        assert!(Radius::CONTROL < Radius::TRAY);
+        const { assert!(Radius::CONTROL < Radius::TRAY) };
     }
 }
