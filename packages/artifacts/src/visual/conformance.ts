@@ -381,7 +381,9 @@ export const ERRORS: ErrorCase[] = [
 	},
 	{
 		name: "too many nodes",
-		source: "({ ui }) => () => ui.column(Array.from({ length: 5001 }, () => ui.rule()))",
+		// Root + 5000 occurrences exceed the 5000-node budget by exactly one.
+		// Reuse an unkeyed leaf to avoid builder allocations racing the deadline.
+		source: "({ ui }) => () => ui.column(Array(5000).fill(ui.rule()))",
 		data: null,
 	},
 	{ name: "too much text", source: '({ ui }) => () => ui.text("x".repeat(70000))', data: null },
