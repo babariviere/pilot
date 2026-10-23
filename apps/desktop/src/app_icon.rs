@@ -15,7 +15,7 @@ icon_assets!(pub(crate) AppIconAssets, [
 macro_rules! app_icons {
     ($($role:ident => $glyph:ident),* $(,)?) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub(crate) enum AppIcon { $($role),* }
+        pub enum AppIcon { $($role),* }
         impl AppIcon {
             pub(crate) fn asset(self) -> IconName {
                 match self { $(Self::$role => IconName::$glyph),* }

@@ -1,4 +1,6 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
+#[cfg(feature = "native-probes")]
+mod catalog_probe;
 mod chat_editor;
 mod delivery_store;
 mod interaction;
@@ -13,7 +15,11 @@ mod navigation;
 mod reader_identity_tests;
 mod tool_presentation;
 mod transcript_view;
+/// App-owned presentation contracts over Kit. See docs/design-system.md.
+pub mod ui;
 mod work_view;
+#[cfg(feature = "native-probes")]
+pub use catalog_probe::run_catalog_probe;
 
 #[cfg(feature = "native-probes")]
 pub use artifact_view::slider_probe::run_slider_probe;

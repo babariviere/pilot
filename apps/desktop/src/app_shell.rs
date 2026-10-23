@@ -311,12 +311,7 @@ impl Overview {
 }
 impl Overview {
     fn heading(&self, id: &'static str, title: &'static str) -> impl IntoElement {
-        div()
-            .id(id)
-            .test_support()
-            .text_size(px(crate::appearance::TextRole::HEADLINE))
-            .font_semibold()
-            .child(title)
+        crate::ui::heading(id, title, crate::ui::Text::Headline)
     }
     fn projects_section(&self, w: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::appearance::{Space, TextRole};
@@ -468,7 +463,7 @@ impl Overview {
 }
 impl Render for Overview {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::appearance::{Space, TextRole};
+        use crate::appearance::TextRole;
         #[cfg(feature = "native-probes")]
         {
             self.renders += 1;
@@ -489,18 +484,14 @@ impl Render for Overview {
             .as_ref()
             .map(|id| self.counts.get(id).copied().unwrap_or_default())
             .unwrap_or(self.totals);
-        let mut header = div().v_flex().gap(px(Space::META)).child(
-            div()
-                .id("overview-title")
-                .test_support()
-                .truncate()
-                .text_size(px(if self.project.is_none() {
-                    TextRole::DISPLAY
-                } else {
-                    TextRole::TITLE
-                }))
-                .font_semibold()
-                .child(SharedString::from(title.to_owned())),
+        let mut header = crate::ui::header(
+            "overview-title",
+            SharedString::from(title.to_owned()),
+            if self.project.is_none() {
+                crate::ui::Text::Display
+            } else {
+                crate::ui::Text::Title
+            },
         );
         if let Some(p) = project {
             header = header.child(
@@ -548,15 +539,7 @@ impl Render for Overview {
                     .child(error),
             );
         }
-        let mut body = div()
-            .v_flex()
-            .gap(px(Space::SECTION))
-            .p(px(Space::HOME))
-            .w_full()
-            .min_w_0()
-            .max_w(px(760.))
-            .mx_auto()
-            .child(header);
+        let mut body = crate::ui::page().child(header);
         if self.project.is_some() && project.is_none() {
             body=body.child(div().text_size(px(TextRole::BODY)).child(if self.projects_loaded {"This project is not in the current catalog. Its folder and chats are unchanged."}else{"Waiting for the Local project catalog…"}));
         } else {
@@ -567,7 +550,7 @@ impl Render for Overview {
                 .child(self.chat_section(w, true, cx))
                 .child(self.chat_section(w, false, cx));
         }
-        body=body.child(Button::new("home-all-chats").ghost().small().self_start().label("All chats").on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))))
+        body=body.child(crate::ui::action("home-all-chats", "All chats", crate::ui::Action::Quiet).self_start().on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))))
             .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Loaded Local activity, not full dashboard totals. Full Inbox, missions and project settings remain available in Swift."));
         div()
             .v_flex()

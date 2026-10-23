@@ -50,6 +50,9 @@ Docs to use when the task touches them:
 
 ## UI and design system
 
+- GPUI desktop components and contracts are indexed in `apps/desktop/docs/design-system.md`.
+  Reuse `src/ui.rs` and its compiled native catalog; keep data, control state and guarded callbacks with callers.
+
 - For interface work, read and use `.agents/skills/frontend-design/SKILL.md` for
   planning and visual critique. Apply it within `DESIGN.md` and the approved product
   brief, using the native renderer and shared tokens rather than importing web defaults.

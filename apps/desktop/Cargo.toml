@@ -126,3 +126,9 @@ name = "motion"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "catalog"
+harness = false
+test = false
+required-features = ["native-probes"]
