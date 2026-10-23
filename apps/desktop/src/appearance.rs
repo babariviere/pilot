@@ -6,6 +6,29 @@ use std::{borrow::Cow, rc::Rc};
 
 /// Swift Theme.Radius, picked by surface role rather than arbitrary size.
 pub(crate) struct Radius;
+/// Shell-only visual roles. Never reset Kit or Markdown/editor metrics globally.
+pub(crate) struct Space;
+impl Space {
+    pub const META: f32 = 4.;
+    pub const CONTROL: f32 = 8.;
+    pub const SIDEBAR: f32 = 12.;
+    pub const HOME: f32 = 28.;
+    pub const SECTION: f32 = 28.;
+    pub const ROW: f32 = 52.;
+}
+pub(crate) struct TextRole;
+impl TextRole {
+    pub const DISPLAY: f32 = 26.;
+    pub const TITLE: f32 = 22.;
+    pub const HEADLINE: f32 = 15.;
+    pub const BODY: f32 = 13.;
+    pub const LABEL: f32 = 12.;
+    pub const CAPTION: f32 = 11.;
+    pub const SMALL: f32 = 10.;
+}
+pub(crate) fn hairline(window: &Window) -> gpui_kit::Pixels {
+    gpui_kit::px(1. / window.scale_factor().max(1.))
+}
 impl Radius {
     pub const SMALL: f32 = 4.;
     pub const ROW: f32 = 6.;
@@ -171,6 +194,37 @@ impl AssetSource for ChromeAssets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_roles_leave_global_type_and_surface_metrics_unchanged() {
+        assert_eq!(
+            [
+                Space::META,
+                Space::CONTROL,
+                Space::SIDEBAR,
+                Space::HOME,
+                Space::SECTION,
+                Space::ROW
+            ],
+            [4., 8., 12., 28., 28., 52.]
+        );
+        assert_eq!(
+            [
+                TextRole::DISPLAY,
+                TextRole::TITLE,
+                TextRole::HEADLINE,
+                TextRole::BODY,
+                TextRole::LABEL,
+                TextRole::CAPTION,
+                TextRole::SMALL
+            ],
+            [26., 22., 15., 13., 12., 11., 10.]
+        );
+        for dark in [false, true] {
+            assert_eq!(config(dark).font_size, Some(14.));
+            assert_eq!(config(dark).mono_font_size, Some(13.));
+        }
+        assert_eq!(Radius::TRAY, 14.);
+    }
     #[test]
     fn radii_and_embedded_assets_do_not_introduce_external_fallback() {
         assert_eq!(

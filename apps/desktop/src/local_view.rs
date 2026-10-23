@@ -27,6 +27,8 @@ pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
 #[path = "workbench_probe.rs"]
 pub(crate) mod workbench_probe;
+#[path = "workbench_view.rs"]
+mod workbench_view;
 use crate::{
     LocalOptions, TranscriptView,
     app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
@@ -156,11 +158,12 @@ impl ListDelegate for ChatList {
                         .child(
                             div()
                                 .truncate()
+                                .text_size(px(appearance::TextRole::BODY))
                                 .child(SharedString::from(chat.title.clone())),
                         )
                         .child(
                             div()
-                                .text_xs()
+                                .text_size(px(appearance::TextRole::CAPTION))
                                 .text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!(
                                     "{}{}",
@@ -210,6 +213,7 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    projects_open: bool,
     jump: Option<Entity<crate::jump_view::JumpPalette>>,
     jump_subscription: Option<Subscription>,
     jump_return: Option<gpui_kit::FocusHandle>,
@@ -645,10 +649,22 @@ impl LocalViewer {
             },
         );
         let project_events = cx.subscribe_in(&projects, window, |view, list, event, window, cx| {
+            if !view.projects_open || view.jump.is_some() {
+                return;
+            }
             if let ListEvent::Confirm(ix) = event
                 && let Some(id) = list.read(cx).delegate().at(*ix).map(|p| p.id.clone())
             {
-                view.focus_scope(id, window, cx);
+                view.focus_scope(id.clone(), window, cx);
+                if view.project_scope.as_ref() == Some(&id) {
+                    view.projects_open = false;
+                    view.chats.update(cx, |l, cx| l.focus(window, cx));
+                    cx.notify();
+                }
+            } else if matches!(event, ListEvent::Cancel) {
+                view.projects_open = false;
+                view.chats.update(cx, |l, cx| l.focus(window, cx));
+                cx.notify();
             }
         });
         let shell_events =
@@ -769,6 +785,7 @@ impl LocalViewer {
             projects,
             overview,
             inbox,
+            projects_open: false,
             jump: None,
             jump_subscription: None,
             jump_return: None,
@@ -1287,16 +1304,6 @@ impl Render for LocalViewer {
         {
             self.render_count += 1;
         }
-        let archived = self.chats.read(cx).delegate().archived;
-        let count = self.chats.read(cx).delegate().filtered.len();
-        let sidebar_width = px(if window.viewport_size().width < px(800.) {
-            184.
-        } else {
-            232.
-        });
-        let healthy = self.state.status.starts_with("Connected")
-            || self.state.status.starts_with("Synthetic")
-            || self.state.status.starts_with("Read-only captured");
         let cwd = self
             .selected
             .as_ref()
@@ -1345,43 +1352,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none(){view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
-            .child(
-                div().id("chat-sidebar").test_support().v_flex().w(sidebar_width).min_w(sidebar_width).max_w(sidebar_width).h_full()
-                    .bg(cx.theme().sidebar).border_r_1().border_color(cx.theme().border)
-                    .child(div().v_flex().p_3().gap_2()
-                        .child(div().h_flex().items_center().justify_between().gap_1()
-                            .child(div().text_sm().font_semibold().child("Pilot Next"))
-                            .child(Button::new("new-local-chat").ghost().small().icon(IconName::Plus).label("New chat").tooltip("Start a Local chat with an explicit folder. Project selection here is browse-only.")
-                                .disabled(!self.editor.read(cx).ready()).on_click(cx.listener(|view,_,window,cx|view.new_chat(window,cx)))))
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child(SharedString::from(format!("{count} Local chats"))))
-                        .child(Checkbox::new("archives").label("Include archived").checked(archived)
-                            .on_change(cx.listener(|view,checked,_,cx|{
-                                view.chats.update(cx,|list,cx|{let d=list.delegate_mut();d.archived = *checked;d.filter();cx.notify();});
-                            }))))
-                    .child(div().v_flex().px_3().pb_2().gap_1()
-                        .child(div().h_flex().gap_1()
-                            .child(Button::new("nav-back").ghost().small().label("Back").tooltip("Back (⌘[)").disabled(!self.navigation.can_move(false)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(false,w,cx))))
-                            .child(Button::new("nav-forward").ghost().small().label("Forward").tooltip("Forward (⌘])").disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx)))))
-                        .child(Button::new("nav-home").ghost().small().w_full().accessibility_label("Home").child(div().w_full().min_w_0().truncate().child("Home")).selected(self.page==Page::Home)
-                            .on_click(cx.listener(|view,_,window,cx|view.show_home(window,cx))))
-                        .child(Button::new("nav-inbox").ghost().small().w_full().accessibility_label("Inbox").child(div().w_full().min_w_0().truncate().child("Inbox")).selected(matches!(self.page,Page::Inbox(_)))
-                            .on_click(cx.listener(|view,_,window,cx|view.show_inbox(view.project_scope.clone(),window,cx))))
-                        .child(Button::new("nav-all-chats").ghost().small().w_full().accessibility_label("All chats").child(div().w_full().min_w_0().truncate().child("All chats")).selected(self.page==Page::Chat&&self.project_scope.is_none())
-                            .on_click(cx.listener(|view,_,window,cx|view.show_chats(window,cx))))
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("⌘K Jump to…")))
-                    .when(self.state.projects_loaded||self.state.projects_error.is_some(),|this|this.child(div().v_flex().px_3().pb_2().gap_1()
-                        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Projects"))
-                        .when(!self.state.projects.is_empty(),|this|this.child(div().h(px((self.state.projects.len().min(5) as f32*30.).min(f32::from(window.viewport_size().height)*0.22).max(30.))).w_full().min_h_0()
-                            .child(List::new(&self.projects))))
-                        .when(self.state.projects.is_empty(),|this|this.child(div().text_xs().text_color(cx.theme().muted_foreground).child(if self.state.projects_error.is_some(){"Project list unavailable"}else{"No configured projects"})))))
-                    .when(self.project_scope.is_some(),|this|this.child(Button::new("project-overview").ghost().small().label("Overview").on_click(cx.listener(|v,_,w,cx|{if let Some(id)=v.project_scope.clone(){v.show_project(id,w,cx);}}))))
-                    .child(div().id("chat-list-pane").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
-                    .when_some(self.nav_error,|this,error|this.child(div().p_3().text_xs().text_color(cx.theme().danger).child(error)))
-                    .children((!healthy).then(||div().v_flex().p_3().gap_2().border_t_1().border_color(cx.theme().border)
-                        .child(div().text_xs().text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
-                        .child(Button::new("reconnect").ghost().small().label("Reconnect").disabled(self.client.is_none())
-                            .on_click(cx.listener(|view,_,_,_|{if let Some(client)=&view.client{client.command(Command::Reconnect);}})))))
-            )
+            .child(self.sidebar(window,cx))
             .child(
                 if matches!(self.page,Page::Inbox(_)) {
                     div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
