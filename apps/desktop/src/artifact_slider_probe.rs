@@ -62,22 +62,29 @@ fn fast_ack(
     pane: &Entity<ArtifactPane>,
     commands: &async_channel::Receiver<Command>,
 ) {
+    if !commands.is_empty() {
+        cx.update(|cx| fast_ack_in_app(cx, pane, commands));
+    }
+}
+fn fast_ack_in_app(
+    cx: &mut gpui_kit::App,
+    pane: &Entity<ArtifactPane>,
+    commands: &async_channel::Receiver<Command>,
+) {
     if let Ok(command) = commands.try_recv() {
         let Command::Event { version, id, value } = command else {
             panic!("unexpected faux command")
         };
-        cx.update(|cx| {
-            pane.update(cx, |p, cx| {
-                assert_eq!(version, p.snapshot.version);
-                let scene = p.snapshot.scene.as_ref().unwrap();
-                let mut values = [scene.sliders["0.0"].1, scene.sliders["0.1"].1];
-                values[usize::from(id == "0.1")] = value.as_f64().unwrap();
-                let mut next = p.snapshot.clone();
-                next.version += 1;
-                next.scene = Some(Arc::new(pair(values)));
-                let reference = p.reference.clone().unwrap();
-                p.accept(p.generation, &reference, next, cx);
-            })
+        pane.update(cx, |p, cx| {
+            assert_eq!(version, p.snapshot.version);
+            let scene = p.snapshot.scene.as_ref().unwrap();
+            let mut values = [scene.sliders["0.0"].1, scene.sliders["0.1"].1];
+            values[usize::from(id == "0.1")] = value.as_f64().unwrap();
+            let mut next = p.snapshot.clone();
+            next.version += 1;
+            next.scene = Some(Arc::new(pair(values)));
+            let reference = p.reference.clone().unwrap();
+            p.accept(p.generation, &reference, next, cx);
         });
         assert!(
             commands.try_recv().is_err(),
@@ -85,7 +92,36 @@ fn fast_ack(
         );
     }
 }
-fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PacingFault {
+    Unpaced,
+    OldestQueued,
+}
+fn callback_rate_valid(samples: &VecDeque<(Instant, Instant, String)>) -> bool {
+    samples.iter().zip(samples.iter().skip(1)).all(|(a, b)| {
+        let (v, w) = (b.0 - a.0, b.1 - a.1);
+        v >= crate::visual_slider::DRAG_INTERVAL && w >= std::time::Duration::from_millis(33)
+    }) && samples.iter().all(|sample| {
+        samples
+            .iter()
+            .filter(|s| s.1 >= sample.1 && s.1 < sample.1 + std::time::Duration::from_secs(1))
+            .count()
+            <= 30
+    })
+}
+fn pending_latest_valid(p: &ArtifactPane, cx: &gpui_kit::App) -> bool {
+    p.slider_flow.queued.as_ref().is_none_or(|q| {
+        let binding = &p.sliders[&q.id];
+        binding.state.read(cx).value().end() == binding.grid.position(q.value)
+            && p.slider_wake.is_some()
+    })
+}
+fn pacing_probe(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+    mode: ThemeMode,
+    fault: Option<PacingFault>,
+) {
     let (worker, commands) = Worker::synthetic();
     // The full LocalViewer lifecycle/pixel matrix runs separately above. Its
     // transcript redraw on every GPUI test update can throttle raw input below
@@ -142,6 +178,8 @@ fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
     let mut previous = point(bounds[0].left() + px(1.), bounds[0].center().y);
     let mut active = 0;
     let mut input_times = Vec::new();
+    let mut latest_was_valid = true;
+    const INPUTS_PER_TICK: usize = 4;
     for tick in 0..120 {
         // TestDispatcher time is virtual. Advance only 8ms after at least 8ms
         // actual waiting, never catch up render time or run the virtual clock
@@ -150,8 +188,25 @@ fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
         cx.advance_clock(std::time::Duration::from_millis(8));
         cx.run_until_parked();
         fast_ack(cx, &pane, &commands);
+        let old_queue = if fault == Some(PacingFault::OldestQueued) {
+            cx.update(|cx| pane.read(cx).slider_flow.queued.clone())
+        } else {
+            None
+        };
+        if fault == Some(PacingFault::Unpaced) {
+            // Test-instance mutation only: erase the private rate gate through
+            // Default, preserving flight/latest. No production hook or limit edit.
+            cx.update(|cx| {
+                pane.update(cx, |p, _| {
+                    let flight = p.slider_flow.flight.take();
+                    let queued = p.slider_flow.queued.take();
+                    p.slider_flow = Default::default();
+                    p.slider_flow.flight = flight;
+                    p.slider_flow.queued = queued;
+                });
+            });
+        }
         let index = usize::from((tick / 30) % 2 != 0);
-        input_times.push(Instant::now());
         cx.update_window(handle, |_, window, cx| {
             // Raw native input can outpace drawing. Rendering every move would
             // throttle the stress test itself instead of exercising the gate.
@@ -185,36 +240,55 @@ fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
                     cx,
                 );
             }
-            let t = if (tick / 15) % 2 == 0 {
-                0.25 + (tick % 15) as f32 / 30.
-            } else {
-                0.75 - (tick % 15) as f32 / 30.
-            };
-            previous = point(b.left() + b.size.width * t, b.center().y);
-            window.dispatch_event(
-                MouseMoveEvent {
-                    position: previous,
-                    pressed_button: Some(MouseButton::Left),
-                    modifiers: Default::default(),
-                }
-                .to_platform_input(),
-                cx,
-            );
+            // HeadlessAppContext flushes/draws after every App update, even
+            // without render_frame. A slow readback must not serialize raw
+            // input behind a GPU frame. Deliver a bounded native event burst
+            // with an immediate real production-pane ack after EACH event.
+            // Time still advances only once per conservative wall-paced tick.
+            for input in tick * INPUTS_PER_TICK..(tick + 1) * INPUTS_PER_TICK {
+                let t = if (input / 15) % 2 == 0 {
+                    0.25 + (input % 15) as f32 / 30.
+                } else {
+                    0.75 - (input % 15) as f32 / 30.
+                };
+                previous = point(b.left() + b.size.width * t, b.center().y);
+                input_times.push(Instant::now());
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: previous,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Default::default(),
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                fast_ack_in_app(cx, &pane, &commands);
+            }
         })
         .unwrap();
         active = index;
         cx.run_until_parked();
+        if let Some(old) = old_queue {
+            cx.update(|cx| {
+                pane.update(cx, |p, _| {
+                    if p.slider_flow.queued.as_ref().is_some_and(|q| {
+                        q.id == old.id && q.binding == old.binding && q.generation == old.generation
+                    }) {
+                        // Deliberate keep-oldest coalescer defect in this probe
+                        // instance; the shared latest/thumb oracle must reject it.
+                        p.slider_flow.queued = Some(old);
+                    }
+                });
+            });
+            latest_was_valid &= cx.update(|cx| pending_latest_valid(pane.read(cx), cx));
+        }
         fast_ack(cx, &pane, &commands);
         cx.update(|cx| {
             let p = pane.read(cx);
-            if let Some(q) = &p.slider_flow.queued {
-                let binding = &p.sliders[&q.id];
-                assert_eq!(
-                    binding.state.read(cx).value().end(),
-                    binding.grid.position(q.value),
-                    "pending ack must not regress thumb"
-                );
-                assert!(p.slider_wake.is_some());
+            let valid = pending_latest_valid(p, cx);
+            latest_was_valid &= valid;
+            if fault.is_none() {
+                assert!(valid, "pending ack must not regress thumb or lose its wake");
             }
         });
     }
@@ -238,9 +312,17 @@ fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
     fast_ack(cx, &pane, &commands);
     cx.update(|cx| {
         let p=pane.read(cx);let samples=&p.slider_dispatches;
+        if let Some(fault) = fault {
+            match fault {
+                PacingFault::Unpaced => assert!(!callback_rate_valid(samples), "negative control: disabled pacer was not detected"),
+                PacingFault::OldestQueued => assert!(!latest_was_valid, "negative control: broken latest coalescing was not detected"),
+            }
+            println!("{}", json!({"negative_control":format!("{fault:?}"),"rejected_by_shared_oracle":true,"enqueue_count":samples.len(),"pointer_input_count":input_times.len(),"faux_reader_only":true}));
+            return;
+        }
         let fast_inputs=input_times.windows(2).filter(|s|s[1]-s[0]<std::time::Duration::from_millis(25)).count();
         let input_window_max=input_times.iter().map(|&at|input_times.iter().filter(|&&t|t>=at&&t<at+std::time::Duration::from_secs(1)).count()).max().unwrap();
-        assert!(fast_inputs>=90&&input_window_max>30,"native input must actually outpace callback budget: {fast_inputs} fast gaps, {input_window_max} inputs/second");
+        assert!(fast_inputs>=90*INPUTS_PER_TICK&&input_window_max>30,"native input must actually outpace callback budget: {fast_inputs} fast gaps, {input_window_max} inputs/second");
         assert!(samples.len()>=15&&samples.len()<=31,"bounded continuous native fast-ack sample count: {}",samples.len());
         assert!(samples.iter().any(|s|s.2=="0.0")&&samples.iter().any(|s|s.2=="0.1"));
         let mut min_virtual=std::time::Duration::MAX;let mut min_wall=min_virtual;
@@ -250,10 +332,22 @@ fn pacing_probe(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
             assert!(w>=std::time::Duration::from_millis(33),"actual enqueue gap {w:?}; 1ms observation tolerance");
         }
         for sample in samples {assert!(samples.iter().filter(|s|s.1>=sample.1&&s.1<sample.1+std::time::Duration::from_secs(1)).count()<=30);}
+        assert!(callback_rate_valid(samples), "shared callback-rate oracle");
+        assert!(latest_was_valid, "shared latest/thumb oracle");
         assert!(p.slider_wake.is_none()&&p.slider_flow.queued.is_none()&&p.slider_flow.flight.is_none());
-        println!("{}",json!({"width":width,"mode":mode.name(),"continuous_native_pointer":true,"cross_slider_fast_ack":true,"enqueue_count":samples.len(),"pointer_input_count":input_times.len(),"fast_input_gaps_under25ms":fast_inputs,"max_inputs_in_one_actual_second":input_window_max,"virtual_gap_min_ms":min_virtual.as_secs_f64()*1000.,"wall_gap_min_ms":min_wall.as_secs_f64()*1000.,"clock":"conservative wall-paced TestDispatcher","wall_tolerance_ms":1,"faux_reader_only":true}));
+        println!("{}",json!({"width":width,"mode":mode.name(),"continuous_native_pointer":true,"cross_slider_fast_ack":true,"enqueue_count":samples.len(),"pointer_input_count":input_times.len(),"inputs_per_native_update":INPUTS_PER_TICK,"fast_input_gaps_under25ms":fast_inputs,"max_inputs_in_one_actual_second":input_window_max,"virtual_gap_min_ms":min_virtual.as_secs_f64()*1000.,"wall_gap_min_ms":min_wall.as_secs_f64()*1000.,"clock":"conservative wall-paced TestDispatcher","wall_tolerance_ms":1,"faux_reader_only":true}));
     });
-    cx.update(|cx| pane.update(cx, |p, _| p.close()));
+    cx.update(|cx| {
+        pane.update(cx, |p, _| {
+            p.close();
+            assert!(
+                p.slider_wake.is_none()
+                    && p.slider_flow.queued.is_none()
+                    && p.slider_flow.flight.is_none(),
+                "normal and negative-control fixtures must both clean up"
+            );
+        });
+    });
     cx.update_window(handle, |_, window, _| window.remove_window())
         .unwrap();
     cx.run_until_parked();
@@ -596,7 +690,11 @@ pub fn run_slider_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(handle, |_, window, _| window.remove_window())
                 .unwrap();
             cx.run_until_parked();
-            pacing_probe(cx, width, mode);
+            pacing_probe(cx, width, mode, None);
         }
+    }
+    cx.update(|cx| Theme::change(ThemeMode::Light, None, cx));
+    for fault in [PacingFault::Unpaced, PacingFault::OldestQueued] {
+        pacing_probe(cx, 680., ThemeMode::Light, Some(fault));
     }
 }

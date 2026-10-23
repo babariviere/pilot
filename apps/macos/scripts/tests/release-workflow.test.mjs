@@ -57,7 +57,13 @@ test("CI is split into PR, main and release entry points sharing one test workfl
 	assert.match(main, /^on:\n  push:\n    branches: \[main\]\n\n/m);
 	assert.match(release, /^on:\n  push:\n    branches: \[main\]\n  workflow_dispatch:\n/m);
 	assert.doesNotMatch(release, /pull_request/);
-	assert.match(tests, /^on:\n  workflow_call:\n\n/m);
+	assert.match(tests, /^on:\n  workflow_call:\n/m);
+	const sharedTrigger = tests.split("on:\n")[1].split("\npermissions:")[0];
+	assert.doesNotMatch(sharedTrigger, /^  (push|pull_request|workflow_dispatch):/m);
+	assert.match(
+		sharedTrigger,
+		/    inputs:\n      desktop-release-build:\n        description: [^\n]+\n        type: boolean\n        required: false\n        default: false/,
+	);
 	assert.match(jobOf(pr)("tests"), /uses: \.\/\.github\/workflows\/tests\.yaml/);
 	assert.match(jobOf(main)("tests"), /uses: \.\/\.github\/workflows\/tests\.yaml/);
 	// The package is validated in PRs; main and release builds never use it as a gate.
@@ -178,7 +184,10 @@ test("Swift test and release build jobs cache only pinned dependencies with tool
 
 test("PRs skip Swift only when the app is untouched, and smoke-test the test build", () => {
 	const macos = jobOf(read("tests.yaml"))("macos");
-	assert.equal(read("tests.yaml").match(/runs-on: macos-15/g).length, 1);
+	// Independent Rust native/opt-in artifact lanes also need Mac runners.
+	// Preserve one Swift gate, not an obsolete one-Mac-job total.
+	assert.match(macos, /runs-on: macos-15/);
+	assert.equal(read("tests.yaml").match(/run: apps\/macos\/scripts\/test\.sh/g).length, 1);
 	assert.match(macos, /fetch-depth: 2/);
 	const block = runBlock(macos, "          swift=true");
 	const prefix = 'git() { test "$*" = "diff --name-only HEAD^1 HEAD" && test "$GIT_OK" = 1 && printf "%s" "$FILES"; }';
@@ -216,6 +225,33 @@ test("PRs skip Swift only when the app is untouched, and smoke-test the test bui
 	assert.match(script, /Release bundles always compile from source/);
 	const guard = script.indexOf('if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]');
 	assert.ok(guard >= 0 && guard < script.indexOf("swift build --package-path"));
+});
+
+test("Rust test, native and opt-in artifact jobs preserve platform and release boundaries", () => {
+	const workflow = read("tests.yaml");
+	const job = jobOf(workflow);
+	const portable = job("rust");
+	const native = job("rust-macos-native");
+	const artifact = job("rust-macos-release");
+	for (const lane of [portable, native, artifact]) {
+		assert.doesNotMatch(lane, /^    needs:/m);
+	}
+	assert.match(portable, /runs-on: ubuntu-24\.04/);
+	assert.match(portable, /ci\.sh check/);
+	assert.doesNotMatch(portable, /ci\.sh (build|artifact|native|mac-tests)|upload-artifact/);
+	assert.match(native, /runs-on: macos-15/);
+	assert.match(native, /ci\.sh mac-tests/);
+	assert.match(native, /ci\.sh native/);
+	assert.doesNotMatch(native, /ci\.sh (check|build|artifact)/);
+	assert.equal(condition(artifact), "inputs.desktop-release-build");
+	assert.match(artifact, /runs-on: macos-15/);
+	assert.match(artifact, /ci\.sh build/);
+	assert.match(artifact, /ci\.sh artifact/);
+	assert.match(artifact, /name: desktop-rust-unsigned-aarch64-apple-darwin-/);
+	assert.doesNotMatch(artifact, /secrets\.|contents: write|gh release|scripts\/publish/);
+	for (const caller of ["pr.yaml", "main.yaml"]) {
+		assert.doesNotMatch(read(caller), /desktop-release-build:/, caller);
+	}
 });
 
 test("SwiftLint is a strict standalone macOS check even when Swift compilation is skipped", () => {

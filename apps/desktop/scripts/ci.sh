@@ -7,16 +7,53 @@ export RUSTUP_HOME="$root/.tools/rustup" RUSTUP_TOOLCHAIN=1.98.1
 export PATH="$root/.tools/bin:$HOME/.cargo/bin:$PATH"
 export MACOSX_DEPLOYMENT_TARGET=15.0
 
-host() {
+macos_host() {
   [[ "$(uname -s):$(uname -m)" == Darwin:arm64 ]] || {
     echo 'Desktop Rust CI requires macOS Apple Silicon; no Intel/Linux claim.' >&2; exit 1;
   }
-  [[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]]
+  # Apple's Bash 3.2 does not apply errexit to bare [[ ... ]] commands.
+  [[ "$(sw_vers -productVersion | cut -d. -f1)" -ge 15 ]] || {
+    echo 'Desktop Rust CI requires macOS 15 or newer.' >&2; exit 1;
+  }
   xcrun --show-sdk-version
+}
+host() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64) echo 'Rust test target: x86_64-unknown-linux-gnu (not a desktop release)' ;;
+    Darwin:arm64) macos_host ;;
+    *) echo 'Unsupported Rust CI host: Ubuntu x86_64 or macOS arm64 required.' >&2; exit 1 ;;
+  esac
 }
 cargo() { bash scripts/cargo.sh "$@"; }
 
 case "${1:-}" in
+  changed)
+    # PR merge first parent is its base. Main/unknown diffs fail open to checks.
+    python3 - <<'PY'
+import fnmatch, os, subprocess
+def is_input(path):
+    if path.startswith('apps/desktop/evidence/'):
+        return False
+    roots = ('apps/desktop/', 'apps/macos/Sources/PilotVisualEngine/',
+             'packages/artifacts/src/visual/', 'packages/protocol/fixtures/visual/', '.cargo/')
+    workflows = {'.github/workflows/tests.yaml', '.github/workflows/pr.yaml',
+                 '.github/workflows/main.yaml', '.github/workflows/desktop-rust.yml'}
+    return (path.startswith(roots) or path in workflows or
+            ('/' not in path and (fnmatch.fnmatchcase(path, 'Cargo.*') or
+                                  fnmatch.fnmatchcase(path, 'rust-toolchain*'))))
+changed = True
+if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request':
+    try:
+        files = subprocess.check_output(['git', 'diff', '--name-only', '-z', 'HEAD^1', 'HEAD'])
+        changed = any(is_input(p) for p in os.fsdecode(files).split('\0') if p)
+    except subprocess.CalledProcessError:
+        pass
+value = str(changed).lower()
+print(f'Rust checks: {value}')
+with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+    output.write(f'rust={value}\n')
+PY
+    ;;
   host) host ;;
   bootstrap)
     host
@@ -28,26 +65,30 @@ case "${1:-}" in
   check)
     host
     cargo fmt --all -- --check
-    # The library's runtime/confinement tests need the real sibling helper.
-    cargo build --locked -p pilot-visual-worker
+    # Build the real production app/helper, not a copied portable-core fixture.
+    cargo build --locked --workspace --bins
     cargo clippy --locked --workspace --all-targets --features native-probes -- -D warnings
     cargo test --locked -p pilot-visual-worker --bin pilot-visual-worker -- --test-threads=1
     cargo test --locked -p pilot-desktop --lib -- --test-threads=1
+    # Auto-discovered path-import integration harness, not part of --lib.
+    cargo test --locked -p pilot-desktop --test settings_state -- --test-threads=1
     python3 -m unittest discover -s scripts -p 'test_*.py' -v
     ;;
   build)
-    host
+    macos_host
     # No test-support/native-probes feature in these normal optimized binaries.
     cargo build --locked --release --workspace --bins
     ;;
   artifact)
-    host
+    macos_host
     : "${DESKTOP_CI_OUTPUT:?Set a fresh output directory outside the checkout}"
     # Refuse stale contents, including artifacts from a failed previous build.
     mkdir "$DESKTOP_CI_OUTPUT"
     for binary in pilot-desktop pilot-visual-worker; do
       source="target/dev/release/$binary"
-      [[ "$(lipo -archs "$source")" == arm64 ]]
+      [[ "$(lipo -archs "$source")" == arm64 ]] || {
+        echo "Refusing non-arm64 CI artifact: $binary" >&2; exit 1;
+      }
       install -m 755 "$source" "$DESKTOP_CI_OUTPUT/$binary"
     done
     python3 - "$DESKTOP_CI_OUTPUT" <<'PY'
@@ -84,14 +125,38 @@ manifest = {
 print(json.dumps(manifest, indent=2))
 PY
     ;;
+  mac-tests)
+    macos_host
+    cargo build --locked -p pilot-visual-worker
+    mkdir -p target
+    # These existing tests are #[cfg(target_os = "macos")]. Never rerun the
+    # portable library suite here or silently succeed with a zero-test filter.
+    tests=(
+      visual_runtime::tests::shared_draw_errors_match_without_relaxing_the_production_budget
+      visual_runtime::tests::native_canvas_packets_match_shared_commands_ops_and_strings
+      visual_runtime::tests::shared_api_one_view_event_and_state_corpus_matches_the_native_worker
+      visual_runtime::tests::real_sandbox_load_event_and_oom_null_discard
+      visual_runtime::tests::stopped_owned_worker_hits_parent_hard_deadline_and_is_killed_reaped
+      visual_session::tests::failed_handler_state_is_not_committed_and_retry_has_a_fresh_vm
+      visual_session::tests::draw_interrupt_or_null_error_discards_vm_and_keeps_committed_state
+      artifact_worker::tests::explicit_scoped_read_and_event_use_only_faux_gets_and_close_reaps
+    )
+    cargo test --locked -p pilot-desktop --lib -- --list > target/ci-macos-tests.txt
+    for test in "${tests[@]}"; do
+      grep -Fqx "$test: test" target/ci-macos-tests.txt || {
+        echo "Missing required macOS test: $test" >&2; exit 1;
+      }
+      cargo test --locked -p pilot-desktop --lib "$test" -- --exact --test-threads=1
+    done
+    ;;
   native)
-    host
+    macos_host
     mkdir -p target
     status="$root/target/ci-native-status.txt"
     echo 'Native capability/probes started; no success recorded.' > "$status"
     trap 'code=$?; if [[ $code -ne 0 ]]; then echo "FAILED (exit $code), not skipped/passed" >> "$status"; fi' EXIT
     # Compile every ordinary probe even on hosts without a Metal device.
-    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench)
+    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench catalog)
     args=()
     for test in "${tests[@]}"; do args+=(--test "$test"); done
     cargo test --locked --features native-probes --no-run "${args[@]}"
@@ -124,5 +189,5 @@ OBJC
       { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
     fi
     ;;
-  *) echo 'Usage: ci.sh {host|bootstrap|check|build|artifact|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|build|artifact|mac-tests|native}' >&2; exit 2 ;;
 esac
