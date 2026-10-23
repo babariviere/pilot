@@ -1,0 +1,18 @@
+[package]
+name = "pilot-desktop-updater"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately independent until the desktop owner registers the path dependency.
+[workspace]
+
+[features]
+default = []
+native-macos = []
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0
