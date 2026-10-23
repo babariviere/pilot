@@ -31,6 +31,126 @@ fn save(store: &mut Store, key: &str, draft: Draft) {
         .unwrap();
 }
 
+fn mission_request(source: &str) -> crate::mission_conversion::Request {
+    crate::mission_conversion::Request {
+        project_id: "project-exact".into(),
+        from_session_id: source.into(),
+        title: "Existing conversation".into(),
+        goal: "A bounded goal".into(),
+        coordinator: false,
+        draft: false,
+    }
+}
+
+#[test]
+fn mission_attempt_is_durable_one_shot_without_changing_chat_drafts() {
+    use crate::mission_conversion::Outcome;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "chat:source", draft(3, "私の下書き"));
+    let original = store.book.drafts.clone();
+    store
+        .prepare_mission("attempt-one", mission_request("source"))
+        .unwrap();
+    assert!(
+        store
+            .prepare_mission("attempt-one", mission_request("source"))
+            .is_err()
+    );
+    assert!(
+        store
+            .prepare_mission("attempt-two", mission_request("source"))
+            .is_err()
+    );
+    assert!(store.book.drafts == original);
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.missions["source"].outcome == Outcome::Unknown);
+    assert!(
+        store
+            .prepare_mission("attempt-three", mission_request("source"))
+            .is_err()
+    );
+    assert!(store.book.drafts == original);
+    assert!(
+        store
+            .finish_mission("source", "wrong-attempt", Outcome::Rejected)
+            .is_err()
+    );
+    store
+        .finish_mission(
+            "source",
+            "attempt-one",
+            Outcome::Created {
+                mission_id: "mission-exact".into(),
+            },
+        )
+        .unwrap();
+    assert!(
+        store
+            .finish_mission("source", "attempt-one", Outcome::Rejected)
+            .is_err()
+    );
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(
+        store.book.missions["source"].outcome
+            == Outcome::Created {
+                mission_id: "mission-exact".into()
+            }
+    );
+    assert!(store.book.drafts == original);
+}
+
+#[test]
+fn mission_refusal_allows_only_a_new_explicit_attempt_and_validates_payload() {
+    use crate::mission_conversion::Outcome;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let empty = serde_json::to_value(&store.book).unwrap();
+    assert!(empty.get("missions").is_none()); // Legacy files need no migration.
+    store
+        .prepare_mission("first", mission_request("source"))
+        .unwrap();
+    store
+        .finish_mission("source", "first", Outcome::Rejected)
+        .unwrap();
+    assert!(
+        store
+            .prepare_mission("first", mission_request("source"))
+            .is_err()
+    );
+    store
+        .prepare_mission("explicit-new", mission_request("source"))
+        .unwrap();
+    let payload = serde_json::to_value(mission_request("source")).unwrap();
+    assert_eq!(payload["projectId"], "project-exact");
+    assert_eq!(payload["fromSessionId"], "source");
+    assert_eq!(payload["coordinator"], false);
+    assert_eq!(payload["draft"], false);
+    assert!(payload.get("startCoordinator").is_none() && payload.get("cwd").is_none());
+    let mut invalid = mission_request("other");
+    invalid.title = "🦀".repeat(101); // 202 UTF-16 units, only 101 scalars.
+    assert!(store.prepare_mission("invalid", invalid).is_err());
+    assert!(!store.book.missions.contains_key("other"));
+}
+
+#[test]
+fn mission_write_failure_cannot_authorize_a_post_or_discard_input() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "chat:source", draft(1, "preserved"));
+    store.fail_write = true;
+    assert!(
+        store
+            .prepare_mission("first", mission_request("source"))
+            .is_err()
+    );
+    assert!(store.book.missions.is_empty());
+    assert_eq!(store.book.drafts["chat:source"].text, "preserved");
+    assert!(store.is_faulted());
+}
+
 #[test]
 fn drafts_and_immutable_intent_survive_restart_without_a_fresh_target() {
     let temp = Temp::new();
@@ -322,4 +442,51 @@ fn private_snapshot_writer_workload() {
         "Synthetic snapshot: {bytes} bytes; 10 atomic updates: {:.3} ms",
         start.elapsed().as_secs_f64() * 1000.
     );
+}
+
+#[test]
+#[ignore = "explicit bounded synthetic snapshot I/O observation, not GUI/performance acceptance"]
+fn mission_ledger_snapshot_cost_observation() {
+    for count in [0, 32] {
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), host()).unwrap();
+        let text = "x".repeat(TEXT_CAP);
+        store
+            .save_edits(
+                (0..DRAFT_CAP)
+                    .map(|i| (format!("chat:synthetic-{i}"), draft(1, &text)))
+                    .collect(),
+            )
+            .unwrap();
+        if count > 0 {
+            store
+                .change(|book| {
+                    for i in 0..count {
+                        let source = format!("mission-source-{i}");
+                        let mut request = mission_request(&source);
+                        request.title = "界".repeat(200);
+                        request.goal = "界".repeat(4_000);
+                        book.missions.insert(
+                            source,
+                            crate::mission_conversion::Attempt {
+                                id: format!("attempt-{i}"),
+                                request,
+                                outcome: crate::mission_conversion::Outcome::Unknown,
+                            },
+                        );
+                    }
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let bytes = fs::metadata(temp.0.join("state-v1.json")).unwrap().len();
+        let start = std::time::Instant::now();
+        for revision in 2..12 {
+            save(&mut store, "chat:synthetic-0", draft(revision, &text));
+        }
+        eprintln!(
+            "Mission ledger synthetic: count={count} snapshot_bytes={bytes} updates=10 elapsed_ms={:.3}",
+            start.elapsed().as_secs_f64() * 1000.
+        );
+    }
 }

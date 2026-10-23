@@ -26,6 +26,9 @@ impl LocalViewer {
         cx.notify();
     }
     pub(super) fn toggle_jump(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.mission_open {
+            return;
+        }
         if let Some(p) = self.jump.clone() {
             if !p.update(cx, |p, cx| p.marked(w, cx)) {
                 self.close_jump(w, cx);

@@ -187,9 +187,10 @@ chmod +x "$1"
         compiled = calls[0][5:]
         executed = [arg for call in calls[1:] for arg in call[4:]]
         self.assertEqual(compiled, executed)
-        self.assertEqual(len(calls), 17)
+        self.assertEqual(len(calls), 18)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "catalog"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "settings"], calls)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission"], calls)
         self.assertIn("PASSED", (self.root / "target/ci-native-status.txt").read_text())
 
     def test_manifest_hashes_both_binaries_and_distinguishes_merge_from_head(self):
@@ -311,6 +312,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(executed, pure)
         self.assertIn("catalog", native)
         self.assertIn("settings", native)
+        self.assertIn("mission", native)
         self.assertIn("settings_state", pure)
         harness = desktop / "tests/settings_state.rs"
         self.assertIn('#[path = "../src/settings_state.rs"]', harness.read_text())

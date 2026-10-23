@@ -9,11 +9,18 @@ mod jump_view;
 mod local_client;
 mod local_model;
 mod local_view;
+mod mission_conversion;
+#[cfg(any(test, feature = "native-probes"))]
+mod mission_fixture;
+mod mission_transport;
+mod mission_view;
 mod model;
 mod navigation;
 mod settings_state;
 mod settings_view;
 mod settings_worker;
+#[cfg(feature = "native-probes")]
+pub use local_view::mission_probe::run_mission_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::settings_probe::run_settings_probe;
 #[cfg(test)]

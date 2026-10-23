@@ -25,7 +25,7 @@ pub struct LocalOptions {
 }
 
 impl LocalOptions {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic(port: u16) -> Self {
         Self {
             port,
@@ -298,7 +298,15 @@ async fn get(
 }
 
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
-    options.verify(&get(client, options, ReadRoute::Hello).await?)
+    hello(client, options).await.map(|_| ())
+}
+pub(crate) async fn hello(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+) -> Result<Value, Failure> {
+    let hello = get(client, options, ReadRoute::Hello).await?;
+    options.verify(&hello)?;
+    Ok(hello)
 }
 pub(crate) async fn artifact(
     options: &LocalOptions,
