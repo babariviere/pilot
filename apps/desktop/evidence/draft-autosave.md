@@ -102,3 +102,43 @@ materializing/building the existing helper resolved all eight without source
 changes. A test-only redundant `drop` was removed after strict Clippy flagged it.
 The existing `block 0.1.6` future-incompatibility notice remains. No native
 renderer executable, complete `check.sh`, visible or Linux suite was run here.
+
+## Shutdown disconnection correction
+
+Review found an own-code error-path regression in the original coalescing
+checkpoint: the biased selector treated a disconnected close channel as another
+explicit Close request. If persistence had failed with unsaved drafts, that
+permanently ready branch could repeatedly attempt a fenced flush and starve
+worker exit.
+
+The close branch now distinguishes a real request from disconnection. When the
+last client disappears, it attempts one best-effort final flush and terminates,
+without publishing a save acknowledgment. Explicit Close still reports a failed
+save, retains unsaved input and stays available for the live client to inspect
+or copy the error. Dropping that client then terminates the worker. Atomic
+reservation/adoption and autosave timing are unchanged.
+
+Deterministic regressions poll the real worker directly, without sleep/timeouts:
+healthy, new write failure, already faulted and corrupt/failed-open stores all
+exit in one poll after all command/wake/close senders drop. They verify healthy
+final persistence/restart, unchanged failed/corrupt bytes and retained unsaved
+mailbox input, with no false flushed status. Separate explicit-close cases
+(write failure and failed-open) publish an error, return Pending without another
+publication while the client lives, then return Ready when senders drop.
+
+This supplement is based on the already published restacked autosave head
+`0211c17a9aa188a1ff970d3855ca5aa7a23ee659`; the worker/store/evidence sources there
+were identical to the original checkpoint. Adopting that live head is not a new
+parent rebase or evidence that the separate navigation-marker bug was fixed.
+No sibling, navigation/editor UI, backend accounting test or timeout changed.
+
+Correction verification: rustfmt/strict all-target app Clippy pass; focused
+**14 courier + 12 store tests** pass; locked helper build and complete library
+regression **136 passed / 2 opt-in workloads ignored** pass, followed by both
+explicit disk workloads passing. Final replay still gives 40 / 10 replacements
+and 168,661,180 / 42,165,296 encoded bytes (75% reduction); synchronous debug
+replay wall was 2,651.911 / 663.432 ms. Ten ordinary changed snapshots took
+663.837 ms, confirming unchanged per-snapshot cost. These remain synthetic I/O
+observations, not GUI latency or a hard autosave wall-time guarantee. Checks ran
+serially in the machine-wide slot through mbx. No full native/visible/Linux suite
+was run, and the separate inherited Node accounting failure was not altered.
