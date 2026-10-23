@@ -125,7 +125,19 @@ export function usageFilters(value: unknown): UsageQueryFilters {
 }
 
 export function usageAnalyticsQuery(value: unknown): UsageAnalyticsQuery {
-	const q = object(value, ["version", "from", "to", "filters", "view", "dimension", "bucketMs", "limit", "after"]);
+	const q = object(value, [
+		"version",
+		"from",
+		"to",
+		"filters",
+		"view",
+		"dimension",
+		"sort",
+		"direction",
+		"bucketMs",
+		"limit",
+		"after",
+	]);
 	requireValue(
 		q.version === 1 &&
 			safeUsageInteger(q.from) &&
@@ -134,6 +146,14 @@ export function usageAnalyticsQuery(value: unknown): UsageAnalyticsQuery {
 			q.to - q.from <= 366 * USAGE_DAY_MS,
 	);
 	requireValue(["summary", "breakdown", "buckets"].includes(q.view as string));
+	requireValue(
+		q.sort === undefined ||
+			(q.view === "breakdown" &&
+				["estimatedUsdMicros", "input", "output", "cacheRead", "requests", "durationMs"].includes(
+					q.sort as string,
+				)),
+	);
+	requireValue(q.direction === undefined || (q.sort !== undefined && ["asc", "desc"].includes(q.direction as string)));
 	requireValue(q.limit === undefined || (safeUsageInteger(q.limit) && q.limit >= 1 && q.limit <= 100));
 	requireValue(q.after === undefined || (typeof q.after === "string" && q.after.length <= 2048));
 	requireValue(

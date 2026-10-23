@@ -171,17 +171,7 @@ struct UsageDashboardPage: View {
             } else if dashboard.trendFailed {
                 InlineProblem("Trend unavailable. Refresh to read Local again.", retry: { refresh(force: true) })
             } else if !dashboard.trend.isEmpty {
-                Chart(dashboard.trend) { point in
-                    if let tokens = point.tokens {
-                        BarMark(x: .value("UTC day", point.date, unit: .day), y: .value("Observed tokens", tokens))
-                            .foregroundStyle(Theme.chart1)
-                            .accessibilityLabel(UsageDashboardPresentation.utc(point.milliseconds))
-                            .accessibilityValue("\(UsageFormatting.tokens(tokens)) observed input and output tokens, partial")
-                    }
-                }
-                .chartXScale(domain: Date(timeIntervalSince1970: window.from / 1000)...Date(timeIntervalSince1970: window.to / 1000))
-                .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
-                .frame(height: 150)
+                UsageTrendChart(points: dashboard.trend, window: window)
             }
             Text("Gaps and missing classes are unknown, not zero. Shown days may be partial; cache is shown separately above.")
                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
@@ -215,6 +205,19 @@ struct UsageDashboardPage: View {
 
     private var breakdowns: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Picker("Sort by", selection: Binding(get: { dashboard.sort }, set: {
+                    dashboard.setSort($0, ascending: dashboard.ascending)
+                })) {
+                    ForEach(UsageDashboardModel.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.fixedSize()
+                Button(dashboard.ascending ? "Lowest first" : "Highest first",
+                       systemImage: dashboard.ascending ? "arrow.up" : "arrow.down") {
+                    dashboard.setSort(dashboard.sort, ascending: !dashboard.ascending)
+                }.background(ControlGeometry(id: "usage-sort-direction"))
+            }.controlSize(.small).padding(.vertical, 10)
+            Text("Sorted across all matching groups · known subtotals · unknown and overflow values last")
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).padding(.bottom, 8)
             ForEach(UsageDashboardModel.dimensions, id: \.self) { dimension in
                 let open = isExpanded(dimension)
                 HairlineDivider()
@@ -261,7 +264,7 @@ struct UsageDashboardPage: View {
             else if dashboard.detailFailed { detailProblem }
             else if let page = dashboard.page {
                 if page.rows.isEmpty { Text("No observed records match this scope.").foregroundStyle(Theme.mutedForeground) }
-                ForEach(page.rows, id: \.self) { row in UsageRequestRow(row: row) }
+                ForEach(page.rows, id: \.self) { row in UsageRequestRow(row: row, names: dashboard.recordNames) }
                 if let next = page.next {
                     Button("Next records") { dashboard.show(.records(kind, after: next)) }
                         .background(ControlGeometry(id: "usage-next-records"))
@@ -329,7 +332,7 @@ struct UsageDashboardPage: View {
     private func title(_ dimension: String) -> String {
         switch dimension {
         case "project": "Projects"
-        case "mission": "Missions · canonical identity"
+        case "mission": "Missions"
         case "chat": "Chats"
         case "physicalModel": "Physical serving models"
         default: "Purposes · includes background work"
@@ -366,7 +369,7 @@ private struct UsageBreakdownRow: View {
     let inspect: (String, UsageQueryFilters) -> Void
     var body: some View {
         if let decoded = UsageDashboardPresentation.group(group.key, dimension: dimension, base: filters ?? .init()) {
-            Button { inspect(displayName.map { $0 + " · " + decoded.label } ?? decoded.label, decoded.filters) } label: {
+            Button { inspect(displayName ?? decoded.label, decoded.filters) } label: {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(displayName ?? decoded.label).font(.pilot(.body)).lineLimit(2)
                     Text("\(UsageDashboardPresentation.number(group.aggregate.metrics["requests"])) requests · \(UsageDashboardPresentation.number(group.aggregate.metrics["estimatedUsdMicros"], currency: true)) · \(group.aggregate.unpriced) unpriced")
@@ -385,6 +388,10 @@ private struct UsageBreakdownRow: View {
 
 private struct UsageRequestRow: View {
     let row: UsageObservation
+    let names: [String: [String: String]]
+    private func name(_ dimension: String) -> String? {
+        UsageDashboardPresentation.attributionKey(row, dimension: dimension).flatMap { names[dimension]?[$0] }
+    }
     var body: some View {
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 6) {
@@ -394,22 +401,63 @@ private struct UsageRequestRow: View {
                 Text("Requests \(UsageFormatting.tokens(row.requests)) · observed attempts \(UsageFormatting.tokens(row.providerAttempts)) · observed retries \(UsageFormatting.tokens(row.retries)) · outcome \(row.outcome ?? "unknown")")
                 Text("Activity \(row.activity ?? "Unknown") · observed duration \(UsageFormatting.tokens(row.durationMs)) ms")
                 Text("Source \(row.sourceId) · operation \(row.operationId) · revision \(UsageFormatting.tokens(row.revision))")
-                Text("Project \(row.attribution?.projectId ?? "Unattributed") · chat \(row.attribution?.chatId ?? "Unattributed")")
+                Text("Project \(name("project") ?? row.attribution?.projectId ?? "Unattributed") · chat \(name("chat") ?? row.attribution?.chatId ?? "Unattributed")")
                 if let mission = row.attribution?.mission {
+                    if let title = name("mission") { Text("Mission \(title)") }
                     Text("Mission \(mission.homeId) / \(mission.lineageId) / \(mission.missionId)")
                 }
+                if let chatId = row.attribution?.chatId { Text("Chat ID \(chatId)") }
+                if let projectId = row.attribution?.projectId { Text("Project ID \(projectId)") }
                 if let virtual = row.virtualModel {
                     Text("Observed virtual selection \(virtual.provider)/\(virtual.model) · revision \(row.virtualRevision ?? "Unknown")")
                 }
             }.font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).textSelection(.enabled).padding(.vertical, 8)
         } label: {
             VStack(alignment: .leading, spacing: 4) {
+                if let chat = name("chat") { Text(chat).lineLimit(2) }
+                let context = [name("project"), name("mission")].compactMap { $0 }.joined(separator: " · ")
+                if !context.isEmpty { Text(context).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2) }
                 Text(row.completedAt.map(UsageDashboardPresentation.utc) ?? "Undated checkpoint · non-additive")
                 Text("\(UsageDashboardPresentation.purpose(row.purpose)) · \(row.physicalModel.map { $0.provider + "/" + $0.model } ?? "Unknown physical model") · \(row.scope) · \(row.coverage)")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             }
         }
         HairlineDivider()
+    }
+}
+
+struct UsageTrendChart: View {
+    let points: [UsageTrendPoint]
+    let window: UsageDashboardWindow
+    var body: some View {
+        Chart(points) { point in
+            if let tokens = point.tokens {
+                // Explicit UTC extents avoid calendar midpoint alignment and partial-day overflow.
+                RectangleMark(xStart: .value("UTC day start", point.date.addingTimeInterval(0.12 * 86_400)),
+                        xEnd: .value("UTC day end", point.date.addingTimeInterval(0.88 * 86_400)),
+                        yStart: .value("Baseline", 0), yEnd: .value("Observed tokens", tokens))
+                    .foregroundStyle(Theme.chart1)
+                    .accessibilityLabel(UsageDashboardPresentation.utc(point.milliseconds))
+                    .accessibilityValue("\(UsageFormatting.tokens(tokens)) observed input and output tokens, partial")
+            }
+        }
+        .chartXScale(domain: UsageDashboardPresentation.chartWindow(window))
+        .chartYScale(domain: .automatic(includesZero: true))
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine()
+                AxisValueLabel { if let tokens = value.as(Double.self) { Text(UsageFormatting.tokens(tokens)) } }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .day, count: max(1, Int(ceil((window.to - window.from) / UsageDashboardPresentation.day / 4))))) {
+                AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+            }
+        }
+        .chartPlotStyle { $0.clipped().background(ControlGeometry(id: "usage-chart-plot")) }
+        .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
+        .frame(height: 180)
+        .background(ControlGeometry(id: "usage-chart"))
     }
 }
 

@@ -115,13 +115,17 @@ public struct UsageAnalyticsQuery: Codable, Equatable, Hashable, Sendable {
     public let filters: UsageQueryFilters?
     public let view: String
     public let dimension: String?
+    public let sort: String?
+    public let direction: String?
     public let bucketMs: Int?
     public let limit: Int?
     public let after: String?
     public init(from: Double, to: Double, filters: UsageQueryFilters? = nil, view: String = "summary",
-                dimension: String? = nil, bucketMs: Int? = nil, limit: Int? = nil, after: String? = nil) {
+                dimension: String? = nil, bucketMs: Int? = nil, limit: Int? = nil, after: String? = nil,
+                sort: String? = nil, direction: String? = nil) {
         version = 1; self.from = from; self.to = to; self.filters = filters; self.view = view
         self.dimension = dimension; self.bucketMs = bucketMs; self.limit = limit; self.after = after
+        self.sort = sort; self.direction = direction
     }
 }
 

@@ -68,6 +68,11 @@ test("versioned GET query/page boundary is read-only, bounded, host-fenced and c
 	const result = (await response.json()) as UsageAnalyticsResult;
 	assert.equal(result.total.records, 0);
 	assert.equal(result.total.metrics.input.value, undefined);
+	const ranked = await fetch(
+		url({ ...query, view: "breakdown", dimension: "chat", sort: "estimatedUsdMicros", direction: "desc" }),
+	);
+	assert.equal(ranked.status, 200);
+	assert.deepEqual(((await ranked.json()) as UsageAnalyticsResult).groups, []);
 	assert.equal((await fetch(url({ kind: "checkpoint", from: query.from, to: query.to }, "page"))).status, 200);
 	assert.equal((await fetch(url(query, "query", "different"))).status, 409);
 	assert.equal((await fetch(url(query), { headers: { origin: "https://external.invalid" } })).status, 403);
@@ -75,6 +80,8 @@ test("versioned GET query/page boundary is read-only, bounded, host-fenced and c
 	for (const invalid of [
 		{ ...query, limit: 101 },
 		{ ...query, version: 2 },
+		{ ...query, sort: "input" },
+		{ ...query, view: "breakdown", dimension: "chat", sort: "title" },
 		{ ...query, filters: { mission: { missionId: "incomplete" } } },
 	])
 		assert.equal((await fetch(url(invalid))).status, 400);
