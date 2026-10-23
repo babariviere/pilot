@@ -142,3 +142,32 @@ replay wall was 2,651.911 / 663.432 ms. Ten ordinary changed snapshots took
 observations, not GUI latency or a hard autosave wall-time guarantee. Checks ran
 serially in the machine-wide slot through mbx. No full native/visible/Linux suite
 was run, and the separate inherited Node accounting failure was not altered.
+
+## Corrected navigation-parent integration
+
+Restacked only the two autosave/close-correction commits onto the published
+canonical-reader correction `e0f434c20676a5ea47289d1c617f7aedec002765` after its
+owner's exact-head handoff. This is a real changed lower-branch integration,
+not a root/BEHIND/CI-driven refresh. Worker/store implementations and focused
+tests are byte-identical to `97e91af5`; no navigation/editor, daemon or sibling
+branch was edited, and no sibling was turned into a linear dependency.
+
+The excluded empty working-copy revision initially stayed on its old parent
+after the explicit two-revision rebase. That first check launcher was cancelled
+and is not verification evidence. The workspace was explicitly moved to the
+rebased owned head `5c22fff34e93a477aefc84cdc94217f307458178` before restarting
+the checks, with an exact-parent assertion in the launcher.
+
+On this corrected-parent tree: rustfmt/strict all-target Clippy and focused
+14 courier + 12 store tests passed; locked helper build and **142 library tests
+passed / 2 opt-in workloads ignored**, followed by both explicit disk workloads
+passing. The complete library run includes the parent's six canonical-reader
+reducer regressions; native rendering/navigation suites were not rerun here.
+The shared machine-wide slot and bounded mbx wrapper serialized checks.
+
+Replay counts/bytes remain 40 / 10 atomic replacements and 168,661,180 /
+42,165,296 encoded bytes (75% reduction). Actual synchronous debug replay wall
+was 3,398.858 / 806.205 ms; ten ordinary changed snapshots took 848.973 ms.
+Host/queue variability does not establish per-save or GUI latency improvement.
+No production persistence code, timer, format or authority change was needed
+for the corrected-parent integration.
