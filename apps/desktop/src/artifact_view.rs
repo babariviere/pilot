@@ -31,6 +31,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
+    time::Instant,
 };
 pub(crate) struct ArtifactPane {
     focus: Option<gpui_kit::FocusHandle>,
@@ -49,6 +50,10 @@ pub(crate) struct ArtifactPane {
     slider_flow: SliderFlow,
     slider_serial: u64,
     slider_synced: Option<(u64, u64, bool)>,
+    slider_wake: Option<(Instant, Task<()>)>,
+    slider_wake_serial: u64,
+    #[cfg(feature = "native-probes")]
+    slider_dispatches: VecDeque<(Instant, Instant, String)>,
 }
 struct SliderBinding {
     serial: u64,
@@ -76,6 +81,10 @@ impl ArtifactPane {
             slider_flow: SliderFlow::default(),
             slider_serial: 0,
             slider_synced: None,
+            slider_wake: None,
+            slider_wake_serial: 0,
+            #[cfg(feature = "native-probes")]
+            slider_dispatches: VecDeque::new(),
         }
     }
     pub(crate) fn preview(
@@ -202,6 +211,7 @@ impl ArtifactPane {
         }
     }
     pub(crate) fn close(&mut self) {
+        self.cancel_slider_wake();
         self.sliders.clear();
         self.slider_flow.clear();
         self.slider_synced = None;
@@ -299,12 +309,10 @@ impl ArtifactPane {
             }
         }
         let healthy = snapshot.live && snapshot.error.is_none();
-        let queued = self.slider_flow.finish(snapshot.version, healthy);
+        self.slider_flow.finish(snapshot.version, healthy);
         self.snapshot = snapshot;
         self.busy = self.slider_flow.flight.is_some();
-        if let Some(intent) = queued {
-            self.send_slider(intent, cx);
-        }
+        self.pump_slider(cx);
         cx.notify();
     }
     fn valid_slider(&self, intent: &SliderIntent) -> bool {
@@ -341,6 +349,7 @@ impl ArtifactPane {
         self.generation += 1;
         self.busy = false;
         self.slider_flow.clear();
+        self.cancel_slider_wake();
         self.sliders.clear();
         self.slider_synced = None;
         self.snapshot.live = false;
@@ -356,6 +365,8 @@ impl ArtifactPane {
     }
     fn send_slider(&mut self, intent: SliderIntent, cx: &mut Context<Self>) {
         if self.busy || !self.valid_slider(&intent) {
+            self.slider_flow.queued = None;
+            self.cancel_slider_wake();
             self.slider_synced = None;
             return;
         }
@@ -367,13 +378,23 @@ impl ArtifactPane {
                 value: json!(intent.value),
             })
         }) {
-            self.slider_flow.sent(intent, version);
+            let now = cx.background_executor().now();
+            #[cfg(feature = "native-probes")]
+            {
+                self.slider_dispatches
+                    .push_back((now, Instant::now(), intent.id.clone()));
+                if self.slider_dispatches.len() > 512 {
+                    self.slider_dispatches.pop_front();
+                }
+            }
+            self.slider_flow.sent(intent, version, now);
             self.busy = true;
         } else {
             self.worker = None;
             self.updates = None;
             self.generation += 1;
             self.slider_flow.clear();
+            self.cancel_slider_wake();
             self.sliders.clear();
             self.slider_synced = None;
             self.snapshot.live = false;
@@ -390,25 +411,75 @@ impl ArtifactPane {
         if !intent.value.is_finite() || !self.valid_slider(&intent) {
             return;
         }
-        if self.slider_flow.flight.is_none()
-            && self
-                .snapshot
-                .scene
-                .as_ref()
-                .and_then(|s| s.sliders.get(&intent.id))
-                .is_some_and(|(_, value)| *value == intent.value)
-        {
-            return;
-        }
-        match self.slider_flow.offer(&intent, self.busy) {
-            SliderOffer::Send => self.send_slider(intent, cx),
-            SliderOffer::Queued => cx.notify(),
+        let canonical = self.snapshot.scene.as_ref().unwrap().sliders[&intent.id].1;
+        let offer = self.slider_flow.offer(
+            &intent,
+            self.busy,
+            canonical,
+            cx.background_executor().now(),
+        );
+        match offer {
+            SliderOffer::Send | SliderOffer::Queued | SliderOffer::Cancelled => {
+                self.slider_synced = None;
+                cx.notify();
+            }
             SliderOffer::Rejected => {
                 self.slider_synced = None;
                 cx.notify();
             }
             SliderOffer::Unchanged => {}
         }
+        self.pump_slider(cx);
+    }
+    fn cancel_slider_wake(&mut self) {
+        self.slider_wake = None;
+        self.slider_wake_serial = self.slider_wake_serial.wrapping_add(1);
+    }
+    fn pump_slider(&mut self, cx: &mut Context<Self>) {
+        if let Some(intent) = self.slider_flow.queued.as_ref()
+            && (!self.valid_slider(intent)
+                || (self.slider_flow.flight.is_none()
+                    && self
+                        .snapshot
+                        .scene
+                        .as_ref()
+                        .is_some_and(|s| s.sliders[&intent.id].1 == intent.value)))
+        {
+            self.slider_flow.queued = None;
+            self.slider_synced = None;
+        }
+        let now = cx.background_executor().now();
+        if !self.busy
+            && let Some(intent) = self.slider_flow.ready(now)
+        {
+            self.send_slider(intent, cx);
+        }
+        let deadline = (!self.busy).then(|| self.slider_flow.deadline()).flatten();
+        if self.slider_wake.as_ref().map(|(due, _)| *due) == deadline {
+            return;
+        }
+        self.cancel_slider_wake();
+        if let Some(deadline) = deadline {
+            let (serial, generation) = (self.slider_wake_serial, self.generation);
+            let delay = deadline.saturating_duration_since(now);
+            self.slider_wake = Some((
+                deadline,
+                cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(delay).await;
+                    let _ = view.update(cx, |view, cx| {
+                        view.slider_due(generation, serial, cx);
+                    });
+                }),
+            ));
+        }
+    }
+    fn slider_due(&mut self, generation: u64, serial: u64, cx: &mut Context<Self>) {
+        if serial != self.slider_wake_serial || generation != self.generation {
+            return;
+        }
+        self.slider_wake = None;
+        self.pump_slider(cx);
+        cx.notify();
     }
     fn sync_sliders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let key = (self.generation, self.snapshot.version, self.snapshot.live);
@@ -544,6 +615,9 @@ impl ArtifactPane {
             .as_ref()
             .is_some_and(|w| w.command(Command::Event { version, id, value }))
         {
+            self.slider_flow.queued = None;
+            self.cancel_slider_wake();
+            self.slider_synced = None;
             self.busy = true;
             cx.notify();
         }
@@ -851,6 +925,7 @@ impl ArtifactPane {
                     value["unit"].as_str().unwrap_or("")
                 )));
                 if let Some(binding) = binding {
+                    let own_pending = self.slider_flow.latest(&id, binding.serial).is_some();
                     let own_flight =
                         self.slider_flow.flight.as_ref().is_some_and(|f| {
                             f.intent.id == id && f.intent.binding == binding.serial
@@ -873,7 +948,7 @@ impl ArtifactPane {
                                     .w_full(),
                             ),
                     );
-                    if own_flight {
+                    if own_pending {
                         row = row.child(
                             div()
                                 .text_xs()
@@ -1325,6 +1400,151 @@ mod tests {
         s.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"slider","id":"0","label":"Load","min":0,"max":100,"step":1,"value":value}})).unwrap()));
         s
     }
+    fn two_slider_snapshot(version: u64, values: [f64; 2]) -> Snapshot {
+        let mut s = slider_snapshot(version, 0.);
+        let children:Vec<_>=values.into_iter().enumerate().map(|(i,value)|json!({"type":"slider","id":format!("0.{i}"),"label":format!("Load {i}"),"min":0,"max":100,"step":1,"value":value})).collect();
+        s.scene = Some(Arc::new(
+            crate::visual_scene::Scene::parse(
+                json!({"api":1,"root":{"type":"column","children":children}}),
+            )
+            .unwrap(),
+        ));
+        s
+    }
+    #[gpui_kit::test]
+    fn continuous_fast_acks_cross_sliders_keep_one_deadline_and_no_burst(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        let (worker, commands) = Worker::synthetic();
+        let window = cx.add_window(|window, cx| {
+            let mut p = ArtifactPane::new();
+            p.reference = Some(reference(1));
+            p.generation = 20;
+            p.worker = Some(worker);
+            p.snapshot = two_slider_snapshot(1, [0., 0.]);
+            p.sync_sliders(window, cx);
+            p
+        });
+        let pane = window.root(cx).unwrap();
+        let mut values = [0., 0.];
+        let mut times = Vec::new();
+        let mut ids = Vec::new();
+        for ms in 0..1000 {
+            pane.update(cx, |p, cx| {
+                let id = format!("0.{}", (ms / 11) % 2);
+                let before = p
+                    .slider_wake
+                    .as_ref()
+                    .map(|(due, _)| (*due, p.slider_wake_serial));
+                p.slide(
+                    SliderIntent {
+                        generation: 20,
+                        binding: p.sliders[&id].serial,
+                        id,
+                        value: f64::from(ms % 99 + 1),
+                    },
+                    cx,
+                );
+                if let (Some(before), Some((due, _))) = (before, &p.slider_wake) {
+                    assert_eq!(
+                        before,
+                        (*due, p.slider_wake_serial),
+                        "overwriting latest must reuse deadline/task"
+                    );
+                }
+            });
+            cx.run_until_parked();
+            if let Ok(command) = commands.try_recv() {
+                let Command::Event { version, id, value } = command else {
+                    panic!("unexpected command")
+                };
+                times.push(cx.executor().now());
+                ids.push(id.clone());
+                assert!(commands.try_recv().is_err());
+                values[usize::from(id == "0.1")] = value.as_f64().unwrap();
+                pane.update(cx, |p, cx| {
+                    p.accept(
+                        20,
+                        &reference(1),
+                        two_slider_snapshot(version + 1, values),
+                        cx,
+                    )
+                });
+                assert!(
+                    commands.try_recv().is_err(),
+                    "even zero-latency acknowledgments cannot burst"
+                );
+            }
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(1));
+            cx.run_until_parked();
+        }
+        assert!(times.len() > 20 && times.len() <= 30);
+        assert!(
+            times
+                .windows(2)
+                .all(|t| t[1] - t[0] >= crate::visual_slider::DRAG_INTERVAL)
+        );
+        assert!(ids.iter().any(|id| id == "0.0") && ids.iter().any(|id| id == "0.1"));
+        pane.update(cx, |p, _| p.close());
+        let _ = commands.try_recv();
+        cx.executor()
+            .advance_clock(crate::visual_slider::DRAG_INTERVAL);
+        cx.run_until_parked();
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[gpui_kit::test]
+    fn pending_slider_deadline_revalidates_removal_binding_and_canonical_state(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        for mode in ["removed", "binding", "canonical", "stepper"] {
+            let (worker, commands) = Worker::synthetic();
+            let window = cx.add_window(|window, cx| {
+                let mut p = ArtifactPane::new();
+                p.reference = Some(reference(1));
+                p.generation = 20;
+                p.worker = Some(worker);
+                p.snapshot = slider_snapshot(1, 0.);
+                p.sync_sliders(window, cx);
+                p
+            });
+            let pane = window.root(cx).unwrap();
+            pane.update(cx,|p,cx|{
+                let make=|value|SliderIntent {generation:20,binding:p.sliders["0"].serial,id:"0".into(),value};
+                let first=make(1.);let queued=make(80.);
+                p.slide(first,cx);let _=commands.try_recv();
+                p.accept(20,&reference(1),slider_snapshot(2,1.),cx);p.slide(queued,cx);
+                assert!(p.slider_wake.is_some());
+                match mode {
+                    "removed"=>{let mut next=slider_snapshot(3,1.);next.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"text","runs":[{"text":"removed"}]}})).unwrap()));p.accept(20,&reference(1),next,cx);},
+                    "binding"=>{p.sliders.get_mut("0").unwrap().serial+=1;},
+                    "canonical"=>p.accept(20,&reference(1),slider_snapshot(3,80.),cx),
+                    "stepper"=>{p.event(20,2,"0".into(),json!(2.),cx);assert!(matches!(commands.try_recv(),Ok(Command::Event{version:2,value,..})if value==json!(2.)));},
+                    _=>unreachable!(),
+                }
+                if mode!="binding" {assert!(p.slider_wake.is_none()&&p.slider_flow.queued.is_none());}
+            });
+            cx.run_until_parked();
+            cx.executor()
+                .advance_clock(crate::visual_slider::DRAG_INTERVAL);
+            cx.run_until_parked();
+            assert!(
+                commands.try_recv().is_err(),
+                "{mode} must not replay pending drag"
+            );
+            pane.update(cx, |p, _| {
+                assert!(p.slider_wake.is_none() && p.slider_flow.queued.is_none());
+                p.close();
+            });
+        }
+    }
     #[gpui_kit::test]
     fn slider_queue_uses_new_ack_version_and_drops_fault_replacement_close(
         cx: &mut TestAppContext,
@@ -1344,28 +1564,102 @@ mod tests {
             p
         });
         let pane = window.root(cx).unwrap();
-        pane.update(cx,|p,cx|{
-            let binding=p.sliders["0"].serial;
-            let intent=|value|SliderIntent{generation:20,binding,id:"0".into(),value};
-            p.slide(intent(0.),cx);assert!(commands.try_recv().is_err(),"programmatic/canonical values do not send");
-            p.slide(intent(1.),cx);for i in 2..=100 {p.slide(intent(f64::from(i)),cx);}
-            assert!(matches!(commands.try_recv(),Ok(Command::Event{version:1,value,..})if value==json!(1.)));assert!(commands.try_recv().is_err());
-            p.accept(20,&reference(1),slider_snapshot(1,0.),cx);assert!(p.busy&&commands.try_recv().is_err(),"same-version update is not an ack");
-            p.accept(19,&reference(1),slider_snapshot(2,1.),cx);assert!(commands.try_recv().is_err());
+        let slide = |p: &mut ArtifactPane, value, cx: &mut Context<ArtifactPane>| {
+            p.slide(
+                SliderIntent {
+                    generation: p.generation,
+                    binding: p.sliders["0"].serial,
+                    id: "0".into(),
+                    value,
+                },
+                cx,
+            );
+        };
+        pane.update(cx, |p, cx| {
+            slide(p,0.,cx); assert!(commands.try_recv().is_err());
+            slide(p,1.,cx); for i in 2..=100 {slide(p,f64::from(i),cx);}
+            assert!(matches!(commands.try_recv(),Ok(Command::Event{version:1,value,..})if value==json!(1.)));
+            p.accept(20,&reference(1),slider_snapshot(1,0.),cx);
+            assert!(p.busy&&commands.try_recv().is_err(),"same-version update is not an ack");
+            p.accept(19,&reference(1),slider_snapshot(2,1.),cx); assert!(commands.try_recv().is_err());
             p.accept(20,&reference(1),slider_snapshot(2,1.),cx);
-            assert!(matches!(commands.try_recv(),Ok(Command::Event{version:2,value,..})if value==json!(100.)));assert!(commands.try_recv().is_err());
-            p.accept(20,&reference(1),slider_snapshot(3,100.),cx);assert!(!p.busy&&p.slider_flow.flight.is_none());
-            p.slide(intent(90.),cx);p.slide(intent(80.),cx);let _=commands.try_recv();
-            let mut failed=slider_snapshot(3,100.);failed.live=false;failed.error=Some(crate::visual_runtime::Fault{kind:"timeout",message:"synthetic failure".into(),line:None,limit:None});
-            p.accept(20,&reference(1),failed,cx);assert!(p.slider_flow.flight.is_none()&&p.slider_flow.queued.is_none());assert!(commands.try_recv().is_err());
-            p.accept(20,&reference(1),slider_snapshot(4,50.),cx);p.slide(intent(60.),cx);p.slide(intent(70.),cx);let _=commands.try_recv();
-            let mut replaced=slider_snapshot(5,60.);let mut root=(*replaced.scene.take().unwrap().root).clone();root["label"]=json!("Different control");replaced.scene=Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":root})).unwrap()));
-            p.accept(20,&reference(1),replaced,cx);assert!(!p.busy&&commands.try_recv().is_err(),"changed semantic descriptor cannot replay pending input");
-            p.accept(20,&reference(1),slider_snapshot(6,20.),cx);p.slide(intent(40.),cx);p.slide(intent(50.),cx);let _=commands.try_recv();
-            p.reader_ended(19,&reference(1),cx);assert!(p.busy);
-            p.reader_ended(20,&reference(1),cx);assert!(!p.busy&&!p.snapshot.live&&p.snapshot.scene.is_some()&&p.snapshot.error.is_some());assert!(p.slider_flow.flight.is_none()&&p.slider_flow.queued.is_none());assert!(commands.try_recv().is_err());
-            p.close();p.slide(intent(70.),cx);assert!(p.sliders.is_empty()&&p.slider_flow.flight.is_none());assert!(commands.try_recv().is_err());
+            assert!(!p.busy&&p.slider_wake.is_some()&&commands.try_recv().is_err(),"fast ack cannot bypass pacing");
+            assert_eq!(p.slider_flow.latest("0",p.sliders["0"].serial),Some(100.));
         });
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(33));
+        cx.run_until_parked();
+        assert!(commands.try_recv().is_err());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(
+            matches!(commands.try_recv(),Ok(Command::Event{version:2,value,..})if value==json!(100.))
+        );
+        pane.update(cx, |p, cx| {
+            p.accept(20, &reference(1), slider_snapshot(3, 100.), cx);
+            slide(p, 90., cx);
+            let cancelled = p.slider_wake_serial;
+            slide(p, 100., cx);
+            assert!(
+                p.slider_wake.is_none() && p.slider_flow.queued.is_none(),
+                "return to canonical cancels deadline"
+            );
+            slide(p, 80., cx);
+            let current = p.slider_wake_serial;
+            p.slider_due(20, cancelled, cx);
+            assert_eq!(
+                p.slider_wake_serial, current,
+                "old wake cannot consume replacement"
+            );
+            assert!(p.slider_wake.is_some());
+            let mut failed = slider_snapshot(3, 100.);
+            failed.live = false;
+            failed.error = Some(crate::visual_runtime::Fault {
+                kind: "timeout",
+                message: "synthetic failure".into(),
+                line: None,
+                limit: None,
+            });
+            p.accept(20, &reference(1), failed, cx);
+            assert!(p.slider_wake.is_none() && p.slider_flow.queued.is_none());
+            p.accept(20, &reference(1), slider_snapshot(4, 50.), cx);
+            slide(p, 60., cx);
+            let mut replaced = slider_snapshot(5, 60.);
+            let mut root = (*replaced.scene.take().unwrap().root).clone();
+            root["label"] = json!("Different control");
+            replaced.scene = Some(Arc::new(
+                crate::visual_scene::Scene::parse(json!({"api":1,"root":root})).unwrap(),
+            ));
+            p.accept(20, &reference(1), replaced, cx);
+            assert!(p.slider_wake.is_none() && p.slider_flow.queued.is_none());
+            p.accept(20, &reference(1), slider_snapshot(6, 20.), cx);
+            slide(p, 40., cx);
+            p.reader_ended(19, &reference(1), cx);
+            assert!(p.slider_flow.queued.is_some());
+            p.reader_ended(20, &reference(1), cx);
+            assert!(
+                !p.busy
+                    && !p.snapshot.live
+                    && p.snapshot.scene.is_some()
+                    && p.snapshot.error.is_some()
+            );
+            assert!(
+                p.slider_wake.is_none()
+                    && p.slider_flow.flight.is_none()
+                    && p.slider_flow.queued.is_none()
+            );
+            p.close();
+            assert!(p.sliders.is_empty());
+        });
+        cx.executor()
+            .advance_clock(crate::visual_slider::DRAG_INTERVAL);
+        cx.run_until_parked();
+        assert!(
+            commands.try_recv().is_err(),
+            "cancelled deadlines cannot dispatch after close"
+        );
     }
     #[gpui_kit::test]
     fn generation_revision_and_typed_event_fences_and_bounded_state_cache(cx: &mut TestAppContext) {
