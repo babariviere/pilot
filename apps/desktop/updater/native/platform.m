@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <sys/acl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 // Worker-only. The caller has authenticated the signed manifest before extraction.
 // No updater networking, install-on-quit observer, app delegate patch or secret access.
@@ -38,15 +40,21 @@ int pnu_swap(int parent, const char *staged, const char *installed) {
 // policy1: strip ACLs ONLY on a just-created private stage, then require no allows.
 // policy2: existing private stage, require no extended allow entries at all.
 bool pnu_acl_policy(const char *path, int policy) {
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (fd < 0) return false;
     if (policy == 1) {
         acl_t empty = acl_init(0);
-        if (!empty) return false;
-        int result = acl_set_file(path, ACL_TYPE_EXTENDED, empty);
+        if (!empty) { close(fd); return false; }
+        int result = acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED);
         acl_free(empty);
-        if (result != 0) return false;
+        if (result != 0) { close(fd); return false; }
     }
-    acl_t acl = acl_get_file(path, ACL_TYPE_EXTENDED);
-    if (!acl) return false; // unsupported/unreadable permissions fail closed
+    acl_t acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED);
+    int acl_error = errno;
+    close(fd);
+    // Darwin reports ENOENT for no extended ACL even on an existing object. The
+    // successfully opened, no-follow descriptor distinguishes that from a missing path.
+    if (!acl) return acl_error == ENOENT;
     if (acl_valid(acl) != 0) { acl_free(acl); return false; }
     acl_entry_t entry;
     int position = ACL_FIRST_ENTRY;
