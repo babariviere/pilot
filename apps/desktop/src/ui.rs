@@ -6,7 +6,10 @@ pub use crate::appearance::{Radius, Space, TextRole};
 use gpui_kit::{
     AnyElement, App, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, SharedString, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, Button, ButtonVariants, Icon, Sizable, StyledExt},
+    component::{
+        ActiveTheme, Icon, Sizable, StyledExt,
+        button::{Button, ButtonVariants},
+    },
     div, px,
 };
 
