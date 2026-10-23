@@ -2399,6 +2399,208 @@ test("Make a mission joins the chat as coordinator and asks it to draft", async 
 	assert.throws(() => f.service.join(other.id, { missionId: detail.mission.id }), /its own project/);
 });
 
+test("conversion rejects already linked sources without changing old work, while explicit move still works", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const original = await f.service.create({
+		projectId: f.project.id,
+		title: "Original",
+		fromSessionId: chat.id,
+		draft: false,
+	});
+	const task = f.store.addTask(original.mission.id, {
+		title: "Owned work",
+		sessionId: chat.id,
+		status: "in_progress",
+	});
+	const before = f.store.detail(original.mission.id);
+	const count = f.store.list().length;
+	await assert.rejects(
+		f.service.create({
+			projectId: f.project.id,
+			title: "Stale conversion",
+			fromSessionId: chat.id,
+			coordinator: true,
+			draft: true,
+		}),
+		/already belongs/,
+	);
+	assert.equal(f.store.list().length, count);
+	assert.deepEqual(f.store.detail(original.mission.id), before);
+	assert.equal(f.store.task(original.mission.id, task.id).sessionId, chat.id);
+	const next = f.store.create({ projectId: f.project.id, title: "Explicit move" });
+	f.service.join(chat.id, { missionId: next.id });
+	assert.equal(f.store.missionOf(chat.id), next.id, "ordinary explicit move is unchanged");
+});
+
+test("conversion is a single atomic admission across concurrent requests and rollback publishes nothing", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const request = {
+		projectId: f.project.id,
+		title: "Same source",
+		fromSessionId: chat.id,
+		coordinator: true,
+		draft: false,
+	};
+	const outcomes = await Promise.allSettled([f.service.create(request), f.service.create(request)]);
+	assert.equal(outcomes.filter((r) => r.status === "fulfilled").length, 1);
+	assert.equal(outcomes.filter((r) => r.status === "rejected").length, 1);
+	assert.equal(f.store.list().length, 1);
+	const other = await f.spawn();
+	const count = f.store.list().length;
+	const changes: string[] = [];
+	const unsubscribe = f.store.onChange((id) => changes.push(id));
+	const join = f.store.join;
+	f.store.join = (id, missionId, actor) => {
+		join.call(f.store, id, missionId, actor);
+		throw new Error("Injected after attach");
+	};
+	try {
+		await assert.rejects(f.service.create({ ...request, fromSessionId: other.id }), /Injected after attach/);
+	} finally {
+		f.store.join = join;
+		unsubscribe();
+	}
+	assert.equal(f.store.list().length, count, "no orphan mission after attachment failure");
+	assert.equal(f.store.missionOf(other.id), undefined);
+	assert.deepEqual(changes, [], "rolled-back changes never reach subscribers");
+});
+
+test("conversion rejects ineligible or delegated sources and validates explicit flags before creating", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const originalGet = f.sessions.get.bind(f.sessions);
+	for (const patch of [
+		{ control: true },
+		{ role: "diagnostics" as const },
+		{ archivedAt: 1 },
+		{ continuedTo: "replacement" },
+	]) {
+		const get = t.mock.method(f.sessions, "get", (id: string) => {
+			const value = originalGet(id);
+			return value && id === chat.id ? { ...value, ...patch } : value;
+		});
+		await assert.rejects(
+			f.service.create({ projectId: f.project.id, title: "Refused", fromSessionId: chat.id, draft: false }),
+		);
+		get.mock.restore();
+		assert.equal(f.store.list().length, 0);
+	}
+	// Session summary also reads the retained grant's mission before admission.
+	f.service["sharing"] = {
+		membership: () => ({ state: "accepted", grant: { task: { mission: { missionId: "synthetic-delegated" } } } }),
+	} as unknown as NonNullable<(typeof f.service)["sharing"]>;
+	await assert.rejects(
+		f.service.create({ projectId: f.project.id, title: "Delegated", fromSessionId: chat.id, draft: false }),
+		/delegated execution/,
+	);
+	f.service["sharing"] = undefined;
+	for (const flags of [{ coordinator: "yes" }, { draft: "yes" }]) {
+		await assert.rejects(
+			f.service.create({ projectId: f.project.id, title: "Invalid", fromSessionId: chat.id, ...flags } as never),
+			/must be a boolean/,
+		);
+	}
+	assert.equal(f.store.list().length, 0);
+	assert.equal(f.store.missionOf(chat.id), undefined);
+});
+
+test("conversion keeps explicit coordinator and drafting choices independent", async (t) => {
+	const f = await fixture(t);
+	for (const coordinator of [false, true])
+		for (const draft of [false, true]) {
+			const chat = await f.spawn();
+			const send = t.mock.method(f.sessions, "send", async () => {});
+			const detail = await f.service.create({
+				projectId: f.project.id,
+				title: "Explicit choices",
+				fromSessionId: chat.id,
+				coordinator,
+				draft,
+			});
+			assert.equal(f.store.missionOf(chat.id), detail.mission.id);
+			assert.equal(detail.mission.coordinatorSessionId, coordinator ? chat.id : undefined);
+			assert.equal(send.mock.callCount(), draft ? 1 : 0);
+			if (draft) assert.equal(send.mock.calls[0]!.arguments[2], "followUp");
+			send.mock.restore();
+		}
+});
+
+test("conversion HTTP advertises guarded admission and rejects a stale second request without mutation", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	try {
+		const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+		const hello = (await fetch(`${base}/hello`).then((response) => response.json())) as {
+			capabilities: { guardedMissionConversion?: boolean };
+		};
+		assert.equal(hello.capabilities.guardedMissionConversion, true);
+		const create = () =>
+			fetch(`${base}/missions`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					projectId: f.project.id,
+					title: "HTTP conversion",
+					fromSessionId: chat.id,
+					coordinator: false,
+					draft: false,
+				}),
+			});
+		const accepted = await create();
+		assert.equal(accepted.status, 201);
+		const detail = (await accepted.json()) as MissionDetail;
+		const before = f.store.detail(detail.mission.id);
+		const refused = await create();
+		assert.equal(refused.status, 409);
+		await refused.arrayBuffer();
+		assert.equal(f.store.list().length, 1);
+		assert.deepEqual(f.store.detail(detail.mission.id), before);
+		assert.deepEqual(
+			f.sessions.list().map((session) => session.id),
+			[chat.id],
+		);
+	} finally {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	}
+});
+
 test("agent calls run against the chat's mission and update its context", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();

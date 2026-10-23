@@ -109,6 +109,8 @@ pub(crate) struct Book {
     next_sequence: u64,
     pub(crate) drafts: BTreeMap<String, Draft>,
     pub(crate) pending: BTreeMap<String, Intent>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) missions: BTreeMap<String, crate::mission_conversion::Attempt>,
 }
 
 pub(crate) fn token(value: &str) -> bool {
@@ -147,7 +149,7 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
 }
 
 impl Book {
-    #[cfg(feature = "native-probes")]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn shell_probe() -> Self {
         Self::fresh(Host {
             host_id: "local".into(),
@@ -163,6 +165,7 @@ impl Book {
             next_sequence: 1,
             drafts: BTreeMap::new(),
             pending: BTreeMap::new(),
+            missions: BTreeMap::new(),
         }
     }
     fn validate(&self, host: &Host) -> Result<(), Failure> {
@@ -181,10 +184,14 @@ impl Book {
             || self.next_sequence > 9_007_199_254_740_990
             || self.drafts.len() > DRAFT_CAP
             || self.pending.len() > 32
+            || self.missions.len() > 32
         {
             return Err(
                 "Private state identity/version/limits differ. Writes are disabled; original state is preserved.",
             );
+        }
+        for (source, attempt) in &self.missions {
+            attempt.validate(source)?;
         }
         for (key, draft) in &self.drafts {
             validate_draft(key, draft)?;
@@ -500,6 +507,57 @@ impl Store {
             let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into()};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
             book.pending.insert(id,intent.clone());Ok(intent)
+        })
+    }
+
+    /// Called on the existing writer worker BEFORE the one non-idempotent POST.
+    /// Returning an existing attempt would incorrectly authorize retransmission.
+    pub(crate) fn prepare_mission(
+        &mut self,
+        id: &str,
+        request: crate::mission_conversion::Request,
+    ) -> Result<crate::mission_conversion::Attempt, Failure> {
+        use crate::mission_conversion::{Attempt, Outcome};
+        let attempt = Attempt {
+            id: id.into(),
+            request,
+            outcome: Outcome::Unknown,
+        };
+        let source = attempt.request.from_session_id.clone();
+        attempt.validate(&source)?;
+        self.change(|book| {
+            if let Some(old) = book.missions.get(&source) {
+                if old.id == attempt.id || old.outcome != Outcome::Rejected {
+                    return Err("This chat already has a mission attempt. Check its outcome; do not resend.");
+                }
+            } else if book.missions.len() >= 32 {
+                return Err("Mission attempt storage is full; nothing was discarded");
+            }
+            book.missions.insert(source, attempt.clone());
+            Ok(attempt)
+        })
+    }
+
+    pub(crate) fn finish_mission(
+        &mut self,
+        source: &str,
+        id: &str,
+        outcome: crate::mission_conversion::Outcome,
+    ) -> Result<(), Failure> {
+        use crate::mission_conversion::Outcome;
+        self.change(|book| {
+            let attempt = book
+                .missions
+                .get_mut(source)
+                .ok_or("Missing mission attempt")?;
+            if attempt.id != id {
+                return Err("Mission attempt identity differs");
+            }
+            if attempt.outcome != Outcome::Unknown && attempt.outcome != outcome {
+                return Err("A settled mission receipt cannot be replaced");
+            }
+            attempt.outcome = outcome;
+            Ok(())
         })
     }
 

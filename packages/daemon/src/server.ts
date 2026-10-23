@@ -688,7 +688,10 @@ export function createDaemonServer(
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!hello) throw new ServiceUnavailable("Daemon handshake is unavailable");
 			res.setHeader("cache-control", "no-store");
-			return json(res, 200, hello);
+			return json(res, 200, {
+				...hello,
+				capabilities: { ...hello.capabilities, guardedMissionConversion: missions ? true : undefined },
+			});
 		}
 		if (parts[1] === "machine" && parts.length === 2) {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");

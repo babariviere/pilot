@@ -21,9 +21,17 @@ pub(crate) struct WriteState {
     pub(crate) flushed: bool,
     pub(crate) handled: BTreeMap<String, u64>,
     pub(crate) notice_key: Option<String>,
+    pub(crate) mission: Option<crate::mission_conversion::Reply>,
+    pub(crate) mission_receipts:
+        Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
 }
 
 pub(crate) enum WriteCommand {
+    Mission {
+        target: crate::mission_conversion::Target,
+        request: u64,
+        action: crate::mission_conversion::Action,
+    },
     Submit {
         key: String,
         draft: Box<Draft>,
@@ -62,6 +70,15 @@ pub(crate) struct Interaction {
     close: async_channel::Sender<()>,
 }
 impl Interaction {
+    /// Withdraw every sender of an owned headless fixture after its window is
+    /// removed. GPUI may retain entities until the whole test context drops.
+    /// Exercise the ordinary disconnect path, never forge a durable Close ack.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn disconnect_fixture(&self) {
+        self.close.close();
+        self.commands.close();
+        self.wake.close();
+    }
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn recording() -> (Self, async_channel::Receiver<WriteCommand>) {
         let (commands, receiver) = async_channel::bounded(8);
@@ -232,6 +249,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
     } = channels;
     let client = reqwest::Client::builder()
         .no_proxy()
+        .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(5))
@@ -277,6 +295,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             _ => None,
         };
         status.notice_key = match &command {
+            Some(WriteCommand::Mission { target, .. }) => {
+                Some(format!("mission:{}", target.source))
+            }
             Some(WriteCommand::Submit { key, .. })
             | Some(WriteCommand::RetireCreated { key, .. })
             | Some(WriteCommand::ClearRecovery { key, .. })
@@ -297,6 +318,41 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 Ok(()) => {
                     status.error = None;
                     match command {
+                        Some(WriteCommand::Mission {
+                            target,
+                            request,
+                            action,
+                        }) => {
+                            use crate::mission_conversion::{Action, Inspection, Receipt, Reply};
+                            let attempt_id = match &action {
+                                Action::Submit { id, .. } => Some(id.clone()),
+                                _ => None,
+                            };
+                            status.mission = Some(Reply {
+                                target: target.clone(),
+                                request,
+                                result: Ok(Inspection::Pending),
+                            });
+                            publish(&updates, &replace, status.clone());
+                            tokio::select! {
+                                result=crate::mission_transport::execute(&client,&options,store,&target,action,|store| {
+                                    status.book=Some(Arc::new(store.book.clone()));
+                                    publish(&updates,&replace,status.clone());
+                                })=>{
+                                    if let (Some(id), Ok(Inspection::Created { mission_id })) = (attempt_id, &result)
+                                        && let Some(attempt) = store.book.missions.get(&target.source)
+                                        && attempt.id == id && attempt.request.project_id == target.project {
+                                        Arc::make_mut(&mut status.mission_receipts).insert(target.source.clone(), Receipt {
+                                            attempt_id: id, project_id: target.project.clone(), mission_id: mission_id.clone(),
+                                        });
+                                    }
+                                    status.mission=Some(Reply {target,request,result});
+                                    if store.is_faulted() {status.error=Some("Private state write failed; preserve unsaved input before restarting.");}
+                                    Ok("")
+                                },
+                                _=close.recv()=>{closing=true;Ok("Closing. Interrupted mission conversion is not retried.")}
+                            }
+                        }
                         Some(WriteCommand::Submit {
                             key,
                             draft,

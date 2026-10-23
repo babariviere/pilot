@@ -13,6 +13,11 @@ mod jump_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
+#[path = "mission_navigation.rs"]
+mod mission_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "mission_probe.rs"]
+pub(crate) mod mission_probe;
 #[cfg(feature = "native-probes")]
 #[path = "motion_probe.rs"]
 pub(crate) mod motion_probe;
@@ -231,6 +236,9 @@ pub struct LocalViewer {
     jump: Option<Entity<crate::jump_view::JumpPalette>>,
     jump_subscription: Option<Subscription>,
     jump_return: Option<gpui_kit::FocusHandle>,
+    mission: Entity<crate::mission_view::MissionForm>,
+    mission_open: bool,
+    mission_return: Option<gpui_kit::FocusHandle>,
     navigation: crate::navigation::History,
     navigation_seeded: bool,
     restoring_navigation: bool,
@@ -272,6 +280,16 @@ pub struct LocalViewer {
 impl LocalViewer {
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
+            KeyBinding::new(
+                "secondary-enter",
+                crate::mission_view::ConfirmMission,
+                Some("MissionConversion"),
+            ),
+            KeyBinding::new(
+                "escape",
+                crate::mission_view::CancelMission,
+                Some("MissionConversion"),
+            ),
             KeyBinding::new("secondary-k", ToggleJump, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
@@ -323,19 +341,7 @@ impl LocalViewer {
                     .await;
             }
         }));
-        view.writes = Some(cx.spawn_in(window, async move |view, cx| {
-            while let Ok(state) = write_updates.recv().await {
-                if view
-                    .update_in(cx, |view, window, cx| {
-                        view.editor
-                            .update(cx, |editor, cx| editor.accept(state, window, cx))
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
+        view.listen_writes(write_updates, window, cx);
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |view, cx| {
@@ -351,6 +357,41 @@ impl LocalViewer {
             .unwrap_or(true)
         });
         view
+    }
+
+    fn listen_writes(
+        &mut self,
+        write_updates: async_channel::Receiver<crate::interaction::WriteState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.writes = Some(cx.spawn_in(window, async move |view, cx| {
+            while let Ok(state) = write_updates.recv().await {
+                if view
+                    .update_in(cx, |view, window, cx| {
+                        let had_attempt = view
+                            .selected
+                            .as_ref()
+                            .is_some_and(|id| view.mission.read(cx).has_attempt(id));
+                        view.mission
+                            .update(cx, |form, cx| form.accept(&state, window, cx));
+                        if had_attempt
+                            != view
+                                .selected
+                                .as_ref()
+                                .is_some_and(|id| view.mission.read(cx).has_attempt(id))
+                        {
+                            cx.notify();
+                        }
+                        view.editor
+                            .update(cx, |editor, cx| editor.accept(state, window, cx))
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
 
     /// Network-free production-view fixture for native rendering/interaction checks.
@@ -724,6 +765,15 @@ impl LocalViewer {
             );
         let transcript = cx.new(|cx| TranscriptView::readonly(window, cx));
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
+        let mission =
+            cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
+        let mission_events = cx.subscribe_in(&mission, window, |view, _, _, window, cx| {
+            view.mission_open = false;
+            if let Some(focus) = view.mission_return.take() {
+                focus.focus(window, cx);
+            }
+            cx.notify();
+        });
         let editor_events =
             cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
@@ -839,6 +889,9 @@ impl LocalViewer {
             jump: None,
             jump_subscription: None,
             jump_return: None,
+            mission,
+            mission_open: false,
+            mission_return: None,
             nav_projects: Arc::new(Vec::new()),
             pending_transcript: None,
             nav_error: None,
@@ -854,6 +907,7 @@ impl LocalViewer {
             },
             _subscriptions: vec![
                 subscription,
+                mission_events,
                 editor_events,
                 artifact_events,
                 history_events,
@@ -1383,6 +1437,11 @@ impl Render for LocalViewer {
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
+                if v.mission_open {
+                    let marked=v.mission.update(cx,|f,cx|f.marked(w,cx));
+                    let key=e.keystroke.key.as_str();let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
+                    if (marked && matches!(key,"enter"|"escape"|"tab")) || (modified && !matches!(key,"c"|"v"|"x"|"a"|"q"|"enter")) {cx.stop_propagation();}
+                }
                 if let Some(palette)=v.jump.clone() {
                     let marked=palette.update(cx,|p,cx|p.marked(w,cx));
                     let key=e.keystroke.key.as_str();
@@ -1394,7 +1453,7 @@ impl Render for LocalViewer {
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
-                if view.jump.is_none() && view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
+                if view.jump.is_none() && !view.mission_open && view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
                     view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
                 }
             }))
@@ -1404,7 +1463,7 @@ impl Render for LocalViewer {
                 if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
-                if view.jump.is_some(){return;}
+                if view.jump.is_some()||view.mission_open{return;}
                 if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
@@ -1413,7 +1472,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
-            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none(){view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
+            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
             .child(self.sidebar(window,cx))
             .child(
                 if matches!(self.page,Page::Inbox(_)) {
@@ -1432,6 +1491,8 @@ impl Render for LocalViewer {
                                 .on_click(cx.listener(|view,_,_,cx|view.earlier(true,cx))))
                             .child(Button::new("latest").ghost().small().icon(AppIcon::Latest.asset()).label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
                                 .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
+                            .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
+                                .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
                                 .on_click(cx.listener(|view,_,_,cx|{view.artifacts_open = !view.artifacts_open;if !view.artifacts_open{view.artifacts.update(cx,|p,_|p.close());}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
@@ -1453,6 +1514,7 @@ impl Render for LocalViewer {
                 }
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
+            .when(self.mission_open,|this|this.child(self.mission_overlay(window,cx)))
     }
 }
 #[cfg(test)]

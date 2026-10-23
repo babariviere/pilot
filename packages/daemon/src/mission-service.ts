@@ -421,20 +421,43 @@ export class MissionService {
 		if (typeof request.projectId !== "string") throw new Error("projectId is required");
 		this.projects.require(request.projectId);
 		const from = request.fromSessionId;
-		if (from !== undefined) {
-			const session = this.session(from);
-			if (session.continuedTo) throw new Conflict("Continue in the replacement chat");
-			if (session.projectId !== request.projectId) throw new Conflict("The chat belongs to another project");
-			if (session.archivedAt !== undefined) throw new Conflict("Restore the archived chat first");
-		}
 		if (request.startCoordinator !== undefined && typeof request.startCoordinator !== "boolean")
 			throw new Error("startCoordinator must be a boolean");
 		if (from !== undefined && request.startCoordinator)
 			throw new Error("startCoordinator cannot be combined with fromSessionId");
-		const mission = this.store.create(request);
 		if (from !== undefined) {
-			this.store.join(from, mission.id);
-			if (request.coordinator !== false) this.store.update(mission.id, { coordinatorSessionId: from });
+			if (request.coordinator !== undefined && typeof request.coordinator !== "boolean")
+				throw new Error("coordinator must be a boolean");
+			if (request.draft !== undefined && typeof request.draft !== "boolean")
+				throw new Error("draft must be a boolean");
+		}
+		const mission =
+			from === undefined
+				? this.store.create(request)
+				: this.store.batchChanges(() => {
+						// Conversion is not an explicit move. Check and attach in one synchronous
+						// transaction; notifications run only after commit, never during admission.
+						const session = this.session(from);
+						if (session.continuedTo) throw new Conflict("Continue in the replacement chat");
+						if (session.projectId !== request.projectId)
+							throw new Conflict("The chat belongs to another project");
+						if (session.archivedAt !== undefined) throw new Conflict("Restore the archived chat first");
+						if (
+							session.control ||
+							session.role !== undefined ||
+							(session.mode !== undefined && session.mode !== "ask" && session.mode !== "build")
+						)
+							throw new Conflict("Only an ordinary Local chat can become a mission");
+						if (this.sharing?.membership(from))
+							throw new Conflict("Release the delegated execution before making a mission");
+						if (this.store.missionOf(from) !== undefined || session.missionId !== undefined)
+							throw new Conflict("The chat already belongs to a mission; conversion cannot move it");
+						const mission = this.store.create(request);
+						this.store.join(from, mission.id);
+						if (request.coordinator !== false) this.store.update(mission.id, { coordinatorSessionId: from });
+						return mission;
+					});
+		if (from !== undefined) {
 			// The mission exists either way; a chat that cannot take input now can still be asked later.
 			if (request.draft !== false)
 				await this.sessions

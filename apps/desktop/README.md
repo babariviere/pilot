@@ -13,7 +13,9 @@ focused checks and explicit platform/performance gaps.
 
 Experimental Rust desktop, kept separate from the production Swift app.
 `pilot-desktop --local` uses the existing loopback API. Its user-driven write
-controls can create chats, send messages and Stop. The default launch remains a
+controls can create chats, send messages, Stop and convert an eligible existing
+chat into a mission with explicit confirmation. Conversion requires the guarded
+Local daemon capability; an older daemon is refused without a mutation. The default launch remains a
 network-free synthetic transcript and memory-only local-echo composer, without
 disk state. No read-status writes, service installation, updater or default switch.
 
@@ -54,7 +56,9 @@ requests. Loopback + Origin rejection and identity pinning are not cryptographic
 authentication. Protocol/full Local identity is checked before every socket and
 history read, including reconnects. An identity/protocol mismatch fences all
 subscriptions. Existing daemon chat-open semantics can refresh PR status and
-perform ordinary internal subscription housekeeping. No backend change is made.
+perform ordinary internal subscription housekeeping. Read transport does not mutate
+mission membership. Existing-chat conversion adds only the narrow atomic admission
+guard described in [chat-to-mission.md](docs/chat-to-mission.md).
 
 The read transport issues only allowlisted hello/history/WS/scoped artifact requests and sends
 no application WS messages. A separate worker supports GET of the selected
@@ -62,6 +66,25 @@ chat, POST /api/operations/receipt, POST /api/operations and the selected chat's
 Stop route. There are no legacy send/create fallbacks, focus, approvals, edits,
 archive or mark-read routes. Retained Control, specialist, archived and continued
 chats are readonly. The daemon remains the permission and execution authority.
+
+### Make an existing chat a mission
+
+In an eligible Local chat, choose **Make a mission…**. Review the title and optional
+goal, coordinator role and draft-message choices, then confirm with the button or
+**Cmd-Return**. Both choices default on, matching Swift. Drafting sends a follow-up
+and may start a reply; creation does not independently acknowledge message delivery.
+The same conversation, private draft and reader remain mounted. The outcome and
+copyable mission ID stay reachable in the sheet.
+
+The separate writer uses only scoped GET of the source/project/mission and the
+existing `POST /api/missions` for this confirmation. Source identity, project and
+Local runtime are rechecked; already-linked and delegated chats cannot silently
+move. A private single-attempt record is durable before transmission. Lost replies,
+non-201 responses and restart never automatically resend it. **Check Local** reports
+current membership, not a durable creation receipt or attribution to an unknown
+request. A full 32-record mission ledger refuses new conversion rather than evicting
+uncertain work. This is not a mission dashboard or permission promotion. See
+[the workflow and qualified checks](docs/chat-to-mission.md).
 
 ### Messages and private drafts
 
