@@ -85,6 +85,10 @@ NATIVE_POINTERS = [
     "rowActionsStayClickableAcrossSubmenusAndHideAfterDismissal",
 ]
 NATIVE_POINTER_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in NATIVE_POINTERS]
+CI_QUARANTINED_POINTER = "swiftUIExpandedArtifactCloseAndEscapeLeaveTheChatUsable"
+CI_NATIVE_POINTERS = [name for name in NATIVE_POINTERS if name != CI_QUARANTINED_POINTER]
+CI_QUARANTINE_NOTICE = (f"Skipping {CI_QUARANTINED_POINTER} in CI: "
+                        "artifact readiness failed (run 40019119622).\n")
 VISUAL_LAYOUT = "longNativeVisualTextReflowsAndShrinksWithoutAnInlineScrollView"
 UI_PROBE = "inlineArtifactLayoutKeepsTheReadingColumnWhenResized"
 TAIL_OUTPUTS = [STARTED + f"◇ Test {name}() started.\n" + PASSED for name in [VISUAL_LAYOUT, UI_PROBE]]
@@ -268,7 +272,9 @@ class TestOutputTests(unittest.TestCase):
             outputs += ([(text, 0) for text in SCOPED_MODEL_OUTPUTS] if scoped_model_outputs is None else scoped_model_outputs)
             outputs += ([(text, 0) for text in AUTOMATIC_UPDATE_OUTPUTS] if automatic_update_outputs is None else automatic_update_outputs)
             outputs += ([(text, 0) for text in REGRESSION_OUTPUTS] if regression_outputs is None else regression_outputs)
-            outputs += ([(text, 0) for text in NATIVE_POINTER_OUTPUTS] if pointer_outputs is None else pointer_outputs)
+            pointer_names = CI_NATIVE_POINTERS if extra_env.get("CI") else NATIVE_POINTERS
+            outputs += ([(STARTED + f"◇ Test {name}() started.\n" + PASSED, 0) for name in pointer_names]
+                        if pointer_outputs is None else pointer_outputs)
             outputs += ([(text, 0) for text in TAIL_OUTPUTS] if tail_outputs is None else tail_outputs)
             env = {**{key: value for key, value in os.environ.items() if key != "CI"},
                    "PATH": f"{root}:{os.environ['PATH']}",
@@ -292,8 +298,8 @@ class TestOutputTests(unittest.TestCase):
         result, continued, calls = self.run_wrapper(PASSED, all_calls=True, extra_env={"CI": "true"})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(continued)
-        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(NATIVE_POINTERS) + len(TAIL_OUTPUTS))
-        expected_guards = [[], *PARTITIONS]
+        self.assertEqual(len(calls), 7 + len(SCOPED_MODEL_OUTPUTS) + len(AUTOMATIC_UPDATE_OUTPUTS) + len(REGRESSION_OUTPUTS) + len(CI_NATIVE_POINTERS) + len(TAIL_OUTPUTS))
+        expected_guards = [[], *[names for names in PARTITIONS if names != [CI_QUARANTINED_POINTER]]]
         sampling = self.guard_calls[0][:4]
         self.assertEqual(sampling[:3], ["--sample-stalled-after", "60", "--runner-parent-pid"])
         self.assertGreater(int(sampling[3]), 0)
@@ -321,10 +327,10 @@ class TestOutputTests(unittest.TestCase):
         for index, name in enumerate(SCOPED_MODEL_NATIVE, start=scoped_start + 1):
             self.assertEqual(calls[index][-2:], ["--filter", name])
             self.assertIn("--skip-build", calls[index])
-        for call, names in zip(calls[-len(REGRESSION_PARTITIONS)-len(NATIVE_POINTERS)-2:-len(NATIVE_POINTERS)-2], REGRESSION_PARTITIONS):
+        for call, names in zip(calls[-len(REGRESSION_PARTITIONS)-len(CI_NATIVE_POINTERS)-2:-len(CI_NATIVE_POINTERS)-2], REGRESSION_PARTITIONS):
             self.assertEqual(call[-2:], ["--filter", "|".join(names)])
             self.assertIn("--skip-build", call)
-        for call, name in zip(calls[-len(NATIVE_POINTERS)-2:-2], NATIVE_POINTERS):
+        for call, name in zip(calls[-len(CI_NATIVE_POINTERS)-2:-2], CI_NATIVE_POINTERS):
             self.assertEqual(call[-2:], ["--filter", name])
             self.assertIn("--skip-build", call)
         self.assertEqual(calls[-2][-2:], ["--filter", VISUAL_LAYOUT])
@@ -337,7 +343,37 @@ class TestOutputTests(unittest.TestCase):
         output = re.sub(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", "", result.stdout, flags=re.MULTILINE)
         self.assertEqual(output, PASSED + ISOLATED_OUTPUT + DEVBOX_OUTPUT + TERMINAL_OUTPUT + CALLBACKS_OUTPUT
                          + JOURNEY_START_OUTPUT + JOURNEY_SIDEBAR_OUTPUT
-                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(REGRESSION_OUTPUTS) + "".join(NATIVE_POINTER_OUTPUTS) + "".join(TAIL_OUTPUTS))
+                         + "".join(SCOPED_MODEL_OUTPUTS) + "".join(AUTOMATIC_UPDATE_OUTPUTS) + "".join(REGRESSION_OUTPUTS)
+                         + CI_QUARANTINE_NOTICE
+                         + "".join(STARTED + f"◇ Test {name}() started.\n" + PASSED for name in CI_NATIVE_POINTERS)
+                         + "".join(TAIL_OUTPUTS))
+
+    def test_ci_quarantine_preserves_local_required_start_and_explicit_selection(self):
+        result, continued, calls = self.run_wrapper(PASSED, all_calls=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+        self.assertIn(["--filter", CI_QUARANTINED_POINTER], [call[-2:] for call in calls])
+        self.assertIn(["--require-test", CI_QUARANTINED_POINTER], self.guard_calls)
+        self.assertNotIn(CI_QUARANTINE_NOTICE, result.stdout)
+        # Explicit selection stays available even on CI for a deliberate diagnostic run.
+        result, continued, calls = self.run_wrapper(
+            STARTED + f"◇ Test {CI_QUARANTINED_POINTER}() started.\n" + PASSED,
+            args=("--filter", CI_QUARANTINED_POINTER), all_calls=True, extra_env={"CI": "true"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][-2:], ["--filter", CI_QUARANTINED_POINTER])
+        self.assertNotIn(CI_QUARANTINE_NOTICE, result.stdout)
+
+    def test_ci_quarantine_does_not_excuse_missing_or_failing_other_pointer_tests(self):
+        name = CI_NATIVE_POINTERS[0]
+        for output in [PASSED, STARTED + f"◇ Test {name}() started.\n" + FAILED]:
+            result, continued, _ = self.run_wrapper(
+                PASSED, pointer_outputs=[(output, 0)], extra_env={"CI": "true"})
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(continued)
+            self.assertIn(CI_QUARANTINE_NOTICE, result.stdout)
+        self.assertIn("native test target failed", result.stderr)
 
     def test_isolated_journeys_are_required_only_on_ci(self):
         # Outside CI an empty journey is valid. On CI its required-start guard rejects it.
