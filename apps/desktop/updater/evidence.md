@@ -1,24 +1,31 @@
-# Updater checkpoint evidence
+# App-owned updater evidence
 
-Scope: only new `apps/desktop/updater/` files, based on published
-`5bd2498d2cd71fc3b4f864620c31deff2576c2a3`. Shared desktop/Settings/CI/packaging
-seams remain untouched. This checkpoint is not integration or updater acceptance.
+Initial source checkpoint was based on exact published
+`5bd2498d2cd71fc3b4f864620c31deff2576c2a3`; only new updater-subtree paths are owned.
+The user subsequently explicitly requested an app-owned updater. The earlier native
+Sparkle probe was replaced, not layered alongside a second production updater.
 
-## Verification record
+App-owned signed manifest/transport/bounded ZIP staging, Security validation, native
+atomic swap, explicit COMMIT+OS parent-exit helper and typed scheduler/worker are now
+implemented. No gpui-updater/Sparkle dependency, custom cryptographic primitive or
+shared UI/manifest/Settings/CI/packaging seam is adopted here.
 
-Focused Rust and linked Objective-C synthetic checks are pending resource admission.
-Formatting and `bash -n tests/native.sh` have passed; no compile/test pass is claimed yet.
-Final results will identify exact frozen source and command logs.
+## Verification
 
-## Explicit gaps
+Compilation/tests are pending focused resource admission. Formatting and offline
+dependency resolution have run; Cargo.lock pins the standalone dependency graph.
+No compile/test pass is claimed yet. Final record will include frozen source and logs.
 
-- No real feed, token, Keychain, network release, production bundle/daemon mutation,
-  install, restart, signing operation, Swift build/test or Linux gate was exercised.
-- Native implementation is probe-only, using genuine public Sparkle APIs, not a
-  mocked native updater. `Available` remains unverified metadata.
-- Synthetic install/restart/failure transitions cover the Rust safety protocol only.
-  Cryptographic archive verification, signed/wrong-app archives, download/extraction,
-  prepared-helper ordinary quit, crash recovery, durable gating and native install
-  remain unimplemented/unverified, not test passes.
-- Native installation is hard-disabled. See README transport and ordinary-quit
-  blockers, credential/identity contract and packaging/integration prerequisites.
+## Acceptance gaps
+
+- No production credentials/key/feed/release, signing secrets, real installed app or
+  daemon mutation, global install, local Swift test/build or Linux validation.
+- Source is not registered/reachable in GPUI; compiled release identity/key are absent
+  by default. Worker/helper fail closed, not silently using a development feed.
+- No integrated draft/delivery/Settings acknowledgement+admission fence, actual shared
+  daemon stop, GUI clean quit, helper packaging or post-restart durability receipt.
+- Unit tests exercise real maintained cryptographic verification and synthetic transport;
+  TLS network deployment/private-host authentication and an actual N→N+1 GUI launch
+  are not inferred. Native component tests do not establish a production lifecycle.
+- Failed launch retains old/new bundles; no automatic rollback or automatic cleanup
+  promise. See README for recovery-required states and integration contracts.
