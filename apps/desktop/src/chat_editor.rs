@@ -669,15 +669,14 @@ impl Render for ChatEditor {
                     ),
             );
         }
-        // Kit already owns the multiline editor's text padding. A second
-        // padded/outlined card made this look like two large nested boxes.
-        // Keep an opaque matching surface so dither stays behind the text.
+        // Kit owns the editor's text padding. Keep its opaque card on the tray
+        // without adding a second padded wrapper or outline; dither stays behind text.
         let input = div()
             .id("composer-input")
             .w_full()
             .min_w_0()
             .rounded(px(crate::appearance::Radius::CARD))
-            .bg(crate::appearance::tray(cx))
+            .bg(crate::appearance::card(cx))
             .child(
                 Textarea::new(&self.text)
                     .appearance(false)
