@@ -10,9 +10,31 @@ const MAX_MESSAGES: usize = 128;
 pub(crate) const CHUNK_CHARS: usize = 100;
 pub(crate) const TICK_MS: u64 = 250;
 
+/// Session-relative canonical identity. The Local reader/cache supplies owner
+/// and generation qualification. Never derived from a presentation allocation.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ReaderKey {
+    Entry {
+        entry: u64,
+        model: Option<usize>,
+        block: Option<usize>,
+    },
+    Tool(String),
+}
+impl ReaderKey {
+    pub(crate) fn model(entry: u64, model: usize, block: Option<usize>) -> Self {
+        Self::Entry {
+            entry,
+            model: Some(model),
+            block,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Message {
     id: u64,
+    reader: Option<ReaderKey>,
     label: String,
     source: Arc<String>,
     display: Option<Arc<String>>,
@@ -37,6 +59,7 @@ impl Message {
         });
         Self {
             id,
+            reader: None,
             label,
             source: Arc::new(source),
             display,
@@ -48,6 +71,30 @@ impl Message {
     }
     pub(crate) fn id(&self) -> u64 {
         self.id
+    }
+    pub(crate) fn anchored(mut self, key: ReaderKey) -> Self {
+        self.reader = Some(key);
+        self
+    }
+    pub(crate) fn reader_key(&self) -> Option<ReaderKey> {
+        self.reader.clone().or_else(|| {
+            self.work.as_ref().and_then(|work| {
+                work.calls()
+                    .find(|tool| !tool.id.is_empty() && tool.id.len() <= 256)
+                    .map(|tool| ReaderKey::Tool(tool.id.clone()))
+                    .or_else(|| work.readers.first().cloned())
+            })
+        })
+    }
+    pub(crate) fn matches_reader(&self, key: &ReaderKey) -> bool {
+        self.reader.as_ref() == Some(key)
+            || self.work.as_ref().is_some_and(|work| {
+                work.readers.contains(key)
+                    || match key {
+                        ReaderKey::Tool(id) => work.calls().any(|tool| &tool.id == id),
+                        _ => false,
+                    }
+            })
     }
     pub(crate) fn label(&self) -> &str {
         &self.label
@@ -108,6 +155,8 @@ impl Message {
     }
     pub(crate) fn tool_ref(id: u64, call_id: &str) -> Self {
         let mut row = Self::live(id, "assistant".into(), String::new());
+        row.reader =
+            (!call_id.is_empty() && call_id.len() <= 256).then(|| ReaderKey::Tool(call_id.into()));
         row.attach_tools(vec![call_id.into()]);
         row
     }
@@ -116,6 +165,21 @@ impl Message {
         row.work = Some(work);
         row
     }
+}
+
+pub(crate) fn reader_index(messages: &[Message], key: &ReaderKey) -> Option<usize> {
+    let mut found = None;
+    for (ix, _) in messages
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.matches_reader(key))
+    {
+        if found.is_some() {
+            return None;
+        }
+        found = Some(ix);
+    }
+    found
 }
 
 pub(crate) struct Transcript {
@@ -221,6 +285,7 @@ impl Transcript {
         self.next_id += 1;
         self.messages.push(Message {
             id,
+            reader: None,
             label: label.to_string(),
             source: Arc::new(source),
             display: None,
@@ -305,6 +370,7 @@ fn history_message(ix: usize) -> Message {
     };
     Message {
         id: (ix + 1) as u64,
+        reader: None,
         label: "Assistant · history fixture".into(),
         source: Arc::new(source),
         display: None,

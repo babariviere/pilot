@@ -808,7 +808,7 @@ impl LocalViewer {
         self.pending_reader = self.selected.as_ref().and_then(|id| {
             self.reader_marks
                 .get(id)
-                .copied()
+                .cloned()
                 .map(|mark| (generation, id.clone(), mark))
         });
         self.artifacts_open = false;

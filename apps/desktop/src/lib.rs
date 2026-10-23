@@ -7,6 +7,8 @@ mod local_model;
 mod local_view;
 mod model;
 mod navigation;
+#[cfg(test)]
+mod reader_identity_tests;
 mod tool_presentation;
 mod transcript_view;
 mod work_view;

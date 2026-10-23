@@ -298,7 +298,7 @@ impl TranscriptView {
             .messages()
             .get(top.item_ix)
             .map(|m| crate::navigation::ReadingMark {
-                message: m.id(),
+                message: m.reader_key(),
                 offset: f32::from(top.offset_in_item),
                 following: s.is_following_tail(),
             })
@@ -312,12 +312,11 @@ impl TranscriptView {
             self.latest(cx);
             return true;
         }
-        let Some(ix) = self
-            .transcript
-            .messages()
-            .iter()
-            .position(|m| m.id() == mark.message)
-        else {
+        let Some(key) = mark.message else {
+            return false;
+        };
+        // Missing or ambiguous projection identities never choose another row.
+        let Some(ix) = crate::model::reader_index(self.transcript.messages(), &key) else {
             return false;
         };
         let offset = if mark.offset.is_finite() {
