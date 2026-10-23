@@ -147,7 +147,7 @@ pub fn finish_stage(
     })
 }
 
-fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
+pub(crate) fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
     if !target.is_absolute()
         || target
             .file_name()
@@ -167,6 +167,47 @@ fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
         || metadata.mode() & 0o022 != 0
     {
         return Err(Error::Filesystem);
+    }
+    validate_bundle_tree(target)?;
+    Ok(())
+}
+
+fn validate_bundle_tree(root: &Path) -> Result<(), Error> {
+    let mut pending = vec![(root.to_owned(), 0_usize)];
+    let mut count = 0;
+    // SAFETY: current identity query, no side effects.
+    let uid = unsafe { libc::geteuid() };
+    while let Some((path, depth)) = pending.pop() {
+        count += 1;
+        if count > 30_000 || depth > 128 {
+            return Err(Error::Filesystem);
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(|_| Error::Filesystem)?;
+        if metadata.file_type().is_symlink() {
+            if !path
+                .canonicalize()
+                .map_err(|_| Error::Filesystem)?
+                .starts_with(root)
+            {
+                return Err(Error::Filesystem);
+            }
+            continue;
+        }
+        if (!metadata.is_dir() && !metadata.is_file())
+            || (metadata.uid() != uid && metadata.uid() != 0)
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(Error::Filesystem);
+        }
+        acl_policy(&path, 0)?;
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&path).map_err(|_| Error::Filesystem)? {
+                if pending.len() + count >= 30_000 {
+                    return Err(Error::Filesystem);
+                }
+                pending.push((entry.map_err(|_| Error::Filesystem)?.path(), depth + 1));
+            }
+        }
     }
     Ok(())
 }

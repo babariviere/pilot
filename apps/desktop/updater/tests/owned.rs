@@ -1140,6 +1140,32 @@ fn macos_acl_write_grants_are_refused_even_with_safe_posix_mode() {
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 #[test]
+fn nested_installed_file_acl_cannot_race_verified_helper_or_bundle_contents() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    let nested = target.join("Contents/build");
+    helper::run_command(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", "everyone allow write,writeattr,writeextattr"])
+            .arg(&nested),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert!(matches!(
+        installer::new_stage(&target, &trust(), &FakePlatform::default()),
+        Err(Error::Filesystem)
+    ));
+    helper::run_command(
+        std::process::Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(nested),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
 fn newly_created_private_stage_strips_inherited_acl_grants() {
     let temp = Temp::new();
     let target = fixture_target(&temp);
