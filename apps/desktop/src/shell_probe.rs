@@ -18,6 +18,10 @@ fn settle(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle) {
     }
 }
 pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_PROJECT_ROWS_DIR").is_some() {
+        run_project_rows_probe(cx);
+        return;
+    }
     if std::env::var_os("PILOT_NEXT_HOME_CONTEXT_DIR").is_some() {
         run_home_context_probe(cx);
         return;
@@ -142,8 +146,14 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 assert!(window.try_find("home-project-project-a").is_some());
                 assert!(window.try_find("home-project-project-b").is_some());
                 let button = window.find("home-project-project-a").bounds();
-                let label = window.find("overview-project-title-project-a").bounds();
-                let icon = window.find("overview-project-icon-project-a").bounds();
+                let label = window
+                    .within("home-project-project-a")
+                    .find("resource-title")
+                    .bounds();
+                let icon = window
+                    .within("home-project-project-a")
+                    .find("resource-icon")
+                    .bounds();
                 assert!(
                     label.left() >= button.left()
                         && label.right() <= button.right()
@@ -153,8 +163,10 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     icon.left() >= button.left()
                         && f32::from(icon.left() - button.left()) < 12.
                         && icon.size.width == window.rem_size()
-                        && (label.left() - icon.right() - window.rem_size() * 0.5).abs() < px(0.1),
-                    "project icon must lead at the original inset with an exact half-rem label gap"
+                        && (label.left() - icon.right() - px(crate::appearance::Space::CONTROL))
+                            .abs()
+                            < px(0.1),
+                    "project icon must lead at the original inset with the exact shared Control gap"
                 );
                 window.click("home-project-project-a", cx);
             })
@@ -549,7 +561,10 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     assert_eq!(view.read(cx).state.projects.len(), 256);
                     assert_eq!(view.read(cx).state.chats.len(), 1000);
                     assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1001);
-                    let title = window.find("overview-project-title-p000").bounds();
+                    let title = window
+                        .within("home-project-p000")
+                        .find("resource-title")
+                        .bounds();
                     let b = window.find("home-project-p000").bounds();
                     assert!(title.left() >= b.left() && title.right() <= b.right());
                 })
@@ -684,6 +699,130 @@ fn run_home_context_probe(cx: &mut HeadlessAppContext) {
                         .unwrap()
                         .save(dir.join(format!("{}-{}-{phase}.png", width as u32, mode.name())))
                         .unwrap();
+                }
+            }
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+}
+
+// One byte-identical synthetic fixture across project-row label adoption.
+// The selector runs only this capture matrix, not the original full shell test.
+fn run_project_rows_probe(cx: &mut HeadlessAppContext) {
+    let captures =
+        std::path::PathBuf::from(std::env::var_os("PILOT_NEXT_PROJECT_ROWS_DIR").unwrap());
+    std::fs::create_dir_all(&captures).unwrap();
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let projects = Arc::new(crate::local_model::projects(&json!([
+                {"id":"a","name":"Synthetic Atlas 日本語 👩‍💻 e\u{301} with a deliberately long project name to test narrow truncation and retained context","path":"/synthetic/shared"},
+                {"id":"ab","name":"Synthetic Boreal 日本語 👩‍💻 e\u{301} with a deliberately long project name to test narrow truncation and retained context","path":"/synthetic/shared"}
+            ])).unwrap());
+            let chats = Arc::new([
+                json!({"id":"work-ab","title":"Synthetic work","projectId":"ab","cwd":"/synthetic/shared","state":"working"}),
+                json!({"id":"ask-ab","title":"Synthetic question","projectId":"ab","cwd":"/synthetic/shared","state":"idle","outcome":"question","attentionReason":{"kind":"asks","detail":"Choose a synthetic region"}}),
+                json!({"id":"archived-a","title":"Synthetic archived","projectId":"a","cwd":"/synthetic/shared","state":"failed","archivedAt":1}),
+            ].iter().map(|v| crate::local_model::chat(v).unwrap()).collect::<Vec<_>>());
+            assert_eq!(projects[0].path, projects[1].path);
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1000.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut v = LocalViewer::synthetic(w, cx);
+                            v.state.projects = projects.clone();
+                            v.state.projects_loaded = true;
+                            v.state.chats = Arc::default();
+                            v.state.list_loaded = false;
+                            v.rebuild_nav(w, cx);
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            for phase in ["loading", "loaded", "refresh-failed", "empty"] {
+                cx.update_window(h, |_, w, cx| {
+                    v.update(cx, |v, cx| {
+                        v.state.chats = if phase == "loading" || phase == "empty" {
+                            Arc::default()
+                        } else {
+                            chats.clone()
+                        };
+                        v.state.projects = if phase == "empty" {
+                            Arc::default()
+                        } else {
+                            projects.clone()
+                        };
+                        v.state.list_loaded = phase != "loading";
+                        v.state.projects_error =
+                            (phase == "refresh-failed").then_some("Couldn't refresh projects");
+                        v.rebuild_nav(w, cx);
+                        v.show_home(w, cx);
+                    })
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_,w,cx| {
+                    w.draw(cx).clear(cx);
+                    let view = v.read(cx);
+                    assert!(view.client.is_none() && view.writer.is_none());
+                    assert_eq!(view.page,Page::Home);
+                    assert_eq!(view.state.projects.len(),if phase=="empty" {0} else {2});
+                    if phase != "empty" {
+                        for id in ["a", "ab"] {
+                            let row_id = format!("home-project-{id}");
+                            let row = w.find(row_id.clone()).bounds();
+                            let shared = w.within(row_id.clone()).try_find("resource-title").is_some();
+                            let title = if shared {
+                                w.within(row_id.clone()).find("resource-title").bounds()
+                            } else { w.find(format!("overview-project-title-{id}")).bounds() };
+                            let icon = if shared {
+                                w.within(row_id).find("resource-icon").bounds()
+                            } else { w.find(format!("overview-project-icon-{id}")).bounds() };
+                            let gap = if shared { px(crate::appearance::Space::CONTROL) } else { w.rem_size()*0.5 };
+                            assert_eq!(row.size.height,px(crate::appearance::Space::ROW));
+                            assert_eq!(icon.size,size(w.rem_size(),w.rem_size()));
+                            assert!(icon.left()>=row.left() && icon.left()-row.left()<px(12.));
+                            assert!((title.left()-icon.right()-gap).abs()<px(0.1));
+                            assert!(title.right()<=row.right() && row.right()<=px(width));
+                            assert!(row.left()>=w.find("chat-sidebar").bounds().right());
+                            println!("{}",json!({"fixture":"project-rows-v1","width":width,"mode":mode.name(),"phase":phase,"project":id,"shared_resource_parts":shared,"no_transport_or_writer":true}));
+                        }
+                    }
+                }).unwrap();
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(captures.join(format!("{}-{}-{phase}.png", width as u32, mode.name())))
+                    .unwrap();
+                if phase == "loaded" {
+                    cx.update_window(h, |_, w, cx| w.click("home-project-ab", cx))
+                        .unwrap();
+                    settle(cx, h);
+                    cx.update(|cx| {
+                        let view = v.read(cx);
+                        assert_eq!(view.page, Page::Project("ab".into()));
+                        assert_eq!(view.project_scope.as_deref(), Some("ab"));
+                        let list = view.chats.read(cx).delegate();
+                        assert_eq!(
+                            list.filtered.len(),
+                            2,
+                            "exact ID membership, not shared cwd or archived chats"
+                        );
+                        assert!(Arc::ptr_eq(&list.all, &view.state.chats));
+                        assert!(view.client.is_none() && view.writer.is_none());
+                    });
                 }
             }
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();

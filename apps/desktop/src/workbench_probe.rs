@@ -131,7 +131,7 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h, |_, w, cx| {
                 let row = w.find("home-project-a").bounds();
-                let title = w.find("overview-project-title-a").bounds();
+                let title = w.within("home-project-a").find("resource-title").bounds();
                 assert!(title.left() >= row.left() && title.right() <= row.right());
                 if !baseline {
                     assert!(
