@@ -2667,7 +2667,7 @@
 		},
 		{
 			"name": "too many nodes",
-			"source": "({ ui }) => () => ui.column(Array.from({ length: 5001 }, () => ui.rule()))",
+			"source": "({ ui }) => () => ui.column(Array(5000).fill(ui.rule()))",
 			"data": null,
 			"error": "the view has more than 5000 nodes"
 		},
