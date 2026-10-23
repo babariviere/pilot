@@ -177,7 +177,16 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     )
                 })
                 .unwrap();
-            assert!(tray.size.height <= px(88.) && input.size.height <= px(44.));
+            assert_eq!(
+                tray.size.height,
+                px(76.),
+                "contrast must not enlarge the tray"
+            );
+            assert_eq!(
+                input.size.height,
+                px(34.),
+                "contrast must not enlarge the editor"
+            );
             assert_eq!(input.bottom(), controls.top());
             for rect in [input, controls, stop, send] {
                 assert!(
@@ -187,17 +196,37 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 assert!(rect.top() >= tray.top() && rect.bottom() <= tray.bottom());
             }
             assert_eq!(stop.center().y, send.center().y);
+            let (card, tray_color) = cx.update(|cx| {
+                let rgba = |color: gpui_kit::Hsla| {
+                    let color: gpui_kit::Rgba = color.into();
+                    [color.r, color.g, color.b, color.a]
+                        .map(|channel| (channel * 255.).round() as u8)
+                };
+                (
+                    rgba(crate::appearance::card(cx)),
+                    rgba(crate::appearance::tray(cx)),
+                )
+            });
+            let editor_pixel = sample(f32::from(input.left()) + 16., f32::from(input.top()) + 2.);
+            let tray_pixel = sample(
+                f32::from(controls.left()) + 16.,
+                f32::from(controls.top()) + 2.,
+            );
             assert_eq!(
-                sample(f32::from(input.left()) + 16., f32::from(input.top()) + 2.),
-                sample(
-                    f32::from(controls.left()) + 16.,
-                    f32::from(controls.top()) + 2.
-                ),
-                "one continuous surface, not a contrasting nested editor card"
+                editor_pixel, card,
+                "opaque editor must paint semantic card, not tray"
+            );
+            assert_eq!(
+                tray_pixel, tray_color,
+                "controls retain the soft tray surface"
+            );
+            assert_ne!(
+                editor_pixel, tray_pixel,
+                "compact spacing must not flatten editor/tray contrast"
             );
             println!(
                 "{}",
-                json!({"composer_width":width,"mode":mode.name(),"tray_height":f32::from(tray.size.height),"input_height":f32::from(input.size.height),"send_stop_one_row":true,"controls_contained":true,"native_production_root":true})
+                json!({"composer_width":width,"mode":mode.name(),"tray_height":f32::from(tray.size.height),"input_height":f32::from(input.size.height),"editor_rgba":editor_pixel,"tray_rgba":tray_pixel,"send_stop_one_row":true,"controls_contained":true,"native_production_root":true})
             );
             let outside = sample(f32::from(tray.left()) + 0.5, f32::from(tray.top()) + 0.5);
             let top = sample(f32::from(tray.left()) + 24., f32::from(tray.top()) + 2.);
@@ -378,9 +407,31 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     let before = cx.capture_screenshot(handle).unwrap();
                     pulse(cx, handle, 12, 84);
                     let after = cx.capture_screenshot(handle).unwrap();
-                    let tray = cx
-                        .update_window(handle, |_, window, _| window.find("composer-tray").bounds())
+                    let (tray, editor) = cx
+                        .update_window(handle, |_, window, _| {
+                            (
+                                window.find("composer-tray").bounds(),
+                                window.find("composer-input").bounds(),
+                            )
+                        })
                         .unwrap();
+                    // A blank interior strip must stay opaque while the working
+                    // corner changes underneath. Avoid text and rounded edges.
+                    let y = ((f32::from(editor.top()) + 2.) * scale) as u32;
+                    for x in ((f32::from(editor.left()) + 16.) * scale) as u32
+                        ..((f32::from(editor.right()) - 16.) * scale) as u32
+                    {
+                        assert_eq!(
+                            before.get_pixel(x, y).0,
+                            card,
+                            "working dither must not bleed through editor"
+                        );
+                        assert_eq!(
+                            after.get_pixel(x, y).0,
+                            card,
+                            "editor backing must remain opaque after dither ticks"
+                        );
+                    }
                     let mut pixels = 0;
                     for y in (f32::from(tray.top()) * scale) as u32
                         ..(f32::from(tray.bottom()) * scale) as u32
