@@ -1186,6 +1186,18 @@ fn newly_created_private_stage_strips_inherited_acl_grants() {
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn existing_object_without_extended_acl_is_not_a_missing_path() {
+    let temp = Temp::new();
+    installer::acl_policy(&temp.0, 0).unwrap();
+    installer::acl_policy(&temp.0, 2).unwrap();
+    assert_eq!(
+        installer::acl_policy(&temp.0.join("missing"), 0),
+        Err(Error::Filesystem)
+    );
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
 fn signed_bundle(root: &Path, build: &str) -> PathBuf {
     let app = root.join("Pilot Next.app");
     fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
