@@ -203,6 +203,24 @@ struct WorkerChannels {
     replace: async_channel::Receiver<WriteState>,
     close: async_channel::Receiver<()>,
 }
+
+const AUTOSAVE_IDLE: Duration = Duration::from_millis(250);
+const AUTOSAVE_MAX: Duration = Duration::from_secs(1);
+
+/// Only editable draft autosaves may wait. Keep a fixed first-edit ceiling so
+/// continued typing cannot indefinitely postpone persistence. Explicit commands
+/// bypass this schedule; their flush/intent/adoption acknowledgments stay durable.
+#[derive(Default)]
+struct Autosave {
+    first_edit: Option<tokio::time::Instant>,
+    deadline: Option<tokio::time::Instant>,
+}
+impl Autosave {
+    fn edited(&mut self, now: tokio::time::Instant) {
+        let first = *self.first_edit.get_or_insert(now);
+        self.deadline = Some((now + AUTOSAVE_IDLE).min(first + AUTOSAVE_MAX));
+    }
+}
 async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels: WorkerChannels) {
     let WorkerChannels {
         commands,
@@ -225,21 +243,26 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         Err(error) => status.error = Some(*error),
     }
     publish(&updates, &replace, status.clone());
-    let mut dirty = false;
-    let mut deadline: Option<tokio::time::Instant> = None;
+    let mut autosave = Autosave::default();
     let mut closing = false;
     loop {
         let command = tokio::select! {
+            biased;
             _=close.recv()=>{closing=true;Some(WriteCommand::Close)},
             command=commands.recv()=>match command {Ok(command)=>Some(command),Err(_)=>{
                 if let Ok(store)=&mut store {let _=flush(store,&edits);}break;
             }},
-            signal=wake.recv()=>{if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,&edits);}break;}dirty=true;deadline.get_or_insert_with(||tokio::time::Instant::now()+Duration::from_millis(250));None},
-            _=tokio::time::sleep_until(deadline.unwrap_or_else(||tokio::time::Instant::now()+Duration::from_secs(3600))),if dirty=>{dirty=false;deadline=None;None}
+            // An expired ceiling wins over even a continuously ready edit wake.
+            _=tokio::time::sleep_until(autosave.deadline.unwrap_or_else(||tokio::time::Instant::now()+Duration::from_secs(3600))),if autosave.deadline.is_some()=>None,
+            signal=wake.recv()=>{
+                if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,&edits);}break;}
+                autosave.edited(tokio::time::Instant::now());
+                continue;
+            }
         };
-        if command.is_none() && dirty {
-            continue;
-        }
+        // All commands force the existing flush immediately. Do not leave an
+        // obsolete timer armed after their durable save/adoption.
+        autosave = Autosave::default();
         let handled = match &command {
             Some(WriteCommand::Submit { key, request, .. }) => Some((key.clone(), *request)),
             _ => None,

@@ -76,12 +76,16 @@ explicit local acknowledgement before another action.
 Limits: 128 private drafts, 32 pending intents, 32 KiB editable messages, eight
 recovery texts (each up to 4 MiB), 16 MiB snapshot. Saved empty chat records retire
 only after UI adoption; blank new-chat drafts are reused. Snapshot writes are
-atomic, off-UI, coalesced after 250 ms, and forced before user actions/normal exit.
+atomic and off-UI. Draft autosaves debounce for 250 ms idle, with a fixed 1 s
+first-unsaved-edit ceiling during sustained typing. User actions and normal exit
+force a flush without waiting for that timer; intent/adoption acknowledgments
+still follow durable writes. Unchanged transactions do not rewrite the snapshot.
 Corrupt/missing initialized state, wrong identity, unsafe ownership and write
 failures fail closed, not to an empty replacement. The private directory admits
 at most 64 files/64 MiB, with up to one additional 16 MiB atomic-write temporary.
 Large full snapshots still amplify disk I/O; bounds do not establish performance
-parity. See [interaction evidence](evidence/local-interaction.md).
+parity. See [interaction evidence](evidence/local-interaction.md) and the
+[bounded autosave comparison](evidence/draft-autosave.md).
 
 Search the virtualized chat list, optionally include archives, open by click or
 Return. Earlier loads up to 24 entries. Latest resumes following; reading above

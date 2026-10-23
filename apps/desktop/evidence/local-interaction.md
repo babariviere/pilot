@@ -68,7 +68,10 @@ An explicit synthetic 128-draft workload produced a roughly 4.02 MiB snapshot.
 Ten full atomic updates took approximately 0.69 seconds on this host. This runs
 off UI, but is a **write-amplification risk**, not a performance win: sustained
 250 ms updates at that size can rewrite about 16 MiB/s. Large recovery snapshots
-are more expensive. Incremental persistence/performance work remains warranted.
+are more expensive. A later [bounded autosave checkpoint](draft-autosave.md)
+reduces sustained typing writes without changing the atomic snapshot format;
+these original numbers describe the earlier 250 ms fixed batching policy.
+Incremental persistence/performance work remains warranted.
 Streaming alone does not schedule draft saves, and unchanged permission updates
 do not invalidate the composer. Recovery text is not joined/copied during render.
 
