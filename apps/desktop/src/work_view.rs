@@ -97,14 +97,23 @@ fn disclosure(id: SharedString, title: String, open: bool, icon: Option<AppIcon>
                 .gap_1()
                 .items_center()
                 .child(
-                    Icon::new(if open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .small(),
+                    div()
+                        .id("disclosure-leading")
+                        .test_support()
+                        .h_flex()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            Icon::new(if open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .small(),
+                        )
+                        .when_some(icon, |this, icon| this.child(icon.inline())),
                 )
-                .when_some(icon, |this, icon| this.child(icon.inline()))
                 .child(
                     div()
                         .id("disclosure-text")
