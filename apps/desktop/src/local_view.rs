@@ -14,6 +14,9 @@ mod jump_navigation;
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
 #[cfg(feature = "native-probes")]
+#[path = "motion_probe.rs"]
+pub(crate) mod motion_probe;
+#[cfg(feature = "native-probes")]
 #[path = "navigation_probe.rs"]
 pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]

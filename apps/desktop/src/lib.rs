@@ -27,6 +27,8 @@ pub use local_view::inbox_probe::run_inbox_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::jump_probe::run_jump_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::motion_probe::run_motion_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::shell_probe::run_shell_probe;
