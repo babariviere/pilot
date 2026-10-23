@@ -9,6 +9,10 @@ use serde_json::json;
 use std::time::Duration;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_TOOL_PRESENTATION_DIR").is_some() {
+        run_tool_presentation_probe(cx);
+        return;
+    }
     let captures = std::env::var_os("PILOT_NEXT_DISCLOSURE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -225,6 +229,143 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
         cx.run_until_parked();
     }
     run_thinking_probe(cx, captures.as_deref());
+    run_tool_presentation_probe(cx);
+}
+
+// Same immutable synthetic fixture before/after presentation changes. The
+// capture-only selector above avoids repeating the unrelated long anchor matrix.
+// This function constructs the real production LocalViewer; no transport exists.
+fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
+    use gpui_kit::component::{Theme, ThemeMode};
+    let captures =
+        std::env::var_os("PILOT_NEXT_TOOL_PRESENTATION_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let mut model = LiveTranscript::default();
+            let calls = json!([
+                {"type":"toolCall","id":"failed-early","name":"bash","arguments":{"command":"cargo test --test parser"}},
+                {"type":"toolCall","id":"read","name":"read","arguments":{"path":"src/synthetic_parser_with_a_deliberately_long_name.rs","offset":20,"limit":80}},
+                {"type":"toolCall","id":"command","name":"bash","arguments":{"command":"set -euo pipefail\ncd synthetic-workspace\ncargo test --locked --test parser","timeout":30}},
+                {"type":"toolCall","id":"patch","name":"applyPatch","arguments":{"patch":"*** Begin Patch\n*** Update File: src/parser.rs\n@@\n-old_line\n+new_line\n*** End Patch"}},
+                {"type":"toolCall","id":"search","name":"web","arguments":{"action":"search","query":"synthetic 日本語 parser behavior"}},
+                {"type":"toolCall","id":"script","name":"codemode","arguments":{"code":"const result = { note: 'synthetic only' };\nreturn result;"}}
+            ]);
+            model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+            for id in [
+                "failed-early",
+                "read",
+                "command",
+                "patch",
+                "search",
+                "script",
+            ] {
+                model.apply(
+                    &json!({"type":"tool_execution_start","toolCallId":id,"toolName":"tool"}),
+                );
+            }
+            for id in ["read", "patch", "search"] {
+                model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"result":{"content":[{"type":"text","text":"Synthetic completed result."}]}}));
+            }
+            // Match the real event envelope: isError is top-level and the
+            // committed result lives in entry.model, not an ignored result key.
+            model.apply(&json!({"type":"tool_execution_end","toolCallId":"failed-early","isError":true,"entry":{"id":21,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":"failed-early","isError":true,"content":[{"type":"text","text":"Synthetic assertion failed: expected a parser result."}]}]}}));
+            let output = format!(
+                "Synthetic output 日本語 👩‍💻\n{}",
+                "bounded output line\n".repeat(60)
+            );
+            model.apply(&json!({"type":"tool_execution_update","toolCallId":"command","output":{"set":output}}));
+            let rows = model.rows();
+            assert_eq!(
+                rows.last().unwrap().work_data().unwrap().failures,
+                1,
+                "fixture must contain a real failed tool before testing its visibility"
+            );
+            let group = rows.last().unwrap().id();
+            let key = SharedString::from(format!("work-toggle-{group}"));
+            let (handle, view) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                Default::default(),
+                                size(px(width), px(1040.)),
+                            ))),
+                            show: false,
+                            focus: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |window, cx| {
+                            cx.new(|cx| {
+                                let v = LocalViewer::synthetic(window, cx);
+                                v.transcript
+                                    .update(cx, |v, cx| v.replace_readonly(rows, true, cx));
+                                v
+                            })
+                        },
+                    )
+                })
+                .unwrap();
+            cx.run_until_parked();
+            let mut entity = None;
+            for phase in [
+                "live",
+                "collapsed",
+                "expanded",
+                "detail",
+                "stream",
+                "copy",
+                "settled",
+            ] {
+                cx.update_window(handle, |_, window, cx| {
+                    if matches!(phase,"collapsed"|"expanded") { window.click(key.clone(),cx); }
+                    if phase=="detail" { window.click("step-toggle-call:command",cx); }
+                    if phase=="stream" {
+                        model.apply(&json!({"type":"tool_execution_update","toolCallId":"command","output":{"append":"last synthetic line\n"}}));
+                        view.update(cx,|v,cx|v.transcript.update(cx,|v,cx|v.replace_readonly(model.rows(),false,cx)));
+                    }
+                    if phase=="settled" {
+                        for id in ["command","script"] { model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"result":{"content":[{"type":"text","text":"Synthetic completed result."}]}})); }
+                        model.apply(&json!({"type":"run_end"}));
+                        view.update(cx,|v,cx|v.transcript.update(cx,|v,cx|v.replace_readonly(model.rows(),false,cx)));
+                    }
+                }).unwrap();
+                cx.run_until_parked();
+                cx.update_window(handle,|_,window,cx| {
+                    window.draw(cx).clear(cx);
+                    let viewport=window.find("viewport").bounds();
+                    assert!(viewport.right()<=px(width) && viewport.size.width>px(0.));
+                    let (_,_,_,open,current)=view.read(cx).transcript.read(cx).disclosure_probe_state(group,cx);
+                    if let Some(old)=entity { assert_eq!(current,old,"canonical group entity must survive"); } else { entity=Some(current); }
+                    assert_eq!(open,phase!="collapsed");
+                    if matches!(phase,"detail"|"stream"|"copy"|"settled") { assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("command",cx).0); }
+                    if phase=="copy" {
+                        window.click("copy-call:command-Output",cx);
+                        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(),format!("{output}last synthetic line\n"));
+                    }
+                    println!("{}",json!({"tool_fixture":"semantic-work-v2","phase":phase,"width":width,"appearance":mode.name(),"open":open,"synthetic_only":true,"production_root":true}));
+                }).unwrap();
+                cx.run_until_parked();
+                if let Some(dir) = &captures {
+                    cx.capture_screenshot(handle)
+                        .unwrap()
+                        .save(dir.join(format!(
+                            "tools-{}-{}-{phase}.png",
+                            width as u32,
+                            mode.name()
+                        )))
+                        .unwrap();
+                }
+            }
+            cx.update_window(handle, |_, window, _| window.remove_window())
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
 }
 
 fn run_thinking_probe(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {

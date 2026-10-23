@@ -83,12 +83,39 @@ fn step_id(step: &Step) -> String {
         Step::Note { id, .. } => format!("note:{id}"),
     }
 }
-fn disclosure(id: SharedString, title: String, open: bool, icon: Option<AppIcon>) -> Button {
+#[derive(Default)]
+struct Caption {
+    verb: String,
+    subject: String,
+    meta: String,
+    status: String,
+    error: bool,
+    mono: bool,
+}
+fn disclosure(
+    id: SharedString,
+    caption: Caption,
+    open: bool,
+    icon: Option<AppIcon>,
+    cx: &gpui_kit::App,
+) -> Button {
+    let title = [
+        &caption.verb,
+        &caption.subject,
+        &caption.meta,
+        &caption.status,
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .cloned()
+    .collect::<Vec<_>>()
+    .join(" · ");
     Button::new(id)
         .ghost()
         .small()
         .w_full()
         .accessibility_label(title.clone())
+        .tooltip(title)
         .child(
             div()
                 .h_flex()
@@ -120,9 +147,49 @@ fn disclosure(id: SharedString, title: String, open: bool, icon: Option<AppIcon>
                         .test_support()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .child(SharedString::from(title)),
-                ),
+                        .h_flex()
+                        .gap_1()
+                        .items_center()
+                        .child(
+                            crate::ui::text(crate::ui::Text::Label, caption.verb)
+                                .flex_shrink_0()
+                                .max_w(gpui_kit::relative(0.45))
+                                .truncate()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(
+                            crate::ui::text(crate::ui::Text::Body, caption.subject)
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(cx.theme().foreground)
+                                .when(caption.mono, |this| {
+                                    this.font_family(cx.theme().mono_font_family.clone())
+                                }),
+                        ),
+                )
+                // Counts/status are separate nonshrinking slots: truncating a
+                // long target or group summary must never erase a failure.
+                .when(!caption.meta.is_empty(), |this| {
+                    this.child(
+                        crate::ui::text(crate::ui::Text::Label, caption.meta)
+                            .flex_shrink_0()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                })
+                .when(!caption.status.is_empty(), |this| {
+                    this.child(
+                        crate::ui::text(crate::ui::Text::Label, caption.status)
+                            .id("disclosure-status")
+                            .test_support()
+                            .flex_shrink_0()
+                            .text_color(if caption.error {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().muted_foreground
+                            }),
+                    )
+                }),
         )
 }
 impl WorkUi {
@@ -190,6 +257,7 @@ impl WorkUi {
                     let view = cx.new(|_| StepView {
                         step: step.clone(),
                         open: false,
+                        arguments_open: false,
                         bodies: BTreeMap::new(),
                         subscriptions: Vec::new(),
                     });
@@ -219,6 +287,8 @@ impl WorkUi {
                     if view.data != work {
                         let shape = view.data.active != work.active
                             || view.data.failures != work.failures
+                            || view.data.uncertain != work.uncertain
+                            || automatic_preview(&view.data) != automatic_preview(&work)
                             || view.data.steps.len() != work.steps.len();
                         view.data = work;
                         view.children = children;
@@ -264,6 +334,26 @@ impl WorkUi {
         });
     }
 }
+/// Four recent steps plus at most one earlier critical step, in original order.
+/// Nothing is filtered from data or explicit expansion. Prefer a real failure
+/// over an unknown result; never manufacture a separate duplicated tool entity.
+fn automatic_preview(work: &Work) -> Vec<usize> {
+    let start = work.steps.len().saturating_sub(4);
+    let critical = work
+        .steps
+        .iter()
+        .position(|step| matches!(step, Step::Tool(tool) if tool.status == Status::Error))
+        .or_else(|| {
+            work.steps.iter().position(
+                |step| matches!(step, Step::Tool(tool) if tool.status == Status::Interrupted),
+            )
+        });
+    critical
+        .filter(|index| *index < start)
+        .into_iter()
+        .chain(start..work.steps.len())
+        .collect()
+}
 pub(crate) struct WorkView {
     data: Arc<Work>,
     children: Vec<Entity<StepView>>,
@@ -283,27 +373,38 @@ impl Render for WorkView {
         let open = self.open();
         let choice = self.choices.borrow().choice(&self.data);
         let all = choice.is_some_and(|(_, all)| all);
-        let limited = choice.is_none() && !all && self.children.len() > 4;
-        let start = if limited { self.children.len() - 4 } else { 0 };
+        let visible = if choice.is_none() && !all {
+            automatic_preview(&self.data)
+        } else {
+            (0..self.children.len()).collect()
+        };
+        let hidden = self.children.len() - visible.len();
+        let (verb, subject) = self
+            .data
+            .title
+            .split_once(" · ")
+            .unwrap_or((&self.data.title, ""));
+        let status = [
+            (self.data.failures > 0).then(|| format!("{} failed", self.data.failures)),
+            (self.data.uncertain > 0).then(|| format!("{} status unknown", self.data.uncertain)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
         let mut root = div().v_flex().gap_2().w_full().min_w_0().child(
             disclosure(
                 SharedString::from(format!("work-toggle-{}", self.data.id)),
-                format!(
-                    "{}{}{}",
-                    self.data.title,
-                    if self.data.failures > 0 {
-                        format!(" · {} failed", self.data.failures)
-                    } else {
-                        String::new()
-                    },
-                    if self.data.uncertain > 0 {
-                        format!(" · {} status unknown", self.data.uncertain)
-                    } else {
-                        String::new()
-                    }
-                ),
+                Caption {
+                    verb: verb.into(),
+                    subject: subject.into(),
+                    status,
+                    error: self.data.failures > 0,
+                    ..Default::default()
+                },
                 open,
                 None,
+                cx,
             )
             .on_click(cx.listener(|view, _, _, cx| {
                 let open = !view.open();
@@ -320,13 +421,13 @@ impl Render for WorkView {
                 .border_l_1()
                 .border_color(cx.theme().border)
                 .min_w_0();
-            if limited {
+            if hidden > 0 {
                 steps = steps.child(
                     Button::new(("work-earlier", self.data.id))
                         .ghost()
                         .small()
                         .self_start()
-                        .label(format!("Show {start} earlier steps"))
+                        .label(format!("Show {hidden} more steps"))
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.choices.borrow_mut().choose(&view.data, true, true);
                             cx.emit(Change::Disclosure(format!("group:{}", view.data.id)));
@@ -334,8 +435,8 @@ impl Render for WorkView {
                         })),
                 );
             }
-            for view in &self.children[start..] {
-                steps = steps.child(view.clone());
+            for index in visible {
+                steps = steps.child(self.children[index].clone());
             }
             root = root.child(steps);
         }
@@ -347,9 +448,11 @@ struct Body {
     state: Entity<TextViewState>,
     plain: bool,
 }
+
 pub(crate) struct StepView {
     step: Step,
     open: bool,
+    arguments_open: bool,
     bodies: BTreeMap<&'static str, Body>,
     subscriptions: Vec<Subscription>,
 }
@@ -497,15 +600,14 @@ impl StepView {
 impl Render for StepView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = step_id(&self.step);
-        let (title, error, limited) = match &self.step {
+        let (caption, limited) = match &self.step {
             Step::Tool(tool) => (
-                format!(
-                    "{} {}{}{}",
-                    tool.title,
-                    tool.subject,
-                    if tool.additions + tool.deletions > 0 {
+                Caption {
+                    verb: tool.title.clone(),
+                    subject: tool.subject.clone(),
+                    meta: if tool.additions + tool.deletions > 0 {
                         format!(
-                            " · {}+{} −{}",
+                            "{}+{} −{}",
                             if tool.limited { "shown " } else { "" },
                             tool.additions,
                             tool.deletions
@@ -513,13 +615,15 @@ impl Render for StepView {
                     } else {
                         String::new()
                     },
-                    if tool.status != Status::Done {
-                        format!(" · {}", tool.status.label())
-                    } else {
-                        String::new()
-                    }
-                ),
-                tool.status == Status::Error,
+                    status: tool.status.label().into(),
+                    error: tool.status == Status::Error,
+                    mono: matches!(
+                        tool.kind,
+                        crate::tool_presentation::Kind::Read
+                            | crate::tool_presentation::Kind::Edit
+                            | crate::tool_presentation::Kind::Command
+                    ),
+                },
                 tool.limited,
             ),
             Step::Note {
@@ -527,18 +631,20 @@ impl Render for StepView {
                 streaming,
                 ..
             } => (
-                (if *thinking {
-                    if *streaming { "Thinking…" } else { "Thought" }
-                } else {
-                    "Note"
-                })
-                .into(),
-                false,
+                Caption {
+                    verb: (if *thinking {
+                        if *streaming { "Thinking…" } else { "Thought" }
+                    } else {
+                        "Note"
+                    })
+                    .into(),
+                    ..Default::default()
+                },
                 false,
             ),
         };
         let icon = match &self.step {
-            Step::Tool(_) if error => Some(AppIcon::Error),
+            Step::Tool(_) if caption.error => Some(AppIcon::Error),
             Step::Tool(tool) => Some(match tool.kind {
                 crate::tool_presentation::Kind::Read => AppIcon::Read,
                 crate::tool_presentation::Kind::Edit => AppIcon::Edit,
@@ -553,15 +659,11 @@ impl Render for StepView {
         let mut root = div().v_flex().gap_2().min_w_0().w_full().child(
             disclosure(
                 SharedString::from(format!("step-toggle-{id}")),
-                title,
+                caption,
                 self.open,
                 icon,
+                cx,
             )
-            .text_color(if error {
-                cx.theme().danger
-            } else {
-                cx.theme().muted_foreground
-            })
             .on_click(cx.listener(|view, _, _, cx| {
                 view.open = !view.open;
                 cx.emit(Change::Disclosure(step_id(&view.step)));
@@ -573,6 +675,9 @@ impl Render for StepView {
             let mut details = div().v_flex().gap_2().pl_4().min_w_0();
             match step {
                 Step::Tool(tool) => {
+                    if let Some((label, source)) = &tool.input {
+                        details = details.child(self.body(label, source.clone(), true, cx));
+                    }
                     if !tool.diff.is_empty() {
                         details = details.child(self.body(
                             "Replacement / patch preview",
@@ -582,8 +687,35 @@ impl Render for StepView {
                         ));
                     }
                     if !tool.arguments.is_empty() {
-                        details =
-                            details.child(self.body("Arguments", tool.arguments.clone(), true, cx));
+                        // For executable source, JSON is metadata, not the main
+                        // reading surface. This choice stays with the canonical
+                        // StepView through streaming, hiding and regrouping.
+                        if tool.input.is_some() {
+                            details = details.child(
+                                Button::new(SharedString::from(format!("arguments-toggle-{id}")))
+                                    .ghost()
+                                    .small()
+                                    .self_start()
+                                    .label(if self.arguments_open {
+                                        "Hide arguments"
+                                    } else {
+                                        "Show arguments"
+                                    })
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.arguments_open = !view.arguments_open;
+                                        cx.emit(Change::Disclosure(step_id(&view.step)));
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                        if tool.input.is_none() || self.arguments_open {
+                            details = details.child(self.body(
+                                "Arguments",
+                                tool.arguments.clone(),
+                                true,
+                                cx,
+                            ));
+                        }
                     }
                     if !tool.output.is_empty() {
                         details = details.child(self.body("Output", tool.output.clone(), true, cx));
@@ -606,5 +738,59 @@ impl Render for StepView {
             root = root.child(details);
         }
         root
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use crate::local_model::LiveTranscript;
+    use serde_json::json;
+
+    #[test]
+    fn automatic_preview_is_bounded_ordered_and_failure_aware() {
+        let mut model = LiveTranscript::default();
+        let calls: Vec<_> = (0..8).map(|i| json!({"type":"toolCall","id":format!("task-{i}"),"name":"read","arguments":{"path":format!("{i}.rs")}})).collect();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+        let rows = model.rows();
+        let mut work = rows[0].work_data().unwrap().as_ref().clone();
+        assert_eq!(automatic_preview(&work), [4, 5, 6, 7]);
+        let set = |work: &mut Work, index: usize, status| {
+            if let Step::Tool(tool) = &mut work.steps[index] {
+                Arc::make_mut(tool).status = status;
+            }
+        };
+        set(&mut work, 0, Status::Interrupted);
+        assert_eq!(automatic_preview(&work), [0, 4, 5, 6, 7]);
+        set(&mut work, 1, Status::Error);
+        assert_eq!(
+            automatic_preview(&work),
+            [1, 4, 5, 6, 7],
+            "failure takes precedence over unknown"
+        );
+        set(&mut work, 2, Status::Error);
+        assert_eq!(
+            automatic_preview(&work),
+            [1, 4, 5, 6, 7],
+            "many failures never make the preview unbounded"
+        );
+        set(&mut work, 0, Status::Done);
+        set(&mut work, 1, Status::Done);
+        assert_eq!(
+            automatic_preview(&work),
+            [2, 4, 5, 6, 7],
+            "same failure count can change the visible shape"
+        );
+        set(&mut work, 2, Status::Done);
+        set(&mut work, 6, Status::Error);
+        assert_eq!(
+            automatic_preview(&work),
+            [4, 5, 6, 7],
+            "do not duplicate a failure already in the recent tail"
+        );
+        work.steps.truncate(3);
+        assert_eq!(automatic_preview(&work), [0, 1, 2]);
+        work.steps.clear();
+        assert!(automatic_preview(&work).is_empty());
     }
 }
