@@ -47,22 +47,28 @@ impl PreparedExit {
             .map_err(|_| Error::Native)?;
         let control_fd = duplicate_high(child_control.as_raw_fd())?;
         let lock_fd = duplicate_high(staged.lock.as_raw_fd())?;
+        let control_number = control_fd.as_raw_fd();
+        let lock_number = lock_fd.as_raw_fd();
         let mut command = Command::new(executable);
         command
             .arg("--transaction")
             .arg(&staged.root)
+            .arg("--control-fd")
+            .arg(control_number.to_string())
+            .arg("--lock-fd")
+            .arg(lock_number.to_string())
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("LANG", "C")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // SAFETY: after fork only async-signal-safe libc dup2/fcntl calls. High source
-        // fds cannot alias the fixed control3/lock4 destinations. Owned sources stay alive.
+        // SAFETY: only async-signal-safe fcntl after fork. Preserve owned high fds,
+        // never clobber std::process's private exec-error pipe with dup2 destinations.
         unsafe {
             command.pre_exec(move || {
-                if libc::dup2(control_fd.as_raw_fd(), 3) < 0
-                    || libc::dup2(lock_fd.as_raw_fd(), 4) < 0
+                if libc::fcntl(control_fd.as_raw_fd(), libc::F_SETFD, 0) < 0
+                    || libc::fcntl(lock_fd.as_raw_fd(), libc::F_SETFD, 0) < 0
                 {
                     return Err(std::io::Error::last_os_error());
                 }
@@ -237,7 +243,11 @@ pub fn compiled_trust() -> Result<Trust, Error> {
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
-pub fn run_native(root: PathBuf) -> Result<(), Error> {
+pub fn run_native(
+    root: PathBuf,
+    control_fd: libc::c_int,
+    lock_fd: libc::c_int,
+) -> Result<(), Error> {
     use crate::installer::{MacPlatform, Platform};
     let trust = compiled_trust()?; // no journal access at all in development/unconfigured builds
     let executable = std::env::current_exe().map_err(|_| Error::Unconfigured)?;
@@ -290,12 +300,16 @@ pub fn run_native(root: PathBuf) -> Result<(), Error> {
     }
     // SAFETY: check descriptor existence before taking ownership; arbitrary manual
     // invocation must fail normally, not trigger Rust's invalid-fd IO-safety abort.
-    if unsafe { libc::fcntl(3, libc::F_GETFD) } < 0 || unsafe { libc::fcntl(4, libc::F_GETFD) } < 0
+    if control_fd < 10
+        || lock_fd < 10
+        || control_fd == lock_fd
+        || unsafe { libc::fcntl(control_fd, libc::F_GETFD) } < 0
+        || unsafe { libc::fcntl(lock_fd, libc::F_GETFD) } < 0
     {
         return Err(Error::Identity);
     }
-    // SAFETY: fixed descriptors are passed by PreparedExit; helper owns them now.
-    let lock = unsafe { File::from_raw_fd(4) };
+    // SAFETY: checked descriptor is passed by PreparedExit; helper owns it now.
+    let lock = unsafe { File::from_raw_fd(lock_fd) };
     let expected = target
         .parent()
         .ok_or(Error::Filesystem)?
@@ -312,8 +326,8 @@ pub fn run_native(root: PathBuf) -> Result<(), Error> {
         return Err(Error::Busy);
     }
     let staged = Staged::reopen(&root, &target, &trust, lock)?;
-    // SAFETY: descriptor3 is the owned, inherited private handshake socket.
-    let mut control = unsafe { UnixStream::from_raw_fd(3) };
+    // SAFETY: checked descriptor is the inherited private handshake socket.
+    let mut control = unsafe { UnixStream::from_raw_fd(control_fd) };
     control
         .set_read_timeout(Some(Duration::from_secs(60)))
         .map_err(|_| Error::Native)?;
