@@ -3,6 +3,7 @@
 The app owns presentation, Kit owns controls. Start with `src/ui.rs`; examples
 in `src/catalog_probe.rs` compile and paint in the actual synthetic GPUI catalog.
 Do not copy styles from a screenshot or add a second theme/framework.
+Paths in this guide are relative to `apps/desktop`.
 
 ## Direction and sources
 
@@ -97,6 +98,7 @@ These patterns are compiled in `catalog_probe.rs::Catalogue::render`.
 
 ```rust
 use crate::ui::{self, Action, FieldRow, FieldLayout, IconRole, ResourceLabel};
+use gpui_kit::{ParentElement, Styled};
 use gpui_kit::component::{Sizable, button::{Button, ButtonVariants}, input::Input};
 
 ui::action("catalog-primary", "Run example", Action::Primary)
