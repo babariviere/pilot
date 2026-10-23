@@ -56,7 +56,11 @@ all 26 initial roles actually painted at 680/1100 light/dark, plus four producti
 workbench scenes with real icon pixels, label/slot bounds and all existing
 navigation/preedit/draft/reader/no-write assertions. Synthetic Home/chat/scope
 captures were inspected; raw images and logs stay ignored. The later six
-artifact-chrome glyph properties and Source alias still require the final gate.
+artifact-chrome glyph properties and Source alias also passed focused job
+`45e205a0`: all 27 roles paint in all four configurations, and native control
+pointer/lifecycle/rollback/replacement/stale-binding/close checks pass. Removing
+the import and six glyph-property additions reproduces the complete prior
+artifact view byte-for-byte, including every handler and controller.
 No complete native/full-suite or readiness result is claimed yet.
 
 The static glyph board proves actual SVG paint within mounted bounds for every
