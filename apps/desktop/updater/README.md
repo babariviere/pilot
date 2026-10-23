@@ -21,9 +21,18 @@ helper. No default points at the Swift application, its feed, credentials or key
   No token reaches the CDN. No implicit gh/Keychain/environment credential reads,
   token migration/storage, response-body logging or signed URL logging.
 - `src/archive.rs`: signed size/SHA256 checked before ZIP parsing. Private staging,
-  max1GiB archive/2GiB expanded/30,000 entries, bounded paths, exact single app root,
+  max1GiB archive/2GiB expanded/30,000 raw central records, bounded paths, exact single app root,
   create-new files, no device/setuid extraction. Symlinks appear only after file writes;
   canonical targets must remain inside the bundle. No writes through archive symlinks.
+  Before eager ZIP indexing, admission checks ZIP32/ZIP64 single-disk footer agreement,
+  at most 30,000 raw records and 64MiB of directory/footer metadata. Raw duplicate
+  names (including file/directory aliases) are rejected; post-index count agreement
+  also rejects Unicode-extra-field deduplication. The exact admitted metadata is
+  snapshotted in cancellable chunks. Indexing cannot select an older unadmitted
+  footer and has a 4× metadata read-work budget plus cancellation on reads/seeks.
+  Canonical archives end at their declared EOCD comment, with contiguous directory
+  and footer records and absolute offsets, not split/self-extracting/trailing-junk
+  ZIPs. ZIP decoding, compression, ZIP64 entry extras and CRC remain library-owned.
 - `src/installer.rs`, `native/platform.m`: whole-bundle identity/version and Security
   framework signature/compiled requirement checks, repeated after parent exit. Same-volume
   native `renameatx_np(RENAME_SWAP)`, durable journal and retained old app. No administrator
@@ -52,7 +61,7 @@ design, not a Sparkle fork or borrowed GPL implementation. No custom cryptograph
 `ring0.17.14` (Apache-2.0 AND ISC) supplies Ed25519. `reqwest0.12.28`,
 `serde1.0.229`, `serde_json1.0.154`, `base640.22.1`, `sha20.10.9`,
 `url2.5.8`, `libc0.2.191` use their upstream permissive MIT/Apache-family licenses;
-`zip8.6.0` supplies bounded ZIP decoding (MIT). See each pinned package's license and
+`zip8.6.0` supplies ZIP decoding (MIT); app-owned admission supplies the bounds. See each pinned package's license and
 the Cargo.lock transitive dependency inventory when packaging notices. System
 Foundation/Security and clang/ar are used only with `native-macos`; no Swift build,
 downloaded framework, global install, gpui-updater dependency or signing secret.
