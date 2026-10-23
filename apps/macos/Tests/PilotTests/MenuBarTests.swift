@@ -134,35 +134,59 @@ private func menuSession(id: String = "menu-test", title: String = "Session", st
     try app.registerLocal(local); try loadClientFixture(app.client, host: local, into: hosts)
     let client = PilotClient(); client.loadFixture(projects: [], sessions: [control, ordinary])
     try loadClientFixture(client, host: box, into: hosts)
+    var retained = try #require(hosts.offlineHosts[box])
     app.daemon.markRunningForSnapshot()
     let menu = MenuBarModel(model: app, updater: AppUpdater())
     let ordinaryRef = HostResourceRef(host: box, kind: .session, localId: ordinary.id)
     let controlRef = HostResourceRef(host: box, kind: .session, localId: control.id)
     let baseline = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
-        hosted: [Hosted(ref: ordinaryRef, value: ordinary)], availableHosts: [box])
+        hosted: [Hosted(ref: ordinaryRef, value: ordinary)], availableHosts: [local])
     #expect(menu.snapshot == baseline)
+    #expect(hosts.available == [local])
+    #expect(menu.snapshot.statusText == "1 working", "only the ordinary Local chat counts as live work")
+    #expect(menu.snapshot.rows.map(\.id) == [localChat.id, ordinaryRef.storageKey])
+    #expect(menu.snapshot.rows.first?.available == true)
+    #expect(menu.snapshot.rows.last?.reference == ordinaryRef)
+    #expect(menu.snapshot.rows.last?.available == false, "retained ordinary history stays offline, even when titled Control")
 
-    // The barrier requires the fresh inventory's ordinary title. It does not wait for the absence
-    // under test, so the old reactive-path bug produces a failed assertion, not a hanging wait.
-    var observation: AnyCancellable?
+    // Require publication of the fresh ordinary title, not the Control absence under test.
+    // A missing publication must fail within a bounded wait, not strand a continuation.
     var received = false
+    let (publications, publication) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingOldest(1))
     let updated = menuSession(id: ordinary.id, title: "Control after update", state: "working")
     var updatedControl = SessionSummary(id: control.id, title: "Waiting Control", cwd: "/tmp",
         createdAt: 1, updatedAt: 2, state: "idle", outcome: .question)
     updatedControl.control = true
     #expect(updatedControl.status == .question)
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        observation = menu.$snapshot.sink { value in
-            guard !received, value.rows.contains(where: { $0.id == ordinaryRef.storageKey && $0.session.title == updated.title }) else { return }
-            received = true; continuation.resume()
+    let observation = menu.$snapshot.sink { value in
+        if value.rows.contains(where: { $0.id == ordinaryRef.storageKey && $0.session.title == updated.title }) {
+            // Expiry can finish the stream before this MainActor test resumes. Keep the
+            // actual delivery record independent of whether that stream is still open.
+            received = true
+            publication.yield(())
+            publication.finish()
         }
-        client.loadFixture(projects: [], sessions: [updatedControl, updated])
     }
-    observation?.cancel()
+    // Use the production debounce's scheduler for bounded expiry as well. The timer
+    // only wakes the waiter; it does not decide whether delivery occurred.
+    let timeout = DispatchSource.makeTimerSource(queue: .main)
+    timeout.setEventHandler { publication.finish() }
+    timeout.schedule(deadline: .now() + 2)
+    timeout.resume()
+    // loadClientFixture copied the detached client's initial data. Replace that immutable
+    // directory snapshot explicitly; mutating the client cannot publish a retained update.
+    retained.sessions = [updatedControl, updated].sorted(by: SessionSummary.listPrecedes)
+    hosts.restoreLegacySnapshot(retained)
+    #expect(hosts.sessions.first { $0.ref == ordinaryRef }?.value.title == updated.title)
+    var iterator = publications.makeAsyncIterator()
+    _ = await iterator.next()
+    timeout.cancel()
+    observation.cancel()
+    #expect(received, "The replaced retained snapshot did not publish its ordinary chat title after the bounded wait")
     let expected = MenuBarSnapshot(sessions: localSessions, isUnread: { _ in false }, status: .running,
         lifecycleBusy: app.daemon.lifecycleBusy, waitingToInstall: false,
-        hosted: [Hosted(ref: ordinaryRef, value: updated)], availableHosts: [box])
+        hosted: [Hosted(ref: ordinaryRef, value: updated)], availableHosts: [local])
     #expect(menu.snapshot == expected)
     #expect(!menu.snapshot.rows.contains { $0.id == controlRef.storageKey })
     #expect(menu.snapshot.rows.contains { $0.id == localChat.id })

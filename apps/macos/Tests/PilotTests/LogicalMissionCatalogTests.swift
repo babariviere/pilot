@@ -283,7 +283,7 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     }
 }
 
-@Test @MainActor func missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndReconnect() async throws {
+@Test @MainActor func missionNavigationAndPaletteKeepCanonicalPinsAcrossExecutionChangesAndRetainedSnapshots() async throws {
     let model = AppModel()
     try model.registerLocal(logicalHome)
     model.client.loadFixture(projects: [], sessions: [])
@@ -306,6 +306,8 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     model.newSessionForm.executionHost = second
     let remote = try #require(model.missionRegistry.rows.first { $0.mission.home.matches(logicalBox) })
     model.openLogicalMission(remote, tab: .brief)
+    let pinnedRemoteKey = try #require(model.selectedMissionId)
+    #expect(try HostResourceRef.decodeKey(pinnedRemoteKey).host == logicalBox)
     #expect(model.hosts.selection?.host == logicalBox)
     #expect(model.newSessionForm.executionHost == second)
     model.go(to: .tasks)
@@ -320,9 +322,14 @@ private func logicalMission(_ id: String = "same", title: String = "Canonical", 
     #expect(model.selectedLogicalMission?.id == remote.id)
     let replacement = PilotClient()
     replacement.loadFixture(projects: [], sessions: [])
-    replacement.handle(.missions([logicalMission()]))
+    replacement.handle(.missions([logicalMission(title: "Updated retained mission")]))
     try loadClientFixture(replacement, host: logicalBox, into: model.hosts)
-    try await logicalEventually { model.missionAvailable(model.missionRegistry.destination(remote, model: model)) }
+    // Retained snapshots refresh presentation, never reconnect a retired execution endpoint.
+    try await logicalEventually { model.selectedLogicalMission?.title == "Updated retained mission" }
+    #expect(!model.missionAvailable(model.missionRegistry.destination(remote, model: model)))
+    // A changed title may reorder rows, but must not add, lose or merge canonical identities.
+    #expect(model.missionRegistry.rows.count == ids.count && Set(model.missionRegistry.rows.map(\.id)) == Set(ids))
+    #expect(model.selectedMissionId == pinnedRemoteKey && model.missionTab == .tasks)
     #expect(model.selectedLogicalMission?.id == remote.id)
     model.openMission(HostResourceRef(host: second, kind: .mission, localId: "same").storageKey)
     #expect(model.missionTab == .overview, "Switching missions resets tabs even with colliding IDs")
