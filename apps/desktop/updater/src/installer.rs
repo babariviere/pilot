@@ -156,15 +156,60 @@ fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
         return Err(Error::Identity);
     }
     let metadata = fs::symlink_metadata(target).map_err(|_| Error::Filesystem)?;
+    validate_parents(target.parent().ok_or(Error::Filesystem)?)?;
     // Deliberately no privilege escalation or administrator-owned installation support.
     // SAFETY: geteuid is a pure process identity query.
     if !metadata.is_dir()
         || metadata.file_type().is_symlink()
         || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o022 != 0
     {
         return Err(Error::Filesystem);
     }
     Ok(())
+}
+
+fn validate_parents(parent: &Path) -> Result<(), Error> {
+    // A root-owned sticky ancestor (e.g. /private/tmp) protects our owned entry;
+    // an immediately writable/sticky installation parent is deliberately refused.
+    // SAFETY: geteuid is a process identity query.
+    let uid = unsafe { libc::geteuid() };
+    for (index, ancestor) in parent.ancestors().enumerate() {
+        let metadata = fs::symlink_metadata(ancestor).map_err(|_| Error::Filesystem)?;
+        let safe_sticky = index > 0 && metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
+        if !metadata.is_dir()
+            || metadata.file_type().is_symlink()
+            || (metadata.uid() != uid && metadata.uid() != 0)
+            || (metadata.mode() & 0o022 != 0 && !safe_sticky)
+        {
+            return Err(Error::Filesystem);
+        }
+    }
+    Ok(())
+}
+
+fn entry_identity(parent: &File, relative: &Path) -> Result<(u64, u64), Error> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let name = CString::new(relative.as_os_str().as_bytes()).map_err(|_| Error::Filesystem)?;
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: valid owned directory fd, NUL-terminated relative name and output allocation.
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(Error::RecoveryRequired);
+    }
+    // SAFETY: successful fstatat initialized the stat object.
+    let metadata = unsafe { metadata.assume_init() };
+    if metadata.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(Error::RecoveryRequired);
+    }
+    Ok((metadata.st_dev as u64, metadata.st_ino))
 }
 
 impl Staged {
@@ -179,6 +224,7 @@ impl Staged {
     /// compiled trust root, never a key supplied by the journal or command line.
     pub fn reopen(root: &Path, target: &Path, trust: &Trust, lock: File) -> Result<Self, Error> {
         validate_target(target, trust)?;
+        validate_root(root, target)?;
         let parent = target.parent().ok_or(Error::Filesystem)?;
         if root.parent() != Some(parent)
             || !root.file_name().is_some_and(|name| {
@@ -241,6 +287,10 @@ impl Staged {
             return Err(Error::RecoveryRequired);
         }
         platform.verify(&self.target, trust, &trust.current_build, None)?;
+        let parent_path = self.target.parent().ok_or(Error::Filesystem)?;
+        validate_parents(parent_path)?;
+        let parent = open_directory(parent_path)?;
+        let held_parent = parent.metadata().map_err(|_| Error::Filesystem)?;
         // Re-extract to a new private directory after parent exit. Do not trust any
         // staged bundle that could have been changed while awaiting user confirmation.
         let cancel = Cancellation::default();
@@ -258,27 +308,48 @@ impl Staged {
             Some(&self.verified.manifest().short_version),
         )?;
         // Keep the old app in the same directory as the actually swapped candidate.
-        let parent = open_directory(self.target.parent().ok_or(Error::Filesystem)?)?;
         let relative = candidate
             .strip_prefix(self.target.parent().ok_or(Error::Filesystem)?)
             .map_err(|_| Error::Filesystem)?;
-        platform.swap(
-            &parent,
-            relative,
-            Path::new(self.target.file_name().ok_or(Error::Filesystem)?),
-        )?;
+        let target_name = Path::new(self.target.file_name().ok_or(Error::Filesystem)?);
+        let candidate_identity = entry_identity(&parent, relative)?;
+        let journal_guard = journal_guard(&self.root)?;
+        journal = read_journal(&self.root)?;
+        if journal.phase != Phase::Committed {
+            return Err(Error::RecoveryRequired);
+        }
+        validate_parents(parent_path)?;
+        let named_parent = fs::symlink_metadata(parent_path).map_err(|_| Error::Filesystem)?;
+        if (held_parent.dev(), held_parent.ino()) != (named_parent.dev(), named_parent.ino())
+            || entry_identity(&parent, target_name)?
+                != (journal.original_device, journal.original_inode)
+        {
+            return Err(Error::RecoveryRequired);
+        }
+        platform.swap(&parent, relative, target_name)?;
+        if entry_identity(&parent, target_name)? != candidate_identity
+            || entry_identity(&parent, relative)?
+                != (journal.original_device, journal.original_inode)
+        {
+            return Err(Error::RecoveryRequired);
+        }
         parent.sync_all().map_err(|_| Error::RecoveryRequired)?;
         journal.phase = Phase::Swapped;
         write_journal(&self.root, &journal)?;
+        // Persist intent BEFORE launching. A fast new app may acknowledge startup
+        // while open is returning; never overwrite its newer journal phase afterwards.
+        journal.phase = Phase::RelaunchRequested;
+        write_journal(&self.root, &journal)?;
+        drop(journal_guard);
         // open success is NOT startup acknowledgement or a promise of rollback.
         if platform.relaunch(&self.target, &self.root).is_err() {
             return Err(Error::RecoveryRequired);
         }
-        journal.phase = Phase::RelaunchRequested;
-        write_journal(&self.root, &journal)
+        Ok(())
     }
 
     pub(crate) fn mark_committed(&self) -> Result<(), Error> {
+        let _guard = journal_guard(&self.root)?;
         let mut journal = read_journal(&self.root)?;
         if journal.phase != Phase::Ready {
             return Err(Error::RecoveryRequired);
@@ -302,6 +373,9 @@ pub fn acknowledge_startup(
     platform: &impl Platform,
     target: &Path,
 ) -> Result<(), Error> {
+    validate_target(target, trust)?;
+    validate_root(root, target)?;
+    let _guard = journal_guard(root)?;
     let bytes = read_small(&root.join("manifest.json"), crate::manifest::MAX_MANIFEST)?;
     use base64::Engine as _;
     let envelope: crate::manifest::Envelope =
@@ -323,6 +397,9 @@ pub fn acknowledge_startup(
         Some(&manifest.manifest().short_version),
     )?;
     let mut journal = read_journal(root)?;
+    if journal.phase == Phase::StartupAcknowledged {
+        return Ok(());
+    }
     if !matches!(journal.phase, Phase::Swapped | Phase::RelaunchRequested) {
         return Err(Error::RecoveryRequired);
     }
@@ -382,6 +459,54 @@ pub(crate) fn open_directory(path: &Path) -> Result<File, Error> {
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(|_| Error::Filesystem)
+}
+
+fn sync_directory(path: &Path) -> Result<(), Error> {
+    open_directory(path)?
+        .sync_all()
+        .map_err(|_| Error::Filesystem)
+}
+
+fn journal_guard(root: &Path) -> Result<File, Error> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root.join("journal.lock"))
+        .map_err(|_| Error::Filesystem)?;
+    // SAFETY: flock holds only this private transaction's journal serialization lock.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(Error::Busy);
+    }
+    Ok(file)
+}
+
+fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
+    if root.parent() != target.parent()
+        || !root.file_name().is_some_and(|name| {
+            name.to_str().is_some_and(|name| {
+                name.strip_prefix(".pilot-next-update-")
+                    .is_some_and(|suffix| {
+                        suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+            })
+        })
+    {
+        return Err(Error::Identity);
+    }
+    let metadata = fs::symlink_metadata(root).map_err(|_| Error::Filesystem)?;
+    // SAFETY: identity query, no pointer arguments.
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.mode() & 0o077 != 0
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return Err(Error::Filesystem);
+    }
+    Ok(())
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

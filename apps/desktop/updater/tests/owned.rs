@@ -604,7 +604,7 @@ fn failed_launch_retains_both_bundles_and_refuses_blind_second_swap() {
     );
     assert_eq!(
         installer::recovery_phase(staged.root()).unwrap(),
-        installer::Phase::Swapped
+        installer::Phase::RelaunchRequested
     );
     assert_eq!(
         staged.apply_after_exit(
@@ -886,6 +886,206 @@ fn teardown_never_arms_installation_or_accepts_late_results() {
     assert_eq!(updater.backend_mut().stops, 1);
     assert!(!updater.complete(done(2, Outcome::Staged(candidate())), Duration::ZERO));
     assert_eq!(updater.backend_mut().commits, 0);
+}
+
+#[test]
+fn writable_installation_parent_is_rejected_without_touching_target() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(matches!(
+        installer::new_stage(&target, &trust(), &FakePlatform::default()),
+        Err(Error::Filesystem)
+    ));
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn target_inode_is_rechecked_after_long_signature_and_extraction_work() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Substitute {
+        target: PathBuf,
+        changed: AtomicBool,
+    }
+    impl installer::Platform for Substitute {
+        fn verify(
+            &self,
+            bundle: &Path,
+            trust: &manifest::Trust,
+            build: &str,
+            short: Option<&str>,
+        ) -> Result<(), Error> {
+            installer::Platform::verify(&FakePlatform::default(), bundle, trust, build, short)?;
+            if bundle.to_string_lossy().contains("install-payload")
+                && !self.changed.swap(true, Ordering::SeqCst)
+            {
+                fs::rename(
+                    &self.target,
+                    self.target.parent().unwrap().join("original-retained.app"),
+                )
+                .unwrap();
+                fs::create_dir_all(self.target.join("Contents")).unwrap();
+                fs::write(self.target.join("Contents/build"), "100.1").unwrap();
+                fs::write(self.target.join("Contents/id"), &trust.application_id).unwrap();
+            }
+            Ok(())
+        }
+        fn swap(&self, _: &File, _: &Path, _: &Path) -> Result<(), Error> {
+            panic!("must reject substitution before swap")
+        }
+        fn relaunch(&self, _: &Path, _: &Path) -> Result<(), Error> {
+            panic!("must not relaunch")
+        }
+    }
+    let temp = Temp::new();
+    let stage = fixture_stage(&temp);
+    commit(&stage);
+    let platform = Substitute {
+        target: stage.target.clone(),
+        changed: AtomicBool::new(false),
+    };
+    assert_eq!(
+        stage.apply_after_exit(&trust(), &platform, helper::ExitedParent::synthetic()),
+        Err(Error::RecoveryRequired)
+    );
+    assert_eq!(
+        fs::read_to_string(stage.target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    assert!(temp.0.join("original-retained.app").exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn fast_startup_acknowledgement_is_never_overwritten_by_helper() {
+    struct FastStartup;
+    impl installer::Platform for FastStartup {
+        fn verify(
+            &self,
+            bundle: &Path,
+            trust: &manifest::Trust,
+            build: &str,
+            short: Option<&str>,
+        ) -> Result<(), Error> {
+            installer::Platform::verify(&FakePlatform::default(), bundle, trust, build, short)
+        }
+        fn swap(&self, parent: &File, relative: &Path, name: &Path) -> Result<(), Error> {
+            installer::Platform::swap(&installer::MacPlatform, parent, relative, name)
+        }
+        fn relaunch(&self, app: &Path, transaction: &Path) -> Result<(), Error> {
+            installer::acknowledge_startup(transaction, "101.1", &trust(), self, app)
+        }
+    }
+    let temp = Temp::new();
+    let stage = fixture_stage(&temp);
+    commit(&stage);
+    stage
+        .apply_after_exit(&trust(), &FastStartup, helper::ExitedParent::synthetic())
+        .unwrap();
+    assert_eq!(
+        installer::recovery_phase(stage.root()).unwrap(),
+        installer::Phase::StartupAcknowledged
+    );
+    installer::acknowledge_startup(stage.root(), "101.1", &trust(), &FastStartup, &stage.target)
+        .unwrap();
+}
+
+#[test]
+fn helper_status_monitor_reports_abort_and_lost_ack_without_polling() {
+    use std::sync::mpsc;
+    for bytes in [
+        b"ABORTED\n".as_slice(),
+        b"COMMITTED\nABORTED\n".as_slice(),
+        b"".as_slice(),
+    ] {
+        let (ack, receipt) = mpsc::sync_channel(1);
+        let errors = Mutex::new(Vec::new());
+        helper::watch_control(Cursor::new(bytes), ack, |error| {
+            errors.lock().unwrap().push(error)
+        });
+        assert!(!errors.lock().unwrap().is_empty());
+        assert!(receipt.try_recv().is_ok());
+    }
+}
+
+#[test]
+fn lost_commit_ack_does_not_undo_durable_intent() {
+    struct BrokenAck {
+        input: Cursor<Vec<u8>>,
+        writes: usize,
+    }
+    impl std::io::Read for BrokenAck {
+        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+            std::io::Read::read(&mut self.input, bytes)
+        }
+    }
+    impl Write for BrokenAck {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes += 1;
+            if self.writes > 1 {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(bytes.len())
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let temp = Temp::new();
+    let stage = fixture_stage(&temp);
+    helper::await_commit(
+        &mut BrokenAck {
+            input: Cursor::new(b"COMMIT\n".to_vec()),
+            writes: 0,
+        },
+        &stage,
+    )
+    .unwrap();
+    assert_eq!(
+        installer::recovery_phase(stage.root()).unwrap(),
+        installer::Phase::Committed
+    );
+    assert_eq!(
+        fs::read_to_string(stage.target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+}
+
+#[test]
+fn helper_expiry_and_death_cannot_leave_false_ready_or_authorized_status() {
+    let mut updater = ready();
+    updater.request_install(safe(), Duration::ZERO).unwrap();
+    updater.complete(done(3, Outcome::ExitPrepared), Duration::ZERO);
+    assert!(updater.complete(
+        done(3, Outcome::HelperStopped(Error::Cancelled)),
+        Duration::ZERO
+    ));
+    assert!(matches!(
+        updater.state(),
+        State::Deferred {
+            reason: Error::Cancelled,
+            ..
+        }
+    ));
+    let mut updater = ready();
+    updater.request_install(safe(), Duration::ZERO).unwrap();
+    updater.complete(done(3, Outcome::ExitPrepared), Duration::ZERO);
+    updater.commit_exit(safe(), Duration::ZERO).unwrap();
+    updater.complete(done(4, Outcome::ExitCommitted), Duration::ZERO);
+    assert!(!updater.complete(
+        done(99, Outcome::HelperStopped(Error::Cancelled)),
+        Duration::ZERO
+    ));
+    updater.complete(
+        done(3, Outcome::HelperStopped(Error::Cancelled)),
+        Duration::ZERO,
+    );
+    assert_eq!(updater.state(), &State::RecoveryRequired(Error::Cancelled));
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

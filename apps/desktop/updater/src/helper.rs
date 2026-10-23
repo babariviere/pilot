@@ -9,6 +9,7 @@ use std::{
     },
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::mpsc::{self, Receiver, SyncSender},
     time::{Duration, Instant},
 };
 
@@ -27,10 +28,14 @@ impl ExitedParent {
 pub struct PreparedExit {
     control: UnixStream,
     child: Child,
+    acknowledgement: Receiver<Result<(), Error>>,
 }
 impl PreparedExit {
     /// Worker-only. The helper verifies its own compiled trust root; no trust key in argv.
-    pub fn launch(staged: &Staged) -> Result<Self, Error> {
+    pub fn launch(
+        staged: &Staged,
+        helper_stopped: impl Fn(Error) + Send + 'static,
+    ) -> Result<Self, Error> {
         let executable = staged
             .target
             .join("Contents/Helpers/pilot-desktop-update-helper");
@@ -76,8 +81,16 @@ impl PreparedExit {
             });
         }
         let child = command.spawn().map_err(|_| Error::Native)?;
+        // Release closure-owned copies of the child's endpoint before waiting for
+        // READY. Otherwise a failed child cannot produce EOF on our parent socket.
+        drop(command);
         drop(child_control);
-        let mut prepared = Self { control, child };
+        let (receipt, acknowledgement) = mpsc::sync_channel(1);
+        let mut prepared = Self {
+            control,
+            child,
+            acknowledgement,
+        };
         let mut ready = [0; 6];
         prepared
             .control
@@ -86,6 +99,17 @@ impl PreparedExit {
         if &ready != b"READY\n" {
             return Err(Error::Native);
         }
+        prepared
+            .control
+            .set_read_timeout(None)
+            .map_err(|_| Error::Native)?;
+        let reader = prepared.control.try_clone().map_err(|_| Error::Native)?;
+        std::thread::Builder::new()
+            .name("updater-helper-status".into())
+            .spawn(move || {
+                watch_control(reader, receipt, helper_stopped);
+            })
+            .map_err(|_| Error::Native)?;
         Ok(prepared)
     }
 
@@ -95,14 +119,42 @@ impl PreparedExit {
         self.control
             .write_all(b"COMMIT\n")
             .map_err(|_| Error::CommitUncertain)?;
-        let mut receipt = [0; 10];
-        self.control
-            .read_exact(&mut receipt)
-            .map_err(|_| Error::CommitUncertain)?;
-        if &receipt != b"COMMITTED\n" {
-            return Err(Error::CommitUncertain);
+        self.acknowledgement
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| Error::CommitUncertain)?
+    }
+}
+
+pub(crate) fn watch_control(
+    mut reader: impl Read,
+    acknowledgement: SyncSender<Result<(), Error>>,
+    stopped: impl Fn(Error),
+) {
+    loop {
+        let mut frame = Vec::new();
+        let mut byte = [0; 1];
+        while frame.len() < 32 {
+            if reader.read_exact(&mut byte).is_err() {
+                let _ = acknowledgement.try_send(Err(Error::CommitUncertain));
+                stopped(Error::RecoveryRequired);
+                return;
+            }
+            frame.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
         }
-        Ok(())
+        if frame == b"COMMITTED\n" {
+            let _ = acknowledgement.try_send(Ok(()));
+        } else {
+            let _ = acknowledgement.try_send(Err(Error::CommitUncertain));
+            stopped(if frame == b"ABORTED\n" {
+                Error::Cancelled
+            } else {
+                Error::RecoveryRequired
+            });
+            return;
+        }
     }
 }
 impl Drop for PreparedExit {
@@ -149,9 +201,10 @@ pub(crate) fn await_commit(
         return Err(Error::Cancelled);
     }
     staged.mark_committed()?;
-    control
-        .write_all(b"COMMITTED\n")
-        .map_err(|_| Error::CommitUncertain)
+    // COMMIT is already durable. A lost acknowledgement makes the parent uncertain,
+    // but cannot silently undo the committed intent. Continue to the OS exit gate.
+    let _ = control.write_all(b"COMMITTED\n");
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -308,6 +361,25 @@ pub fn run_native(
     {
         return Err(Error::Identity);
     }
+    // SAFETY: restore close-on-exec on checked inherited descriptors before any
+    // launcher is created, so /usr/bin/open cannot retain our lock or control pipe.
+    if unsafe { libc::fcntl(control_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+        || unsafe { libc::fcntl(lock_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
+    {
+        return Err(Error::Native);
+    }
+    let mut peer = std::mem::MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut peer_length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    let mut peer_uid = 0;
+    let mut peer_gid = 0;
+    // SAFETY: bounded initialized output allocations and an already checked fd.
+    if unsafe { libc::getpeername(control_fd, peer.as_mut_ptr().cast(), &mut peer_length) } != 0
+        || unsafe { peer.assume_init() }.ss_family as libc::c_int != libc::AF_UNIX
+        || unsafe { libc::getpeereid(control_fd, &mut peer_uid, &mut peer_gid) } != 0
+        || peer_uid != unsafe { libc::geteuid() }
+    {
+        return Err(Error::Identity);
+    }
     // SAFETY: checked descriptor is passed by PreparedExit; helper owns it now.
     let lock = unsafe { File::from_raw_fd(lock_fd) };
     let expected = target
@@ -334,8 +406,17 @@ pub fn run_native(
     control
         .set_write_timeout(Some(Duration::from_secs(1)))
         .map_err(|_| Error::Native)?;
-    await_commit(&mut control, &staged)?;
-    let exit = watch.wait(Duration::from_secs(120))?;
+    if let Err(error) = await_commit(&mut control, &staged) {
+        let _ = control.write_all(b"ABORTED\n");
+        return Err(error);
+    }
+    let exit = match watch.wait(Duration::from_secs(120)) {
+        Ok(exit) => exit,
+        Err(error) => {
+            let _ = control.write_all(b"ABORTED\n");
+            return Err(error);
+        }
+    };
     staged.apply_after_exit(&trust, &MacPlatform, exit)
 }
 

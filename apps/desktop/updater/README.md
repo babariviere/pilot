@@ -37,7 +37,8 @@ helper. No default points at the Swift application, its feed, credentials or key
   cancellation acknowledgement, operation generations fence old callbacks, hourly
   checks, bounded exponential failure backoff60s→1h, explicit manual checks. Downloads
   do not install. Staging, helper readiness and exit authorization are distinct states.
-- `src/worker.rs`: one bounded background worker/command/result, no idle polling, no
+- `src/worker.rs`: one bounded background worker/command/result, plus one blocking
+  helper-status watcher only while a helper exists, no idle polling, no
   network/file/signature work in render/UI handlers. Completion callback only schedules
   a foreground wakeup; the host drains results and reschedules one monotonic deadline.
 
@@ -144,6 +145,11 @@ already acknowledged/fenced install intent; safety must be established before se
 ## Recovery and explicit limits
 
 Stages are private same-volume directories, permanent target lock files are never unlinked.
+Writable installation parents/unsafe ancestors are rejected. The parent directory is
+held open through extraction and the target inode rechecked immediately before the
+swap; the retained/installed inode identities are checked afterwards too. Journal
+transitions use a separate private nonblocking lock. Relaunch intent is durable before
+launch, so fast startup acknowledgement cannot be overwritten by a later helper write.
 The old app is retained after swap. Journals/archives/backups are not automatically cleaned
 or retried; `recovery_phase` is read-only. A failed swap leaves the original in place.
 Failed relaunch retains both bundles and reports RecoveryRequired. No automatic rollback
@@ -154,6 +160,9 @@ Cleanup/explicit rollback with running-process checks remains later recovery int
 Cancellation is cooperative between bounded reads; it can take up to the HTTP timeout
 during a blocked read. ZIP/file operations are bounded and off-UI. Helper readiness timeout
 is30s, COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs without exit.
+Helper EOF/abort is delivered through a blocking status watcher with generation fencing,
+not an idle polling timer; prepared/authorized UI cannot remain falsely ready after
+helper death. A lost COMMIT receipt is uncertain, not an undo of durable intent.
 There is no elevated install, Linux/Wayland implementation/validation, production feed,
 key provisioning, real access-provider integration, daemon update coordination, startup
 receipt UI, rollback UI or integrated GUI quit proof in this standalone checkpoint.

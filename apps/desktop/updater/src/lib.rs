@@ -60,6 +60,7 @@ pub enum Outcome {
     Staged(Candidate),
     ExitPrepared,
     ExitCommitted,
+    HelperStopped(Error),
     Failed(Error),
     Cancelled,
 }
@@ -154,6 +155,7 @@ pub struct Updater<B: Backend> {
     failures: u32,
     sequence: u64,
     staged: Option<Candidate>,
+    helper_operation: Option<u64>,
 }
 impl<B: Backend> Updater<B> {
     pub fn new(backend: B, automatic: bool, now: Duration) -> Self {
@@ -165,6 +167,7 @@ impl<B: Backend> Updater<B> {
             failures: 0,
             sequence: 0,
             staged: None,
+            helper_operation: None,
         }
     }
     pub fn state(&self) -> &State {
@@ -312,6 +315,24 @@ impl<B: Backend> Updater<B> {
         }
     }
     pub fn complete(&mut self, completion: Completion, now: Duration) -> bool {
+        if let Outcome::HelperStopped(reason) = completion.outcome {
+            if self.helper_operation != Some(completion.operation) {
+                return false;
+            }
+            self.helper_operation = None;
+            self.state = if self.state == State::ExitPrepared {
+                match &self.staged {
+                    Some(candidate) => State::Deferred {
+                        candidate: candidate.clone(),
+                        reason,
+                    },
+                    None => State::Failed(reason),
+                }
+            } else {
+                State::RecoveryRequired(reason)
+            };
+            return true;
+        }
         let (operation, work) = match self.state {
             State::Working { operation, work } => (operation, Some(work)),
             State::Cancelling { operation } => (operation, None),
@@ -338,7 +359,10 @@ impl<B: Backend> Updater<B> {
                 self.staged = Some(candidate.clone());
                 Ok(State::ReadyToRestart(candidate))
             }
-            (Some(Work::PreparingExit), Outcome::ExitPrepared) => Ok(State::ExitPrepared),
+            (Some(Work::PreparingExit), Outcome::ExitPrepared) => {
+                self.helper_operation = Some(operation);
+                Ok(State::ExitPrepared)
+            }
             (Some(Work::CommittingExit), Outcome::ExitCommitted) => Ok(State::ExitAuthorized),
             _ => Err(Error::InvalidResponse),
         };
