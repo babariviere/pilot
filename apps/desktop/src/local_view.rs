@@ -1282,6 +1282,15 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.update(cx, |editor, cx| {
+            editor.projects(
+                self.state.projects.clone(),
+                self.state.projects_loaded,
+                self.state.projects_error,
+                window,
+                cx,
+            )
+        });
         if let Some(palette) = &self.jump {
             let source = self.jump_source();
             palette.update(cx, |v, cx| v.sync(source, window, cx));

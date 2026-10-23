@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_editor;
+#[cfg(feature = "native-probes")]
+pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
 mod interaction;
 mod jump;

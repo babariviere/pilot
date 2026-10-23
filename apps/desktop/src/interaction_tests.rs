@@ -31,6 +31,9 @@ enum Behavior {
     WrongReceipt,
     Slow,
     LostStop,
+    ProjectsUnavailable,
+    ProjectRemoved,
+    ProjectPathChanged,
 }
 #[derive(Default)]
 struct Seen {
@@ -39,6 +42,7 @@ struct Seen {
     envelopes: Vec<Value>,
     executions: usize,
     stops: usize,
+    projects: BTreeMap<String, String>,
 }
 struct Daemon {
     options: LocalOptions,
@@ -82,8 +86,14 @@ impl Daemon {
                             let response={
                                 let mut seen=record.lock().unwrap();seen.requests.push((method.clone(),path.clone()));
                                 if method=="GET"&&path=="/api/hello" {json!({"daemonId":if behavior==Behavior::BadIdentity{"wrong"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})}
+                                else if method=="GET"&&path=="/api/projects" {
+                                    if behavior==Behavior::ProjectsUnavailable {json!({"error":"Synthetic unavailable"})}
+                                    else if behavior==Behavior::ProjectRemoved {json!([{"id":"project-a","name":"Synthetic Atlas","path":"/tmp"}])}
+                                    else {json!([{"id":"project-a","name":"Synthetic Atlas","path":"/tmp"},{"id":"project-ab","name":"Synthetic Boreal","path":if behavior==Behavior::ProjectPathChanged{"/changed"}else{"/tmp"}}])}
+                                }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
-                                    json!({"id":path.rsplit('/').next().unwrap(),"mode":"ask","control":behavior==Behavior::Readonly,"state":"working"})
+                                    let id=path.rsplit('/').next().unwrap();
+                                    json!({"id":id,"mode":"ask","control":behavior==Behavior::Readonly,"state":"working","projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {
@@ -95,7 +105,13 @@ impl Daemon {
                                         if behavior==Behavior::LostBeforeAdmission&&seen.envelopes.len()==1{return;}
                                         let state=if behavior==Behavior::Pending{"pending"}else if behavior==Behavior::Reject{"rejected"}else{"accepted"};
                                         let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]}});
-                                        if !seen.operations.contains_key(&id){seen.executions+=1;seen.operations.insert(id.clone(),receipt);}
+                                        if !seen.operations.contains_key(&id){
+                                            if payload["kind"]=="chat-create"&&state=="accepted" {
+                                                let request:Value=serde_json::from_str(payload["payload"].as_str().unwrap()).unwrap();
+                                                if let Some(project)=request["projectId"].as_str() {seen.projects.insert(payload["targetId"].as_str().unwrap().into(),project.into());}
+                                            }
+                                            seen.executions+=1;seen.operations.insert(id.clone(),receipt);
+                                        }
                                         if behavior==Behavior::LostAccepted&&seen.envelopes.len()==1{return;}
                                         let mut receipt=seen.operations[&id].clone();
                                         if behavior==Behavior::WrongReceipt {receipt["targetId"]=json!("another-target");}
@@ -123,6 +139,7 @@ fn draft(revision: u64, text: &str) -> Draft {
         revision,
         text: text.into(),
         cwd: "/tmp".into(),
+        project_id: Some("project-a".into()),
         ..Default::default()
     }
 }
@@ -156,6 +173,81 @@ fn submit(client: &Interaction, key: &str, revision: u64, text: &str, request: u
         stop,
         request
     }));
+}
+
+#[tokio::test]
+async fn same_folder_projects_use_exact_supported_identity_and_canonical_readback() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    let mut captured = draft(1, "Synthetic project-bound create 日本語");
+    captured.project_id = Some("project-ab".into());
+    assert!(client.command(WriteCommand::Submit {
+        key: "new:project".into(),
+        draft: Box::new(captured),
+        follow_up: true,
+        stop: false,
+        request: 1
+    }));
+    let state = until(&updates, |s| s.handled.get("new:project") == Some(&1)).await;
+    let target = state.book.as_ref().unwrap().drafts["new:project"]
+        .created
+        .clone()
+        .unwrap();
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.executions, 1);
+        let payload: Value =
+            serde_json::from_str(seen.envelopes[0]["payload"].as_str().unwrap()).unwrap();
+        assert_eq!(payload["projectId"], "project-ab");
+        assert!(payload.get("cwd").is_none());
+        assert_eq!(
+            seen.projects.get(&target).map(String::as_str),
+            Some("project-ab")
+        );
+    }
+    let readback = read_json(reqwest::Client::new().get(format!(
+        "{}/api/sessions/{target}",
+        daemon.options.loopback()
+    )))
+    .await
+    .unwrap();
+    assert_eq!(readback["projectId"], "project-ab");
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+
+#[tokio::test]
+async fn invalid_or_stale_project_catalog_never_reserves_or_posts_creation() {
+    for behavior in [
+        Behavior::ProjectsUnavailable,
+        Behavior::ProjectRemoved,
+        Behavior::ProjectPathChanged,
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        let mut captured = draft(1, "Keep draft when project changes");
+        captured.project_id = Some("project-ab".into());
+        assert!(client.edit("new:project".into(), captured.clone()));
+        assert!(client.command(WriteCommand::Submit {
+            key: "new:project".into(),
+            draft: Box::new(captured),
+            follow_up: true,
+            stop: false,
+            request: 1
+        }));
+        let state = until(&updates, |s| s.handled.get("new:project") == Some(&1)).await;
+        let book = state.book.as_ref().unwrap();
+        assert!(book.pending.is_empty());
+        assert_eq!(
+            book.drafts["new:project"].text,
+            "Keep draft when project changes"
+        );
+        assert!(daemon.seen.lock().unwrap().envelopes.is_empty());
+        assert!(client.command(WriteCommand::Close));
+        until(&updates, |s| s.flushed).await;
+    }
 }
 
 #[tokio::test]

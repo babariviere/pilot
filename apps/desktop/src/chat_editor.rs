@@ -13,12 +13,18 @@ use gpui_kit::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         checkbox::Checkbox,
-        input::{Input, InputEvent, InputState, Textarea, TextareaState},
+        input::{InputEvent, InputState, Textarea, TextareaState},
         radio::RadioGroup,
     },
     div, px,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(feature = "native-probes")]
+#[path = "project_creation_probe.rs"]
+pub(crate) mod project_creation_probe;
+#[path = "chat_projects.rs"]
+mod projects;
 
 pub(crate) enum EditorEvent {
     DraftsChanged,
@@ -37,6 +43,8 @@ pub(crate) struct ChatEditor {
     client: Option<Interaction>,
     text: Entity<TextareaState>,
     cwd: Entity<InputState>,
+    project_catalog: projects::Catalog,
+    project_picker: Option<projects::Picker>,
     cache: BTreeMap<String, Draft>,
     selected: Option<String>,
     writable: bool,
@@ -87,6 +95,8 @@ impl ChatEditor {
             client,
             text,
             cwd,
+            project_catalog: Default::default(),
+            project_picker: None,
             cache: BTreeMap::new(),
             selected: None,
             writable: false,
@@ -137,6 +147,7 @@ impl ChatEditor {
     }
     pub(crate) fn browse_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selected = None;
+        self.project_picker = None;
         self.writable = false;
         self.busy = false;
         self.background_work = false;
@@ -279,7 +290,7 @@ impl ChatEditor {
             state.marked_text_range(window, cx).is_some()
         }) || self.cwd.update(cx, |state, cx| {
             state.marked_text_range(window, cx).is_some()
-        })
+        }) || self.project_query_marked(window, cx)
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn shell_probe_setup(
@@ -317,6 +328,7 @@ impl ChatEditor {
             self.cwd
                 .update(cx, |state, cx| state.set_value(cwd, window, cx));
         }
+        self.sync_project_picker(window, cx);
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -497,6 +509,14 @@ impl ChatEditor {
         {
             return;
         }
+        if !stop
+            && key.starts_with("new:")
+            && let Some(error) = self.project_problem(&draft)
+        {
+            self.error = Some(error);
+            cx.notify();
+            return;
+        }
         if stop && (!key.starts_with("chat:") || !self.busy) {
             return;
         }
@@ -557,6 +577,9 @@ impl ChatEditor {
         if self.marked(window, cx) {
             return false;
         }
+        if !self.retire_project_picker(window, cx) {
+            return false;
+        }
         self.changed(cx);
         true
     }
@@ -577,7 +600,7 @@ impl ChatEditor {
 }
 
 impl Render for ChatEditor {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(key) = self.selected.clone() else {
             return div()
                 .px_3()
@@ -645,18 +668,22 @@ impl Render for ChatEditor {
                     .h_flex()
                     .gap_2()
                     .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.cwd)
-                                .readonly(!can_edit)
-                                .aria_label("Local working folder"),
-                        ),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.project_field(draft, window, cx)),
                     )
                     .child(
                         RadioGroup::new("new-chat-mode")
                             .children(["Ask", "Build"])
                             .selected_index(Some(usize::from(draft.mode == "build")))
-                            .on_change(cx.listener(|view, index, _, cx| {
-                                if !view.ready() {
+                            .disabled(blocked || !draft.editable())
+                            .on_change(cx.listener(|view, index, window, cx| {
+                                if !view.ready()
+                                    || view.waiting()
+                                    || view.marked(window, cx)
+                                    || !view.draft().is_some_and(Draft::editable)
+                                {
                                     return;
                                 }
                                 if let Some(key) = &view.selected
@@ -757,7 +784,7 @@ impl Render for ChatEditor {
                                     || settled
                                     || !draft.editable()
                                     || draft.text.trim().is_empty()
-                                    || (is_new && !std::path::Path::new(&draft.cwd).is_absolute()),
+                                    || (is_new && self.project_problem(draft).is_some()),
                             )
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 if view.selected.as_ref() == Some(&send_key) {

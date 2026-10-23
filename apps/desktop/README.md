@@ -88,9 +88,15 @@ uncertain work. This is not a mission dashboard or permission promotion. See
 
 ### Messages and private drafts
 
-New chat requires an explicit absolute Local folder and Ask/Build choice (Ask
-by default). It never inherits another agent's isolated working copy. Enter or
-Send submits; Shift-Enter inserts a newline. Marked text cannot submit. Follow-up
+New chat requires an explicit configured Local **project**, selected with the
+searchable project picker, and an Ask/Build choice (Ask by default). The canonical
+project ID, not a guessed folder match, determines the chat association and daemon-owned
+working directory/workspace defaults. No manual working-folder prompt or another
+agent's isolated working copy is inherited. Selection is retained per private draft;
+legacy unsent folder-only drafts keep their text and require an explicit project choice.
+Pending deliveries keep their original destination and payload. Empty, unavailable or
+changed project choices cannot create a chat. See `docs/project-based-chat-creation.md`.
+Enter or Send submits; Shift-Enter inserts a newline. Marked text cannot submit. Follow-up
 queues behind current work; unchecking it selects the existing steer delivery
 mode. Sending does not force the reader down the transcript. Stop is available
 for a working chat or its queued input; withdrawn text is saved separately, never

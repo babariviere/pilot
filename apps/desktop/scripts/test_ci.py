@@ -187,7 +187,9 @@ chmod +x "$1"
         compiled = calls[0][5:]
         executed = [arg for call in calls[1:] for arg in call[4:]]
         self.assertEqual(compiled, executed)
-        self.assertEqual(len(calls), 18)
+        self.assertEqual(len(compiled) % 2, 0)
+        self.assertEqual(len(calls), 1 + len(compiled) // 2)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "project_creation"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "catalog"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "settings"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission"], calls)
