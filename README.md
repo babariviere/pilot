@@ -602,6 +602,9 @@ starts are rejected with the size, without truncation. The app's task Start chat
 It opens a small sheet with optional instructions, model and thinking (defaulting to the task's preferred
 model), Build or Ask mode, base branch, and artifact or link references, validated like the coordinator's start.
 
+Creating a mission with a new coordinator, or starting a coordinator later, has no separate prompt-length
+cap. Its planning instructions are delivered in full; the API's general request-size limit still applies.
+
 A task can have a preferred model and thinking level, set from the task's menu in the Tasks tab or by the
 coordinator. It uses the same scoped, price-capped model list as coordinator starts. New chats for the task
 start on it unless a start picks another model; the coordinator cannot change or override a preference you set.

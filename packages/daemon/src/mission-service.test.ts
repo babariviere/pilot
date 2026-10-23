@@ -897,6 +897,30 @@ test("new mission starts a coordinator with the draft request and user context b
 	);
 });
 
+for (const creating of [true, false]) {
+	test(`${creating ? "new" : "existing"} mission delivers a long coordinator prompt without truncation`, async (t) => {
+		const f = await fixture(t);
+		const goal = "g".repeat(4000);
+		const message = "Requirements: preserve all context. 🦜\n".repeat(500);
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Long plan",
+			goal,
+			...(creating ? { startCoordinator: true, message } : {}),
+		});
+		const session = creating
+			? f.sessions.get(mission.coordinatorSessionId!)!
+			: await f.service.startCoordinator(mission.id, { message });
+		assert.equal(f.store.require(mission.id).coordinatorSessionId, session.id);
+		assert.deepEqual(f.store.members(mission.id), [session.id]);
+		const worker = await until(() => f.workers.get(session.id));
+		assert.equal(worker.spec.mission?.coordinator, "self");
+		const input = await until(() => worker.requests.find((command) => command.type === "input"));
+		assert.equal(input.type, "input");
+		assert.equal(input.content, `${draftMessage("Long plan")}\n\n${goal}\n\n${message.trim()}`);
+	});
+}
+
 test("new mission with start disabled or omitted creates no chat", async (t) => {
 	const f = await fixture(t);
 	for (const startCoordinator of [false, undefined]) {
