@@ -25,8 +25,8 @@ This extends the scoped Home/projects delivery, not full app parity.
   may clamp old offsets to the new content bounds.
 - Returning to the same current chat preserves its one transcript/scroller,
   loaded history cursor and text entities. Cross-chat history uses the existing
-  pinned reader, never cached transcripts. At most100 message-ID/offset/follow
-  tokens restore a marker only if it is in the newly admitted page. If not,
+  pinned reader, never cached transcripts. At most100 canonical entry/model/block
+  or tool-call identity/offset/follow tokens restore a marker only if it is in the newly admitted page. If not,
   explain that Earlier can load older messages; never silently drain history.
   Generation/owner fences reject stale publications; Latest overrides a pending
   marker. Restoration itself does not manufacture a scroll/history request.
@@ -39,6 +39,42 @@ This extends the scoped Home/projects delivery, not full app parity.
 All state is window-local and bounded. Restart intentionally forgets navigation
 and UI filters, not durable drafts/outbox. Stored ID locations remain qualified
 by this viewer's fixed Local daemon/lineage; there is no host switching/fanout.
+
+### Canonical reader identity correction
+
+Independent review exposed a real defect in the original checkpoint: a
+`ReadingMark` stored the transient `Message.id()` used for rendering. A fresh
+`LiveTranscript` allocates new high-bit block keys while reading a reverse
+snapshot. Appending entry30 with thinking/text can reuse entry20's saved render
+number for different content. The original handcrafted-ID native scenes did
+not cover that reducer boundary; their pass was not evidence against this bug.
+
+Render IDs remain separate and unchanged for ordinary valid content. Reader
+keys now come only from canonical entry ID plus model/block positions, or a
+canonical tool-call ID. Work grouping retains contributing canonical row
+aliases and resolves tool keys by actual call membership, not the group's
+allocated render number. The existing fixed Local owner, chat-cache key and
+pending generation/selected-owner checks qualify these session-relative keys.
+Restoration rejects missing or ambiguous identities, with no numeric fallback
+and no transcript cache/history drain. Uncommitted text has no invented durable
+key; a manual uncommitted marker cannot be restored after a fresh reader. Tail
+following remains explicit. A live row promoted to committed history acquires
+its entry/model/block key while retaining its render ID.
+
+Collapsed over-limit model placeholders use an aggregate model key, never an
+unrelated block's position. Tool IDs are kept exact or refused, not truncated
+into another identity. Invalid tool placeholders retain distinct render keys.
+Reasoning still stays suppressed and no private reasoning fields are exposed.
+
+Regression coverage now includes actual reducer snapshots and fresh Opens with
+thinking/text, append and wire-order changes, multiple models/blocks, grouped
+tools and contributing notes, live-to-committed text/tool promotion, malformed
+tool IDs and missing markers. Native production-root reopen scenes deliberately
+reproduce the render-number collision, then assert the canonical top marker and
+copy the actually rendered OLD source. Missing-key cases reuse that same number
+for NEW text and must produce the notice, not restore it. Final results follow
+after the focused/full correction gates complete; older results below describe
+the original checkpoint only.
 
 ## Scoped dependency seams
 
