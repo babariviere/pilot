@@ -24,7 +24,7 @@ fn book() -> std::sync::Arc<crate::delivery_store::Book> {
     std::fs::remove_dir_all(root).unwrap();
     book
 }
-fn setup(
+pub(super) fn setup(
     cx: &mut TestAppContext,
 ) -> (
     gpui_kit::AnyWindowHandle,

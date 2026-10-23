@@ -144,3 +144,9 @@ name = "mission"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "project_creation"
+harness = false
+test = false
+required-features = ["native-probes"]

@@ -522,6 +522,25 @@ async fn submit(
     if let Some(target) = key.strip_prefix("chat:") {
         writable(client, options, target).await?;
     }
+    if key.starts_with("new:")
+        && !store
+            .book
+            .drafts
+            .get(key)
+            .is_some_and(|d| d.pending.is_some())
+    {
+        let id = draft
+            .project_id
+            .as_deref()
+            .ok_or("Choose a configured Local project")?;
+        let value = read_json(client.get(format!("{}/api/projects", options.loopback()))).await?;
+        let projects = crate::local_model::projects(&value)?;
+        if !projects.iter().any(|p| p.id == id && p.path == draft.cwd) {
+            return Err(
+                "The selected project or folder changed. Choose the project again before creating.",
+            );
+        }
+    }
     // No mutation is possible before this durable reservation succeeds.
     let intent = store.prepare(key, draft, follow_up, stop)?;
     prepared(store);

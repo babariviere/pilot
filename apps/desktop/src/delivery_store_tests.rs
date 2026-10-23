@@ -22,6 +22,7 @@ fn draft(revision: u64, text: &str) -> Draft {
         revision,
         text: text.into(),
         cwd: "/tmp".into(),
+        project_id: Some("project-a".into()),
         ..Default::default()
     }
 }
@@ -149,6 +150,76 @@ fn mission_write_failure_cannot_authorize_a_post_or_discard_input() {
     assert!(store.book.missions.is_empty());
     assert_eq!(store.book.drafts["chat:source"].text, "preserved");
     assert!(store.is_faulted());
+}
+
+#[test]
+fn project_identity_is_explicit_and_pending_selection_cannot_retarget_creation() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut selected = draft(1, "Synthetic 日本語 project request");
+    selected.project_id = Some("project-ab".into());
+    let first = store
+        .prepare("new:project", &selected, true, false)
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(&first.operation.as_ref().unwrap().payload).unwrap();
+    assert_eq!(payload["projectId"], "project-ab");
+    assert!(
+        payload.get("cwd").is_none(),
+        "project defaults/workspaces are not overridden"
+    );
+    let mut changed = selected.clone();
+    changed.revision = 2;
+    changed.project_id = Some("project-a".into());
+    changed.cwd = "/another-folder".into();
+    save(&mut store, "new:project", changed.clone());
+    assert_eq!(
+        store.book.drafts["new:project"].project_id.as_deref(),
+        Some("project-ab")
+    );
+    assert_eq!(store.book.drafts["new:project"].cwd, "/tmp");
+    assert!(store.prepare("new:project", &changed, true, false).unwrap() == first);
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.prepare("new:project", &changed, true, false).unwrap() == first);
+}
+
+#[test]
+fn old_unsubmitted_cwd_drafts_require_choice_but_old_pending_payloads_are_immutable() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut legacy = draft(1, "Keep legacy 👩‍💻 text");
+    legacy.project_id = None;
+    let encoded = serde_json::to_value(&legacy).unwrap();
+    assert!(encoded.get("projectId").is_none());
+    let restored: Draft = serde_json::from_value(encoded).unwrap();
+    assert!(restored == legacy);
+    save(&mut store, "new:legacy", legacy.clone());
+    assert!(store.prepare("new:legacy", &legacy, true, false).is_err());
+    assert_eq!(store.book.drafts["new:legacy"].text, legacy.text);
+    let selected = draft(2, &legacy.text);
+    let intent = store.prepare("new:legacy", &selected, true, false).unwrap();
+    store
+        .change(|book| {
+            let op = book
+                .pending
+                .get_mut(&intent.id)
+                .unwrap()
+                .operation
+                .as_mut()
+                .unwrap();
+            op.payload =
+                serde_json::json!({"message":legacy.text,"cwd":"/tmp","mode":"ask"}).to_string();
+            op.payload_hash = hash(&op.payload);
+            book.drafts.get_mut("new:legacy").unwrap().project_id = None;
+            Ok(())
+        })
+        .unwrap();
+    let original = store.book.pending[&intent.id].clone();
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.prepare("new:legacy", &legacy, true, false).unwrap() == original);
+    assert!(store.book.drafts["new:legacy"].project_id.is_none());
 }
 
 #[test]

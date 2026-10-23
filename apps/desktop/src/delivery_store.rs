@@ -57,6 +57,9 @@ pub(crate) struct Draft {
     pub(crate) revision: u64,
     pub(crate) text: String,
     pub(crate) cwd: String,
+    /// Canonical project chosen for a new draft, never inferred from cwd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) project_id: Option<String>,
     pub(crate) mode: String,
     pub(crate) pending: Option<String>,
     pub(crate) last: Option<Delivery>,
@@ -73,6 +76,7 @@ impl Default for Draft {
             revision: 0,
             text: String::new(),
             cwd: String::new(),
+            project_id: None,
             mode: "ask".into(),
             pending: None,
             last: None,
@@ -134,6 +138,7 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
         || draft.revision > 9_007_199_254_740_990
         || draft.text.len() > TEXT_CAP
         || draft.cwd.len() > 4096
+        || draft.project_id.as_deref().is_some_and(|id| !token(id))
         || !matches!(draft.mode.as_str(), "ask" | "build")
         || draft.recovered.len() > 8
         || draft.recovered.iter().any(|s| s.len() > RECOVER_CAP)
@@ -463,6 +468,10 @@ impl Store {
                     draft.recovered = old.recovered.clone();
                     draft.recovery_revision = old.recovery_revision;
                     draft.settled_revision = old.settled_revision;
+                    if !old.editable() {
+                        draft.project_id = old.project_id.clone();
+                        draft.cwd = old.cwd.clone();
+                    }
                 } else if book.drafts.len() >= DRAFT_CAP {
                     return Err("Draft capacity reached; nothing was evicted");
                 }
@@ -498,8 +507,10 @@ impl Store {
             let operation=if stop {None} else {
                 if captured.text.trim().is_empty() {return Err("Message is empty");}
                 let create=key.starts_with("new:");
-                if create&&!Path::new(&captured.cwd).is_absolute() {return Err("Choose an absolute Local working folder");}
-                let payload=if create {serde_json::json!({"message":captured.text,"cwd":captured.cwd,"mode":captured.mode})} else {serde_json::json!({"message":captured.text,"mode":if follow_up {"followUp"} else {"steer"}})}.to_string();
+                if create&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
+                // Project ID is the supported SpawnRequest contract. No cwd
+                // override: the daemon owns project/workspace resolution.
+                let payload=if create {serde_json::json!({"message":captured.text,"projectId":captured.project_id,"mode":captured.mode})} else {serde_json::json!({"message":captured.text,"mode":if follow_up {"followUp"} else {"steer"}})}.to_string();
                 if payload.len()>64*1024 {return Err("Encoded message exceeds the daemon's 64 KiB operation limit");}
                 let sequence=book.next_sequence;book.next_sequence+=1;
                 Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})

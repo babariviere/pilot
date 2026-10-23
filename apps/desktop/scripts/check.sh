@@ -54,3 +54,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test settings
 # Existing-chat conversion with an owned faux HTTP daemon and private writer.
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission
+
+# Actual project choice and durable create over an owned faux daemon.
+bash scripts/cargo.sh test --locked --features native-probes --test project_creation

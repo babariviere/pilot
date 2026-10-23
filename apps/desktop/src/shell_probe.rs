@@ -375,27 +375,31 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 "navigation must not create/send/Stop or approve"
             );
             cx.update(|cx| assert_eq!(view.read(cx).selected.as_deref(), Some("other")));
-            // A new draft still requires an explicit folder. Cwd preedit also fences shell navigation.
+            // Project-search preedit fences navigation; no hidden cwd input is used.
             cx.update_window(handle, |_, window, cx| {
-                view.update(cx, |v, cx| v.new_chat(window, cx))
+                view.update(cx, |v, cx| v.new_chat(window, cx));
             })
             .unwrap();
             settle(cx, handle);
             assert!(matches!(reads.try_recv(), Ok(Command::Clear { .. })));
             cx.update_window(handle, |_, window, cx| {
-                let cwd = view.read(cx).editor.read(cx).shell_probe().1;
-                cwd.update(cx, |v, cx| {
-                    v.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx)
+                let editor = view.read(cx).editor.clone();
+                let query = editor
+                    .read(cx)
+                    .project_query(cx)
+                    .expect("new draft project picker");
+                query.update(cx, |q, cx| {
+                    q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), window, cx)
                 });
                 view.update(cx, |v, cx| v.show_home(window, cx));
                 assert_eq!(view.read(cx).page, Page::Chat);
-                cwd.update(cx, |v, cx| {
-                    v.unmark_text(window, cx);
-                    v.set_value("/synthetic/explicit-folder", window, cx);
-                });
+                query.update(cx, |q, cx| q.unmark_text(window, cx));
                 view.update(cx, |v, cx| v.show_home(window, cx));
-                let draft = view.read(cx).editor.read(cx).shell_probe().2.unwrap();
-                assert_eq!(draft.cwd, "/synthetic/explicit-folder");
+                let draft = editor.read(cx).shell_probe().2.unwrap();
+                assert!(
+                    draft.project_id.is_none(),
+                    "no association is guessed from browsing scope or old cwd"
+                );
             })
             .unwrap();
             settle(cx, handle);
@@ -584,7 +588,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             }
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"home_projects_exact_scope":true,"same_cwd_not_membership":true,"archived_and_search_scope":true,"scope_shares_metadata":true,"draft_capture_unicode":true,"text_and_cwd_preedit_block_navigation":true,"late_receipt_and_newer_input_fenced":true,"removed_project_no_fallback":true,"text_entity_and_pixel_anchor_retained":true,"pointer_dismiss_and_reselect_copy":true,"home_all_chats_shortcuts":true,"reader_backpressure_keeps_destination_and_draft":true,"injected_faux_queue_controls":4,"hidden_publications_coalesced":32,"hidden_transcript_renders":0,"explicit_chat_open_read_commands":1,"clear_read_subscription":1,"write_commands":0,"native_offscreen_production_root":true})
+                json!({"width":width,"mode":mode.name(),"home_projects_exact_scope":true,"same_cwd_not_membership":true,"archived_and_search_scope":true,"scope_shares_metadata":true,"draft_capture_unicode":true,"text_and_project_search_preedit_block_navigation":true,"late_receipt_and_newer_input_fenced":true,"removed_project_no_fallback":true,"text_entity_and_pixel_anchor_retained":true,"pointer_dismiss_and_reselect_copy":true,"home_all_chats_shortcuts":true,"reader_backpressure_keeps_destination_and_draft":true,"injected_faux_queue_controls":4,"hidden_publications_coalesced":32,"hidden_transcript_renders":0,"explicit_chat_open_read_commands":1,"clear_read_subscription":1,"write_commands":0,"native_offscreen_production_root":true})
             );
             cx.update_window(handle, |_, window, _| window.remove_window())
                 .unwrap();
