@@ -110,9 +110,13 @@ test("memory and tree limits fail with plain messages", async () => {
 		"line 3: the visual used more than 32 MiB of memory",
 	);
 	assert.equal(
-		failed(await run("({ ui }) => () => ui.column(Array.from({ length: 5001 }, () => ui.rule()))")),
+		failed(await run("({ ui }) => () => ui.column(Array(5000).fill(ui.rule()))")),
 		"the view has more than 5000 nodes",
 	);
+	// Sharing a leaf must not deduplicate occurrences out of the node budget.
+	const boundary = await run("({ ui }) => () => ui.column(Array(4999).fill(ui.rule()))");
+	assert.ok(boundary.ok);
+	assert.equal(boundary.report.nodes, 5000);
 });
 
 test("console output is kept, bounded in lines and length", async () => {
