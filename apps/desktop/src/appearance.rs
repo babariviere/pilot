@@ -5,9 +5,9 @@ use gpui_kit::{App, AssetSource, SharedString, Window};
 use std::{borrow::Cow, rc::Rc};
 
 /// Swift Theme.Radius, picked by surface role rather than arbitrary size.
-pub(crate) struct Radius;
+pub struct Radius;
 /// Shell-only visual roles. Never reset Kit or Markdown/editor metrics globally.
-pub(crate) struct Space;
+pub struct Space;
 impl Space {
     pub const META: f32 = 4.;
     pub const CONTROL: f32 = 8.;
@@ -16,7 +16,7 @@ impl Space {
     pub const SECTION: f32 = 28.;
     pub const ROW: f32 = 52.;
 }
-pub(crate) struct TextRole;
+pub struct TextRole;
 impl TextRole {
     pub const DISPLAY: f32 = 26.;
     pub const TITLE: f32 = 22.;
