@@ -3,6 +3,7 @@ use crate::{
     app_icon::AppIcon,
     attention::Kind,
     local_model::{Chat, Project},
+    ui::{self, Notice, ResourceLabel, Space, Text, Tone},
 };
 use gpui_kit::{
     App, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement,
@@ -13,11 +14,26 @@ use gpui_kit::{
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
         select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     },
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::{collections::HashMap, sync::Arc};
 
 const SUMMARY_CAP: usize = 1000;
+fn empty_copy(loaded: bool) -> (&'static str, &'static str) {
+    if loaded {
+        (
+            "Nothing to act on in these chats",
+            "No supported attention in the loaded Local chats for this scope.",
+        )
+    } else {
+        (
+            "Loading Local chats",
+            "Supported chat attention will appear here when summaries arrive.",
+        )
+    }
+}
 pub(crate) struct InboxInput {
     pub(crate) chats: Arc<Vec<Chat>>,
     pub(crate) projects: Arc<Vec<Project>>,
@@ -131,22 +147,33 @@ impl ListDelegate for InboxList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
+        let count = self.rows.section(section).len();
+        if count == 0 {
+            return None;
+        }
         Some(
             div()
-                .px_2()
-                .py_2()
-                .text_sm()
-                .font_semibold()
-                .text_color(cx.theme().foreground)
-                .child(SharedString::from(format!(
-                    "{} · {} loaded",
-                    if section == 0 {
-                        "Needs you"
-                    } else {
-                        "Ready to merge"
-                    },
-                    self.rows.section(section).len()
-                ))),
+                .h_flex()
+                .items_center()
+                .gap(px(Space::CONTROL))
+                .px(px(Space::CONTROL))
+                .py(px(Space::CONTROL))
+                .child(
+                    ui::text(
+                        Text::Label,
+                        if section == 0 {
+                            "Needs you"
+                        } else {
+                            "Ready to merge"
+                        },
+                    )
+                    .font_medium()
+                    .text_color(cx.theme().foreground),
+                )
+                .child(
+                    ui::text(Text::Caption, count.to_string())
+                        .text_color(cx.theme().muted_foreground),
+                ),
         )
     }
     fn render_empty(
@@ -154,18 +181,17 @@ impl ListDelegate for InboxList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
+        let (title, detail) = empty_copy(self.loaded);
         div()
+            .id("inbox-empty-state")
+            .test_support()
             .h_flex()
-            .gap_2()
-            .p_4()
-            .text_sm()
+            .items_start()
+            .gap(px(Space::CONTROL))
+            .p(px(Space::SIDEBAR))
             .text_color(cx.theme().muted_foreground)
             .child(AppIcon::Inbox.icon())
-            .child(if self.loaded {
-                "No supported chat attention in these loaded summaries."
-            } else {
-                "Loading Local summaries…"
-            })
+            .child(Notice::new(title).detail(detail).tone(Tone::Quiet))
     }
     fn render_item(
         &mut self,
@@ -229,20 +255,13 @@ impl ListDelegate for InboxList {
                         .min_w_0()
                         .px_2()
                         .py_2()
-                        .gap_1()
+                        // Keep the existing full corner bounds; reserve a shared
+                        // spacing gutter in the text lane, not a hole in its paint.
+                        .pr(px(Space::SECTION))
                         .child(crate::dither_view::layer(corner))
                         .child(
-                            div()
-                                .text_sm()
-                                .truncate()
-                                .child(SharedString::from(chat.title)),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .truncate()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(context)),
+                            ResourceLabel::new(SharedString::from(chat.title))
+                                .detail(SharedString::from(context)),
                         ),
                 ),
         )
@@ -447,15 +466,29 @@ impl Render for Inbox {
             .filter
             .as_ref()
             .is_some_and(|id| !self.projects.iter().any(|p| &p.id == id));
-        div().id("inbox-page").test_support().v_flex().size_full().min_w_0().min_h_0().p_4().gap_3()
-            .child(div().h_flex().w_full().items_center().justify_between().gap_2()
-                .child(div().text_xl().font_semibold().child("Inbox"))
+        ui::page().id("inbox-page").test_support().h_full().min_h_0()
+            .gap(px(Space::SIDEBAR))
+            .child(div().v_flex().gap(px(Space::META))
+                .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()
+                .child(div().flex_1().min_w_0().child(ui::heading("inbox-title", "Inbox", Text::Title)))
                 // Select's refinement sizes the inner input, not its Base wrapper.
                 // Bound both so native hit testing matches the visible control.
                 .child(div().w(px(220.)).min_w(px(220.)).max_w(px(220.)).child(Select::new(&self.picker).id("inbox-project-filter").small().w_full().focus_ring(false).menu_max_h(px(300.)).accessibility_label("Inbox project filter").search_placeholder("Find a project…"))))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Local · loaded summaries only. Opening a chat does not mark it reviewed."))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(if missing { "Project unavailable. This exact filter is retained; choose another project." } else if self.projects_error { "Project list unavailable. Last received names and exact filters are retained." } else { "Supported chat reasons and ready primary PRs only. Full Inbox sources and actions remain in Swift." }))
+                .child(ui::text(Text::Caption, "Loaded Local chats only. Opening does not mark them reviewed.")
+                    .id("inbox-scope-note").test_support().text_color(cx.theme().muted_foreground)))
+            .when(missing || self.projects_error, |this| this.child(
+                div().id("inbox-project-notice").test_support().h_flex().items_start().gap(px(Space::CONTROL))
+                    .child(AppIcon::Error.inline().text_color(cx.theme().danger))
+                    .child(div().v_flex().min_w_0().gap(px(Space::META))
+                        .child(Notice::new(if missing { "Project unavailable" } else { "Couldn't refresh projects" }).tone(Tone::Error))
+                        .child(ui::text(Text::Caption, if missing {
+                            "This exact filter is retained. Choose another project to change scope."
+                        } else {
+                            "Last received names and exact filters are retained. Loaded chats remain available."
+                        }).text_color(cx.theme().muted_foreground)))))
             .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list)))
+            .child(ui::text(Text::Caption, "Chat attention and ready primary PRs only. More Inbox sources and actions remain in Swift.")
+                .id("inbox-availability-note").test_support().text_color(cx.theme().muted_foreground))
     }
 }
 
@@ -463,6 +496,99 @@ impl Render for Inbox {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn empty_and_loading_copy_keep_the_loaded_scope_boundary() {
+        assert_ne!(empty_copy(true), empty_copy(false));
+        assert!(empty_copy(true).0.contains("these chats"));
+        assert!(empty_copy(true).1.contains("loaded Local chats"));
+        assert!(empty_copy(false).0.contains("Loading"));
+        assert!(!empty_copy(true).0.contains("caught up"));
+    }
+    #[gpui_kit::test]
+    fn shared_rows_keep_glyph_free_text_lane_and_scope_guidance_mounted(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::{Bounds, WindowBounds, WindowOptions, size, test::TestWindowExt};
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        for width in [496., 868.] {
+            let chats = Arc::new(vec![crate::local_model::chat(&json!({
+                "id":"bounded", "title":"A very long synthetic attention title 日本語 ".repeat(8),
+                "state":"failed", "attentionReason":{"kind":"failed","detail":"synthetic reason ".repeat(20)}
+            })).unwrap()]);
+            let (h, _) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(600.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut inbox = Inbox::new(w, cx);
+                            inbox.sync(
+                                InboxInput {
+                                    chats,
+                                    projects: Arc::default(),
+                                    filter: None,
+                                    loaded: true,
+                                    projects_error: false,
+                                },
+                                w,
+                                cx,
+                            );
+                            inbox
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            cx.run_until_parked();
+            cx.update_window(h, |_, w, cx| {
+                w.draw(cx).clear(cx);
+                let row = w.find("attention-bounded").bounds();
+                let title = w
+                    .within("attention-bounded")
+                    .find("resource-title")
+                    .bounds();
+                let detail = w
+                    .within("attention-bounded")
+                    .find("resource-detail")
+                    .bounds();
+                assert!(title.size.width > px(0.) && detail.size.width > px(0.));
+                assert!(
+                    title.left() >= row.left() && title.left() - row.left() < px(Space::SIDEBAR)
+                );
+                assert!(title.right() <= row.right() - px(Space::SECTION));
+                assert_eq!(title.left(), detail.left());
+                assert!(
+                    w.within("attention-bounded")
+                        .try_find("resource-icon")
+                        .is_none(),
+                    "no new status column"
+                );
+                let pane = w.find("inbox-page").bounds();
+                let filter = w.find("inbox-project-filter").bounds();
+                let note = w.find("inbox-scope-note").bounds();
+                let footer = w.find("inbox-availability-note").bounds();
+                assert_eq!(filter.size.width, px(220.));
+                for bounds in [filter, note, footer] {
+                    assert!(bounds.left() >= pane.left() && bounds.right() <= pane.right());
+                    assert!(bounds.bottom() <= pane.bottom());
+                }
+                w.remove_window();
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+    }
     #[test]
     fn exact_scope_stable_urgency_and_capacity() {
         let chats:Vec<_>=(0..1001).map(|i|crate::local_model::chat(&json!({"id":format!("chat-{i}"),"state":"idle","projectId":if i%2==0 {"a"} else {"ab"},"attentionReason":{"kind":match i%4 {0=>"mcp",1=>"asks",2=>"failed",_=>"not_reviewed"}}})).unwrap()).collect();

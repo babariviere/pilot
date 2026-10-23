@@ -18,7 +18,7 @@ fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
 fn chats() -> Vec<Chat> {
     [
         json!({"id":"synthetic","title":"Review deployment options","projectId":"a","state":"idle","outcome":"question","attentionReason":{"kind":"asks","detail":"Which region should receive the canary?"}}),
-        json!({"id":"failed","title":"Check release package","projectId":"a","state":"idle","outcome":"failed","attentionReason":{"kind":"failed","detail":"Synthetic verification needs a correction"}}),
+        json!({"id":"failed","title":"Check release package and retained native resources for the synthetic macOS desktop 日本語","projectId":"a","state":"idle","outcome":"failed","attentionReason":{"kind":"failed","detail":"Synthetic verification needs a correction before the next source checkpoint. Retain the exact chat identity and do not treat this fixture as production readiness."}}),
         json!({"id":"job","title":"Inspect metrics export","projectId":"a","state":"working","attentionReason":{"kind":"long_job","detail":"Export is still running"}}),
         json!({"id":"review","title":"Read the API summary","projectId":"b","state":"idle","attentionReason":{"kind":"not_reviewed"}}),
         json!({"id":"ready","title":"Refresh navigation icons","projectId":"b","state":"idle","pullRequest":{"state":"open","readiness":{"state":"ready"}}}),
@@ -34,6 +34,23 @@ fn rows() -> Vec<Message> {
         "assistant".into(),
         "Synthetic retained reader 👩‍💻 e\u{301}.".into(),
     )]
+}
+fn capture_state(
+    cx: &mut HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+    directory: Option<&std::path::Path>,
+    width: f32,
+    mode: ThemeMode,
+    state: &str,
+) {
+    if let Some(directory) = directory {
+        cx.update_window(h, |_, w, cx| w.draw(cx).clear(cx))
+            .unwrap();
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(directory.join(format!("{}-{}-{state}.png", width as u32, mode.name())))
+            .unwrap();
+    }
 }
 pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_INBOX_DIR").map(std::path::PathBuf::from);
@@ -142,6 +159,14 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            capture_state(
+                cx,
+                h,
+                captures.as_deref(),
+                width,
+                mode,
+                "populated-selected",
+            );
             cx.update_window(h, |_, w, cx| {
                 let view = v.read(cx);
                 assert_eq!(view.page, Page::Inbox(None));
@@ -283,6 +308,17 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                 v.update(cx, |v, cx| {
                     let mut s = v.state.clone();
                     s.rows = rows();
+                    s.projects_error = Some("Synthetic catalog interrupted");
+                    v.accept(s, w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            capture_state(cx, h, captures.as_deref(), width, mode, "projects-error");
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut s = v.state.clone();
+                    s.rows = rows();
                     s.projects = Arc::new(vec![s.projects[1].clone()]);
                     s.projects_error = Some("Synthetic catalog interrupted");
                     v.accept(s, w, cx);
@@ -290,6 +326,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            capture_state(cx, h, captures.as_deref(), width, mode, "missing-project");
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(v.read(cx).page, Page::Inbox(Some("a".into())));
                 assert_eq!(v.read(cx).inbox.read(cx).probe(cx).0, 3);
@@ -349,6 +386,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                 "Inbox cannot replay create/send/Stop/approval"
             );
             cx.update_window(h,|_,w,cx|v.update(cx,|v,cx|{
+                v.state.projects_error = None;
                 v.state.projects=Arc::new((0..256).map(|i|crate::local_model::Project{id:format!("p{i}"),name:format!("Project {i}"),path:"/synthetic/shared".into()}).collect());
                 v.state.chats=Arc::new((0..1000).map(|i|crate::local_model::chat(&json!({"id":format!("capacity-{i}"),"title":format!("Attention {i}"),"projectId":format!("p{}",i%256),"state":"failed"})).unwrap()).collect());
                 v.show_inbox(None,w,cx);
@@ -372,6 +410,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             cx.update(|cx| assert_eq!(v.read(cx).inbox.read(cx).probe(cx).0, 0));
+            capture_state(cx, h, captures.as_deref(), width, mode, "loading");
             cx.update_window(h, |_, w, cx| {
                 v.update(cx, |v, cx| {
                     v.state.list_loaded = true;
@@ -381,6 +420,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            capture_state(cx, h, captures.as_deref(), width, mode, "empty");
             cx.update(|cx| {
                 let p = v.read(cx).inbox.read(cx).probe(cx);
                 assert_eq!((p.0, p.1, p.2), (0, 0, 0));
