@@ -3,8 +3,8 @@
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
 use crate::{
-    app_icon::AppIcon,
     LocalOptions,
+    app_icon::AppIcon,
     artifact_model::Reference,
     artifact_worker::{Command, Snapshot, Worker},
     visual_slider::{
