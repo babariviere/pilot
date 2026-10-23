@@ -1,6 +1,9 @@
-//! Reader-owned numeric grid and one-in-flight/one-latest drag admission.
-//! No transport, VM, clock, host access or canonical state.
+//! Reader-owned numeric grid and pane-wide, paced one-flight/one-latest admission.
+//! Caller supplies monotonic time/canonical values. No transport, VM or host access.
 use serde_json::Value;
+use std::time::{Duration, Instant};
+// Round up rather than allowing rounding to exceed 30 dispatches/second.
+pub(crate) const DRAG_INTERVAL: Duration = Duration::from_millis(34);
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Spec {
     pub(crate) min: f64,
@@ -90,16 +93,24 @@ pub(crate) struct Flight {
 pub(crate) struct Flow {
     pub(crate) flight: Option<Flight>,
     pub(crate) queued: Option<Intent>,
+    next_dispatch: Option<Instant>,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Offer {
     Send,
     Queued,
     Unchanged,
+    Cancelled,
     Rejected,
 }
 impl Flow {
-    pub(crate) fn offer(&mut self, intent: &Intent, busy: bool) -> Offer {
+    pub(crate) fn offer(
+        &mut self,
+        intent: &Intent,
+        busy: bool,
+        canonical: f64,
+        now: Instant,
+    ) -> Offer {
         if !intent.value.is_finite() {
             return Offer::Rejected;
         }
@@ -112,36 +123,62 @@ impl Flow {
             {
                 return Offer::Unchanged;
             }
-            self.queued = if flight.intent.value == intent.value {
-                None
+            if flight.intent.value == intent.value {
+                self.queued = None;
+                Offer::Cancelled
             } else {
-                Some(intent.clone())
-            };
-            Offer::Queued
+                self.queued = Some(intent.clone());
+                Offer::Queued
+            }
         } else if busy {
             Offer::Rejected
+        } else if intent.value == canonical {
+            // Programmatic adoption of another slider must not erase this
+            // slider's pending input. Only the owning control can withdraw it.
+            if self.queued.as_ref().is_some_and(|q| q.same_control(intent)) {
+                self.queued = None;
+                Offer::Cancelled
+            } else {
+                Offer::Unchanged
+            }
         } else {
-            Offer::Send
+            self.queued = Some(intent.clone());
+            if self.next_dispatch.is_none_or(|due| now >= due) {
+                Offer::Send
+            } else {
+                Offer::Queued
+            }
         }
     }
-    pub(crate) fn sent(&mut self, intent: Intent, version: u64) {
+    pub(crate) fn sent(&mut self, intent: Intent, version: u64, now: Instant) {
         self.flight = Some(Flight { intent, version });
         self.queued = None;
+        self.next_dispatch = Some(now + DRAG_INTERVAL);
     }
     pub(crate) fn clear(&mut self) {
         self.flight = None;
         self.queued = None;
+        // Cancellation/rebinding/faults must not reset the pane-wide rate gate.
     }
-    pub(crate) fn finish(&mut self, version: u64, healthy: bool) -> Option<Intent> {
+    pub(crate) fn finish(&mut self, version: u64, healthy: bool) {
         if !healthy {
             self.clear();
-            return None;
+            return;
         }
         if self.flight.as_ref().is_none_or(|f| version <= f.version) {
-            return None;
+            return;
         }
         self.flight = None;
-        self.queued.take()
+    }
+    pub(crate) fn ready(&self, now: Instant) -> Option<Intent> {
+        (self.flight.is_none() && self.next_dispatch.is_none_or(|due| now >= due))
+            .then(|| self.queued.clone())
+            .flatten()
+    }
+    pub(crate) fn deadline(&self) -> Option<Instant> {
+        (self.flight.is_none() && self.queued.is_some())
+            .then_some(self.next_dispatch)
+            .flatten()
     }
     pub(crate) fn latest(&self, id: &str, binding: u64) -> Option<f64> {
         self.queued
@@ -204,35 +241,99 @@ mod tests {
     #[test]
     fn thousands_of_drag_updates_keep_one_command_and_only_latest_value() {
         let mut flow = Flow::default();
-        assert_eq!(flow.offer(&intent(0.), false), Offer::Send);
-        flow.sent(intent(0.), 7);
+        let now = Instant::now();
+        assert_eq!(flow.offer(&intent(0.), false, -1., now), Offer::Send);
+        flow.sent(intent(0.), 7, now);
         for n in 1..=4096 {
-            assert_eq!(flow.offer(&intent(f64::from(n)), true), Offer::Queued);
+            assert_eq!(
+                flow.offer(&intent(f64::from(n)), true, -1., now),
+                Offer::Queued
+            );
         }
         assert_eq!(flow.queued.as_ref(), Some(&intent(4096.)));
-        assert!(flow.finish(7, true).is_none());
+        flow.finish(7, true);
         assert!(flow.flight.is_some());
-        assert_eq!(flow.finish(8, true), Some(intent(4096.)));
-        assert!(flow.flight.is_none() && flow.queued.is_none());
+        flow.finish(8, true);
+        assert!(flow.ready(now).is_none());
+        assert_eq!(flow.ready(now + DRAG_INTERVAL), Some(intent(4096.)));
+        assert!(flow.flight.is_none() && flow.queued.is_some());
     }
     #[test]
     fn release_duplicates_replacement_busy_and_faults_do_not_replay() {
         let mut flow = Flow::default();
-        assert_eq!(flow.offer(&intent(1.), true), Offer::Rejected);
-        flow.sent(intent(1.), 4);
-        assert_eq!(flow.offer(&intent(1.), true), Offer::Unchanged);
-        flow.offer(&intent(2.), true);
-        assert_eq!(flow.offer(&intent(2.), true), Offer::Unchanged);
-        flow.offer(&intent(1.), true);
+        let now = Instant::now();
+        assert_eq!(flow.offer(&intent(1.), true, 0., now), Offer::Rejected);
+        flow.sent(intent(1.), 4, now);
+        assert_eq!(flow.offer(&intent(1.), true, 0., now), Offer::Unchanged);
+        flow.offer(&intent(2.), true, 0., now);
+        assert_eq!(flow.offer(&intent(2.), true, 0., now), Offer::Unchanged);
+        flow.offer(&intent(1.), true, 0., now);
         assert!(flow.queued.is_none());
         let mut other = intent(3.);
         other.binding += 1;
-        assert_eq!(flow.offer(&other, true), Offer::Rejected);
+        assert_eq!(flow.offer(&other, true, 0., now), Offer::Rejected);
         other = intent(3.);
         other.generation += 1;
-        assert_eq!(flow.offer(&other, true), Offer::Rejected);
-        flow.offer(&intent(9.), true);
-        assert!(flow.finish(4, false).is_none());
+        assert_eq!(flow.offer(&other, true, 0., now), Offer::Rejected);
+        flow.offer(&intent(9.), true, 0., now);
+        flow.finish(4, false);
         assert!(flow.flight.is_none() && flow.queued.is_none());
+    }
+
+    #[test]
+    fn immediate_acks_and_cross_slider_switches_share_one_fixed_rate_gate() {
+        let start = Instant::now();
+        let mut flow = Flow::default();
+        let mut sent = Vec::new();
+        let mut version = 1;
+        for ms in 0..2000 {
+            let now = start + Duration::from_millis(ms);
+            let mut next = intent(ms as f64);
+            next.id = format!("slider-{}", ms % 2);
+            flow.offer(&next, false, -1., now);
+            if let Some(next) = flow.ready(now) {
+                sent.push(now);
+                flow.sent(next, version, now);
+                flow.finish(version + 1, true); // Fastest possible helper.
+                version += 1;
+            }
+        }
+        assert!(sent.len() > 50 && sent.len() <= 60);
+        assert!(sent.windows(2).all(|s| s[1] - s[0] >= DRAG_INTERVAL));
+        for &at in &sent {
+            assert!(
+                sent.iter()
+                    .filter(|&&t| t >= at && t < at + Duration::from_secs(1))
+                    .count()
+                    <= 30
+            );
+        }
+        assert!(flow.queued.is_some());
+        let due = flow.deadline().unwrap();
+        let next = flow.ready(due).unwrap();
+        assert_eq!(next.value, 1999.);
+    }
+
+    #[test]
+    fn canonical_return_withdraws_only_unsent_own_input_and_does_not_reset_cadence() {
+        let now = Instant::now();
+        let mut flow = Flow::default();
+        flow.sent(intent(10.), 1, now);
+        // While in flight, returning to old canonical must remain queued: the
+        // pending callback can still change canonical from 0 to 10.
+        assert_eq!(flow.offer(&intent(0.), true, 0., now), Offer::Queued);
+        flow.finish(2, true);
+        assert_eq!(flow.ready(now + DRAG_INTERVAL), Some(intent(0.)));
+        flow.offer(&intent(20.), false, 10., now);
+        assert_eq!(flow.offer(&intent(10.), false, 10., now), Offer::Cancelled);
+        assert!(flow.queued.is_none() && flow.deadline().is_none());
+        flow.clear();
+        let mut other = intent(30.);
+        other.id = "other".into();
+        assert_eq!(flow.offer(&other, false, 0., now), Offer::Queued);
+        assert_eq!(flow.offer(&intent(10.), false, 10., now), Offer::Unchanged);
+        assert_eq!(flow.queued, Some(other));
+        assert_eq!(flow.deadline(), Some(now + DRAG_INTERVAL));
+        assert!(flow.ready(now).is_none());
     }
 }
