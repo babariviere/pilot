@@ -36,8 +36,9 @@ reasoning, canonical write or inferred authority is involved in building/search.
   Existing guarded navigation captures draft/reader state only on an explicit
   jump. Closing restores previous focus, without changing the reader/history.
 - Search/opening the palette does not create, send, Stop, approve, retry, check
-  receipts, mark read, archive, merge or reconfigure anything. Explicit chat open
-  alone uses the existing reader contract, including possible server-side PR
+  receipts, mark read, archive, merge or reconfigure anything. Only explicit
+  destination activation uses the existing reader contract (project focus may
+  restore its last chat), including possible server-side PR
   refresh. Loopback + Origin rejection/identity pinning is not authentication.
 
 ## Verification
@@ -52,7 +53,18 @@ bash scripts/cargo.sh test --locked --features native-probes --test jump
 bash scripts/check.sh
 ```
 
-Initial verification is in progress; no pass or delivery claim yet. Native scenes
+Focused catalog tests and all four native palette scenes passed. The native
+matrix verifies Unicode search, keyboard/project and pointer/Inbox jumps, draft
+text preservation, per-key preedit refusal, Tab/Cmd-F/Cmd-L containment,
+programmatic navigation refusal, old-rendered-ID pointer activation after a feed
+change, long-query refusal, exactly one explicit faux chat read, zero canonical
+write commands,1259-entry/18-match capacity and entity release after close.
+Search input is driven natively, not by assuming `set_value` emits Change.
+Empty-section measurement and accepted-versus-requested query selection have
+defensive guards; preedit is captured in the action phase before Input Escape
+can unmark it. These source fixes add no dependency patch or global timer.
+
+The final full gate is pending; no delivery/ready claim yet. Native scenes
 exercise the production root at680/1100pt, light/dark, and never open a visible
 window or access real Local/private state. The separate SwiftUI artifact is a
 labelled static reference, not GPUI/rendering or acceptance evidence. Offscreen

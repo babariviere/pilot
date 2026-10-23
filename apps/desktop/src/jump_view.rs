@@ -4,6 +4,7 @@ use gpui_kit::{
     App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
     WeakEntity, Window,
+    base::FocusTrapElement,
     component::{
         ActiveTheme, IndexPath, StyledExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -75,6 +76,9 @@ impl ListDelegate for JumpList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
+        // Kit may measure section zero before the async catalog exists, and
+        // cached section geometry may outlive a filtered result set.
+        let group = self.matches.groups.get(section)?;
         Some(
             div()
                 .px_2()
@@ -82,11 +86,7 @@ impl ListDelegate for JumpList {
                 .text_xs()
                 .font_semibold()
                 .text_color(cx.theme().muted_foreground)
-                .child(
-                    self.matches.groups[section]
-                        .kind
-                        .title(self.matches.suggested),
-                ),
+                .child(group.kind.title(self.matches.suggested)),
         )
     }
     fn render_empty(
@@ -148,10 +148,12 @@ impl ListDelegate for JumpList {
     }
 }
 pub(crate) struct JumpPalette {
+    focus: gpui_kit::FocusHandle,
     pub(crate) list: Entity<ListState<JumpList>>,
     pub(crate) source: Snapshot,
     catalog: Option<Arc<Catalog>>,
     query: Query,
+    applied_query: Option<Query>,
     epoch: u64,
     ready: bool,
     task: Option<Task<()>>,
@@ -204,10 +206,12 @@ impl JumpPalette {
             _ => {}
         });
         let mut v = Self {
+            focus: cx.focus_handle().tab_stop(false),
             list,
             source,
             catalog: None,
             query: Query::new(""),
+            applied_query: None,
             epoch: 0,
             ready: false,
             task: None,
@@ -233,7 +237,6 @@ impl JumpPalette {
         self.request(self.query.clone(), w, cx);
     }
     fn request(&mut self, query: Query, w: &mut Window, cx: &mut Context<Self>) {
-        let changed = query != self.query;
         self.query = query.clone();
         self.epoch += 1;
         let epoch = self.epoch;
@@ -253,6 +256,11 @@ impl JumpPalette {
                 if epoch != v.epoch {
                     return;
                 }
+                // Repeated input notifications can replace an in-flight task
+                // before its first results land. Compare with the accepted
+                // query, not the last requested query, to retain reset intent.
+                let changed = v.applied_query.as_ref() != Some(&v.query);
+                v.applied_query = Some(v.query.clone());
                 v.catalog = Some(catalog.clone());
                 v.ready = true;
                 v.list.update(cx, |l, cx| {
@@ -297,11 +305,46 @@ impl JumpPalette {
             cx.emit(JumpEvent::Activate(destination));
         }
     }
+    fn guard_preedit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            cx.stop_propagation();
+        } else {
+            cx.propagate();
+        }
+    }
 }
 impl Render for JumpPalette {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("jump-palette")
+            // Keybindings dispatch actions before raw key listeners. Capture
+            // Escape before the input clears preedit, not after List::Cancel.
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| v.guard_preedit(w, cx)),
+            )
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::Enter, w, cx| v.guard_preedit(w, cx)),
+            )
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::actions::Cancel, w, cx| v.guard_preedit(w, cx)),
+            )
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::actions::Confirm, w, cx| {
+                    v.guard_preedit(w, cx)
+                }),
+            )
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::IndentInline, w, cx| {
+                    v.focus(w, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::OutdentInline, w, cx| {
+                    v.focus(w, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .test_support()
             .v_flex()
             .w_full()
@@ -327,5 +370,6 @@ impl Render for JumpPalette {
                         "↑↓ choose · Enter open · Esc close · Loaded Local resources only"
                     }),
             )
+            .focus_trap("jump-palette", &self.focus)
     }
 }
