@@ -33,6 +33,19 @@ struct UsageTrendPoint: Identifiable, Sendable {
         let window: UsageDashboardWindow
         var filters: UsageQueryFilters?
     }
+    enum Sort: String, CaseIterable {
+        case cost = "estimatedUsdMicros", input, output, cacheRead, requests, duration = "durationMs"
+        var title: String {
+            switch self {
+            case .cost: "Estimated cost"
+            case .input: "Input tokens"
+            case .output: "Output tokens"
+            case .cacheRead: "Cache read"
+            case .requests: "Requests"
+            case .duration: "Duration"
+            }
+        }
+    }
     typealias LocalRead = @MainActor (UsageAnalyticsQuery) async throws -> UsageConnectedProjection
     typealias PageRead = @MainActor (UsageHistoryQuery, HostRef) async throws -> UsageHistoryPage
     typealias TokenRead = @MainActor (HostRef) -> HostConnectionToken?
@@ -46,6 +59,9 @@ struct UsageTrendPoint: Identifiable, Sendable {
     @Published private(set) var detail: Detail = .overview
     @Published private(set) var groups: UsageAnalyticsResult?
     @Published private(set) var groupNames: [String: String] = [:]
+    @Published private(set) var recordNames: [String: [String: String]] = [:]
+    @Published private(set) var sort = Sort.cost
+    @Published private(set) var ascending = false
     @Published private(set) var page: UsageHistoryPage?
     @Published private(set) var detailLoading = false
     @Published private(set) var detailFailed = false
@@ -82,16 +98,11 @@ struct UsageTrendPoint: Identifiable, Sendable {
                       let sessions = (try? hosts.endpoint(host).sessions) ?? []
                       return await Task.detached(priority: .utility) { HomeStatus.subscriptions(sessions) }.value
                   }, labels: { host, dimension, keys in
-                      guard dimension == "project" || dimension == "chat", let client = try? hosts.endpoint(host) else { return [:] }
-                      let projects = client.projects, chats = client.sessions
+                      guard let client = try? hosts.endpoint(host) else { return [:] }
+                      let projects = client.projects, chats = client.sessions, missions = client.missions
                       return await Task.detached(priority: .utility) {
-                          var names: [String: String] = [:]
-                          for key in keys {
-                              guard let data = key.data(using: .utf8), let id = try? JSONDecoder().decode(String.self, from: data) else { continue }
-                              if dimension == "project" { names[key] = projects.first { $0.id.lowercased() == id }?.name }
-                              else { names[key] = chats.first { $0.id.lowercased() == id }?.title }
-                          }
-                          return names
+                          UsageDashboardPresentation.displayNames(keys, dimension: dimension, host: host,
+                                                                  projects: projects, chats: chats, missions: missions)
                       }.value
                   })
         // Invalidate on endpoint events, without rereading history or polling. objectWillChange precedes
@@ -108,7 +119,7 @@ struct UsageTrendPoint: Identifiable, Sendable {
         self.scope = scope
         summary = nil; trend = []; trendFailed = false; trendLoading = false; groups = nil; page = nil
         detailFailed = false
-        breakdowns = [:]; breakdownNames = [:]; groupNames = [:]
+        breakdowns = [:]; breakdownNames = [:]; groupNames = [:]; recordNames = [:]
         anchor = nil; localHost = nil; detail = .overview; subscriptions = []
         state = .loading
         let request = revision
@@ -178,7 +189,7 @@ struct UsageTrendPoint: Identifiable, Sendable {
 
     func show(_ selection: Detail, force: Bool = false) {
         detailTask?.cancel(); detailRevision = UUID()
-        detail = selection; groups = nil; groupNames = [:]; page = nil; detailFailed = false; detailLoading = false
+        detail = selection; groups = nil; groupNames = [:]; recordNames = [:]; page = nil; detailFailed = false; detailLoading = false
         guard selection != .overview, let scope, let host = localHost, current else {
             if selection != .overview { invalidate() }
             return
@@ -217,6 +228,14 @@ struct UsageTrendPoint: Identifiable, Sendable {
                     try Task.checkCancellation()
                     guard revision == request, detailRevision == subrequest else { return }
                     guard current, result.status.generation == summary?.status.generation else { invalidate(); return }
+                    var names: [String: [String: String]] = [:]
+                    for dimension in ["project", "chat", "mission"] {
+                        let keys = Array(Set(result.rows.compactMap { UsageDashboardPresentation.attributionKey($0, dimension: dimension) }))
+                        names[dimension] = await labels(host, dimension, keys)
+                        guard revision == request, detailRevision == subrequest else { return }
+                    }
+                    guard current else { invalidate(); return }
+                    recordNames = names
                     page = result // Replace, never sum repeated totals or retain an unbounded list of pages.
                 }
             } catch {
@@ -227,6 +246,13 @@ struct UsageTrendPoint: Identifiable, Sendable {
     }
 
     static let dimensions = ["project", "mission", "chat", "physicalModel", "purpose"]
+
+    func setSort(_ sort: Sort, ascending: Bool) {
+        guard self.sort != sort || self.ascending != ascending else { return }
+        self.sort = sort; self.ascending = ascending
+        breakdowns = [:]; breakdownNames = [:]
+        if case let .breakdown(dimension, _) = detail { show(.breakdown(dimension)) }
+    }
 
     func connectionChanged() {
         if summary != nil, !current { invalidate() }
@@ -253,7 +279,7 @@ struct UsageTrendPoint: Identifiable, Sendable {
     }
 
     private func invalidate() {
-        stop(); summary = nil; groups = nil; groupNames = [:]; page = nil; trend = []; breakdowns = [:]; breakdownNames = [:]
+        stop(); summary = nil; groups = nil; groupNames = [:]; recordNames = [:]; page = nil; trend = []; breakdowns = [:]; breakdownNames = [:]
         trendLoading = false; subscriptions = []
         state = .unavailable("Local connection or history changed. Refresh to read the current retained view.")
     }
@@ -273,7 +299,9 @@ struct UsageTrendPoint: Identifiable, Sendable {
     private func query(_ scope: Scope, view: String = "summary", dimension: String? = nil,
                        bucket: Int? = nil, limit: Int? = nil, after: String? = nil) -> UsageAnalyticsQuery {
         .init(from: scope.window.from, to: scope.window.to, filters: scope.filters,
-              view: view, dimension: dimension, bucketMs: bucket, limit: limit, after: after)
+              view: view, dimension: dimension, bucketMs: bucket, limit: limit, after: after,
+              sort: view == "breakdown" ? sort.rawValue : nil,
+              direction: view == "breakdown" ? (ascending ? "asc" : "desc") : nil)
     }
 
     private static func unavailable(_ state: String) -> String {

@@ -68,3 +68,37 @@ import Testing
     #expect(UsageDashboardPresentation.group("malformed", dimension: "project") == nil)
     #expect(UsageDashboardPresentation.group(#"["only-one"]"#, dimension: "mission") == nil)
 }
+
+@Test func usageDashboardNamesResolveArchivedChatsAndCanonicalMissionsWithoutChangingIdentity() throws {
+    let host = HostRef(hostId: "local", daemonId: "HOME", lineageId: "LINEAGE")
+    let project = Project(id: "PROJECT", name: "Pilot", path: "/fixture", createdAt: 0)
+    let chat = SessionSummary(id: "CHAT", title: "Fix usage chart", cwd: "/fixture", createdAt: 0,
+                              updatedAt: 0, state: "idle", archivedAt: 1)
+    let mission = Mission(id: "MISSION", projectId: project.id, title: "Ship the dashboard", goal: "", createdAt: 0, updatedAt: 0)
+    func names(_ keys: [String], _ dimension: String) -> [String: String] {
+        UsageDashboardPresentation.displayNames(keys, dimension: dimension, host: host,
+                                                projects: [project], chats: [chat], missions: [mission])
+    }
+    #expect(names([#""project""#], "project") == [#""project""#: "Pilot"])
+    #expect(names([#""chat""#, #""deleted""#, "null"], "chat") == [#""chat""#: "Fix usage chart"])
+    let key = #"["home","lineage","mission"]"#
+    #expect(names([key, #"["other-home","lineage","mission"]"#, #"["home","other-lineage","mission"]"#], "mission") == [key: "Ship the dashboard"])
+    let decoded = try #require(UsageDashboardPresentation.group(key, dimension: "mission"))
+    #expect(decoded.filters.mission == .init(homeId: "home", lineageId: "lineage", missionId: "mission"))
+}
+
+@Test func usageDashboardChartFitsWholeUTCBucketsIncludingPartialFinalDay() {
+    let day = UsageDashboardPresentation.day
+    for window in [UsageDashboardWindow(from: 0, to: 1), .init(from: 0, to: day * 6 + 1),
+                   .init(from: day, to: day * 2), .init(from: day + 1, to: day * 2 + 1)] {
+        let domain = UsageDashboardPresentation.chartWindow(window)
+        let first = domain.lowerBound.timeIntervalSince1970 * 1000
+        let end = domain.upperBound.timeIntervalSince1970 * 1000
+        #expect(first <= window.from && end >= window.to)
+        #expect(first.truncatingRemainder(dividingBy: day) == 0)
+        #expect(end.truncatingRemainder(dividingBy: day) == 0)
+        #expect(end >= floor((window.to - 1) / day) * day + day)
+    }
+    #expect(UsageFormatting.tokens(15_000_000) == "15M")
+    #expect(UsageFormatting.tokens(5_000_000) == "5M")
+}

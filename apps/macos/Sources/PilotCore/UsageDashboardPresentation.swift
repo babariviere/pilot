@@ -49,6 +49,53 @@ public enum UsageDashboardPresentation {
                                   timeZone: TimeZone(secondsFromGMT: 0)!) + " UTC"
     }
 
+    /// Current catalog names decorate exact accounting identities, never replace their filters.
+    /// Mission titles are valid only on their canonical home/lineage, not by mission UUID alone.
+    public static func displayNames(_ keys: [String], dimension: String, host: HostRef,
+                                    projects: [Project], chats: [SessionSummary], missions: [Mission]) -> [String: String] {
+        var names: [String: String] = [:]
+        for key in keys {
+            guard let decoded = group(key, dimension: dimension) else { continue }
+            let name: String?
+            switch dimension {
+            case "project":
+                name = projects.first { $0.id.lowercased() == decoded.filters.projectId?.lowercased() }?.name
+            case "chat":
+                name = chats.first { $0.id.lowercased() == decoded.filters.chatId?.lowercased() }
+                    .map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled chat" : $0.title }
+            case "mission":
+                guard let identity = decoded.filters.mission,
+                      identity.homeId.lowercased() == host.daemonId.lowercased(),
+                      identity.lineageId.lowercased() == host.lineageId.lowercased() else { continue }
+                name = missions.first { $0.id.lowercased() == identity.missionId.lowercased() }?.title
+            default: name = nil
+            }
+            if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { names[key] = name }
+        }
+        return names
+    }
+
+    public static func attributionKey(_ row: UsageObservation, dimension: String) -> String? {
+        let encoder = JSONEncoder()
+        let data: Data?
+        switch dimension {
+        case "project": data = row.attribution?.projectId.flatMap { try? encoder.encode($0.lowercased()) }
+        case "chat": data = row.attribution?.chatId.flatMap { try? encoder.encode($0.lowercased()) }
+        case "mission": data = row.attribution?.mission.flatMap {
+            try? encoder.encode([$0.homeId.lowercased(), $0.lineageId.lowercased(), $0.missionId.lowercased()])
+        }
+        default: data = nil
+        }
+        return data.map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// Full UTC bucket extents: a partial final day must still fit its whole bar inside the plot.
+    public static func chartWindow(_ window: UsageDashboardWindow) -> ClosedRange<Date> {
+        let first = floor(window.from / day) * day
+        let last = max(first + day, ceil(window.to / day) * day)
+        return Date(timeIntervalSince1970: first / 1000)...Date(timeIntervalSince1970: last / 1000)
+    }
+
     /// Keys are canonical JSON, not titles or the chat's current model. Unknown is an exact missing filter.
     public static func group(_ key: String, dimension: String,
                              base: UsageQueryFilters = .init()) -> (label: String, filters: UsageQueryFilters)? {

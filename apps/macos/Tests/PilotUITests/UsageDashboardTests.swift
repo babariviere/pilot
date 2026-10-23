@@ -36,6 +36,7 @@ private func usageDashboardReplacing<T: Codable>(_ value: T, _ change: (inout [S
     var replaceGeneration = false
     var bucketCount = 0
     var secondaryState: String?
+    var nameReads: [(String, [String])] = []
 
     init() throws {
         connection = HostConnectionToken(host: host)
@@ -85,7 +86,10 @@ private func usageDashboardReplacing<T: Codable>(_ value: T, _ change: (inout [S
             status["generation"] = replaceGeneration ? "erased" : analytics.status.generation
             object["status"] = status
             return try JSONDecoder().decode(UsageHistoryPage.self, from: JSONSerialization.data(withJSONObject: object))
-        }, token: { [self] requested in requested == host ? connection : nil })
+        }, token: { [self] requested in requested == host ? connection : nil }, labels: { [self] _, dimension, keys in
+            nameReads.append((dimension, keys))
+            return Dictionary(uniqueKeysWithValues: keys.map { ($0, "Named \(dimension)") })
+        })
     }
 
     var scope: UsageDashboardModel.Scope { .init(window: .init(from: 0, to: 86_400_000)) }
@@ -204,11 +208,34 @@ private func usageDashboardReplacing<T: Codable>(_ value: T, _ change: (inout [S
         model.show(.overview); model.show(.breakdown("project"))
         #expect(fixture.queries.count == 3, "Reopening the active scope's first breakdown is cached")
         #expect(fixture.queries.last?.limit == 10)
+        #expect(fixture.queries.last?.sort == "estimatedUsdMicros" && fixture.queries.last?.direction == "desc")
+        #expect(model.groupNames.values.allSatisfy { $0 == "Named project" })
+        model.show(.breakdown("project", after: "fixture-next"))
+        try await usageDashboardWait { !model.detailLoading }
+        model.setSort(.input, ascending: true)
+        try await usageDashboardWait { !model.detailLoading }
+        #expect(fixture.queries.last?.sort == "input" && fixture.queries.last?.direction == "asc")
+        #expect(fixture.queries.last?.after == nil, "Changing order discards the previous keyset cursor")
+        let sortedReads = fixture.queries.count
+        model.show(.overview); model.show(.breakdown("project"))
+        #expect(fixture.queries.count == sortedReads, "Only the current sort's first page can be reused")
         model.show(.records("checkpoint"))
         try await usageDashboardWait { !model.detailLoading }
         #expect(fixture.pages.last?.0.kind == "checkpoint")
         #expect(fixture.pages.last?.1 == fixture.host)
         #expect(fixture.pages.last?.0.limit == 25)
+        #expect(model.recordNames["chat"]?.values.allSatisfy { $0 == "Named chat" } == true)
+        #expect(model.recordNames["chat"]?.isEmpty == false)
+        let observed = try #require(model.page?.rows.first)
+        for dimension in ["project", "chat", "mission"] {
+            if let key = UsageDashboardPresentation.attributionKey(observed, dimension: dimension) {
+                let decoded = try #require(UsageDashboardPresentation.group(key, dimension: dimension))
+                if dimension == "chat" { #expect(decoded.filters.chatId == observed.attribution?.chatId?.lowercased()) }
+                if dimension == "mission" { #expect(decoded.filters.mission?.missionId == observed.attribution?.mission?.missionId.lowercased()) }
+                #expect(model.recordNames[dimension]?[key] == "Named \(dimension)")
+            }
+        }
+        #expect(Set(fixture.nameReads.map(\.0)) == ["project", "chat", "mission"])
         let count = model.page?.rows.count
         model.show(.records("request", after: "opaque-next"))
         try await usageDashboardWait { !model.detailLoading }
@@ -354,6 +381,9 @@ func usageDashboardMountedControlsReadLocalRangesFoldAndPageInBothAppearances() 
         try await click("usage-breakdown-physicalModel")
         try await usageDashboardWait { model.groups != nil && !model.detailLoading }
         #expect(fixture.queries.last?.dimension == "physicalModel")
+        try await click("usage-sort-direction")
+        try await usageDashboardWait { !model.detailLoading }
+        #expect(fixture.queries.last?.direction == "asc" && fixture.queries.last?.after == nil)
         try await click("usage-breakdown-physicalModel")
         #expect(model.detail == .overview)
         try await click("usage-requests")
@@ -386,5 +416,43 @@ func usageDashboardMountedControlsReadLocalRangesFoldAndPageInBothAppearances() 
         #expect(document.frame.width <= scroll.contentView.bounds.width + 1,
                 "The mounted document must fit its actual viewport without horizontal scrolling")
         #expect(fixture.pages.allSatisfy { $0.1 == fixture.host })
+
+        // Mount the production chart with the screenshot's scale and a partial final UTC day.
+        // Verify actual painted bars, not just a document frame that can hide plot overflow.
+        let day = UsageDashboardPresentation.day
+        let points = [10_600_000.0, 12_600_000, 3_400_000, 1_000_000].enumerated().map {
+            UsageTrendPoint(milliseconds: Double($0.offset + 3) * day, tokens: $0.element)
+        }
+        let chart = NSHostingView(rootView: UsageTrendChart(points: points, window: .init(from: 0, to: 6.1 * day))
+            .padding(16).background(Theme.background))
+        window.contentView = chart
+        window.setContentSize(NSSize(width: width, height: 220))
+        try await usageDashboardWait {
+            chart.layoutSubtreeIfNeeded()
+            return NativeInput.views(in: chart, of: ControlGeometryView.self)
+                .contains { $0.identifier?.rawValue == "usage-chart-plot" && $0.bounds.width > 0 }
+        }
+        let plot = try #require(NativeInput.views(in: chart, of: ControlGeometryView.self)
+            .first { $0.identifier?.rawValue == "usage-chart-plot" })
+        let plotBounds = plot.convert(plot.bounds, to: chart)
+        let bitmap = try #require(chart.bitmapImageRepForCachingDisplay(in: chart.bounds))
+        chart.cacheDisplay(in: chart.bounds, to: bitmap)
+        let sx = CGFloat(bitmap.pixelsWide) / chart.bounds.width
+        let sy = CGFloat(bitmap.pixelsHigh) / chart.bounds.height
+        var bluePixels = 0, finalDayPixels = 0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      color.blueComponent > color.redComponent + 0.2,
+                      color.blueComponent > color.greenComponent + 0.1 else { continue }
+                let location = NSPoint(x: CGFloat(x) / sx,
+                                       y: chart.isFlipped ? CGFloat(y) / sy : chart.bounds.height - CGFloat(y) / sy)
+                #expect(plotBounds.insetBy(dx: -1, dy: -1).contains(location), "Painted tokens must stay inside the plot")
+                bluePixels += 1
+                if location.x > plotBounds.minX + plotBounds.width * 6 / 7 { finalDayPixels += 1 }
+            }
+        }
+        #expect(bluePixels > 2000, "Bars must be filled from zero, not thin horizontal range marks")
+        #expect(finalDayPixels > 50, "The partial final day's bar must be visible inside the plot")
     }
 }

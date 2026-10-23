@@ -443,21 +443,33 @@ export class UsageHistoryDisk {
 		const q = usageAnalyticsQuery(value);
 		if (!safeUsageInteger(now)) throw new Error("Invalid usage clock");
 		const m = this.meta();
-		const signature = queryKey([q.version, q.from, q.to, q.filters, q.view, q.dimension ?? null, q.bucketMs ?? null]);
+		const signature = queryKey([
+			q.version,
+			q.from,
+			q.to,
+			q.filters,
+			q.view,
+			q.dimension ?? null,
+			q.bucketMs ?? null,
+			...(q.sort ? [q.sort, q.direction ?? "desc"] : []),
+		]);
 		let after = "";
+		let afterValue: number | null = null;
 		if (q.after !== undefined) {
 			try {
 				const c = JSON.parse(Buffer.from(q.after, "base64url").toString("utf8"));
 				if (
 					!Array.isArray(c) ||
-					c.length !== 3 ||
+					c.length !== (q.sort ? 4 : 3) ||
 					c[0] !== m.generation ||
 					c[1] !== signature ||
 					typeof c[2] !== "string" ||
-					c[2].length > 512
+					c[2].length > 512 ||
+					(q.sort && c[3] !== null && !safeUsageInteger(c[3]))
 				)
 					throw new Error();
 				after = c[2];
+				if (q.sort) afterValue = c[3];
 			} catch {
 				throw new Error("Invalid usage cursor");
 			}
@@ -473,13 +485,30 @@ export class UsageHistoryDisk {
 		const total = readTotal("request", q.from, q.to);
 		const reconciliation = readTotal("checkpoint", 0, Number.MAX_SAFE_INTEGER);
 		const limit = q.limit ?? 100;
+		// Sort the bounded scalar reduction inside the worker, never hydrate all groups in the UI.
+		// Bind the metric so trying every sort/order still fits the bounded statement cache.
+		// Unknown/unsafe subtotals stay last in either direction.
+		const sortValue = `CASE ? ${["estimatedUsdMicros", "input", "output", "cacheRead", "requests", "durationMs"]
+			.map(
+				(key) =>
+					`WHEN '${key}' THEN CASE WHEN ${key}Known>0 AND ${key}Value<=${Number.MAX_SAFE_INTEGER} THEN ${key}Value END`,
+			)
+			.join(" ")} END`;
+		const sorted = q.sort !== undefined;
+		const ascending = q.direction === "asc";
+		const pageSQL = sorted
+			? `, ranked AS (SELECT *, ${sortValue} AS sortValue FROM grouped)
+			 SELECT * FROM ranked WHERE ?=0 OR
+			 (sortValue IS NULL AND ? IS NOT NULL) OR sortValue ${ascending ? ">" : "<"} ? OR (sortValue IS ? AND key>?)
+			 ORDER BY sortValue IS NULL, sortValue ${ascending ? "ASC" : "DESC"}, key LIMIT ?`
+			: "SELECT * FROM grouped WHERE key>? ORDER BY key LIMIT ?";
 		const rows =
 			q.view === "summary"
 				? []
 				: // LIMIT prevents flattening: SQLite streams scalar index facts into the grouping
 					// sorter instead of carrying/reparsing raw ledger JSON for every aggregate field.
-					this.prepare(`SELECT key, ${REDUCE_FACTS_SQL} FROM (SELECT ${GROUP_SQL} AS key, ${FACTS_SQL} ${where} LIMIT ${USAGE_MAX_ROWS})
-		 GROUP BY key HAVING key>? ORDER BY key LIMIT ?`).all(
+					this.prepare(`WITH grouped AS (SELECT key, ${REDUCE_FACTS_SQL} FROM (SELECT ${GROUP_SQL} AS key, ${FACTS_SQL} ${where} LIMIT ${USAGE_MAX_ROWS})
+		 GROUP BY key) ${pageSQL}`).all(
 						q.dimension ?? "buckets",
 						q.bucketMs ?? 1,
 						q.bucketMs ?? 1,
@@ -488,7 +517,9 @@ export class UsageHistoryDisk {
 						q.to,
 						floor,
 						...args,
-						after,
+						...(sorted
+							? [q.sort!, q.after === undefined ? 0 : 1, afterValue, afterValue, afterValue, after]
+							: [after]),
 						limit + 1,
 					);
 		const truncated = rows.length > limit;
@@ -504,7 +535,11 @@ export class UsageHistoryDisk {
 			coverage: "partial",
 			truncated,
 			...(truncated && last
-				? { next: Buffer.from(JSON.stringify([m.generation, signature, last.key])).toString("base64url") }
+				? {
+						next: Buffer.from(
+							JSON.stringify([m.generation, signature, last.key, ...(sorted ? [last.sortValue] : [])]),
+						).toString("base64url"),
+					}
 				: {}),
 		};
 		if (Buffer.byteLength(JSON.stringify(result)) > 512 * 1024) throw new Error("Usage response limit exceeded");

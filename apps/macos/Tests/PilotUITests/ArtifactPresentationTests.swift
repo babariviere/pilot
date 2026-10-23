@@ -1,5 +1,5 @@
 import AppKit
-import PilotCore
+@testable import PilotCore
 import SwiftUI
 import Testing
 @testable import Pilot
