@@ -18,6 +18,10 @@ fn settle(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle) {
     }
 }
 pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_HOME_CONTEXT_DIR").is_some() {
+        run_home_context_probe(cx);
+        return;
+    }
     let captures = std::env::var_os("PILOT_NEXT_SHELL_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -569,6 +573,120 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(handle, |_, window, _| window.remove_window())
                 .unwrap();
+            cx.run_until_parked();
+        }
+    }
+}
+
+// Same frozen, public-summary fixture before/after. The selector above is only
+// this bounded capture check, never a pass of the original full shell matrix.
+fn run_home_context_probe(cx: &mut HeadlessAppContext) {
+    let captures = std::env::var_os("PILOT_NEXT_HOME_CONTEXT_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let projects = Arc::new(
+                crate::local_model::projects(&json!([
+                    {"id":"a","name":"Synthetic Atlas","path":"/synthetic/shared"},
+                    {"id":"ab","name":"Synthetic Boreal","path":"/synthetic/shared"}
+                ]))
+                .unwrap(),
+            );
+            let chats=Arc::new([
+                json!({"id":"busy-a","title":"Prepare the synthetic native resource bundle 日本語","state":"working","projectId":"a","cwd":"/synthetic/shared"}),
+                json!({"id":"question-b","title":"Choose a canary region for the synthetic release and retained project resources 日本語","state":"idle","outcome":"question","projectId":"ab","cwd":"/synthetic/shared","attentionReason":{"kind":"asks","detail":"Which region should receive the canary? Keep this public reason attached to its exact project."}}),
+                json!({"id":"unassigned","title":"Inspect synthetic unassigned notes","state":"idle","cwd":"/synthetic/shared"}),
+                json!({"id":"missing","title":"Check synthetic missing-project result","state":"failed","projectId":"absent","cwd":"/synthetic/shared","attentionReason":{"kind":"failed","detail":"Synthetic verification failed; the unavailable project must not resolve by shared folder."}}),
+            ].iter().map(|v|crate::local_model::chat(v).unwrap()).collect::<Vec<_>>());
+            assert_ne!(chats[0].project_id, chats[1].project_id);
+            assert_eq!(chats[0].cwd, chats[1].cwd);
+            assert!(
+                chats[1]
+                    .attention
+                    .as_ref()
+                    .unwrap()
+                    .label
+                    .contains("canary")
+            );
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1000.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut v = LocalViewer::synthetic(w, cx);
+                            v.state.projects = projects.clone();
+                            v.state.chats = chats.clone();
+                            v.state.projects_loaded = true;
+                            v.state.list_loaded = true;
+                            v.rebuild_nav(w, cx);
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            for phase in [
+                "global",
+                "focused",
+                "global-again",
+                "missing-catalog-entry",
+                "loading",
+                "empty",
+            ] {
+                cx.update_window(h, |_, w, cx| {
+                    v.update(cx, |v, cx| match phase {
+                        "focused" => v.show_project("a".into(), w, cx),
+                        "missing-catalog-entry" => {
+                            v.state.projects = Arc::new(vec![projects[0].clone()]);
+                            v.rebuild_nav(w, cx);
+                        }
+                        "loading" | "empty" => {
+                            v.state.chats = Arc::default();
+                            v.state.projects = Arc::default();
+                            v.state.projects_loaded = phase == "empty";
+                            v.state.list_loaded = phase == "empty";
+                            v.rebuild_nav(w, cx);
+                        }
+                        _ => v.show_home(w, cx),
+                    })
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h,|_,w,cx| {
+                    w.draw(cx).clear(cx);
+                    let view=v.read(cx);
+                    assert!(view.client.is_none() && view.writer.is_none(),"fixture cannot transport or persist");
+                    assert_eq!(view.page,if phase=="focused"{Page::Project("a".into())}else{Page::Home});
+                    if matches!(phase,"global"|"focused"|"global-again"|"missing-catalog-entry") {
+                        let row=w.find("home-working-busy-a").bounds();
+                        assert_eq!(row.size.height,px(crate::appearance::Space::ROW));
+                        assert!(row.left()>=w.find("chat-sidebar").bounds().right() && row.right()<=px(width));
+                    }
+                    if phase=="focused" {
+                        assert!(w.try_find("home-chat-question-b").is_none(),"exact project scope, not shared-folder inference");
+                    }
+                    println!("{}",json!({"fixture":"home-context-v1","width":width,"mode":mode.name(),"phase":phase,"production_root":true,"no_transport_or_writer":true}));
+                }).unwrap();
+                if let Some(dir) = &captures {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(dir.join(format!("{}-{}-{phase}.png", width as u32, mode.name())))
+                        .unwrap();
+                }
+            }
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
         }
     }
