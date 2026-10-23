@@ -73,13 +73,13 @@ pub struct MacOS {
     _wake: Box<Wake>,
 }
 
-struct Wake(Box<dyn Fn()>);
+struct Wake(Rc<dyn Fn()>);
 
 extern "C" fn wake(context: *mut c_void) {
     // SAFETY: stable Box retained until native teardown revokes all future callbacks.
-    let context = unsafe { &*context.cast::<Wake>() };
+    let callback = unsafe { &*context.cast::<Wake>() }.0.clone();
     // Never unwind over Objective-C. Integration only schedules, never borrows the updater here.
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (context.0)()));
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback()));
 }
 
 impl MacOS {
@@ -94,7 +94,7 @@ impl MacOS {
             return Err(Error::Native);
         }
         let identity = CString::new(expected_bundle_id).map_err(|_| Error::Identity)?;
-        let mut context = Box::new(Wake(Box::new(schedule_wakeup)));
+        let mut context = Box::new(Wake(Rc::new(schedule_wakeup)));
         // SAFETY: main-thread checked above; C consumes string synchronously.
         let handle = NonNull::new(unsafe {
             pnu_create(identity.as_ptr(), wake, (&mut *context as *mut Wake).cast())

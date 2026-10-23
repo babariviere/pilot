@@ -267,6 +267,13 @@ impl<B: Backend> Updater<B> {
         } else {
             completion.outcome
         };
+        let outcome = match outcome {
+            Outcome::Installed if !installing => Outcome::Failed(Error::InvalidResponse),
+            Outcome::Available(_) | Outcome::Current | Outcome::Cancelled if installing => {
+                Outcome::Failed(Error::InvalidResponse)
+            }
+            outcome => outcome,
+        };
         self.state = match outcome {
             Outcome::Failed(error) => {
                 self.failures = self.failures.saturating_add(1);
