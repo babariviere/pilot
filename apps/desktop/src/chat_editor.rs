@@ -273,7 +273,7 @@ impl ChatEditor {
         }
     }
 
-    fn marked(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn marked(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.text.update(cx, |state, cx| {
             state.marked_text_range(window, cx).is_some()
         }) || self.cwd.update(cx, |state, cx| {
