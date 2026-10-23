@@ -688,7 +688,8 @@ impl LocalViewer {
                     revision,
                     target,
                 } => {
-                    if view.page != Page::Chat
+                    if view.jump.is_some()
+                        || view.page != Page::Chat
                         || !view.editor.update(cx, |editor, cx| {
                             editor.can_adopt_creation(key, *revision, target, window, cx)
                         })
@@ -1323,7 +1324,7 @@ impl Render for LocalViewer {
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
-                if view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
+                if view.jump.is_none() && view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
                     view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
                 }
             }))
@@ -1332,6 +1333,7 @@ impl Render for LocalViewer {
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
+                if view.jump.is_some(){return;}
                 if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
@@ -1339,7 +1341,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
-            .on_action(cx.listener(|view,_:&FocusChats,window,cx|view.chats.update(cx,|list,cx|list.focus(window,cx))))
+            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none(){view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
             .child(
                 div().id("chat-sidebar").test_support().v_flex().w(sidebar_width).min_w(sidebar_width).max_w(sidebar_width).h_full()
                     .bg(cx.theme().sidebar).border_r_1().border_color(cx.theme().border)

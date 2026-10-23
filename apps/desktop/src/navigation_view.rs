@@ -46,6 +46,11 @@ impl LocalViewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A resource search is newer user intent. Only its explicit activation
+        // closes the palette before entering these existing guarded routes.
+        if self.jump.is_some() {
+            return false;
+        }
         if self.restoring_navigation {
             return true;
         }
