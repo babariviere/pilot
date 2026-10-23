@@ -1,5 +1,36 @@
 # Composer surface contrast and motion evidence
 
+## Final verification ledger
+
+Combined corrected source: `160c837ae15159b65f2c67a5726c2c67da3e154e`.
+Verification is an explicit retained prefix plus a corrected tail, not one
+uninterrupted successful invocation:
+
+- `ae233a89` on frozen `10700d8e` passed strict checks, **150 library tests
+  (two ignored)**, rendering, 16 chrome scenes, 56 visual scenes, disclosure,
+  style, all 27 glyph roles, word motion, controls and all eight history scenes.
+  It then exited 101 at an obsolete bare-label inset assertion in the shell
+  probe. No failure is hidden or relabeled as a completed full run.
+- The sole source difference from `10700d8e` to the corrected combined head is
+  `src/shell_probe.rs`: measure the existing one-rem folder icon at the original
+  leading inset and the exact half-rem label gap. No production or other test
+  input changed. A machine-checked diff and SHA256 manifest preceded the tail.
+- `0d3d4c87`, exit **zero**, completed shell, navigation/canonical reader, Inbox,
+  jump palette and workbench, four mocked Python checks, locked app/helper
+  builds and engine-symbol isolation. All guards and event outcomes remain.
+
+The earlier `bb2ebf95` library-stage interruption led to an exact two-rem tool
+leading-slot/quarter-rem label-gap regression check; focused `d276035b` passed
+all five work regressions and native disclosure before the retained prefix.
+No old fixed-pixel bound was merely widened. Both verification stages emitted
+immutable source/hash fences before compilation and ran serially with the
+shared resource scheduler. Raw logs remain private and ignored.
+
+The icon-only parent has its own focused checks; the combined ledger includes
+this child's contrast and test harness, so it is not claimed to be an identical
+transitive build of the parent alone. A documentation-only publication successor
+does not change the verified code. Existing `block` 0.1.6 warning remains.
+
 ## Priority surface correction
 
 The compact editor should be an opaque card on its soft tray, as in Swift.
