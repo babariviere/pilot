@@ -649,7 +649,7 @@ impl LocalViewer {
             },
         );
         let project_events = cx.subscribe_in(&projects, window, |view, list, event, window, cx| {
-            if !view.projects_open || view.jump.is_some() {
+            if !view.projects_open || !view.project_choices_ready(window, cx) {
                 return;
             }
             if let ListEvent::Confirm(ix) = event
@@ -1212,20 +1212,30 @@ impl LocalViewer {
                 )
             });
         }
-        if !Arc::ptr_eq(&self.nav_projects, &self.state.projects)
-            || self.projects.read(cx).delegate().selected != self.project_scope
-        {
+        let empty_label = if self.state.projects_error.is_some() {
+            "Project list unavailable"
+        } else if !self.state.projects_loaded {
+            "Loading Local projects…"
+        } else {
+            "No configured projects"
+        };
+        let projects_changed = !Arc::ptr_eq(&self.nav_projects, &self.state.projects)
+            || self.projects.read(cx).delegate().selected != self.project_scope;
+        if projects_changed || self.projects.read(cx).delegate().empty_label != empty_label {
             self.nav_projects = self.state.projects.clone();
             self.projects.update(cx, |list, cx| {
                 let d = list.delegate_mut();
                 d.all = self.state.projects.clone();
+                d.empty_label = empty_label;
                 d.selected = self.project_scope.clone();
-                let index = self
-                    .project_scope
-                    .as_ref()
-                    .and_then(|id| self.state.projects.iter().position(|p| &p.id == id))
-                    .map(IndexPath::new);
-                list.set_selected_index(index, window, cx);
+                if projects_changed {
+                    let index = self
+                        .project_scope
+                        .as_ref()
+                        .and_then(|id| self.state.projects.iter().position(|p| &p.id == id))
+                        .map(IndexPath::new);
+                    list.set_selected_index(index, window, cx);
+                }
                 cx.notify();
             });
         }

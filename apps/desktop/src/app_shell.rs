@@ -69,6 +69,7 @@ impl Counts {
 
 pub(crate) struct ProjectList {
     pub(crate) all: Arc<Vec<Project>>,
+    pub(crate) empty_label: &'static str,
     pub(crate) selected: Option<String>,
     index: Option<IndexPath>,
 }
@@ -76,6 +77,7 @@ impl ProjectList {
     pub(crate) fn new() -> Self {
         Self {
             all: Arc::new(Vec::new()),
+            empty_label: "Loading Local projects…",
             selected: None,
             index: None,
         }
@@ -134,7 +136,7 @@ impl ListDelegate for ProjectList {
         div()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child("No configured projects")
+            .child(self.empty_label)
     }
 }
 

@@ -150,6 +150,12 @@ never run in the UI process, and pending values are not canonical writes.
 The Local browser uses the app's soft light/dark palette, follows system
 appearance, keeps a compact adaptive sidebar and centers a bounded reading
 column. Neutral selection identifies the opened chat independently of search.
+Home and Inbox are global navigation, above an exact-project browse selector.
+The bounded project catalog opens inline and closes with Escape; All chats,
+Overview, history, archive visibility and search remain reachable. Home leads
+with Projects, Working now and Recent chats, with a loaded-Local qualifier and
+quiet title/metadata rows. Shell-only spacing/type roles do not reset editor or
+Markdown metrics. See [shell hierarchy evidence](evidence/workbench.md).
 Cmd/Ctrl-F focuses chat search.
 Cmd/Ctrl-K opens a read-only resource jump palette over loaded pages, projects
 and chats. Search is case/diacritic/width folded, grouped and bounded to six
