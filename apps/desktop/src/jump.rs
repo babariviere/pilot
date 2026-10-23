@@ -66,7 +66,6 @@ pub(crate) struct Entry {
     pub(crate) kind: Kind,
     pub(crate) title: String,
     pub(crate) detail: String,
-    pub(crate) attention: bool,
     folded_title: String,
     keywords: Vec<String>,
     suggested: bool,
@@ -90,7 +89,6 @@ impl Entry {
             title,
             detail,
             suggested,
-            attention: false,
         }
     }
 }
@@ -203,7 +201,7 @@ impl Catalog {
             let suggested =
                 !c.archived && c.writable && s.selected.as_ref() != Some(&c.id) && recent < 3;
             recent += usize::from(suggested);
-            let mut entry = Entry::new(
+            entries.push(Entry::new(
                 format!("chat:{}", c.id),
                 Destination::Chat(c.id.clone()),
                 Kind::Chat,
@@ -211,13 +209,7 @@ impl Catalog {
                 format!("{project} · {state}"),
                 vec![project.into(), state.into()],
                 suggested,
-            );
-            entry.attention = !c.archived
-                && matches!(
-                    c.signal,
-                    Some(crate::dither::Signal::Failed | crate::dither::Signal::NeedsYou)
-                );
-            entries.push(entry);
+            ));
         }
         Self {
             entries,
@@ -232,7 +224,7 @@ impl Catalog {
             return Matches {
                 groups: vec![],
                 suggested: false,
-                error: Some("Use up to240 search characters."),
+                error: Some("Use up to 240 search characters."),
             };
         }
         let query = fold(query.text.trim());
@@ -241,7 +233,7 @@ impl Catalog {
             return Matches {
                 groups: vec![],
                 suggested: false,
-                error: Some("Use up to32 search words."),
+                error: Some("Use up to 32 search words."),
             };
         }
         let suggested = tokens.is_empty();
