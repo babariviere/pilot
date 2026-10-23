@@ -33,6 +33,10 @@ fn rows() -> Vec<Message> {
     )]
 }
 pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
+    let captures = std::env::var_os("PILOT_NEXT_JUMP_DIR").map(std::path::PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));
@@ -74,6 +78,12 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}.png", width as u32, mode.name())))
+                    .unwrap();
+            }
             cx.update_window(h, |_, w, cx| {
                 let pane = w.find("jump-palette").bounds();
                 assert!(
@@ -82,12 +92,32 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                         && pane.bottom() <= px(600.)
                 );
                 assert!(v.read(cx).jump.as_ref().unwrap().read(cx).probe(cx).2);
+                let q = query(&v, cx);
+                let before = w.focused(cx);
+                w.press("tab", cx);
+                w.press("shift-tab", cx);
+                w.press("secondary-f", cx);
+                w.press("secondary-l", cx);
+                assert_eq!(w.focused(cx), before, "modal search owns keyboard focus");
+                assert!(q.read(cx).value().is_empty());
+                v.update(cx, |v, cx| v.show_home(w, cx));
+                assert_eq!(
+                    v.read(cx).page,
+                    Page::Chat,
+                    "background/menu navigation cannot override active search intent"
+                );
                 w.input("ＲＥＳＵＭＥ", cx);
             })
             .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("jump-row-project:a").is_some());
+                let state = v.read(cx).jump.as_ref().unwrap().read(cx).probe(cx);
+                assert_eq!(
+                    state.3.as_deref(),
+                    Some("project:a"),
+                    "ready/selection before native Enter: {state:?}"
+                );
                 w.press("enter", cx);
             })
             .unwrap();
@@ -96,6 +126,10 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                 assert!(v.read(cx).jump.is_none());
                 assert_eq!(v.read(cx).project_scope.as_deref(), Some("a"));
                 assert_eq!(v.read(cx).transcript.entity_id(), transcript);
+                assert_eq!(
+                    v.read(cx).editor.read(cx).shell_probe().2.unwrap().text,
+                    "Keep 👩‍💻 e\u{301}"
+                );
             });
             assert!(reads.try_recv().is_err());
             cx.update_window(h, |_, w, cx| w.press("secondary-k", cx))
@@ -115,20 +149,46 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                     q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
                 });
                 w.press("enter", cx);
+                assert!(v.read(cx).jump.is_some(), "IME Return cannot activate");
+                q.update(cx, |q, cx| {
+                    assert!(
+                        q.marked_text_range(w, cx).is_some(),
+                        "IME Return preserves preedit"
+                    )
+                });
                 w.press("escape", cx);
+                assert!(
+                    v.read(cx).jump.is_some(),
+                    "IME Escape cannot dismiss palette"
+                );
+                q.update(cx, |q, cx| {
+                    assert!(
+                        q.marked_text_range(w, cx).is_some(),
+                        "IME Escape preserves preedit"
+                    )
+                });
                 w.press("secondary-k", cx);
                 assert!(v.read(cx).jump.is_some());
                 assert_eq!(v.read(cx).page, Page::Inbox(Some("a".into())));
                 q.update(cx, |q, cx| {
                     assert!(q.marked_text_range(w, cx).is_some());
                     q.unmark_text(w, cx);
-                    q.set_value("Review package", w, cx);
                 });
+                // Programmatic set_value is not a native Change notification.
+                // Drive the real search input, including its list controller.
+                w.press("secondary-a", cx);
+                w.input("Review package", cx);
             })
             .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("jump-row-chat:other").is_some());
+                let state = v.read(cx).jump.as_ref().unwrap().read(cx).probe(cx);
+                assert_eq!(
+                    state.3.as_deref(),
+                    Some("chat:other"),
+                    "post-preedit ready selection: {state:?}"
+                );
                 // Publication race: UI still shows an old row while the source changed.
                 v.update(cx, |v, cx| {
                     v.state.chats = Arc::new(
@@ -141,7 +201,7 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                     );
                     cx.notify();
                 });
-                w.press("enter", cx);
+                w.click("jump-row-chat:other", cx);
             })
             .unwrap();
             settle(cx, h);
@@ -149,7 +209,8 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 assert!(v.read(cx).jump.is_some());
                 assert!(w.try_find("jump-row-chat:other").is_none());
-                query(&v, cx).update(cx, |q, cx| q.set_value("z".repeat(241), w, cx));
+                w.press("secondary-a", cx);
+                w.input(&"z".repeat(241), cx);
             })
             .unwrap();
             settle(cx, h);
