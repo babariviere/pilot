@@ -72,9 +72,19 @@ tools and contributing notes, live-to-committed text/tool promotion, malformed
 tool IDs and missing markers. Native production-root reopen scenes deliberately
 reproduce the render-number collision, then assert the canonical top marker and
 copy the actually rendered OLD source. Missing-key cases reuse that same number
-for NEW text and must produce the notice, not restore it. Final results follow
-after the focused/full correction gates complete; older results below describe
-the original checkpoint only.
+for NEW text and must produce the notice, not restore it.
+
+The complete correction gate passed on the frozen production/test tree at
+`341e8e167f4f7d3f2b65e9e7ca0fc2ff8c108fc9`: **133 library tests passed,1 ignored**,
+including all6 real-reducer canonical identity cases. Strict all-target native,
+app/helper, native fixture/browser,16 chrome/56 visual scenes,720 disclosure
+frames, rounded/dither/composer/slider,8 history scenes,4 Home scenes plus
+capacity and all8 navigation scenes passed. Four mocked Python runner tests,
+locked app/helper builds and engine-symbol separation passed. The helper has
+no Rust unit tests. The existing `block0.1.6` compatibility notice remains.
+The earlier cancelled full run is not substituted for this exit0 rerun.
+The original results below describe the original checkpoint only; they did not
+cover the now-fixed canonical marker defect.
 
 ## Scoped dependency seams
 
