@@ -32,6 +32,8 @@ pub use local_view::navigation_probe::run_navigation_probe;
 pub use local_view::shell_probe::run_shell_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::workbench_probe::run_workbench_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
