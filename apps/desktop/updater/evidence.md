@@ -107,6 +107,54 @@ semantic safety precondition is documented at the call. This is standalone compo
 qualification only. Shared CI does not currently register this separate crate, and
 this correction neither wires nor enables live update/install/restart.
 
+## Mixed-sentinel parser-dispatch correction
+
+A later source review found a smaller remaining count-contract gap in the previous
+admission correction. zip8.6.0 chooses ZIP64 only when EOCD total count, directory
+size or directory offset is sentinel. It ignores the per-disk count for dispatch,
+but uses that count when indexing ZIP32. A per-disk-only65535 sentinel alongside
+an otherwise small matching ZIP64 footer was therefore admitted as count1 even
+though the eager reader used65535. This is a bounded count-admission defect, not
+signature bypass or RCE. Prior passing tests did not cover mixed sentinel states.
+
+The new pre-index guard matches those exact three dispatch fields and, when the
+library would use ZIP32, requires its effective per-disk count to equal admission's
+count. Unsupported divergence is refused before snapshot allocation or eager index
+construction. Valid ordinary ZIP32, matching all-normal small ZIP64 and dispatched
+mixed-sentinel ZIP64 remain supported. No older-footer, snapshot, duplicate, work,
+cancellation, signed-byte, path, type, extraction or installer protection is removed.
+
+Runtime regression now uses an actual raw single-record archive with directory
+start100000, beyond the pinned library's65535 capacity-zero optimization threshold,
+plus adjacent valid ZIP64 count1 metadata and the per-disk-only sentinel. A tracing
+Read/Seek adapter confirms the actual pinned parser attempts the first central
+header and then a second header at the ZIP64 footer before failing, instead of
+using ZIP64's count1. The same observation is asserted against the previous bounded
+indexing view, constructed from a normal control then changed only at the EOCD
+per-disk field. This reproduces parser dispatch, not a measured allocation/RSS trace;
+the exact65535 reserve size follows from the pinned library source. Corrected
+preflight refuses the raw counterexample after only tail+locator+fixedZIP64 reads,
+before creating its metadata snapshot or calling the eager parser.
+
+A32-case matrix spans all16 sentinel combinations of per-disk count, total count,
+directory size and offset, both with and without adjacent ZIP64 metadata. Every
+admitted case is run through the actual pinned parser on both its raw archive and
+bounded indexing view, with exactly one central-header read and count agreement.
+The unsupported states must fail preflight. Existing50 regressions are retained.
+
+Frozen source `b3a69b416ad16ee924a419cc846086e74409500c` passed job
+`426d53a5-22db-482f-ac9a-4bc838f9c998` exit0 via
+`/tmp/updater-check-zip-dispatch/run.sh`, actual native verification slot1/1,
+PID44241 (waited0s), mbx1.26 CPU2/4GiB, Rust1.98.1/macOS15 and isolated target.
+Formatting, locked/offline strict all-target native Clippy,10 focused admission tests,
+**52/52 full standalone/native tests** (none ignored), helper build and unconfigured
+exit1 all passed. Full unit execution was1.11s, not a performance claim. All17
+pre/post source hashes matched; this subsequent evidence-only fold leaves the16
+other inputs unchanged. The job joined and released its slot before publication.
+No local Swift/full desktop suite, shared workflow change, live updater activation,
+real app/daemon install/restart, credentials/feed/release or merged-history rewrite.
+This is component qualification, not integration or production-update acceptance.
+
 ## Acceptance gaps
 
 - No production credentials/key/feed/release, signing secrets, real installed app or

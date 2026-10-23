@@ -27,7 +27,10 @@ helper. No default points at the Swift application, its feed, credentials or key
   Before eager ZIP indexing, admission checks ZIP32/ZIP64 single-disk footer agreement,
   at most 30,000 raw records and 64MiB of directory/footer metadata. Raw duplicate
   names (including file/directory aliases) are rejected; post-index count agreement
-  also rejects Unicode-extra-field deduplication. The exact admitted metadata is
+  also rejects Unicode-extra-field deduplication. Admission is
+  matched to zip8.6.0's dispatch/effective count before indexing, including mixed
+  ZIP32/ZIP64 sentinel fields (a per-disk-only sentinel is refused).
+  The exact admitted metadata is
   snapshotted in cancellable chunks. Indexing cannot select an older unadmitted
   footer and has a 4× metadata read-work budget plus cancellation on reads/seeks.
   Canonical archives end at their declared EOCD comment, with contiguous directory
