@@ -246,6 +246,61 @@ fn stop_cannot_erase_settled_send_revision_protection() {
 }
 
 #[test]
+fn unchanged_transactions_do_not_replace_the_durable_snapshot() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let captured = draft(1, "synthetic input");
+    save(&mut store, "chat:a", captured.clone());
+    let intent = store.prepare("chat:a", &captured, true, false).unwrap();
+    store.pending(&intent.id).unwrap();
+    let before = fs::metadata(temp.0.join("state-v1.json")).unwrap().ino();
+    // A redundant transaction must not even reach the injected writer failure.
+    store.fail_write = true;
+    save(&mut store, "chat:a", captured.clone());
+    save(&mut store, "chat:a", draft(0, "stale"));
+    store.pending(&intent.id).unwrap();
+    assert_eq!(
+        store.prepare("chat:a", &captured, true, false).unwrap().id,
+        intent.id
+    );
+    store.finish("unknown-intent", "accepted", None).unwrap();
+    store.retire_empty("chat:a", 0).unwrap();
+    store.retire_created("new:absent", 1, "absent").unwrap();
+    store.save_edits(BTreeMap::new()).unwrap();
+    assert!(!store.is_faulted());
+    assert_eq!(
+        before,
+        fs::metadata(temp.0.join("state-v1.json")).unwrap().ino()
+    );
+    // Changed terminal adoption is still an immediate, fallible durable write.
+    assert!(store.finish(&intent.id, "accepted", None).is_err());
+    assert!(store.is_faulted());
+    assert!(store.book.pending.contains_key(&intent.id));
+}
+
+#[test]
+fn noop_elision_does_not_bypass_validation_or_an_existing_fault() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "chat:a", draft(1, "saved"));
+    let mut invalid = draft(0, "stale but invalid");
+    invalid.mode = "invalid".into();
+    assert!(
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), invalid)]))
+            .is_err()
+    );
+    store.fail_write = true;
+    assert!(
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), draft(2, "unsaved"))]))
+            .is_err()
+    );
+    assert!(store.save_edits(BTreeMap::new()).is_err());
+    assert_eq!(store.book.drafts["chat:a"].revision, 1);
+}
+
+#[test]
 #[ignore = "explicit synthetic disk-I/O observation, not a GUI benchmark"]
 fn private_snapshot_writer_workload() {
     let temp = Temp::new();
