@@ -185,7 +185,10 @@ fn canonical_reader_lookup_refuses_ambiguous_or_unqualified_render_matches() {
     let key = ReaderKey::model(20, 0, Some(1));
     let first = Message::live(7, "assistant".into(), "old".into()).anchored(key.clone());
     let duplicate = Message::live(8, "assistant".into(), "other".into()).anchored(key.clone());
-    assert_eq!(crate::model::reader_index(&[first.clone()], &key), Some(0));
+    assert_eq!(
+        crate::model::reader_index(std::slice::from_ref(&first), &key),
+        Some(0)
+    );
     assert_eq!(crate::model::reader_index(&[first, duplicate], &key), None);
     assert_eq!(
         crate::model::reader_index(&[Message::live(7, "assistant".into(), "new".into())], &key),
