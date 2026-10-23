@@ -315,6 +315,9 @@ impl<B: Backend> Updater<B> {
         }
     }
     pub fn complete(&mut self, completion: Completion, now: Duration) -> bool {
+        if self.state == State::Stopped {
+            return false;
+        }
         if let Outcome::HelperStopped(reason) = completion.outcome {
             if self.helper_operation != Some(completion.operation) {
                 return false;
@@ -392,6 +395,7 @@ impl<B: Backend> Updater<B> {
     }
     pub fn stop(&mut self) {
         if self.state != State::Stopped {
+            self.helper_operation = None;
             self.backend.teardown();
             self.state = State::Stopped;
         }

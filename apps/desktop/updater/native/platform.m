@@ -2,6 +2,8 @@
 #import <Security/Security.h>
 #include <sys/attr.h>
 #include <stdio.h>
+#include <sys/acl.h>
+#include <errno.h>
 
 // Worker-only. The caller has authenticated the signed manifest before extraction.
 // No updater networking, install-on-quit observer, app delegate patch or secret access.
@@ -30,4 +32,43 @@ bool pnu_verify_bundle(const char *path, const char *identifier, const char *bui
 // A single same-volume namespace operation. Old app remains in staging for recovery.
 int pnu_swap(int parent, const char *staged, const char *installed) {
     return renameatx_np(parent, staged, parent, installed, RENAME_SWAP);
+}
+
+// policy0: existing path, reject write-capable extended allow entries.
+// policy1: strip ACLs ONLY on a just-created private stage, then require no allows.
+// policy2: existing private stage, require no extended allow entries at all.
+bool pnu_acl_policy(const char *path, int policy) {
+    if (policy == 1) {
+        acl_t empty = acl_init(0);
+        if (!empty) return false;
+        int result = acl_set_file(path, ACL_TYPE_EXTENDED, empty);
+        acl_free(empty);
+        if (result != 0) return false;
+    }
+    acl_t acl = acl_get_file(path, ACL_TYPE_EXTENDED);
+    if (!acl) return false; // unsupported/unreadable permissions fail closed
+    if (acl_valid(acl) != 0) { acl_free(acl); return false; }
+    acl_entry_t entry;
+    int position = ACL_FIRST_ENTRY;
+    bool safe = true;
+    int result;
+    while ((result = acl_get_entry(acl, position, &entry)) == 0) {
+        position = ACL_NEXT_ENTRY;
+        acl_tag_t tag;
+        acl_permset_t permissions;
+        if (acl_get_tag_type(entry, &tag) != 0 || acl_get_permset(entry, &permissions) != 0) { safe = false; break; }
+        if (tag != ACL_EXTENDED_ALLOW) continue;
+        if (policy != 0) { safe = false; break; }
+        acl_perm_t unsafe[] = { ACL_WRITE_DATA, ACL_APPEND_DATA, ACL_DELETE, ACL_DELETE_CHILD,
+            ACL_WRITE_ATTRIBUTES, ACL_WRITE_EXTATTRIBUTES, ACL_WRITE_SECURITY, ACL_CHANGE_OWNER };
+        for (unsigned index = 0; index < sizeof(unsafe) / sizeof(unsafe[0]); index++) {
+            if (acl_get_perm_np(permissions, unsafe[index]) != 0) { safe = false; break; }
+        }
+        if (!safe) break;
+    }
+    // Darwin returns -1 at the end of iteration. Other retrieval errors are also
+    // refused when errno is not the documented end-of-list EINVAL.
+    if (result != 0 && errno != EINVAL && errno != 0) safe = false;
+    acl_free(acl);
+    return safe;
 }

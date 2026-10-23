@@ -1088,6 +1088,77 @@ fn helper_expiry_and_death_cannot_leave_false_ready_or_authorized_status() {
     assert_eq!(updater.state(), &State::RecoveryRequired(Error::Cancelled));
 }
 
+#[test]
+fn stopped_is_terminal_even_for_a_captured_helper_death_event() {
+    let mut updater = ready();
+    updater.request_install(safe(), Duration::ZERO).unwrap();
+    updater.complete(done(3, Outcome::ExitPrepared), Duration::ZERO);
+    updater.stop();
+    assert!(!updater.complete(
+        done(3, Outcome::HelperStopped(Error::Cancelled)),
+        Duration::ZERO
+    ));
+    assert_eq!(updater.state(), &State::Stopped);
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn macos_acl_write_grants_are_refused_even_with_safe_posix_mode() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o755)).unwrap();
+    helper::run_command(
+        std::process::Command::new("/bin/chmod")
+            .args([
+                "+a",
+                "everyone allow add_file,delete_child,writeattr,writeextattr",
+            ])
+            .arg(&temp.0),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::metadata(&temp.0).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert!(matches!(
+        installer::new_stage(&target, &trust(), &FakePlatform::default()),
+        Err(Error::Filesystem)
+    ));
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    helper::run_command(
+        std::process::Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(&temp.0),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn newly_created_private_stage_strips_inherited_acl_grants() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    helper::run_command(std::process::Command::new("/bin/chmod").args(["+a", "everyone allow read,readattr,readextattr,readsecurity,search,file_inherit,directory_inherit"]).arg(&temp.0), Duration::from_secs(5)).unwrap();
+    let (root, _lock) = installer::new_stage(&target, &trust(), &FakePlatform::default()).unwrap();
+    installer::acl_policy(&root, 2).unwrap();
+    assert_eq!(
+        fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    helper::run_command(
+        std::process::Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(&temp.0),
+        Duration::from_secs(5),
+    )
+    .unwrap();
+}
+
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 fn signed_bundle(root: &Path, build: &str) -> PathBuf {
     let app = root.join("Pilot Next.app");
