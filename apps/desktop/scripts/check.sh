@@ -35,3 +35,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test inbox
 # Ephemeral bounded resource palette, faux reads and no action replay.
 bash scripts/cargo.sh clippy --locked --features native-probes --test jump -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test jump
+# Same-fixture shell hierarchy and native chooser reachability/IME checks.
+bash scripts/cargo.sh clippy --locked --features native-probes --test workbench -- -D warnings
+env -u PILOT_NEXT_WORKBENCH_BASELINE bash scripts/cargo.sh test --locked --features native-probes --test workbench

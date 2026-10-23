@@ -2,7 +2,7 @@
 //! Baseline mode relaxes only new-layout assertions, never route/write fences.
 use super::*;
 use gpui_kit::{
-    Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
+    Bounds, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
     size,
     test::TestWindowExt,
@@ -55,6 +55,12 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             ].iter().map(|x|crate::local_model::chat(x).unwrap()).collect());
             v.title="Synthetic workbench conversation".into();v.rebuild_nav(w,cx);v
         }))).unwrap();
+            let fixture = cx.update(|cx| {
+                (
+                    v.read(cx).state.projects.clone(),
+                    v.read(cx).state.chats.clone(),
+                )
+            });
             settle(cx, h);
             capture(
                 cx,
@@ -78,6 +84,18 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                             && b.right() <= px(if width < 800. { 184. } else { 232. }),
                         "sidebar target {id} stays in bounds"
                     );
+                }
+                if !baseline {
+                    for id in ["nav-home", "nav-inbox", "nav-all-chats"] {
+                        let button = w.find(id).bounds();
+                        let label = w.find(format!("{id}-title")).bounds();
+                        assert!(
+                            label.left() >= button.left()
+                                && label.left() - button.left() < px(12.)
+                                && label.right() <= button.right(),
+                            "{id} label actually aligns left within mounted button"
+                        );
+                    }
                 }
                 w.click("nav-home", cx);
             })
@@ -128,6 +146,15 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| assert_eq!(v.read(cx).project_scope.as_deref(), Some("b")));
             assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
             cx.update_window(h, |_, w, cx| {
+                if !baseline {
+                    let button = w.find("project-overview").bounds();
+                    let label = w.find("project-overview-title").bounds();
+                    assert!(
+                        label.left() >= button.left()
+                            && label.left() - button.left() < px(12.)
+                            && label.right() <= button.right()
+                    );
+                }
                 w.click("project-overview", cx);
                 v.update(cx, |v, cx| {
                     v.state.projects = Arc::new(vec![v.state.projects[0].clone()]);
@@ -197,6 +224,10 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 format!("{}-{}-empty.png", width as u32, mode.name()),
             );
             assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+            if !baseline {
+                chooser_checks(cx, h, &v, fixture);
+                assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+            }
             println!(
                 "{}",
                 json!({"width":width,"mode":mode.name(),"baseline":baseline,"same_synthetic_fixture":"workbench-v1","exact_scope_and_removed_no_fallback":true,"long_label_bounds":true,"global_navigation_and_palette_reachable":true,"canonical_write_commands":0,"implicit_reads":0,"native_offscreen":true})
@@ -205,4 +236,202 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+}
+
+// Runs after all matched captures: extra interaction state never changes their fixture.
+fn chooser_checks(
+    cx: &mut HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+    v: &Entity<LocalViewer>,
+    fixture: (Arc<Vec<crate::local_model::Project>>, Arc<Vec<Chat>>),
+) {
+    for (loaded, error, label) in [
+        (false, None, "Loading Local projects…"),
+        (true, None, "No configured projects"),
+        (
+            true,
+            Some("Synthetic project error"),
+            "Project list unavailable",
+        ),
+    ] {
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                v.state.projects_loaded = loaded;
+                v.state.projects_error = error;
+                v.rebuild_nav(w, cx);
+            });
+            w.click("project-scope", cx);
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            assert!(v.read(cx).projects_open);
+            assert_eq!(v.read(cx).projects.read(cx).delegate().empty_label, label);
+            assert!(
+                v.read(cx).projects.focus_handle(cx).is_focused(w),
+                "empty chooser has a mounted keyboard owner"
+            );
+            w.press("escape", cx);
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            assert!(!v.read(cx).projects_open);
+            assert!(
+                v.read(cx)
+                    .chats
+                    .read(cx)
+                    .query_input()
+                    .focus_handle(cx)
+                    .is_focused(w)
+            );
+        })
+        .unwrap();
+    }
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.state.projects = fixture.0;
+            v.state.chats = fixture.1;
+            v.state.projects_loaded = true;
+            v.state.list_loaded = true;
+            v.state.projects_error = None;
+            v.rebuild_nav(w, cx);
+        });
+        w.press("secondary-2", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    let (reader, cursor) =
+        cx.update(|cx| (v.read(cx).transcript.entity_id(), v.read(cx).state.cursor));
+    let text = cx.update(|cx| v.read(cx).editor.read(cx).shell_probe().0);
+    let (mark, focus) = cx
+        .update_window(h, |_, w, cx| {
+            assert_eq!(v.read(cx).page, Page::Chat);
+            text.focus_handle(cx).focus(w, cx);
+            assert!(text.focus_handle(cx).is_focused(w));
+            let mark = text.update(cx, |t, cx| {
+                t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
+                t.marked_text_range(w, cx)
+            });
+            assert!(mark.is_some());
+            let focus = w.focused(cx);
+            w.click("project-scope", cx);
+            assert!(
+                !v.read(cx).projects_open,
+                "chooser respects composer preedit"
+            );
+            (mark, focus)
+        })
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(w.focused(cx), focus);
+        text.update(cx, |t, cx| {
+            assert_eq!(t.marked_text_range(w, cx), mark);
+            assert_eq!(t.value().to_string(), "にほん");
+            // Marking/unmarking is transient and emits no Change. Commit the
+            // candidate through insertText's real handler before asserting
+            // the app-owned saved draft later in this interaction sequence.
+            t.replace_text_in_range(None, "にほん", w, cx);
+        });
+        w.press("secondary-f", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    let query = cx.update(|cx| v.read(cx).chats.read(cx).query_input());
+    let (mark, focus) = cx
+        .update_window(h, |_, w, cx| {
+            assert!(query.focus_handle(cx).is_focused(w));
+            let mark = query.update(cx, |q, cx| {
+                q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
+                q.marked_text_range(w, cx)
+            });
+            assert!(mark.is_some());
+            let focus = w.focused(cx);
+            w.click("project-scope", cx);
+            assert!(
+                !v.read(cx).projects_open,
+                "chooser respects sidebar preedit"
+            );
+            (mark, focus)
+        })
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(w.focused(cx), focus);
+        query.update(cx, |q, cx| {
+            assert_eq!(q.marked_text_range(w, cx), mark);
+            assert_eq!(q.value().as_ref(), "にほん");
+            q.unmark_text(w, cx);
+        });
+        w.press("secondary-a", cx);
+        w.press("backspace", cx);
+        w.click("project-scope", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert!(v.read(cx).projects_open);
+        w.press("down", cx);
+        w.press("down", cx);
+        let index = v.read(cx).projects.read(cx).selected_index();
+        assert!(index.is_some());
+        v.update(cx, |v, cx| {
+            v.state.projects_error = Some("Synthetic catalog error; retained choices");
+            v.rebuild_nav(w, cx);
+        });
+        assert_eq!(
+            v.read(cx).projects.read(cx).selected_index(),
+            index,
+            "status-only refresh preserves keyboard choice"
+        );
+        w.press("escape", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, _, cx| {
+        assert!(!v.read(cx).projects_open);
+        let projects = v.read(cx).projects.clone();
+        projects.update(cx, |_, cx| cx.emit(ListEvent::Confirm(IndexPath::new(0))));
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(
+            v.read(cx).project_scope,
+            None,
+            "hidden queued choice cannot navigate"
+        );
+        w.click("project-scope", cx);
+        w.press("secondary-k", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, _, cx| {
+        assert!(v.read(cx).jump.is_some());
+        let projects = v.read(cx).projects.clone();
+        projects.update(cx, |_, cx| cx.emit(ListEvent::Confirm(IndexPath::new(0))));
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(
+            v.read(cx).project_scope,
+            None,
+            "palette is newer than underlying queued choice"
+        );
+        assert_eq!(v.read(cx).transcript.entity_id(), reader);
+        assert_eq!(v.read(cx).state.cursor, cursor);
+        assert_eq!(
+            v.read(cx).editor.read(cx).shell_probe().2.unwrap().text,
+            "にほん"
+        );
+        w.press("escape", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert!(!v.read(cx).projects_open));
 }
