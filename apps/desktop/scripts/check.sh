@@ -29,3 +29,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test shell
 # Bounded destination/scope state, fake read channel, no replay of actions.
 bash scripts/cargo.sh clippy --locked --features native-probes --test navigation -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test navigation
+# Read-only partial Inbox with native filtering, faux reads and no action replay.
+bash scripts/cargo.sh clippy --locked --features native-probes --test inbox -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test inbox

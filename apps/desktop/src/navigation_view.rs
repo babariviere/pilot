@@ -8,6 +8,7 @@ impl LocalViewer {
     pub(super) fn location(&self, cx: &App) -> Location {
         let target = match &self.page {
             Page::Home => Target::Home,
+            Page::Inbox(filter) => Target::Inbox(filter.clone()),
             Page::Project(id) => Target::Project(id.clone()),
             Page::Chat => {
                 if let Some(id) = &self.selected {
@@ -138,6 +139,9 @@ impl LocalViewer {
         }
         match &location.target {
             Target::Home => location.scope.is_none(),
+            Target::Inbox(filter) => filter
+                .as_ref()
+                .is_none_or(|id| self.state.projects.iter().any(|p| &p.id == id)),
             Target::Project(id) => {
                 location.scope.as_ref() == Some(id)
                     && self.state.projects.iter().any(|p| &p.id == id)
@@ -167,6 +171,10 @@ impl LocalViewer {
                 self.show_home(window, cx);
                 true
             }
+            Target::Inbox(filter) => {
+                self.show_inbox(filter.clone(), window, cx);
+                true
+            }
             Target::Project(id) => {
                 self.show_project(id.clone(), window, cx);
                 true
@@ -188,6 +196,7 @@ impl LocalViewer {
                     background_work: false,
                     cwd: String::new(),
                     project_id: None,
+                    attention: None,
                 },
                 window,
                 cx,
@@ -242,6 +251,11 @@ impl LocalViewer {
             scope,
             target: saved.unwrap_or(Target::Project(id.clone())),
         };
+        // A fresh project focus presets Inbox to that project, never a filter
+        // previously chosen while browsing some other scope. History is explicit.
+        if matches!(self.page, Page::Inbox(_)) || matches!(location.target, Target::Inbox(_)) {
+            location.target = Target::Inbox(Some(id.clone()));
+        }
         if !self.can_restore(&location, cx) {
             location.target = Target::Project(id);
         }

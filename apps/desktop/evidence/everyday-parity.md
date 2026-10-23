@@ -11,7 +11,8 @@ a scoped feature inventory, not a full-parity/acceptance claim.
 | Navigation history/per-scope restoration | NavigationHistory.swift, SidebarScope.swift | Missing | Subsequent everyday slice; no new persisted settings in this checkpoint. |
 | New chat/send/Stop/drafts | HomeView.swift, Composer.swift | Implemented scoped Local interactions | Preserve. Project-aware destination/model/branch/workspace choices remain partial. |
 | Transcript/tools/history/selection | ChatView.swift, ToolViews.swift | Implemented subset | Preserve composer/history checkpoints and built-in fade; not full content parity. |
-| Inbox, missions, schedules, integrations | HomeOverview.swift, ProjectPage.swift, MissionSidebar.swift | Missing | Further scoped work; derived loaded-chat counts are not authoritative dashboard totals. |
+| Inbox | InboxPage.swift, Inbox.swift, NeedsYouReason.swift | Partial read-only loaded-summary view | Exact project filter, urgency and explicit reader navigation. No authoritative Inbox/private review counts or actions. See [Inbox evidence](inbox.md). |
+| Missions, schedules, integrations | HomeOverview.swift, ProjectPage.swift, MissionSidebar.swift | Missing | Further scoped work; derived loaded-chat counts are not authoritative dashboard totals. |
 | Settings/models/provider/MCP/usage | Settings.swift, ScopedModelsSettings.swift | Missing | Further scoped work; no privileged changes or invented routes. |
 | Artifact viewer | VisualArtifactView.swift | Partial native subset | Separate follow-ups, not a gate for everyday navigation. |
 | Project CRUD/permissions/approvals | ProjectPage.swift, Settings.swift | Missing | No new mutation/authority in this read-only shell slice. |

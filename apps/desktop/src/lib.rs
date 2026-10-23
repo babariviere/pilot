@@ -21,6 +21,8 @@ pub use local_view::disclosure_probe::run_disclosure_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::history_probe::run_history_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::inbox_probe::run_inbox_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::shell_probe::run_shell_probe;
@@ -34,8 +36,10 @@ mod appearance;
 mod artifact_model;
 mod artifact_view;
 mod artifact_worker;
+mod attention;
 mod dither;
 mod dither_view;
+mod inbox;
 mod visual_canvas_plan;
 mod visual_canvas_view;
 mod visual_chart;

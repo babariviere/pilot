@@ -95,3 +95,9 @@ name = "navigation"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "inbox"
+harness = false
+test = false
+required-features = ["native-probes"]
