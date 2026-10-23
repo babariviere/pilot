@@ -258,6 +258,21 @@ pub(crate) struct Inbox {
 }
 impl EventEmitter<InboxEvent> for Inbox {}
 impl Inbox {
+    pub(crate) fn prepare_jump(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.picker
+            .update(cx, |p, cx| p.prepare_navigation(window, cx))
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_picker_query(
+        &self,
+        cx: &App,
+    ) -> Entity<gpui_kit::component::input::InputState> {
+        self.picker.read(cx).query_input(cx)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_picker_value(&self, cx: &App) -> Option<String> {
+        self.picker.read(cx).selected_value().cloned()
+    }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_selected(&self, cx: &App) -> Option<String> {
         let d = self.list.read(cx).delegate();

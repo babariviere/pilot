@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
   "upstream": "https://crates.io/crates/gpui-component/0.8.0",
-  "purpose": "Reader anchor hold, event-derived scroll notification and opt-in suppression of row hover fill; defaults unchanged.",
+  "purpose": "Reader anchor hold, event-derived scroll notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change.",
   "edits": [
     {
       "path": "src/message_scroller.rs",
@@ -119,6 +119,11 @@
       "path": "src/scroll/scrollable.rs",
       "old": "        let scroll_handle = scroll_handle_for(&self.id, window, cx);",
       "new": "        let scroll_handle = self.scroll_handle.take().unwrap_or_else(|| scroll_handle_for(&self.id, window, cx));"
+    },
+    {
+      "path": "src/select.rs",
+      "old": "    /// Focus the select trigger input.\n    pub fn focus",
+      "new": "    /// Current search input, for app-owned preedit/focus fencing before navigation.\n    /// Reading this handle does not clear the query or change selection.\n    pub fn query_input(&self, cx: &App) -> Entity<crate::input::InputState> {\n        self.state.list.read(cx).query_input()\n    }\n\n    /// Refuse navigation during search preedit; otherwise retire this popup\n    /// and return focus to its mounted trigger before an app opens another layer.\n    pub fn prepare_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {\n        let input = self.state.list.read(cx).query_input();\n        if input.update(cx, |input, cx| gpui::EntityInputHandler::marked_text_range(input, window, cx).is_some()) {\n            return false;\n        }\n        if self.state.open {\n            self.clear_query_and_restore_cursor(window, cx);\n            self.set_open(false, cx);\n            self.focus(window, cx);\n        }\n        true\n    }\n\n    /// Focus the select trigger input.\n    pub fn focus"
     }
   ]
 }
