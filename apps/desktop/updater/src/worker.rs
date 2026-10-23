@@ -122,6 +122,7 @@ impl Worker {
                             if prepared.is_some() {
                                 return Err(Error::Busy);
                             }
+                            installer::validate_target(&target, &trust)?;
                             MacPlatform.verify(&target, &trust, &trust.current_build, None)?;
                             let sender = event_sender.clone();
                             let stopped = shutdown.clone();

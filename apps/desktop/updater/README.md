@@ -147,6 +147,8 @@ already acknowledged/fenced install intent; safety must be established before se
 Stages are private same-volume directories, permanent target lock files are never unlinked.
 Writable installation parents/unsafe ancestors are rejected. The parent directory is
 checked for macOS extended ACL write/delete/security grants, not just POSIX mode bits;
+the installed bundle's bounded file tree is checked too, including the helper's ancestors
+and contents, so permissive nested ACLs cannot race verified executable launch.
 only newly created private staging has inherited ACLs stripped. Existing user paths
 are never chmod/ACL-repaired by the installer. Reopened private stages refuse allow ACLs.
 The parent directory is
