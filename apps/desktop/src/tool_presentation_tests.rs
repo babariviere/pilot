@@ -197,3 +197,70 @@ fn out_of_order_progress_cannot_bypass_the_live_slot_bound() {
     assert!(!tools.update("overflow", 33, &json!({"set":"no bypass"})));
     assert_eq!(tools.items.len(), 32);
 }
+
+#[test]
+fn command_captions_are_conservative_display_only_and_keep_original_source() {
+    for (source, expected) in [
+        (
+            "set -euo pipefail\ncd synthetic-workspace\ncargo test --locked --test parser",
+            "cargo test",
+        ),
+        ("/usr/bin/git status --short", "git status"),
+        ("printf '%s' '日本語 👩‍💻'", "printf"),
+        ("cd repo && false", "cd repo && false"),
+        ("cargo test | tee output", "cargo test | tee output"),
+        ("FOO=1 cargo test", "FOO=1 cargo test"),
+        ("'/tmp/a b' test", "'/tmp/a b' test"),
+        ("\"unterminated", "\"unterminated"),
+        ("false", "false"),
+        ("echo synthetic", "echo synthetic"),
+        ("cd /repo", "cd /repo"),
+        ("# comment\n\n日本語 検証 --flag", "日本語 検証"),
+        ("", ""),
+    ] {
+        assert_eq!(command_subject(source), expected);
+        let mut tools = Tools::default();
+        tools.call("a", 1, "bash", &json!({"command":source,"timeout":30}));
+        let tool = &tools.items["a"];
+        assert_eq!(tool.subject, expected);
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool.arguments).unwrap()["timeout"],
+            30
+        );
+        if !source.is_empty() {
+            assert_eq!(tool.input.as_ref().unwrap().0, "Command");
+            assert_eq!(tool.input.as_ref().unwrap().1.as_str(), source);
+        }
+    }
+    assert!(command_subject(&"日".repeat(400)).len() <= 240);
+}
+
+#[test]
+fn executable_input_is_prepared_once_budgeted_and_cleared_on_omission() {
+    let mut tools = Tools::default();
+    let source = "return '<日本語 👩‍💻>';";
+    tools.call("a", 1, "codemode", &json!({"code":source}));
+    let tool = &tools.items["a"];
+    let (label, input) = tool.input.as_ref().unwrap();
+    assert_eq!(*label, "Code");
+    assert_eq!(input.as_str(), source);
+    let input = input.clone();
+    let mut without_input = tool.as_ref().clone();
+    without_input.input = None;
+    assert_eq!(tool.bytes(), without_input.bytes() + source.len());
+    tools.update("a", 1, &json!({"set":"progress"}));
+    assert!(Arc::ptr_eq(
+        &input,
+        &tools.items["a"].input.as_ref().unwrap().1
+    ));
+    tools.call("a", 1, "codemode", &json!({"code":"x".repeat(ARG_CAP)}));
+    assert!(tools.items["a"].input.is_none());
+    assert!(tools.items["a"].limited);
+    for key in 0..300 {
+        let id = format!("bounded-{key}");
+        tools.call(&id, key, "bash", &json!({"command":"日".repeat(2000)}));
+        tools.update(&id, key, &json!({"set":"o".repeat(OUTPUT_CAP)}));
+        tools.end_unknown(&id, key, false);
+        assert!(tools.items.values().map(|tool| tool.bytes()).sum::<usize>() <= DETAIL_CAP);
+    }
+}

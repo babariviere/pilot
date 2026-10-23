@@ -4,10 +4,74 @@ use gpui_kit::{ScrollDelta, TestAppContext, point, px, test::TestWindowExt};
 use serde_json::json;
 fn model() -> LiveTranscript {
     let mut model = LiveTranscript::default();
-    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"head":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"printf synthetic"}}]}]}}));
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"head":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"printf synthetic","timeout":30}}]}]}}));
     model.apply(&json!({"type":"tool_execution_start","toolCallId":"a","toolName":"bash"}));
     model.apply(&json!({"type":"tool_execution_update","toolCallId":"a","output":{"set":"synthetic output 日本語\nsecond line"}}));
     model
+}
+
+#[gpui_kit::test]
+fn an_early_failure_is_findable_without_expanding_all_work(cx: &mut TestAppContext) {
+    let mut model = LiveTranscript::default();
+    let calls: Vec<_> = (0..8).map(|i| json!({"type":"toolCall","id":format!("task-{i}"),"name":"read","arguments":{"path":format!("synthetic-long-path-{i}.rs")}})).collect();
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"task-0","isError":true}));
+    let rows = model.rows();
+    let group = rows[0].id();
+    assert_eq!(rows[0].work_data().unwrap().failures, 1);
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    let group_key = SharedString::from(format!("work-toggle-{group}"));
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let row = window.find("step-toggle-call:task-0").bounds();
+        let status = window
+            .within("step-toggle-call:task-0")
+            .find("disclosure-status")
+            .bounds();
+        assert!(row.size.height > px(0.));
+        assert!(status.size.width > px(0.) && status.right() <= row.right());
+        let header = window.find(group_key.clone()).bounds();
+        let header_status = window
+            .within(group_key.clone())
+            .find("disclosure-status")
+            .bounds();
+        assert!(header_status.right() <= header.right());
+        window.click(group_key.clone(), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(!view.read(cx).work_ui.group_open(group, cx));
+        // Failure count stays visible even when explicit choice hides all steps.
+        assert!(
+            window
+                .within(group_key.clone())
+                .find("disclosure-status")
+                .bounds()
+                .size
+                .width
+                > px(0.)
+        );
+        window.click(group_key.clone(), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        // Explicit expansion is complete, not the automatic bounded preview.
+        for i in 0..8 {
+            assert!(
+                window
+                    .find(SharedString::from(format!("step-toggle-call:task-{i}")))
+                    .bounds()
+                    .size
+                    .height
+                    > px(0.)
+            );
+        }
+    })
+    .unwrap();
 }
 #[gpui_kit::test]
 fn working_disclosure_mounted_frame_diagnosis(cx: &mut TestAppContext) {
@@ -115,6 +179,28 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             assert_eq!(view.read(cx).work_ui.step_info("a", cx), (true, 2));
+            window.click("copy-call:a-Command", cx);
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().unwrap(),
+                "printf synthetic"
+            );
+            window.click("arguments-toggle-call:a", cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(
+                view.read(cx).work_ui.step_info("a", cx),
+                (true, 3),
+                "raw arguments get a parser only on their own intentional expansion"
+            );
+            window.click("copy-call:a-Arguments", cx);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    &cx.read_from_clipboard().unwrap().text().unwrap()
+                )
+                .unwrap(),
+                json!({"command":"printf synthetic","timeout":30})
+            );
+            window.click("arguments-toggle-call:a", cx);
+            window.draw(cx).clear(cx);
             assert_eq!(
                 view.read(cx).scroller.read(cx).logical_scroll_top().item_ix,
                 0,
@@ -139,7 +225,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         });
         window.render_frame(cx);
         assert_eq!(text.read(cx).rendered_text().source(), prior);
-        assert_eq!(view.read(cx).work_ui.step_info("a", cx), (false, 2));
+        assert_eq!(view.read(cx).work_ui.step_info("a", cx), (false, 3));
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();

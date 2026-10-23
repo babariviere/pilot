@@ -54,6 +54,9 @@ pub(crate) struct Tool {
     pub(crate) kind: Kind,
     pub(crate) status: Status,
     pub(crate) arguments: Arc<String>,
+    /// Prepared once with arguments, never parsed during output-only renders.
+    /// Full original command/code; raw JSON arguments remain independently available.
+    pub(crate) input: Option<(&'static str, Arc<String>)>,
     pub(crate) output: Arc<String>,
     output_complete: bool,
     pub(crate) diff: Arc<String>,
@@ -73,6 +76,7 @@ impl Tool {
             kind: Kind::Other,
             status: Status::Pending,
             arguments: Arc::new(String::new()),
+            input: None,
             output: Arc::new(String::new()),
             output_complete: true,
             diff: Arc::new(String::new()),
@@ -88,11 +92,13 @@ impl Tool {
             + self.subject.len()
             + self.paths.iter().map(String::len).sum::<usize>()
             + self.arguments.len()
+            + self.input.as_ref().map_or(0, |(_, source)| source.len())
             + self.output.len()
             + self.diff.len()
     }
     fn describe(&mut self, name: &str, args: &Value) {
         self.subject.clear();
+        self.input = None;
         self.paths.clear();
         self.limited |= !args["viewerOmitted"].is_null();
         self.diff = Arc::new(String::new());
@@ -108,6 +114,14 @@ impl Tool {
         }
         self.arguments = Arc::new(encoded);
         let string = |key: &str| args[key].as_str().unwrap_or("");
+        let input = match name {
+            "bash" => Some(("Command", string("command"))),
+            "codemode" => Some(("Code", string("code"))),
+            _ => None,
+        };
+        self.input = input
+            .filter(|(_, text)| !text.is_empty())
+            .map(|(label, text)| (label, Arc::new(text.to_owned())));
         let mut subject = String::new();
         let (verb, kind) = match name {
             "read" => {
@@ -115,7 +129,7 @@ impl Tool {
                 ("Read", Kind::Read)
             }
             "bash" => {
-                subject = first_line(string("command"));
+                subject = command_subject(string("command"));
                 ("Ran", Kind::Command)
             }
             "edit" | "write" => {
@@ -179,7 +193,7 @@ impl Tool {
                     }
                 } else if code.matches("tools.").count() == 1 && code.contains("tools.bash(") {
                     if let Some(command) = js_string(code, "command:") {
-                        subject = first_line(&command);
+                        subject = command_subject(&command);
                         ("Ran", Kind::Command)
                     } else {
                         ("Ran a script", Kind::Script)
@@ -318,6 +332,7 @@ impl Tools {
                 Arc::new("[Tool detail capacity reached. Open the full result in Swift.]".into());
             next.output = Arc::new(String::new());
             next.diff = Arc::new(String::new());
+            next.input = None;
             next.limited = true;
         }
         if other + next.bytes() > DETAIL_CAP {
@@ -648,6 +663,52 @@ fn first_line(text: &str) -> String {
             .trim(),
         240,
     )
+}
+// Adapted from MonoCode GPUI preview tools.rs:17–31 at d9e6e230b0005bff492a18cd2d3404d199e441f1.
+// MIT, Copyright (c) 2026 Nick. Full notice: ../licenses/MONOCODE.txt.
+// Only std-only caption formatting is reused; no engine, renderer or asset code.
+fn command_label(command: &str) -> String {
+    let mut words = command.split_whitespace();
+    let program = words.next().unwrap_or("");
+    let program = program.rsplit('/').next().unwrap_or(program);
+    match words.next() {
+        Some(sub)
+            if !sub.starts_with('-')
+                && !sub.contains(['/', '.', '=', '\'', '"'])
+                && sub.len() <= 16 =>
+        {
+            format!("{program} {sub}")
+        }
+        _ => program.to_owned(),
+    }
+}
+/// Conservative display-only compaction, NOT a shell parser or execution claim.
+/// Skip standalone setup lines only when a later meaningful line exists. Complex
+/// shell syntax/assignments/quoted programs retain the original line; raw source
+/// and every argument remain available on intentional expansion.
+fn command_subject(command: &str) -> String {
+    let line = command.lines().map(str::trim).find(|line| {
+        !line.is_empty()
+            && !line.starts_with('#')
+            && (line.contains([';', '&', '|', '`', '(', ')', '<', '>'])
+                || !matches!(
+                    line.split_whitespace().next(),
+                    Some("set" | "cd" | "export" | "unset")
+                ))
+    });
+    let Some(line) = line else {
+        return first_line(command);
+    };
+    if line.contains([';', '&', '|', '`', '(', ')', '<', '>'])
+        || line.starts_with(['\'', '"'])
+        || line
+            .split_whitespace()
+            .next()
+            .is_some_and(|word| word.contains('='))
+    {
+        return cut(line, 240);
+    }
+    cut(&command_label(line), 240)
 }
 fn js_string(code: &str, field: &str) -> Option<String> {
     let tail = code.split_once(field)?.1.trim_start();
