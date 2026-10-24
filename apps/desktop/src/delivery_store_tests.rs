@@ -561,3 +561,66 @@ fn mission_ledger_snapshot_cost_observation() {
         );
     }
 }
+
+#[test]
+fn mission_unicode_admission_refuses_new_blank_attempts_but_preserves_legacy_unknown() {
+    use crate::mission_conversion::{Attempt, Outcome};
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let original = fs::read(temp.0.join("state-v1.json")).unwrap();
+    for title in [
+        "",
+        " ",
+        "\u{feff}",
+        " \u{feff} ",
+        "\u{00a0}\u{feff}\u{3000}",
+    ] {
+        let mut r = mission_request("legacy");
+        r.title = title.into();
+        assert!(store.prepare_mission("new-blank", r).is_err());
+        assert!(store.book.missions.is_empty());
+        assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), original);
+    }
+    let mut request = mission_request("legacy");
+    request.title = " \u{feff} ".into();
+    let legacy = Attempt {
+        id: "old-unknown".into(),
+        request,
+        outcome: Outcome::Unknown,
+    };
+    // Exact prior-version snapshot shape, without using the new admission gate.
+    let mut snapshot = store.book.clone();
+    snapshot.missions.insert("legacy".into(), legacy.clone());
+    drop(store);
+    fs::write(
+        temp.0.join("state-v1.json"),
+        serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .unwrap();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.missions["legacy"] == legacy);
+    save(
+        &mut store,
+        "chat:ordinary",
+        draft(1, "Ordinary drafts still save"),
+    );
+    assert!(
+        store
+            .prepare_mission("replacement", mission_request("legacy"))
+            .is_err()
+    );
+    assert!(store.book.missions["legacy"] == legacy);
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.missions["legacy"] == legacy);
+    assert_eq!(
+        store.book.drafts["chat:ordinary"].text,
+        "Ordinary drafts still save"
+    );
+    let mut corrupt = legacy;
+    corrupt.request.title = " \t".into();
+    assert!(
+        corrupt.validate("legacy").is_err(),
+        "compatibility does not accept formerly invalid ASCII blanks"
+    );
+}

@@ -14,7 +14,9 @@ Swift:
 The source chat, composer/draft entities and reader stay mounted. The sheet's
 outcome and copyable mission ID are pinned outside its scrolling fields. Title
 and goal are trimmed before capture, and the exact outbound payload is checked
-against the daemon’s raw UTF-16 limits (200/4,000) before preparing an attempt. Closing
+against the daemon’s raw UTF-16 limits (200/4,000) before preparing an attempt.
+Whitespace follows the daemon’s ECMAScript semantics, including BOM removal and
+NEL preservation. See `mission-whitespace.md`. Closing
 the sheet does not cancel a submitted request. Mission management remains in
 Swift; this feature is not a dashboard, new-chat wizard or replacement approval.
 

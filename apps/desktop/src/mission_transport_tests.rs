@@ -374,3 +374,112 @@ async fn outbound_raw_utf16_padding_and_unicode_overflow_refused_before_attempt_
         assert!(d.seen.lock().unwrap().posts.is_empty());
     }
 }
+
+#[tokio::test]
+async fn ecmascript_blank_titles_never_reserve_or_post_but_nonblank_controls_do() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let tmp = Temp::new();
+    let mut store = Store::open(tmp.0.clone(), d.options.host()).unwrap();
+    let oracle: serde_json::Value =
+        serde_json::from_str(include_str!("../tests/fixtures/ecmascript-trim.json")).unwrap();
+    let mut invalid = vec![String::new(), "\u{feff}".into(), " \u{feff} ".into()];
+    invalid.extend(
+        oracle["trimmedCodePoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|cp| {
+                format!(
+                    " \u{feff}{}\u{feff} ",
+                    char::from_u32(cp.as_u64().unwrap() as u32).unwrap()
+                )
+            }),
+    );
+    for title in invalid {
+        let mut r = request(false, false);
+        r.title = title;
+        assert!(
+            execute(
+                &client(),
+                &d.options,
+                &mut store,
+                &target(),
+                Action::Submit {
+                    id: "never-blank".into(),
+                    request: r
+                },
+                |_| panic!("invalid whitespace title must not prepare")
+            )
+            .await
+            .is_err()
+        );
+        assert!(store.book.missions.is_empty());
+        assert!(d.seen.lock().unwrap().posts.is_empty());
+    }
+    let mut r = request(false, false);
+    r.title = "\u{0085}".into();
+    r.goal = "\u{0085}".into();
+    assert!(matches!(
+        execute(
+            &client(),
+            &d.options,
+            &mut store,
+            &target(),
+            Action::Submit {
+                id: "nonblank-nel".into(),
+                request: r
+            },
+            |_| {}
+        )
+        .await
+        .unwrap(),
+        Inspection::Created { .. }
+    ));
+    let seen = d.seen.lock().unwrap();
+    assert_eq!(seen.posts.len(), 1);
+    assert_eq!(seen.posts[0]["title"], "\u{0085}");
+    assert_eq!(seen.posts[0]["goal"], "\u{0085}");
+}
+
+#[tokio::test]
+async fn legacy_bom_unknown_remains_uncertain_and_cannot_resubmit_after_empty_membership() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let tmp = Temp::new();
+    let mut store = Store::open(tmp.0.clone(), d.options.host()).unwrap();
+    let mut r = request(false, false);
+    r.title = "\u{feff}".into();
+    let legacy = crate::mission_conversion::Attempt {
+        id: "legacy-unknown".into(),
+        request: r,
+        outcome: Outcome::Unknown,
+    };
+    store.book.missions.insert("source".into(), legacy.clone());
+    assert!(matches!(
+        execute(
+            &client(),
+            &d.options,
+            &mut store,
+            &target(),
+            Action::Inspect,
+            |_| panic!("read only")
+        )
+        .await
+        .unwrap(),
+        Inspection::Membership { mission_id: None }
+    ));
+    assert!(store.book.missions["source"] == legacy);
+    assert!(
+        execute(
+            &client(),
+            &d.options,
+            &mut store,
+            &target(),
+            action("fresh-request-refused", false, false),
+            |_| panic!("retained Unknown must not prepare")
+        )
+        .await
+        .is_err()
+    );
+    assert!(store.book.missions["source"] == legacy);
+    assert!(d.seen.lock().unwrap().posts.is_empty());
+}
