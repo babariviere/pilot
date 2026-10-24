@@ -3,7 +3,7 @@
 use crate::{
     delivery_store::Book,
     interaction::{Interaction, WriteCommand, WriteState},
-    mission_conversion::{Action as Command, Inspection, Outcome, Request, Target},
+    mission_conversion::{Action as Command, Inspection, Outcome, Request, Target, trim_text},
     ui::{self, Action, FieldRow, Notice, Text, Tone},
 };
 #[cfg(test)]
@@ -208,8 +208,8 @@ impl MissionForm {
         Some(Request {
             project_id: target.project.clone(),
             from_session_id: target.source.clone(),
-            title: self.title.read(cx).value().trim().to_string(),
-            goal: self.goal.read(cx).value().trim().to_string(),
+            title: trim_text(self.title.read(cx).value().as_ref()).to_string(),
+            goal: trim_text(self.goal.read(cx).value().as_ref()).to_string(),
             coordinator: self.coordinator,
             draft: self.draft,
         })
@@ -278,7 +278,9 @@ impl MissionForm {
             self.pending = matches!(reply.result, Ok(Inspection::Pending));
             self.ready = matches!(reply.result, Ok(Inspection::Ready { .. }));
             if let Ok(Inspection::Ready { title }) = &reply.result {
-                if self.title.read(cx).value().trim().is_empty() && !self.marked(window, cx) {
+                if trim_text(self.title.read(cx).value().as_ref()).is_empty()
+                    && !self.marked(window, cx)
+                {
                     self.title
                         .update(cx, |v, cx| v.set_value(bounded_title(title), window, cx));
                 }
@@ -346,8 +348,7 @@ impl MissionForm {
 
 fn bounded_title(value: &str) -> String {
     let mut units = 0;
-    value
-        .trim()
+    trim_text(value)
         .chars()
         .take_while(|ch| {
             units += ch.len_utf16();

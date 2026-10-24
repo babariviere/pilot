@@ -416,3 +416,48 @@ fn known_201_is_source_attempt_qualified_retained_closed_and_not_replaced_by_ins
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn daemon_trim_blank_and_nonblank_controls_share_capture_and_validation(cx: &mut TestAppContext) {
+    let (handle, form, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        form.update(cx, |f, cx| {
+            let oracle: serde_json::Value =
+                serde_json::from_str(include_str!("../tests/fixtures/ecmascript-trim.json"))
+                    .unwrap();
+            for case in oracle["cases"].as_array().unwrap() {
+                let input = case["input"].as_str().unwrap();
+                let expected = case["expected"].as_str().unwrap();
+                f.title.update(cx, |t, cx| t.set_value(input, w, cx));
+                f.goal.update(cx, |t, cx| t.set_value(input, w, cx));
+                let captured = f.captured(cx).unwrap();
+                assert_eq!(captured.title, expected);
+                assert_eq!(captured.goal, expected);
+                if expected.is_empty() {
+                    f.confirm(w, cx);
+                    assert!(commands.try_recv().is_err());
+                } else {
+                    assert!(captured.validate().is_ok());
+                }
+            }
+            assert_eq!(bounded_title("\u{feff} \u{3000}日本語\u{feff}"), "日本語");
+            assert_eq!(bounded_title(" \u{0085} "), "\u{0085}");
+            f.title
+                .update(cx, |t, cx| t.set_value("\u{feff} \u{0085} \u{feff}", w, cx));
+            f.goal
+                .update(cx, |t, cx| t.set_value("\u{feff} \u{0085} \u{feff}", w, cx));
+            f.confirm(w, cx);
+        })
+    })
+    .unwrap();
+    let WriteCommand::Mission {
+        action: Command::Submit { request, .. },
+        ..
+    } = commands.try_recv().unwrap()
+    else {
+        panic!("one nonblank control request")
+    };
+    assert_eq!(request.title, "\u{0085}");
+    assert_eq!(request.goal, "\u{0085}");
+    assert!(commands.try_recv().is_err());
+}

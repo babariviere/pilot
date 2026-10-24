@@ -258,10 +258,34 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                         let title = pane.read(cx).title.clone();
                         title.update(cx, |t, cx| t.focus(w, cx));
                         w.press("secondary-a", cx);
-                        w.input("Native mission 日本語", cx);
+                        w.input(" \u{feff} ", cx);
+                        assert_eq!(title.read(cx).value().as_ref(), " \u{feff} ");
+                        w.press("secondary-enter", cx);
+                        pane.update(cx, |form, cx| form.confirm(w, cx));
+                        assert!(
+                            pane.read(cx).probe_state().2.is_none(),
+                            "invalid title cannot reserve an attempt"
+                        );
+                        assert!(
+                            server.seen.lock().unwrap().posts.is_empty(),
+                            "invalid title cannot POST"
+                        );
+                        title.update(cx, |t, cx| t.focus(w, cx));
+                        w.press("secondary-a", cx);
+                        w.input(
+                            if mode == ThemeMode::Dark {
+                                "\u{feff} \u{0085} \u{feff}"
+                            } else {
+                                "\u{feff} Native mission 日本語 \u{feff}"
+                            },
+                            cx,
+                        );
                         let goal = pane.read(cx).goal.clone();
                         goal.update(cx, |t, cx| t.focus(w, cx));
-                        w.input("A goal captured from the live native editor.", cx);
+                        w.input(
+                            "\u{feff} A goal captured from the live native editor. \u{feff}",
+                            cx,
+                        );
                         w.press("enter", cx);
                         if mode == ThemeMode::Dark {
                             w.click("mission-coordinator", cx);
@@ -376,7 +400,18 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                     assert_eq!(s.posts.len(), 1);
                     assert_eq!(s.posts[0]["fromSessionId"], "source");
                     assert_eq!(s.posts[0]["projectId"], "project");
-                    assert_eq!(s.posts[0]["title"], "Native mission 日本語");
+                    assert_eq!(
+                        s.posts[0]["title"],
+                        if mode == ThemeMode::Dark {
+                            "\u{0085}"
+                        } else {
+                            "Native mission 日本語"
+                        }
+                    );
+                    assert_eq!(
+                        s.posts[0]["goal"],
+                        "A goal captured from the live native editor."
+                    );
                     assert_eq!(s.posts[0]["coordinator"], mode != ThemeMode::Dark);
                     assert_eq!(s.posts[0]["draft"], mode != ThemeMode::Dark);
                 }

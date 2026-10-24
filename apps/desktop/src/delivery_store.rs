@@ -518,6 +518,9 @@ impl Store {
         request: crate::mission_conversion::Request,
     ) -> Result<crate::mission_conversion::Attempt, Failure> {
         use crate::mission_conversion::{Attempt, Outcome};
+        // Retained records permit the legacy blank-classification edge only for
+        // loading. Every new admission must pass the current daemon semantics.
+        request.validate()?;
         let attempt = Attempt {
             id: id.into(),
             request,
