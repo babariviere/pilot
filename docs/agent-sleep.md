@@ -2,7 +2,12 @@
 
 Settings → Energy controls the daemon, so the policy still applies after quitting the GUI.
 Keeping the Mac awake while agents work is enabled by default. The display may sleep and the
-screen may lock. Idle chats do not hold an assertion; live background jobs and subagents do.
+screen may lock. Live background jobs and subagents hold an assertion. After the last active work
+finishes, Pilot keeps the Mac awake for another 60 seconds so completion notices can reach the
+coordinator and start follow-up work. New work cancels that countdown; the next idle transition
+starts a fresh one. Already-idle chats do not start a countdown on daemon startup or status updates.
+This grace period also retains eligible closed-lid mode, but never delays a sleep pause, unsafe
+closed-lid conditions, disabling keep-awake or daemon shutdown.
 
 **Keep going with the lid closed** is opt-in and needs administrator approval once. It permits
 closed-lid work only when external power **and** a usable Wi-Fi path are present. Disconnecting
@@ -11,8 +16,9 @@ Without that option, ordinary lid sleep still pauses work for the next wake.
 
 While agents work with closed-lid mode enabled, AC power and Wi-Fi connected, macOS ignores
 **Apple menu → Sleep**, even with the lid open. Turn off **Keep going with the lid closed**
-(or wait for agents to finish) before choosing Sleep. The override blocks the sleep request
-before Pilot receives a sleep notification; it does not trigger an agent pause.
+(or wait for agents to finish and the 60-second grace period to expire) before choosing Sleep.
+The override blocks the sleep request before Pilot receives a sleep notification; it does not
+trigger an agent pause.
 
 Pilot does not lock the screen or change macOS password/lock-delay settings. With closed-lid
 keep-awake on, whether the Mac locks depends on macOS and your settings, such as requiring a
@@ -81,7 +87,11 @@ grant, first turn closed-lid work off, then remove `/etc/sudoers.d/pilot-power` 
 Automated tests use synthetic state, temporary stores and injected override writers. They do not
 install sudoers entries, alter this Mac's power settings, call sleep/lock APIs, or use model accounts.
 The 10,000-update streaming regression verifies unchanged activity generates no additional native
-writes. Activity updates track active IDs without scanning the entire session registry, with one
+writes. Fake-clock regressions cover the exact grace deadline, new-work cancellation, safety
+overrides and shutdown. A real mission-notice scheduler fixture delivers a child's completion after
+its 30-second debounce, holds coordinator admission for another ten seconds, and verifies that
+sleep prevention never drops during the handoff. These tests do not sleep the physical Mac.
+Activity updates track active IDs without scanning the entire session registry, with one
 evaluator and at most eight pending native requests. Native sensors are event-driven; the only periodic work is the five-second safety lease.
 
 Physical hardware still needs an opt-in smoke check on a test Mac:
@@ -98,6 +108,19 @@ Physical hardware still needs an opt-in smoke check on a test Mac:
 6. Check a docked external display, permission cancellation/revocation, and helper relaunch recovery.
 
 Do not perform these destructive power/lifecycle checks on a Mac running real work.
+
+### Agent handoff grace verification (2026-10-24)
+
+The idle-release timer is a single unreferenced timeout, armed only when the tracked active-ID
+set becomes empty. New activity, policy disable, a sleep pause, helper loss and shutdown cancel it.
+Unchanged streaming/status updates cannot renew it, and there is no new polling or persistence.
+
+An offline macOS arm64/Node 24.21.0 probe compared `b41bedbc` with the grace policy using five
+alternating pairs after warmup. Each sample delivered 100,000 unchanged activity updates across
+1,000 live idle-parent summaries, each with 100 working child summaries. Median wall time was
+3.45 ms before and 3.53 ms after; median CPU was 3.47 ms and 3.54 ms. Both produced zero extra
+native writes. This isolates in-memory activity handling, not provider streaming, history loading,
+GUI responsiveness, actual sleep latency or notice delivery under arbitrary system load.
 
 ### Sleep acknowledgement investigation (2026-10-15)
 
