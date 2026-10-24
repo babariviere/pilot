@@ -1,7 +1,90 @@
 //! Additive source-capturing header action. Never navigates or replaces the chat.
 use super::*;
+#[cfg(test)]
+#[path = "mission_browser_navigation_tests.rs"]
+mod tests;
 
 impl LocalViewer {
+    pub(super) fn focus_mission_chat_destination(
+        &mut self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The clicked mission control is now unmounted. Keep keyboard navigation
+        // in a mounted scope, then prefer the retained composer when available.
+        self.chats.update(cx, |list, cx| list.focus(w, cx));
+        self.editor.update(cx, |editor, cx| editor.focus(w, cx));
+    }
+    pub(super) fn mission_navigation_ready(
+        &mut self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.prepare_navigation(w, cx) {
+            return false;
+        }
+        if let Some(error) = self.editor.read(cx).resource_navigation_issue() {
+            self.nav_error = Some(error);
+            cx.notify();
+            return false;
+        }
+        true
+    }
+    pub(super) fn show_missions(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.mission_navigation_ready(w, cx) {
+            return false;
+        }
+        self.leave_artifacts(cx);
+        self.page = Page::Missions;
+        self.nav_error = None;
+        self.rebuild_nav(w, cx);
+        self.missions.update(cx, |v, cx| v.focus(w, cx));
+        self.did_navigate(cx);
+        true
+    }
+    pub(super) fn show_mission_overview(
+        &mut self,
+        key: crate::mission_browser::Key,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !key.valid()
+            || !self.missions.read(cx).contains(&key)
+            || !self.mission_navigation_ready(w, cx)
+        {
+            return false;
+        }
+        self.leave_artifacts(cx);
+        self.page = Page::Mission(key);
+        self.nav_error = None;
+        self.rebuild_nav(w, cx);
+        self.missions.update(cx, |v, cx| v.focus(w, cx));
+        self.did_navigate(cx);
+        true
+    }
+    pub(super) fn sync_missions(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let route = match &self.page {
+            Page::Missions => Some(crate::mission_reader::Route::Catalog),
+            Page::Mission(key) => Some(crate::mission_reader::Route::Detail(key.clone())),
+            _ => None,
+        };
+        let online = self.state.status.starts_with("Connected")
+            || self.state.status.starts_with("Synthetic");
+        self.missions.update(cx, |v, cx| {
+            v.sync(
+                crate::mission_browser_view::Input {
+                    route,
+                    filter: self.project_scope.clone(),
+                    projects: self.state.projects.clone(),
+                    chats: self.state.chats.clone(),
+                    online,
+                    loaded: self.state.list_loaded,
+                },
+                w,
+                cx,
+            )
+        });
+    }
     pub(super) fn can_make_mission(&self, cx: &App) -> bool {
         self.page == Page::Chat
             && !self.mission_open

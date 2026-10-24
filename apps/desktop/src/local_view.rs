@@ -13,6 +13,9 @@ mod jump_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
+#[cfg(feature = "native-probes")]
+#[path = "mission_browser_probe.rs"]
+pub(crate) mod mission_browser_probe;
 #[path = "mission_navigation.rs"]
 mod mission_navigation;
 #[cfg(feature = "native-probes")]
@@ -80,6 +83,7 @@ gpui_kit::actions!(
         FocusChats,
         GoHome,
         ShowAllChats,
+        ShowMissions,
         NavigateBack,
         NavigateForward,
         ToggleJump
@@ -250,6 +254,7 @@ pub struct LocalViewer {
     projects: Entity<ListState<ProjectList>>,
     overview: Entity<Overview>,
     inbox: Entity<crate::inbox::Inbox>,
+    missions: Entity<crate::mission_browser_view::Browser>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
     pending_transcript: Option<(Vec<Message>, bool)>,
     nav_error: Option<&'static str>,
@@ -294,6 +299,7 @@ impl LocalViewer {
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
             KeyBinding::new("secondary-2", ShowAllChats, None),
+            KeyBinding::new("secondary-3", ShowMissions, None),
             KeyBinding::new("secondary-[", NavigateBack, None),
             KeyBinding::new("secondary-]", NavigateForward, None),
             KeyBinding::new("secondary-,", crate::settings_view::OpenSettings, None),
@@ -326,6 +332,8 @@ impl LocalViewer {
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
         view.navigation_seeded = true;
+        view.missions
+            .update(cx, |pane, _| pane.options(options.clone()));
         view.artifacts.update(cx, |pane, _| pane.options(options));
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
@@ -767,6 +775,51 @@ impl LocalViewer {
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
+        let missions = cx.new(crate::mission_browser_view::Browser::new);
+        let missions_events = cx.subscribe_in(
+            &missions,
+            window,
+            |view, _, event: &crate::mission_browser_view::Event, window, cx| {
+                use crate::mission_browser_view::Event;
+                if !matches!(view.page, Page::Missions | Page::Mission(_)) {
+                    return;
+                }
+                match event {
+                    Event::Open { key, generation }
+                        if view.page == Page::Missions
+                            && view.missions.read(cx).can_open(key, *generation) =>
+                    {
+                        view.show_mission_overview(key.clone(), window, cx);
+                    }
+                    Event::List { generation }
+                        if view.missions.read(cx).generation == *generation =>
+                    {
+                        view.show_missions(window, cx);
+                    }
+                    Event::Chat {
+                        key,
+                        id,
+                        generation,
+                    } if view.page == Page::Mission(key.clone())
+                        && view.missions.read(cx).can_link(key, id, *generation) =>
+                    {
+                        if !view.mission_navigation_ready(window, cx) {
+                            return;
+                        }
+                        if let Some(chat) = view
+                            .state
+                            .chats
+                            .iter()
+                            .find(|c| &c.id == id && !c.local_draft)
+                            .cloned()
+                        {
+                            view.open(chat, window, cx);
+                        }
+                    }
+                    _ => {}
+                }
+            },
+        );
         let mission_events = cx.subscribe_in(&mission, window, |view, _, _, window, cx| {
             view.mission_open = false;
             if let Some(focus) = view.mission_return.take() {
@@ -885,6 +938,7 @@ impl LocalViewer {
             projects,
             overview,
             inbox,
+            missions,
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -908,6 +962,7 @@ impl LocalViewer {
             _subscriptions: vec![
                 subscription,
                 mission_events,
+                missions_events,
                 editor_events,
                 artifact_events,
                 history_events,
@@ -936,6 +991,7 @@ impl LocalViewer {
         if !self.prepare_navigation(window, cx) {
             return false;
         }
+        let leaving_missions = matches!(self.page, Page::Missions | Page::Mission(_));
         if chat.local_draft {
             self.page = Page::Chat;
             self.nav_error = None;
@@ -946,6 +1002,9 @@ impl LocalViewer {
             });
             self.rebuild_nav(window, cx);
             self.did_navigate(cx);
+            if leaving_missions {
+                self.focus_mission_chat_destination(window, cx);
+            }
             return true;
         }
         if self.selected.as_ref() == Some(&chat.id) {
@@ -954,6 +1013,9 @@ impl LocalViewer {
             self.resume_transcript(cx);
             self.rebuild_nav(window, cx);
             self.did_navigate(cx);
+            if leaving_missions {
+                self.focus_mission_chat_destination(window, cx);
+            }
             return true;
         }
         let generation = self.generation + 1;
@@ -1006,6 +1068,9 @@ impl LocalViewer {
             view.replace_readonly(Vec::new(), true, cx);
         });
         self.did_navigate(cx);
+        if leaving_missions {
+            self.focus_mission_chat_destination(window, cx);
+        }
         true
     }
 
@@ -1282,6 +1347,7 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_missions(window, cx);
         self.editor.update(cx, |editor, cx| {
             editor.projects(
                 self.state.projects.clone(),
@@ -1479,12 +1545,15 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
             .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
+            .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
             .child(self.sidebar(window,cx))
             .child(
-                if matches!(self.page,Page::Inbox(_)) {
+                if matches!(self.page,Page::Missions|Page::Mission(_)) {
+                    div().id("missions").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full().child(self.missions.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else if matches!(self.page,Page::Inbox(_)) {
                     div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.inbox.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else if self.page!=Page::Chat {

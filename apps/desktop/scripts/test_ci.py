@@ -193,6 +193,7 @@ chmod +x "$1"
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "catalog"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "settings"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission"], calls)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "missions"], calls)
         self.assertIn("PASSED", (self.root / "target/ci-native-status.txt").read_text())
 
     def test_manifest_hashes_both_binaries_and_distinguishes_merge_from_head(self):

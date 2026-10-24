@@ -1,0 +1,737 @@
+//! Read-only mission page. Navigation and draft ownership remain with LocalViewer.
+#[cfg(test)]
+#[path = "mission_browser_view_tests.rs"]
+mod tests;
+use crate::{
+    LocalOptions,
+    local_model::{Chat, Project},
+    mission_browser::{Catalog, Detail, Home, Key, Members},
+    mission_reader::{self, Data, Reader, Route},
+    ui::{self, Action, Notice, ResourceLabel, Space, Text, Tone},
+};
+use gpui_kit::{
+    App, ClipboardItem, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt,
+    Window,
+    base::SelectableText,
+    component::{Disableable, StyledExt},
+    div,
+    prelude::FluentBuilder,
+    px,
+};
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub(crate) enum Event {
+    Open {
+        key: Key,
+        generation: u64,
+    },
+    List {
+        generation: u64,
+    },
+    Chat {
+        key: Key,
+        id: String,
+        generation: u64,
+    },
+}
+pub(crate) struct Input {
+    pub(crate) route: Option<Route>,
+    pub(crate) filter: Option<String>,
+    pub(crate) projects: Arc<Vec<Project>>,
+    pub(crate) chats: Arc<Vec<Chat>>,
+    pub(crate) online: bool,
+    pub(crate) loaded: bool,
+}
+pub(crate) struct Browser {
+    pub(crate) generation: u64,
+    pub(crate) route: Option<Route>,
+    options: Option<LocalOptions>,
+    reader: Option<Reader>,
+    reader_lane: u64,
+    updates: Option<Task<()>>,
+    pub(crate) catalog: Option<Arc<Catalog>>,
+    pub(crate) detail: Option<Arc<Detail>>,
+    members: Result<Arc<Members>, &'static str>,
+    pub(crate) error: Option<&'static str>,
+    pub(crate) busy: bool,
+    catalog_current: bool,
+    projects: Arc<Vec<Project>>,
+    chats: Arc<Vec<Chat>>,
+    online: bool,
+    loaded: bool,
+    filter: Option<String>,
+    focus: FocusHandle,
+    catalog_scroll: gpui_kit::ScrollHandle,
+    detail_scroll: gpui_kit::ScrollHandle,
+}
+impl EventEmitter<Event> for Browser {}
+impl Browser {
+    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            generation: 0,
+            route: None,
+            options: None,
+            reader: None,
+            reader_lane: 0,
+            updates: None,
+            catalog: None,
+            detail: None,
+            members: Err("Member chats not loaded."),
+            error: None,
+            busy: false,
+            catalog_current: false,
+            projects: Arc::new(Vec::new()),
+            chats: Arc::new(Vec::new()),
+            online: false,
+            loaded: false,
+            filter: None,
+            focus: cx.focus_handle(),
+            catalog_scroll: gpui_kit::ScrollHandle::default(),
+            detail_scroll: gpui_kit::ScrollHandle::default(),
+        }
+    }
+    pub(crate) fn options(&mut self, options: LocalOptions) {
+        self.options = Some(options);
+    }
+    pub(crate) fn local_home(&self) -> Option<Home> {
+        self.options.as_ref().map(|o| Home::local(&o.host()))
+    }
+    pub(crate) fn contains(&self, key: &Key) -> bool {
+        self.catalog
+            .as_ref()
+            .is_some_and(|c| c.rows.iter().any(|r| &r.key == key))
+    }
+    pub(crate) fn current(&self, generation: u64) -> bool {
+        self.generation == generation && !self.busy && self.error.is_none() && self.route.is_some()
+    }
+    pub(crate) fn can_open(&self, key: &Key, generation: u64) -> bool {
+        self.current(generation)
+            && self.online
+            && self.catalog_current
+            && self.route == Some(Route::Catalog)
+            && self.local_home().as_ref().is_some_and(|local| {
+                self.catalog.as_ref().is_some_and(|c| {
+                    c.rows
+                        .iter()
+                        .any(|r| &r.key == key && r.in_scope(local, self.filter.as_deref()))
+                })
+            })
+    }
+    pub(crate) fn can_link(&self, key: &Key, id: &str, generation: u64) -> bool {
+        self.current(generation)
+            && self.online
+            && self.loaded
+            && self.local_home().as_ref() == Some(&key.home)
+            && self.route == Some(Route::Detail(key.clone()))
+            && self.detail.as_ref().is_some_and(|d| {
+                &d.key == key
+                    && self
+                        .members
+                        .as_ref()
+                        .is_ok_and(|m| m.rows.iter().any(|r| r.id == id))
+                    && self.chats.iter().any(|c| {
+                        c.id == id && !c.local_draft && c.project_id.as_deref() == Some(&d.project)
+                    })
+            })
+    }
+    pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        self.focus.focus(w, cx);
+    }
+    pub(crate) fn sync(&mut self, input: Input, w: &mut Window, cx: &mut Context<Self>) {
+        let Input {
+            route,
+            filter,
+            projects,
+            chats,
+            online,
+            loaded,
+        } = input;
+        let changed = self.filter != filter
+            || !Arc::ptr_eq(&self.projects, &projects)
+            || self.link_availability_changed(&chats)
+            || self.online != online
+            || self.loaded != loaded;
+        if self.filter != filter {
+            self.catalog_scroll
+                .set_offset(gpui_kit::point(px(0.), px(0.)));
+        }
+        self.filter = filter;
+        self.projects = projects;
+        self.chats = chats;
+        self.online = online;
+        self.loaded = loaded;
+        if self.route != route {
+            self.route = route;
+            self.read(w, cx);
+        } else if changed {
+            cx.notify();
+        }
+    }
+    fn link_availability_changed(&self, chats: &[Chat]) -> bool {
+        self.detail.as_ref().is_some_and(|d| {
+            self.members.as_ref().is_ok_and(|m| {
+                m.rows.iter().any(|m| {
+                    let eligible = |rows: &[Chat]| {
+                        rows.iter().any(|c| {
+                            c.id == m.id
+                                && !c.local_draft
+                                && c.project_id.as_deref() == Some(d.project.as_str())
+                        })
+                    };
+                    eligible(&self.chats) != eligible(chats)
+                })
+            })
+        })
+    }
+    pub(crate) fn accept(&mut self, response: mission_reader::Response, cx: &mut Context<Self>) {
+        if response.generation != self.generation || self.route.as_ref() != Some(&response.route) {
+            return;
+        }
+        self.busy = false;
+        match response.result {
+            Err(e) => {
+                self.error = Some(e);
+                if response.route == Route::Catalog {
+                    self.catalog_current = false;
+                }
+            }
+            Ok(Data::Catalog(c)) if response.route == Route::Catalog => {
+                self.catalog = Some(c);
+                self.catalog_current = true;
+                self.error = None;
+            }
+            Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
+                self.detail = Some(d);
+                self.members = m;
+                self.error = None;
+            }
+            _ => self.error = Some("Mission response source differs; refresh explicitly."),
+        }
+        cx.notify();
+    }
+    fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.generation = self.generation.saturating_add(1);
+        self.error = None;
+        self.busy = false;
+        if let Some(Route::Detail(key)) = &self.route {
+            if self.detail.as_ref().is_some_and(|d| &d.key != key) {
+                self.detail = None;
+                self.detail_scroll
+                    .set_offset(gpui_kit::point(px(0.), px(0.)));
+                self.members = Err("Member chats not loaded.");
+            }
+            let local = self.local_home();
+            if local.as_ref().is_none_or(|h| {
+                !self.catalog.as_ref().is_some_and(|c| {
+                    c.rows
+                        .iter()
+                        .any(|r| &r.key == key && r.local_definition(h))
+                })
+            }) {
+                self.detail = None;
+                self.members = Err("Member chats are unavailable.");
+                self.error = Some(
+                    "Mission home is unavailable in this Local-only viewer. Cached catalog context is not live detail.",
+                );
+                if let Some(reader) = &self.reader {
+                    reader.request(mission_reader::Request {
+                        generation: self.generation,
+                        route: None,
+                    });
+                }
+                cx.notify();
+                return;
+            }
+        }
+        if self.route.is_none() {
+            if let Some(r) = &self.reader {
+                r.request(mission_reader::Request {
+                    generation: self.generation,
+                    route: None,
+                });
+            }
+            cx.notify();
+            return;
+        }
+        let Some(options) = self.options.clone() else {
+            self.error = Some(
+                "Mission reads are unavailable in this captured view. Open Local to browse missions.",
+            );
+            cx.notify();
+            return;
+        };
+        if self.reader.is_none() {
+            match Reader::start(options) {
+                Err(e) => {
+                    self.error = Some(e);
+                    cx.notify();
+                    return;
+                }
+                Ok((reader, updates)) => {
+                    self.reader_lane = self.reader_lane.saturating_add(1);
+                    let lane = self.reader_lane;
+                    self.reader = Some(reader);
+                    self.updates = Some(cx.spawn_in(w, async move |view, cx| {
+                        while let Ok(response) = updates.recv().await {
+                            if view
+                                .update(cx, |view, cx| view.accept(response, cx))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        let _ = view.update(cx, |view, cx| view.reader_stopped(lane, cx));
+                    }));
+                }
+            }
+        }
+        if self.reader.as_ref().is_some_and(|r| {
+            r.request(mission_reader::Request {
+                generation: self.generation,
+                route: self.route.clone(),
+            })
+        }) {
+            self.busy = true;
+        } else {
+            self.error = Some("Mission read could not be queued. Retry explicitly.");
+        }
+        cx.notify();
+    }
+    fn reader_stopped(&mut self, lane: u64, cx: &mut Context<Self>) {
+        if lane != self.reader_lane {
+            return;
+        }
+        self.reader = None;
+        self.busy = false;
+        if self.route.is_some() {
+            self.error.get_or_insert(
+                "Mission reader stopped. Retained context is not current; Refresh to retry.",
+            );
+            if self.route == Some(Route::Catalog) {
+                self.catalog_current = false;
+            }
+        }
+        cx.notify();
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn disconnect_probe(&self) {
+        if let Some(reader) = &self.reader {
+            reader.disconnect_fixture();
+        }
+    }
+    fn project_name(&self, id: &str) -> String {
+        self.projects
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| format!("{} · {}", p.name, id))
+            .unwrap_or_else(|| format!("Project unavailable · {id}"))
+    }
+    fn plain(&self, id: &'static str, text: String) -> impl IntoElement {
+        let focus = self.focus.clone();
+        div()
+            .id(id)
+            .test_support()
+            .w_full()
+            .min_w_0()
+            .on_mouse_down(gpui_kit::MouseButton::Left, move |_, w, cx| {
+                focus.focus(w, cx)
+            })
+            .child(SelectableText::new(
+                SharedString::from(format!("{id}-{}", self.generation)),
+                SharedString::from(text),
+            ))
+    }
+    fn snapshot_note(&self) -> &'static str {
+        if self.busy {
+            "Loading mission snapshot…"
+        } else if self.error.is_some() {
+            "Mission read unavailable. Any retained context is not a current snapshot."
+        } else if !self.online {
+            "Offline-safe view · Local is unavailable; chat links are disabled."
+        } else {
+            "Read-only snapshot · Refresh to update. No agents or tasks are started here."
+        }
+    }
+}
+impl Render for Browser {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let generation = self.generation;
+        let is_list = self.route == Some(Route::Catalog);
+        let title = if is_list {
+            "Missions".to_owned()
+        } else {
+            self.detail
+                .as_ref()
+                .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
+                .map(|d| d.title.clone())
+                .or_else(|| {
+                    self.catalog.as_ref().and_then(|c| {
+                        c.rows
+                            .iter()
+                            .find(|r| self.route == Some(Route::Detail(r.key.clone())))
+                            .map(|r| r.title.clone())
+                    })
+                })
+                .unwrap_or_else(|| "Mission overview".into())
+        };
+        let mut content = ui::page()
+            .gap(px(Space::CONTROL))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .when(!is_list, |v| {
+                        v.child(
+                            ui::action("missions-list", "All missions", Action::Quiet).on_click(
+                                cx.listener(move |v, _, _, cx| {
+                                    if v.generation == generation {
+                                        cx.emit(Event::List { generation });
+                                    }
+                                }),
+                            ),
+                        )
+                    })
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            ui::text(Text::Title, SharedString::from(title))
+                                .id("missions-title")
+                                .test_support(),
+                        ),
+                    )
+                    .child(
+                        ui::action("missions-refresh", "Refresh", Action::Secondary)
+                            .disabled(self.options.is_none() || self.busy)
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                if v.generation == generation {
+                                    v.read(w, cx);
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                ui::text(Text::Caption, self.snapshot_note())
+                    .id("missions-snapshot-note")
+                    .test_support(),
+            );
+        if !self.online {
+            content=content.child(Notice::new("Local is unavailable. Retained text is safe to read; chat links require a current Local connection.").tone(Tone::Warning));
+        }
+        if let Some(error) = self.error {
+            content = content.child(
+                div()
+                    .id("missions-error")
+                    .test_support()
+                    .child(Notice::new(error).tone(Tone::Error)),
+            );
+        }
+        if is_list {
+            let scope = self
+                .filter
+                .as_ref()
+                .map(|id| self.project_name(id))
+                .unwrap_or_else(|| "All projects".into());
+            content=content.child(ui::text(Text::Caption,SharedString::from(format!("Browse scope: {scope}. Project evidence filters presentation, never mission identity."))));
+            if let Some(catalog) = &self.catalog {
+                let local = self.local_home();
+                let rows: Vec<_> = catalog
+                    .rows
+                    .iter()
+                    .filter(|r| {
+                        local
+                            .as_ref()
+                            .is_some_and(|h| r.in_scope(h, self.filter.as_deref()))
+                    })
+                    .collect();
+                content = content.child(ui::text(
+                    Text::Caption,
+                    SharedString::from(format!(
+                        "{} shown in scope · {} received · {} known globally",
+                        rows.len(),
+                        catalog.rows.len(),
+                        catalog.total
+                    )),
+                ));
+                if catalog.truncated {
+                    content=content.child(Notice::new("Catalog rows or provenance are partial (server limits: 50 rows, 16 sources per row, 24 KB). This API has no pagination; Refresh updates this window, not the full catalog.").tone(Tone::Warning));
+                }
+                if rows.is_empty() {
+                    content = content.child(Notice::new(if self.catalog_current {
+                        "No missions in this received scope."
+                    } else {
+                        "No retained rows in this scope; current missions are unknown."
+                    }));
+                }
+                for r in rows {
+                    let key = r.key.clone();
+                    let detail = format!(
+                        "{} · {} · {}{}",
+                        r.status,
+                        if local.as_ref() == Some(&key.home) {
+                            "Local home"
+                        } else {
+                            "Home unavailable"
+                        },
+                        key.id,
+                        r.counts
+                            .map(|(d, t)| format!(" · {d}/{t} tasks done"))
+                            .unwrap_or_default()
+                    );
+                    content = content.child(
+                        ui::action(
+                            SharedString::from(format!("mission-row-{}", key.tag())),
+                            "",
+                            Action::Quiet,
+                        )
+                        .w_full()
+                        .h(px(54.))
+                        .justify_start()
+                        .disabled(
+                            !self.online || !self.current(generation) || !self.catalog_current,
+                        )
+                        .child(
+                            ResourceLabel::new(SharedString::from(r.title.clone()))
+                                .detail(SharedString::from(detail))
+                                .icon(crate::app_icon::AppIcon::Overview),
+                        )
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.can_open(&key, generation) {
+                                cx.emit(Event::Open {
+                                    key: key.clone(),
+                                    generation,
+                                });
+                            }
+                        })),
+                    );
+                }
+            } else if !self.busy && self.error.is_none() {
+                content = content.child(Notice::new(
+                    "Mission catalog not loaded. Refresh explicitly.",
+                ));
+            }
+        } else if let Some(d) = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
+        {
+            content = content
+                .child(ui::text(
+                    Text::Caption,
+                    SharedString::from(format!("{} · {}", d.status, self.project_name(&d.project))),
+                ))
+                .child(self.plain(
+                    "mission-canonical",
+                    format!(
+                        "Mission {}\nHome {} / {}",
+                        d.key.id, d.key.home.daemon, d.key.home.lineage
+                    ),
+                ));
+            content = content
+                .child(ui::heading("mission-goal-heading", "Goal", Text::Headline))
+                .child(self.plain(
+                    "mission-goal",
+                    if d.goal.is_empty() {
+                        "No goal saved.".into()
+                    } else {
+                        d.goal.clone()
+                    },
+                ));
+            if !d.goal.is_empty() {
+                let text = d.goal.clone();
+                let key = d.key.clone();
+                content = content.child(
+                    ui::action("mission-copy-goal", "Copy goal", Action::Quiet)
+                        .self_start()
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.generation == generation
+                                && v.route == Some(Route::Detail(key.clone()))
+                            {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                            }
+                        })),
+                );
+            }
+            content = content.child(ui::heading(
+                "mission-chats-heading",
+                "Chats",
+                Text::Headline,
+            ));
+            if let Some(id) = &d.coordinator {
+                content = content.child(ui::text(
+                    Text::Caption,
+                    SharedString::from(format!(
+                        "Coordinator chat: {id} (opens only if available below)"
+                    )),
+                ));
+            } else {
+                content =
+                    content.child(ui::text(Text::Caption, "No coordinator chat is assigned."));
+            }
+            match &self.members {
+                Err(e) => content = content.child(Notice::new(*e).tone(Tone::Warning)),
+                Ok(m) => {
+                    content = content.child(ui::text(
+                        Text::Caption,
+                        SharedString::from(format!(
+                            "{} of {} member chats shown",
+                            m.rows.len(),
+                            m.total
+                        )),
+                    ));
+                    for member in &m.rows {
+                        let key = d.key.clone();
+                        let id = member.id.clone();
+                        let enabled = self.can_link(&key, &id, generation);
+                        let role = if d.coordinator.as_ref() == Some(&id) {
+                            "Coordinator"
+                        } else {
+                            "Member"
+                        };
+                        let label = format!(
+                            "{role} · {id}{}{}",
+                            if member.archived { " · archived" } else { "" },
+                            if enabled {
+                                ""
+                            } else {
+                                " · unavailable in current Local chat list"
+                            }
+                        );
+                        content = content.child(
+                            ui::action(
+                                SharedString::from(format!("mission-chat-{id}")),
+                                "",
+                                Action::Quiet,
+                            )
+                            .w_full()
+                            .h(px(54.))
+                            .justify_start()
+                            .disabled(!enabled)
+                            .child(
+                                ResourceLabel::new(SharedString::from(member.title.clone()))
+                                    .detail(SharedString::from(label))
+                                    .icon(crate::app_icon::AppIcon::Chats),
+                            )
+                            .on_click(cx.listener(
+                                move |v, _, _, cx| {
+                                    if v.can_link(&key, &id, generation) {
+                                        cx.emit(Event::Chat {
+                                            key: key.clone(),
+                                            id: id.clone(),
+                                            generation,
+                                        });
+                                    }
+                                },
+                            )),
+                        );
+                    }
+                }
+            }
+            content = content
+                .child(ui::heading(
+                    "mission-tasks-heading",
+                    "Tasks",
+                    Text::Headline,
+                ))
+                .child(ui::text(
+                    Text::Caption,
+                    SharedString::from(format!(
+                        "{} of {} tasks shown{}",
+                        d.tasks.len(),
+                        d.task_count,
+                        d.counts
+                            .map(|(a, b)| format!(" · {a}/{b} done (canonical count)"))
+                            .unwrap_or_default()
+                    )),
+                ));
+            if d.tasks.is_empty() {
+                content = content.child(Notice::new(
+                    "No tasks in this snapshot. Task creation and management remain in Swift.",
+                ));
+            }
+            for t in &d.tasks {
+                content = content.child(
+                    div()
+                        .id(SharedString::from(format!("mission-task-{}", t.id)))
+                        .test_support()
+                        .v_flex()
+                        .gap(px(Space::META))
+                        .child(ui::text(
+                            Text::Label,
+                            SharedString::from(format!("#{} {}", t.number, t.title)),
+                        ))
+                        .child(ui::text(
+                            Text::Caption,
+                            SharedString::from(format!(
+                                "{}{}",
+                                t.status,
+                                t.owner
+                                    .as_ref()
+                                    .map(|id| format!(" · assigned chat {id}"))
+                                    .unwrap_or_default()
+                            )),
+                        )),
+                );
+            }
+            content = content.child(ui::heading(
+                "mission-brief-heading",
+                "Brief",
+                Text::Headline,
+            ));
+            if let Some(text) = &d.brief {
+                let copy = text.clone();
+                let key = d.key.clone();
+                content = content
+                    .child(self.plain("mission-brief", text.clone()))
+                    .child(
+                        ui::action("mission-copy-brief", "Copy visible brief", Action::Quiet)
+                            .self_start()
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if v.generation == generation
+                                    && v.route == Some(Route::Detail(key.clone()))
+                                {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                }
+                            })),
+                    );
+            } else {
+                content = content.child(Notice::new("No brief saved."));
+            }
+            if d.clipped {
+                content=content.child(Notice::new("Text is clipped for display (goal 8 KiB, brief 32 KiB). Copy retains only the visible bounded text. Full content remains in Swift.").tone(Tone::Warning));
+            }
+        } else if let Some(Route::Detail(key)) = &self.route {
+            content = content.child(self.plain(
+                "mission-canonical",
+                format!(
+                    "Mission {}\nHome {} / {}",
+                    key.id, key.home.daemon, key.home.lineage
+                ),
+            ));
+        }
+        div()
+            .id("missions-page")
+            .test_support()
+            .track_focus(&self.focus)
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(if is_list {
+                &self.catalog_scroll
+            } else {
+                &self.detail_scroll
+            })
+            .on_action(cx.listener(|_, _: &gpui_kit::base::input::Copy, w, cx| {
+                let text = gpui_kit::base::TextSelection::selected_text(w, cx);
+                if text.is_empty() {
+                    cx.propagate();
+                } else {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+            }))
+            .child(content)
+    }
+}

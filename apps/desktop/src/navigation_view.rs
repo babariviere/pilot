@@ -8,6 +8,8 @@ impl LocalViewer {
     pub(super) fn location(&self, cx: &App) -> Location {
         let target = match &self.page {
             Page::Home => Target::Home,
+            Page::Missions => Target::Missions,
+            Page::Mission(key) => Target::Mission(key.clone()),
             Page::Inbox(filter) => Target::Inbox(filter.clone()),
             Page::Project(id) => Target::Project(id.clone()),
             Page::Chat => {
@@ -144,6 +146,8 @@ impl LocalViewer {
         }
         match &location.target {
             Target::Home => location.scope.is_none(),
+            Target::Missions => true,
+            Target::Mission(key) => key.valid() && self.missions.read(cx).contains(key),
             Target::Inbox(filter) => filter
                 .as_ref()
                 .is_none_or(|id| self.state.projects.iter().any(|p| &p.id == id)),
@@ -172,6 +176,8 @@ impl LocalViewer {
     ) -> bool {
         self.restoring_navigation = true;
         let success = match &location.target {
+            Target::Missions => self.show_missions(window, cx),
+            Target::Mission(key) => self.show_mission_overview(key.clone(), window, cx),
             Target::Home => {
                 self.show_home(window, cx);
                 true

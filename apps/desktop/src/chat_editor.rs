@@ -305,9 +305,25 @@ impl ChatEditor {
         ));
         self.select("chat:synthetic".into(), true, false, window, cx);
     }
-    #[cfg(feature = "native-probes")]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn shell_probe(&self) -> (Entity<TextareaState>, Entity<InputState>, Option<Draft>) {
         (self.text.clone(), self.cwd.clone(), self.draft().cloned())
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn saved_probe(&self, cx: &gpui_kit::App) -> bool {
+        self.error.is_none()
+            && self.state.error.is_none()
+            && self.selected.as_ref().is_some_and(|key| {
+                self.cache.get(key).is_some_and(|draft| {
+                    draft.text == self.text.read(cx).value().as_ref()
+                        && self
+                            .state
+                            .book
+                            .as_ref()
+                            .and_then(|b| b.drafts.get(key))
+                            .is_some_and(|saved| saved == draft)
+                })
+            })
     }
     pub(crate) fn background(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.background_work != active {
@@ -566,6 +582,12 @@ impl ChatEditor {
         if self.ready() && self.selected.is_some() {
             self.text.update(cx, |state, cx| state.focus(window, cx));
         }
+    }
+    pub(crate) fn resource_navigation_issue(&self) -> Option<&'static str> {
+        self.state
+            .error
+            .or(self.error)
+            .or(self.closing.then_some("Private drafts are closing."))
     }
     pub(crate) fn capture_navigation(
         &mut self,
