@@ -509,11 +509,9 @@ impl ChatEditor {
         {
             return;
         }
-        if !stop
-            && key.starts_with("new:")
-            && let Some(error) = self.project_problem(&draft)
-        {
-            self.error = Some(error);
+        if !stop && key.starts_with("new:") && self.project_problem(&draft).is_some() {
+            // Catalog validation is derived and already shown beside the picker.
+            // Do not latch it into the unrelated save/write error fence.
             cx.notify();
             return;
         }

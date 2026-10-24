@@ -39,6 +39,11 @@ navigation. Search preedit blocks confirmation and navigation. Normal navigation
 retires the popup and restores its trigger before moving focus. Current message
 text is captured before a destination change. A loading, empty, invalid or failed
 catalog blocks creation without erasing a draft or replacing a retained choice.
+Catalog validation is derived from current catalog state, not stored as a save
+error. After recovery, the same chosen ID/path and unchanged message can be
+submitted explicitly, including after pressing Enter during loading or an error.
+Recovery never creates an intent or submits automatically, and never clears an
+unrelated private-write or unsaved-input fault.
 Pending operation controls keep their original identity and cannot change mode or
 project. A removed selection stays visible as unavailable, never falls back to a
 similarly named/path-matching project.
@@ -125,3 +130,46 @@ PILOT_NEXT_PROJECT_CREATE_DIR="$PWD/target/project-creation" \
 
 The native target is included in the existing check/CI inventory. No workflows,
 runner roles, CI quarantine rules or release/default-switch behavior are changed.
+
+## Transient catalog recovery regression
+
+Pressing Enter during loading or a catalog error used to cache that derived
+validation in the generic save-error field. Healthy publication and same-choice
+reselection could not retire it without a message edit. The fix keeps validation
+derived; it does not clear any error fields or change persistence or delivery.
+
+The new pure recovery case and actual native component case both failed against
+unchanged production code at source `8eb13f1eb17e340e4557a36c17ccdbc6ca2cce0d`,
+tree `6ccdb028193fced59da2489e38676dc25bb8779a`. Failed job
+`0f589803-5923-4c8b-877f-34c952f92c96` retained identical PRE/POST receipts.
+The native failure was the still-disabled Create button after healthy publication
+and same-ID/path reselection, with the unchanged message and no intent or POST.
+
+Final source `9e805c546269e9e449627a71196123b6a0165e06`, tree
+`15dd2dd8a7e982da12f5bd7b51adf9155a74c3c7`, based on accepted main
+`4b89df9406930a51b0d0dd55112b69c2ac265cfd`, passed job
+`e60f0c7a-0be8-4307-b50b-0abf8d043d4f` under actual shared-slot admission:
+
+- Formatting and strict all-target native-probe Clippy.
+- **199 library tests passed**, three existing explicitly ignored workloads.
+  This includes original delivery/immutable-operation guards and new controls
+  for real temporary snapshot write failure and oversized unsaved input. The
+  write failure is projected through the normal editor `accept` entry point;
+  catalog recovery/reselection leaves both kinds of fault fenced and unchanged.
+- Original **shell**, **navigation** and **workbench** native targets passed.
+- All **eight native project cases** passed (680/1100, light/dark, accepted/lost
+  reply), producing **16 fresh captures**. Each captures a chosen project and
+  message before error/loading, presses Enter without reservation or POST,
+  publishes a healthy catalog, reselects the same canonical ID/path without
+  editing the message, then explicitly submits. Duplicate input remains fenced
+  to one operation/POST. Lost-response reconciliation and restart preserve the
+  exact destination and never create a second chat.
+- Source/tree/tracked-diff and all eight recorded file hashes were identical
+  before/after. These results-only paragraphs were added after completion; the
+  publication records that docs-only mapping. No executable/test bytes changed.
+
+The earlier focused after run `b60a345d-794e-4e14-b220-4aca59847a84` also passed
+15 composer tests and the eight native cases, but predates strengthening the
+write-fault control. Only the final-source results above qualify that control.
+Everything remains synthetic and offscreen, not live actions or full desktop,
+OS IME, Linux, animation/performance or acceptance evidence.

@@ -432,6 +432,127 @@ mod tests {
         .unwrap();
     }
     #[gpui_kit::test]
+    fn catalog_recovery_without_edit_or_destination_change_allows_one_submit(
+        cx: &mut TestAppContext,
+    ) {
+        for (loaded, error) in [(false, None), (true, Some("Synthetic catalog error"))] {
+            let (handle, editor, commands) = setup(cx);
+            cx.update_window(handle, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.projects(rows(), true, None, w, cx);
+                    e.new_draft(String::new(), w, cx);
+                    let key = e.selected.clone().unwrap();
+                    e.choose_project(&key, "ab", w, cx);
+                    e.text
+                        .update(cx, |t, cx| t.set_value("Unchanged message 日本語", w, cx));
+                    e.changed(cx);
+                    let before = e.draft().unwrap().clone();
+                    e.projects(rows(), loaded, error, w, cx);
+                    e.submit(false, w, cx);
+                    assert!(commands.try_recv().is_err());
+                    assert!(e.draft().unwrap() == &before);
+                    e.projects(rows(), true, None, w, cx);
+                    e.choose_project(&key, "ab", w, cx);
+                    assert!(e.project_problem(e.draft().unwrap()).is_none());
+                    assert!(
+                        e.draft().unwrap() == &before,
+                        "catalog recovery/reselection never edits the draft"
+                    );
+                    assert!(
+                        e.error.is_none(),
+                        "derived catalog validation must not latch a generic error"
+                    );
+                    e.submit(false, w, cx);
+                    e.submit(false, w, cx);
+                })
+            })
+            .unwrap();
+            let WriteCommand::Submit { draft, .. } = commands.try_recv().unwrap() else {
+                panic!("one explicit recovered submit")
+            };
+            assert_eq!(draft.project_id.as_deref(), Some("ab"));
+            assert_eq!(draft.cwd, "/tmp/shared");
+            assert_eq!(draft.text, "Unchanged message 日本語");
+            assert!(commands.try_recv().is_err());
+        }
+    }
+    #[gpui_kit::test]
+    fn catalog_recovery_does_not_clear_writer_or_unsaved_input_faults(cx: &mut TestAppContext) {
+        for writer_fault in [false, true] {
+            let (handle, editor, commands) = setup(cx);
+            cx.update_window(handle, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.projects(rows(), true, None, w, cx);
+                    e.new_draft(String::new(), w, cx);
+                    let key = e.selected.clone().unwrap();
+                    e.choose_project(&key, "ab", w, cx);
+                    e.text.update(cx, |t, cx| {
+                        t.set_value(
+                            if writer_fault {
+                                "Unchanged text".into()
+                            } else {
+                                "x".repeat(TEXT_CAP + 1)
+                            },
+                            w,
+                            cx,
+                        )
+                    });
+                    e.changed(cx);
+                    if writer_fault {
+                        // Exercise a real atomic-write failure in owned temporary state,
+                        // then publish its error through the normal editor entry point.
+                        let root = std::env::temp_dir()
+                            .join(format!("catalog-write-fault-{}", uuid::Uuid::new_v4()));
+                        let mut store = crate::delivery_store::Store::open(
+                            root.clone(),
+                            e.state.book.as_ref().unwrap().host.clone(),
+                        )
+                        .unwrap();
+                        let snapshot = root.join("state-v1.json");
+                        let original = std::fs::read(&snapshot).unwrap();
+                        std::fs::rename(&snapshot, root.join("retained.json")).unwrap();
+                        std::fs::create_dir(&snapshot).unwrap();
+                        let failed_edits = std::collections::BTreeMap::from([(
+                            key.clone(),
+                            e.draft().unwrap().clone(),
+                        )]);
+                        let error = store.save_edits(failed_edits).unwrap_err();
+                        assert_eq!(
+                            error,
+                            "Draft write failed. Delivery is disabled; keep/copy unsaved text."
+                        );
+                        assert!(store.book.pending.is_empty());
+                        assert!(!store.book.drafts.contains_key(&key));
+                        assert_eq!(std::fs::read(root.join("retained.json")).unwrap(), original);
+                        let mut state = e.state.clone();
+                        state.error = Some(error);
+                        e.accept(state, w, cx);
+                        drop(store);
+                        std::fs::remove_dir_all(root).unwrap();
+                    }
+                    let local_error = e.error;
+                    let writer_error = e.state.error;
+                    let before = e.draft().unwrap().clone();
+                    assert!(local_error.is_some() || writer_error.is_some());
+                    e.projects(rows(), false, Some("Temporary catalog error"), w, cx);
+                    e.submit(false, w, cx);
+                    e.projects(rows(), true, None, w, cx);
+                    e.choose_project(&key, "ab", w, cx);
+                    e.submit(false, w, cx);
+                    assert_eq!(e.error, local_error);
+                    assert_eq!(e.state.error, writer_error);
+                    assert!(e.draft().unwrap() == &before);
+                    assert!(commands.try_recv().is_err());
+                    if !writer_fault {
+                        assert!(e.unsaved_local.contains(&key));
+                    }
+                })
+            })
+            .unwrap();
+        }
+    }
+
+    #[gpui_kit::test]
     fn picker_preedit_guards_submit_selection_and_navigation(cx: &mut TestAppContext) {
         let (handle, editor, commands) = setup(cx);
         cx.update_window(handle, |_, w, cx| {

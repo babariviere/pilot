@@ -339,14 +339,48 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
+                // Capture a nonempty native message BEFORE transient catalog failure.
+                cx.update_window(handle, |_, w, cx| {
+                    let input = editor.read(cx).text.clone();
+                    input.update(cx, |t, cx| t.focus(w, cx));
+                    w.input("Project chosen 日本語 👩‍💻", cx);
+                })
+                .unwrap();
+                pump(cx, handle, &editor, &updates);
+                let (key, before) = cx.update(|cx| {
+                    (
+                        editor.read(cx).navigation_key().unwrap().to_owned(),
+                        editor.read(cx).draft().unwrap().clone(),
+                    )
+                });
                 cx.update_window(handle, |_, w, cx| {
                     editor.update(cx, |e, cx| {
                         assert_eq!(e.draft().unwrap().project_id.as_deref(), Some("project-ab"));
                         assert_eq!(e.draft().unwrap().cwd, "/synthetic/shared");
                         e.projects(
                             Arc::new(local_model::projects(&catalog()).unwrap()),
+                            mode != ThemeMode::Dark,
+                            (mode == ThemeMode::Light).then_some("Synthetic unavailable"),
+                            w,
+                            cx,
+                        );
+                        e.text.update(cx, |t, cx| t.focus(w, cx));
+                    });
+                    w.press("enter", cx); // Must not reserve or post during loading/error.
+                })
+                .unwrap();
+                pump(cx, handle, &editor, &updates);
+                assert!(server.seen.lock().unwrap().envelopes.is_empty());
+                cx.update_window(handle, |_, w, cx| {
+                    assert_eq!(w.find("new-chat-project").disabled(), Some(true));
+                    assert_eq!(w.find("local-send").disabled(), Some(true));
+                    editor.update(cx, |e, cx| {
+                        assert!(e.state.book.as_ref().unwrap().pending.is_empty());
+                        assert!(e.draft().unwrap() == &before);
+                        e.projects(
+                            Arc::new(local_model::projects(&catalog()).unwrap()),
                             true,
-                            Some("Synthetic unavailable"),
+                            None,
                             w,
                             cx,
                         );
@@ -354,32 +388,42 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
+                // Reselect the SAME ID/path using the actual native picker, with no edit.
+                cx.update_window(handle, |_, w, cx| w.click("new-chat-project", cx))
+                    .unwrap();
+                pump(cx, handle, &editor, &updates);
+                cx.update_window(handle, |_, w, cx| w.input("project-ab", cx))
+                    .unwrap();
+                pump(cx, handle, &editor, &updates);
                 cx.update_window(handle, |_, w, cx| {
-                    assert_eq!(w.find("new-chat-project").disabled(), Some(true));
-                    assert_eq!(w.find("local-send").disabled(), Some(true));
-                    editor.update(cx, |e, cx| {
-                        e.projects(
-                            Arc::new(local_model::projects(&catalog()).unwrap()),
-                            true,
-                            None,
-                            w,
-                            cx,
-                        )
-                    });
+                    if mode == ThemeMode::Light {
+                        w.click("new-project-project-ab", cx);
+                    } else {
+                        w.press("down", cx);
+                        w.press("enter", cx);
+                    }
                 })
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
+                cx.update_window(handle,|_,w,cx| {
+                    assert_eq!(editor.read(cx).navigation_key(),Some(key.as_str()));
+                    assert!(editor.read(cx).draft().unwrap()==&before);
+                    assert!(editor.read(cx).state.book.as_ref().unwrap().pending.is_empty());
+                    assert_ne!(w.find("local-send").disabled(),Some(true),"healthy catalog plus same-choice reselection must recover without a message edit");
+                }).unwrap();
+                assert!(
+                    server.seen.lock().unwrap().envelopes.is_empty(),
+                    "recovery never auto-submits"
+                );
                 capture(
                     cx,
                     handle,
                     &dir,
                     format!("{}-{}-{}-selected.png", width as u32, mode.name(), lost),
                 );
-                let key = cx.update(|cx| editor.read(cx).navigation_key().unwrap().to_owned());
                 cx.update_window(handle, |_, w, cx| {
                     let input = editor.read(cx).text.clone();
                     input.update(cx, |t, cx| t.focus(w, cx));
-                    w.input("Project chosen 日本語 👩‍💻", cx);
                     w.press("enter", cx);
                     w.press("enter", cx);
                     w.click("local-send", cx);
@@ -437,7 +481,7 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(server.seen.lock().unwrap().envelopes.len(), 1);
                 println!(
                     "{}",
-                    json!({"width":width,"mode":mode.name(),"lost_after_admission":lost,"actual_native_composer":true,"actual_pointer_or_keyboard_project_choice":true,"same_path_distinct_id":true,"payload_project_id":"project-ab","cwd_override":false,"canonical_faux_readback":true,"private_restart_selection":true,"create_posts":1})
+                    json!({"width":width,"mode":mode.name(),"lost_after_admission":lost,"actual_native_composer":true,"actual_pointer_or_keyboard_project_choice":true,"catalog_recovered_after_enter_without_edit":true,"same_path_distinct_id":true,"payload_project_id":"project-ab","cwd_override":false,"canonical_faux_readback":true,"private_restart_selection":true,"create_posts":1})
                 );
             }
         }
