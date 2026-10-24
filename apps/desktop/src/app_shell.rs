@@ -17,6 +17,8 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Page {
     Home,
+    Missions,
+    Mission(crate::mission_browser::Key),
     Inbox(Option<String>),
     Project(String),
     Chat,

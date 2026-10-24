@@ -60,12 +60,33 @@ perform ordinary internal subscription housekeeping. Read transport does not mut
 mission membership. Existing-chat conversion adds only the narrow atomic admission
 guard described in [chat-to-mission.md](docs/chat-to-mission.md).
 
-The read transport issues only allowlisted hello/history/WS/scoped artifact requests and sends
+The chat read transport issues only allowlisted hello/history/WS/scoped artifact requests and sends
 no application WS messages. A separate worker supports GET of the selected
 chat, POST /api/operations/receipt, POST /api/operations and the selected chat's
 Stop route. There are no legacy send/create fallbacks, focus, approvals, edits,
 archive or mark-read routes. Retained Control, specialist, archived and continued
 chats are readonly. The daemon remains the permission and execution authority.
+
+### Browse Local missions
+
+Use **Missions** in the sidebar or **Cmd-3** for the received mission catalog,
+optionally filtered by the current project browse scope. Mission identity is the
+canonical home plus ID, never a project name or execution host. A bounded
+read-only overview shows goal, plain-text brief, task context and existing member
+chats. **Refresh** explicitly updates a snapshot; there is no mission polling or
+automatic mission subscription. The existing active-chat subscription is unchanged.
+
+The dedicated reader uses only pinned Local hello, mission-catalog, mission-detail
+and filtered member-session GETs. Foreign homes are explanatory cached rows, not
+remote reads or Local-ID fallbacks. Only an exact available existing Local chat
+can be opened. Offline text remains readable/copyable; stale or unavailable links
+stay disabled. No task/coordinator start, creation wizard, membership, task-state,
+archive, read-status or permission mutations are added. Existing private drafts
+and reader entities are retained across the overview round trip.
+
+The catalog API is partial beyond 50 rows/24 KB and has no pagination; that gap
+is shown explicitly. Client response, context and display limits also remain
+visible instead of claiming full management. See [contracts, bounds and evidence](docs/mission-browser.md).
 
 ### Make an existing chat a mission
 

@@ -140,6 +140,7 @@ impl LocalViewer {
             .child(div().id("global-navigation").test_support().v_flex().px(px(Space::SIDEBAR)).gap(px(Space::META))
                 .child(Button::new("nav-home").ghost().small().w_full().justify_start().accessibility_label("Home").child(nav_label("nav-home-title","Home",AppIcon::Home)).selected(self.page==Page::Home).on_click(cx.listener(|v,_,w,cx|v.show_home(w,cx))))
                 .child(Button::new("nav-inbox").ghost().small().w_full().justify_start().accessibility_label("Inbox").child(nav_label("nav-inbox-title","Inbox",AppIcon::Inbox)).selected(matches!(self.page,Page::Inbox(_))).on_click(cx.listener(|v,_,w,cx|v.show_inbox(v.project_scope.clone(),w,cx))))
+                .child(Button::new("nav-missions").ghost().small().w_full().justify_start().accessibility_label("Missions (Command-3)").child(nav_label("nav-missions-title","Missions",AppIcon::Overview)).selected(matches!(self.page,Page::Missions|Page::Mission(_))).on_click(cx.listener(|v,_,w,cx|{v.show_missions(w,cx);})))
                 .child(div().text_size(px(TextRole::SMALL)).text_color(cx.theme().muted_foreground).child("⌘K Jump to…")))
             .child(div().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL))
                 .child(div().id("scope-heading").test_support().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Browse scope"))
