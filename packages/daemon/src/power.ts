@@ -5,6 +5,9 @@ import type { PowerSettings, PowerStatus, SessionSummary } from "@pilot/protocol
 import { Conflict } from "./errors.ts";
 import { openPowerHelper, type PowerHelper, type PowerHelperFactory, type PowerSample } from "./power-helper.ts";
 
+// Mission notices debounce for 30 seconds. Leave room for delivery and coordinator admission too.
+export const POWER_IDLE_GRACE_MS = 60_000;
+
 export interface PowerSessions {
 	readonly powerPause: { since: number; wakeToken?: string } | undefined;
 	readonly sleepPrepared: Promise<void>;
@@ -50,6 +53,7 @@ export class PowerService {
 	private evaluating?: Promise<void>;
 	private stopping = false;
 	private retry?: NodeJS.Timeout;
+	private idleRelease?: NodeJS.Timeout;
 	private failures = 0;
 	private error?: string;
 	private applied?: string;
@@ -88,6 +92,7 @@ export class PowerService {
 		this.schedule();
 	}
 	private record(session: SessionSummary): void {
+		const hadWork = this.working.size > 0;
 		const busy =
 			session.archivedAt === undefined &&
 			!session.sleepPaused &&
@@ -96,6 +101,19 @@ export class PowerService {
 				(session.state === "idle" && session.subagents?.some((agent) => agent.state === "working")));
 		if (busy) this.working.add(session.id);
 		else this.working.delete(session.id);
+		if (this.working.size > 0) this.clearIdleRelease();
+		else if (hadWork && this.settings.keepAwake && !this.sessions.powerPause && !this.stopping) {
+			// Hold through child-result/coordinator handoffs, not every idle status or sensor update.
+			this.idleRelease = setTimeout(() => {
+				this.idleRelease = undefined;
+				this.schedule();
+			}, POWER_IDLE_GRACE_MS);
+			this.idleRelease.unref();
+		}
+	}
+	private clearIdleRelease(): void {
+		clearTimeout(this.idleRelease);
+		this.idleRelease = undefined;
 	}
 	private async connect(): Promise<void> {
 		if (this.stopping) return;
@@ -119,6 +137,7 @@ export class PowerService {
 		}
 	}
 	private lost(): void {
+		this.clearIdleRelease();
 		this.helper = undefined;
 		this.applied = undefined;
 		this.setNetworkPath(undefined);
@@ -210,7 +229,9 @@ export class PowerService {
 			await this.sessions.sleepPrepared;
 			await helper.request({ action: "allowSleep", generation: state.sleepGeneration });
 		}
-		const awake = this.settings.keepAwake && !this.sessions.powerPause && this.working.size > 0;
+		if (!this.settings.keepAwake || this.sessions.powerPause || state.sleeping) this.clearIdleRelease();
+		const awake =
+			this.settings.keepAwake && !this.sessions.powerPause && (this.working.size > 0 || !!this.idleRelease);
 		const closedLid = awake && this.settings.closedLid && state.authorized && closedLidAllowed(state);
 		const key = JSON.stringify([awake, closedLid]);
 		if (this.applied !== key) {
@@ -273,6 +294,7 @@ export class PowerService {
 			await writeFile(temp, JSON.stringify(next), { mode: 0o600 });
 			await rename(temp, file);
 			this.settings = next;
+			if (!next.keepAwake) this.clearIdleRelease();
 			// Disabling the feature is an explicit user action, unlike restoring Wi-Fi while still shut.
 			this.applied = undefined;
 			this.schedule();
@@ -285,6 +307,7 @@ export class PowerService {
 	}
 	async stop(): Promise<void> {
 		this.stopping = true;
+		this.clearIdleRelease();
 		clearTimeout(this.retry);
 		this.stopSessions?.();
 		await this.evaluating;

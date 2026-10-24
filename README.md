@@ -104,6 +104,7 @@ unchanged; outstanding accounting memory and release verification is documented 
   (arrows and Return). Typing in their search fields never triggers those keys, and Escape in the memory search
   clears it, then returns to the tree.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
+  A 60-second grace period after work finishes lets completion notices start coordinator follow-ups.
   Optional closed-lid work requires power and Wi-Fi; without both, agents pause and resume on the next
   full wake with connectivity. Screen locking is left to macOS. See [agent-aware sleep](docs/agent-sleep.md) for
   authorization and interruption limits.

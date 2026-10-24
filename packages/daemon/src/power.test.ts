@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
-import { closedLidAllowed, laterWake, PowerService, type PowerSessions } from "./power.ts";
+import { closedLidAllowed, laterWake, POWER_IDLE_GRACE_MS, PowerService, type PowerSessions } from "./power.ts";
 import { type PowerCommand, type PowerSample, parsePowerSample } from "./power-helper.ts";
 
 const sample: PowerSample = {
@@ -35,8 +35,9 @@ class Sessions implements PowerSessions {
 	pauses = 0;
 	pauseWait?: Promise<void>;
 	sleepPrepared: Promise<void> = Promise.resolve();
+	rows = new Map([session("working"), session("idle", "idle")].map((value) => [value.id, value]));
 	list() {
-		return [session("working"), session("idle", "idle")];
+		return [...this.rows.values()];
 	}
 	onChange(listener: (value: SessionSummary) => void) {
 		this.listeners.add(listener);
@@ -54,16 +55,19 @@ class Sessions implements PowerSessions {
 		this.powerPause = undefined;
 	}
 	change(value: SessionSummary) {
+		this.rows.set(value.id, value);
 		for (const listener of this.listeners) listener(value);
 	}
 }
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, initiallyWorking = true) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-power-"));
 	const sessions = new Sessions();
+	if (!initiallyWorking) sessions.rows.delete("working");
 	const commands: PowerCommand[] = [];
 	let onSample!: (value: PowerSample) => void;
 	let onFailure!: () => void;
 	let rejectAuthorization = false;
+	let closes = 0;
 	const service = new PowerService(home, sessions, async (accept, fail) => {
 		onSample = accept;
 		onFailure = fail;
@@ -73,7 +77,9 @@ async function fixture(t: TestContext) {
 				commands.push(command);
 				if (command.action === "authorize" && rejectAuthorization) throw new Error("denied");
 			},
-			async close() {},
+			async close() {
+				closes++;
+			},
 		};
 	});
 	t.after(async () => {
@@ -87,6 +93,9 @@ async function fixture(t: TestContext) {
 		sessions,
 		commands,
 		service,
+		get closes() {
+			return closes;
+		},
 		async emit(value: Partial<PowerSample>) {
 			onSample({ ...sample, ...value });
 			await service.settled();
@@ -126,10 +135,20 @@ test("closed-lid policy requires power AND Wi-Fi, and rejects unknown/dark state
 	assert.equal(laterWake({ since: 1 }, sample), false);
 });
 
-test("working agents hold an idle-system assertion, never a display assertion; idle releases it", async (t) => {
+test("working agents hold an idle-system assertion; only sustained idle releases it", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const f = await fixture(t);
 	assert.deepEqual(f.commands, [{ action: "activity", awake: true, closedLid: false }]);
 	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, true);
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS - 1);
+	// Neither sensor reports, refresh nor unchanged idle/streaming updates extend the grace period.
+	for (let index = 0; index < 10_000; index++) f.sessions.change(session("working", "idle"));
+	f.service.refresh();
+	await f.emit({ fullWake: false });
+	assert.equal(f.commands.length, 1);
+	t.mock.timers.tick(1);
 	await f.service.settled();
 	assert.deepEqual(f.commands.at(-1), { action: "activity", awake: false, closedLid: false });
 	f.sessions.change({
@@ -277,6 +296,7 @@ test("10,000 unchanged streaming/activity updates do not enqueue native writes",
 });
 
 test("display sleep and lock do not pause work; finishing closed-lid work restores sleep", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const f = await fixture(t);
 	await f.emit({ fullWake: false }); // Graphics off, but no actual system-sleep notification.
 	assert.equal(f.sessions.pauses, 0);
@@ -284,6 +304,15 @@ test("display sleep and lock do not pause work; finishing closed-lid work restor
 	await f.service.configure({ keepAwake: true, closedLid: true });
 	await f.emit({ lidClosed: true, closedLidActive: true });
 	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS - 1);
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, true);
+	assert.equal(
+		f.commands.some((command) => command.action === "sleep"),
+		false,
+	);
+	t.mock.timers.tick(1);
 	await f.service.settled();
 	assert.deepEqual(f.commands.slice(-2), [
 		{ action: "activity", awake: false, closedLid: false },
@@ -317,6 +346,7 @@ test("native frames are bounded typed state, not SSIDs or location authorization
 });
 
 test("live idle workers with busy children stay awake, but stale child history on parked chats does not", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const f = await fixture(t);
 	const subagents = [{ name: "child", state: "working" as const, task: "Work", createdAt: 1, cwd: "/tmp" }];
 	f.sessions.change({ ...session("working", "idle"), working: false, subagents });
@@ -324,18 +354,133 @@ test("live idle workers with busy children stay awake, but stale child history o
 	assert.equal(f.service.status().keepingAwake, true);
 	f.sessions.change({ ...session("working", "parked"), working: false, subagents });
 	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
 	assert.equal(f.service.status().keepingAwake, false);
 });
 
 test("daemon-derived working keeps job result follow-ups awake and never overrides a sleep pause", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const f = await fixture(t);
 	f.sessions.change({ ...session("working", "idle"), working: true });
 	await f.service.settled();
 	assert.equal(f.service.status().keepingAwake, true);
 	f.sessions.change({ ...session("working"), working: false });
 	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
 	assert.equal(f.service.status().keepingAwake, false);
 	f.sessions.change({ ...session("working", "idle"), working: true, sleepPaused: true });
 	await f.service.settled();
 	assert.equal(f.service.status().keepingAwake, false);
+});
+
+test("already-idle startup and repeated idle updates never create a grace period", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t, false);
+	f.sessions.change(session("idle", "idle"));
+	f.service.refresh();
+	await f.emit({ fullWake: false });
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.deepEqual(f.commands, [{ action: "activity", awake: false, closedLid: false }]);
+});
+
+test("new work cancels the old release, and only the last worker finishing starts a fresh countdown", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t);
+	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS - 1);
+	f.sessions.change(session("coordinator"));
+	f.sessions.change(session("second"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS * 2);
+	await f.service.settled();
+	assert.equal(f.commands.length, 1, "no transient assertion release during handoff or resumed work");
+	f.sessions.change(session("coordinator", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.equal(f.commands.length, 1, "another worker is still busy");
+	f.sessions.change(session("second", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS - 1);
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, true);
+	t.mock.timers.tick(1);
+	await f.service.settled();
+	assert.deepEqual(f.commands.at(-1), { action: "activity", awake: false, closedLid: false });
+});
+
+test("sleep and unsafe closed-lid conditions bypass and cancel the idle grace", async (t) => {
+	for (const state of [
+		{ sleeping: true, fullWake: false },
+		{ lidClosed: true, connectedToPower: false },
+		{ lidClosed: true, wifiConnected: false },
+	]) {
+		await t.test(JSON.stringify(state), async (t) => {
+			t.mock.timers.enable({ apis: ["setTimeout"] });
+			const f = await fixture(t);
+			await f.service.configure({ keepAwake: true, closedLid: true });
+			f.sessions.change(session("working", "idle"));
+			await f.service.settled();
+			assert.equal(f.service.status().keepingAwake, true);
+			await f.emit(state);
+			assert.equal(f.sessions.pauses, 1);
+			assert.equal(f.service.status().keepingAwake, false);
+			// A subsequent eligible wake must not restore the canceled grace with no active work.
+			await f.emit({ wakeToken: "101:1" });
+			assert.equal(f.service.status().keepingAwake, false);
+			t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+			await f.service.settled();
+			assert.equal(f.service.status().keepingAwake, false);
+		});
+	}
+});
+
+test("disabling keep-awake cancels grace immediately and re-enabling does not revive it", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t);
+	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	await f.service.configure({ keepAwake: false, closedLid: false });
+	assert.equal(f.service.status().keepingAwake, false);
+	await f.service.configure({ keepAwake: true, closedLid: false });
+	assert.equal(f.service.status().keepingAwake, false);
+	const writes = f.commands.length;
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.equal(f.commands.length, writes);
+});
+
+test("shutdown during grace closes the helper without waiting or issuing delayed writes", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t);
+	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	await f.service.stop();
+	assert.equal(f.closes, 1);
+	const writes = f.commands.length;
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS * 2);
+	await f.service.settled();
+	assert.equal(f.commands.length, writes);
+});
+
+test("helper loss cancels grace so reconnecting while idle cannot rearm sleep prevention", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t);
+	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	f.fail();
+	assert.equal(f.service.status().keepingAwake, false);
+	t.mock.timers.tick(1_000);
+	await Promise.resolve(); // The injected helper factory reconnects asynchronously.
+	await f.service.settled();
+	assert.equal(f.service.status().available, true);
+	assert.deepEqual(f.commands.at(-1), { action: "activity", awake: false, closedLid: false });
+	const writes = f.commands.length;
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.equal(f.commands.length, writes);
 });
