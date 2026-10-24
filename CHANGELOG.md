@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.64.0](https://github.com/babariviere/pilot/compare/v1.63.0...v1.64.0) (2026-10-24)
+
+
+### Features
+
+* **desktop:** add fail-closed native updater foundation ([856cec2](https://github.com/babariviere/pilot/commit/856cec2604a2d1ed77b5d46ffbe9541a9e2b66d6))
+* **desktop:** add isolated settings preferences foundation ([ad2d9d9](https://github.com/babariviere/pilot/commit/ad2d9d94a2013c182a12426bfe2a3250fd98af5a))
+* **desktop:** add native appearance settings with durable saves ([5a43350](https://github.com/babariviere/pilot/commit/5a43350a7353737caf3d7ee9591d2c08c6038e4d))
+* **desktop:** add reusable presentation components and native catalog ([858cfa2](https://github.com/babariviere/pilot/commit/858cfa2b5dc9ccfa9c51fa931bd4d1076a36cd23))
+* **desktop:** checkpoint bounded palette wiring ([e597fc2](https://github.com/babariviere/pilot/commit/e597fc280a51bec34568f0ced6d85b9718ee4fb9))
+* **desktop:** checkpoint initial bounded jump catalog ([a6297e6](https://github.com/babariviere/pilot/commit/a6297e6c74bec456e516b50355708c972e82be0d))
+* **desktop:** clarify project context in Home chat rows ([bbb86e3](https://github.com/babariviere/pilot/commit/bbb86e370b87401389d277c2620e1d1ac6b55c19))
+* **desktop:** convert an existing chat into a mission ([ed791a6](https://github.com/babariviere/pilot/commit/ed791a68dfb282c3fadf1ff447e379b4c2bc9c2d))
+* **desktop:** guard resource jumps and modal input ([2809f52](https://github.com/babariviere/pilot/commit/2809f529f47a1cb839079faabe47c0b4e47baeeb))
+* **desktop:** implement signed app-owned update lifecycle ([451c5a2](https://github.com/babariviere/pilot/commit/451c5a244381eac29b2f9081599cea59b1f45cf4))
+* **desktop:** polish Inbox hierarchy and state guidance ([35cbd65](https://github.com/babariviere/pilot/commit/35cbd65edf000a9deaa798e9dfd9643e37c58cd4))
+* **desktop:** refine semantic tool work disclosures ([1e7e636](https://github.com/babariviere/pilot/commit/1e7e636e1ec8ee9c483c6d6332d44bff6fb17b78))
+* **desktop:** restore bounded navigation and scope state ([a615125](https://github.com/babariviere/pilot/commit/a615125b3d70665b52470173e6e31a1432c380ef))
+* **desktop:** select a project for new chats ([4b89df9](https://github.com/babariviere/pilot/commit/4b89df9406930a51b0d0dd55112b69c2ac265cfd))
+* **desktop:** unify native icon vocabulary ([e52c611](https://github.com/babariviere/pilot/commit/e52c611731c2ef4688888abff5db761126b2a94a))
+
+
+### Bug Fixes
+
+* **deps:** update dependency typebox to v1.4.3 ([4e0a797](https://github.com/babariviere/pilot/commit/4e0a79762d23489d8f4384b65fe480bf4dce69a1))
+* **desktop:** align ZIP admission with parser dispatch ([838d76c](https://github.com/babariviere/pilot/commit/838d76c6b6ad51b7ba6903e908581a8638064c02))
+* **desktop:** bound raw ZIP admission before updater indexing ([e9fa025](https://github.com/babariviere/pilot/commit/e9fa025d3ddf1823609ac06c0356bd4b5c64c079))
+* **desktop:** bound retained updater staging transactions ([73a5035](https://github.com/babariviere/pilot/commit/73a503546a611fee17f04ebb19e0107d6fc99236))
+* **desktop:** distinguish absent ACL from absent update path ([8011f2c](https://github.com/babariviere/pilot/commit/8011f2c24c0e37e452ddcb7bffb2a46a7d915f61))
+* **desktop:** enforce updater ACL privacy and terminal teardown ([9b18661](https://github.com/babariviere/pilot/commit/9b18661fa604e2ac3c0bf9fbec1e3884e436e613))
+* **desktop:** fence updater identity journal and helper lifecycle ([f0f9ff5](https://github.com/babariviere/pilot/commit/f0f9ff527d9b6add4500b13882eb3b3db2de98f1))
+* **desktop:** harden updater completion and wakeup lifetime ([2340890](https://github.com/babariviere/pilot/commit/234089077ae106bbc449180c2f3bdeb18656ceeb))
+* **desktop:** link missing Linux system libraries at build time ([b41bedb](https://github.com/babariviere/pilot/commit/b41bedbcb3f3d5303e316ab8f4dbfa66383f4f65))
+* **desktop:** match mission text to daemon whitespace ([684d47f](https://github.com/babariviere/pilot/commit/684d47f7c8746353744b902285c99b5b4fe1b760))
+* **desktop:** preserve attention inbox on updated base ([f4f4a18](https://github.com/babariviere/pilot/commit/f4f4a182b674070912bce96b9fa838785aeaa7e1))
+* **desktop:** preserve picker preedit before resource jumps ([d11abe4](https://github.com/babariviere/pilot/commit/d11abe40c06f65417f47acd95dfdb808fb5d8365))
+* **desktop:** preserve private updater handshake descriptors ([13e7498](https://github.com/babariviere/pilot/commit/13e7498fa9ca343c87bb6a32462e0342cad60be4))
+* **desktop:** recover chat creation after catalog errors ([3f83499](https://github.com/babariviere/pilot/commit/3f83499f96d9e51420eb4014ee62dca78db4f4de))
+* **desktop:** reject writable installed bundle contents ([c3a65f2](https://github.com/babariviere/pilot/commit/c3a65f2edf7e4e25b850a85d4a0c2d401b53ef3f))
+* **desktop:** restore readers by canonical transcript identity ([cb0563b](https://github.com/babariviere/pilot/commit/cb0563b103c6efac70481d65a415671c9c2b0b29))
+* **desktop:** terminate disconnected draft workers after save failure ([2e2d829](https://github.com/babariviere/pilot/commit/2e2d8290f9fb064a14ab9b925ec2db779463f68e))
+* **desktop:** unify Home project row context ([37046fb](https://github.com/babariviere/pilot/commit/37046fb07043514834c88229f1681ac36eb3584b))
+* **desktop:** use Kit button module in component catalog ([236c079](https://github.com/babariviere/pilot/commit/236c079d4759dd103dab1bcebf52d2ddb9616d51))
+* **missions:** remove coordinator prompt length cap ([e9a3af3](https://github.com/babariviere/pilot/commit/e9a3af3a7a74f316b000cf11863259b6601cca81))
+* **power:** keep Mac awake across agent handoffs ([a102587](https://github.com/babariviere/pilot/commit/a10258714ab6f7e14386a60206ebd52ffa8bdf1c))
+
+
+### Performance Improvements
+
+* **desktop:** bound draft autosave write amplification ([f973be1](https://github.com/babariviere/pilot/commit/f973be1c2502bcfaab27b87d4f8e60f435158456))
+* **desktop:** pace native slider drag callbacks ([82c7915](https://github.com/babariviere/pilot/commit/82c791547308ea8f0c1281467731866cfe7fc38a))
+
 ## [1.63.0](https://github.com/babariviere/pilot/compare/v1.62.2...v1.63.0) (2026-10-23)
 
 
