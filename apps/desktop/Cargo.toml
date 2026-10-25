@@ -156,3 +156,10 @@ name = "missions"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "project_add"
+path = "tests/project_add.rs"
+harness = false
+test = false
+required-features = ["native-probes"]

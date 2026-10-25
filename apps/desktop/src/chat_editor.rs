@@ -27,6 +27,7 @@ pub(crate) mod project_creation_probe;
 mod projects;
 
 pub(crate) enum EditorEvent {
+    AddProject,
     DraftsChanged,
     OpenCreated {
         key: String,

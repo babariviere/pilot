@@ -115,6 +115,8 @@ pub(crate) struct Book {
     pub(crate) pending: BTreeMap<String, Intent>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) missions: BTreeMap<String, crate::mission_conversion::Attempt>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) project_registrations: BTreeMap<String, crate::project_registration::Attempt>,
 }
 
 pub(crate) fn token(value: &str) -> bool {
@@ -171,6 +173,7 @@ impl Book {
             drafts: BTreeMap::new(),
             pending: BTreeMap::new(),
             missions: BTreeMap::new(),
+            project_registrations: BTreeMap::new(),
         }
     }
     fn validate(&self, host: &Host) -> Result<(), Failure> {
@@ -190,6 +193,7 @@ impl Book {
             || self.drafts.len() > DRAFT_CAP
             || self.pending.len() > 32
             || self.missions.len() > 32
+            || self.project_registrations.len() > 32
         {
             return Err(
                 "Private state identity/version/limits differ. Writes are disabled; original state is preserved.",
@@ -197,6 +201,9 @@ impl Book {
         }
         for (source, attempt) in &self.missions {
             attempt.validate(source)?;
+        }
+        for (id, attempt) in &self.project_registrations {
+            attempt.validate(id)?;
         }
         for (key, draft) in &self.drafts {
             validate_draft(key, draft)?;
@@ -518,6 +525,41 @@ impl Store {
             let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into()};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
             book.pending.insert(id,intent.clone());Ok(intent)
+        })
+    }
+
+    pub(crate) fn prepare_project(&mut self, id: &str, path: &str) -> Result<(), Failure> {
+        let attempt = crate::project_registration::Attempt {
+            id: id.into(),
+            path: path.into(),
+            created: None,
+        };
+        attempt.validate(id)?;
+        self.change(|book| {
+            if book.project_registrations.contains_key(id) || book.project_registrations.values().any(|a| a.path == path) {
+                return Err("This folder already has a retained registration attempt. Check projects; it will not be resent.");
+            }
+            if book.project_registrations.len() >= 32 {
+                // Only acknowledged receipts may retire; Unknown never does.
+                let old = book.project_registrations.iter().find(|(_, a)| a.created.is_some()).map(|(id, _)| id.clone());
+                if let Some(old) = old { book.project_registrations.remove(&old); }
+                else { return Err("Unconfirmed project registration storage is full. Nothing was discarded or resent."); }
+            }
+            book.project_registrations.insert(id.into(), attempt);
+            Ok(())
+        })
+    }
+    pub(crate) fn finish_project(&mut self, id: &str, created: &str) -> Result<(), Failure> {
+        self.change(|book| {
+            let attempt = book
+                .project_registrations
+                .get_mut(id)
+                .ok_or("Missing project registration attempt.")?;
+            if attempt.created.as_deref().is_some_and(|old| old != created) {
+                return Err("Project receipt cannot be replaced.");
+            }
+            attempt.created = Some(created.into());
+            Ok(())
         })
     }
 

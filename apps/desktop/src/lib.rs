@@ -23,6 +23,10 @@ mod mission_transport;
 mod mission_view;
 mod model;
 mod navigation;
+mod project_add_view;
+mod project_registration;
+#[cfg(any(test, feature = "native-probes"))]
+mod project_registration_fixture;
 mod settings_state;
 mod settings_view;
 mod settings_worker;
@@ -30,6 +34,8 @@ mod settings_worker;
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_probe::run_mission_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::project_add_probe::run_project_add_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::settings_probe::run_settings_probe;
 #[cfg(test)]

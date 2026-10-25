@@ -22,11 +22,17 @@ pub(crate) struct WriteState {
     pub(crate) handled: BTreeMap<String, u64>,
     pub(crate) notice_key: Option<String>,
     pub(crate) mission: Option<crate::mission_conversion::Reply>,
+    pub(crate) project: Option<crate::project_registration::Reply>,
+    pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) mission_receipts:
         Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
 }
 
 pub(crate) enum WriteCommand {
+    Project {
+        id: String,
+        path: Option<String>,
+    },
     Mission {
         target: crate::mission_conversion::Target,
         request: u64,
@@ -318,6 +324,28 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 Ok(()) => {
                     status.error = None;
                     match command {
+                        Some(WriteCommand::Project { id, path }) => {
+                            use crate::project_registration::{Outcome, Reply};
+                            status.project = Some(Reply {
+                                id: id.clone(),
+                                result: Ok(Outcome::Pending),
+                                catalog: None,
+                            });
+                            publish(&updates, &replace, status.clone());
+                            tokio::select! {
+                                reply = async {
+                                    let result = if let Some(path) = path {
+                                        crate::project_registration::register(&client, &options, store, &id, &path, |store| {
+                                            status.book=Some(Arc::new(store.book.clone())); publish(&updates,&replace,status.clone());
+                                        }).await
+                                    } else { Ok(Outcome::Read) };
+                                    if let Ok(Outcome::Created(created)) = &result { status.project_receipt = Some((id.clone(),created.clone())); }
+                                    let catalog = Some(crate::project_registration::catalog(&client, &options).await);
+                                    Reply { id, result, catalog }
+                                } => { status.project = Some(reply); if store.is_faulted() { status.error=Some("Private state write failed; keep/copy unsaved text before restart."); } Ok("") },
+                                _ = close.recv() => { closing=true; Ok("Closing. Interrupted project registration is not retried.") }
+                            }
+                        }
                         Some(WriteCommand::Mission {
                             target,
                             request,
