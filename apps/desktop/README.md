@@ -63,6 +63,29 @@ closed. There is no remote fanout or automatic write retry. Both daemon success 
 literal GET readback, which confirms current values, not stronger disk durability.
 See [scoped-models.md](docs/scoped-models.md) for bounds, authority and synthetic verification.
 
+### Choose a chat model and thinking level
+
+The composer has native searchable **Model** and **Thinking** menus. Their choices come
+from Local's model catalog for the exact chat directory or chosen new-chat project,
+including pi's global/project scopes and supported thinking levels. A model-only change
+uses the new model's scoped default, not the previous model's thinking level. Fixed or
+unreported thinking levels stay explicitly unavailable; an out-of-scope current model
+is retained, never silently substituted. **Refresh scoped models** is in the model menu.
+
+Existing-chat changes are explicit and idle-only, with no queued work, pending delivery,
+retained/read-only history, failed state, subscription pause or native composition. They
+use only the existing model-change API, never continuation/new-chat/send/Stop as a side
+effect. New-chat choices remain private per-draft, bound to the exact canonical project
+and directory; **Project/pi default** leaves resolution to Local. Changing project does
+not silently retarget an explicit model choice. Existing pending delivery envelopes,
+operation IDs, payloads and hashes remain immutable.
+
+An ambiguous model-change response retains the original choice durably and is never
+automatically replayed. **Inspect current model** reads only. A separate confirmed local
+acknowledgment clears uncertainty without another model POST or claiming the earlier
+request failed. Settings scope changes revalidate choices without replacing input or
+starting work. See [chat-models.md](docs/chat-models.md) for guards, limits and evidence.
+
 ## Use real Local chats
 
 ```sh
@@ -94,7 +117,7 @@ guard described in [chat-to-mission.md](docs/chat-to-mission.md).
 The chat read transport issues only allowlisted hello/history/WS/scoped artifact requests and sends
 no application WS messages. A separate worker supports GET of the selected
 chat, POST /api/operations/receipt, POST /api/operations and the selected chat's
-Stop route. There are no legacy send/create fallbacks, focus, approvals, edits,
+Stop route and explicit idle-only selected-chat model changes. There are no legacy send/create fallbacks, focus, approvals, edits,
 archive or mark-read routes. Retained Control, specialist, archived and continued
 chats are readonly. The daemon remains the permission and execution authority.
 

@@ -207,6 +207,7 @@ impl LocalViewer {
                     background_work: false,
                     cwd: String::new(),
                     project_id: None,
+                    model_configuration: None,
                     attention: None,
                 },
                 window,

@@ -2,6 +2,10 @@
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_editor;
+mod chat_model_reader;
+mod chat_models;
+#[cfg(any(test, feature = "native-probes"))]
+mod chat_models_fixture;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
@@ -35,6 +39,8 @@ mod scoped_models_worker;
 mod settings_state;
 mod settings_view;
 mod settings_worker;
+#[cfg(feature = "native-probes")]
+pub use local_view::chat_model_probe::run_chat_model_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
 #[cfg(feature = "native-probes")]

@@ -43,6 +43,116 @@ fn mission_request(source: &str) -> crate::mission_conversion::Request {
     }
 }
 
+fn model_attempt(source: &str) -> crate::chat_models::Attempt {
+    crate::chat_models::Attempt {
+        id: format!("model-{source}"),
+        target: crate::chat_models::Target {
+            session: source.into(),
+            cwd: "/tmp".into(),
+            model: Some("p/a".into()),
+            thinking: Some("high".into()),
+        },
+        choice: crate::chat_models::Choice {
+            model: "p/b".into(),
+            thinking: None,
+        },
+    }
+}
+#[test]
+fn model_change_unknown_is_bounded_durable_and_never_evicted_or_replaced() {
+    let temp = Temp::new();
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    for i in 0..32 {
+        s.prepare_model_change(model_attempt(&format!("s{i}")))
+            .unwrap();
+    }
+    let retained = s.book.model_changes.clone();
+    assert!(s.prepare_model_change(model_attempt("overflow")).is_err());
+    assert!(s.prepare_model_change(model_attempt("s0")).is_err());
+    assert_eq!(s.book.model_changes, retained);
+    drop(s);
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(s.book.model_changes, retained);
+    assert!(s.finish_model_change("s0", "other-attempt").is_err());
+    assert_eq!(s.book.model_changes, retained);
+    s.finish_model_change("s0", "model-s0").unwrap();
+    assert_eq!(s.book.model_changes.len(), 31);
+    s.prepare_model_change(model_attempt("next")).unwrap();
+}
+#[test]
+fn model_changes_cannot_race_retained_chat_delivery() {
+    let temp = Temp::new();
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    let d = draft(1, "Unsent preserved");
+    let op = s.prepare("chat:source", &d, true, false).unwrap();
+    assert!(s.prepare_model_change(model_attempt("source")).is_err());
+    assert!(s.book.pending[&op.id] == op);
+    assert!(s.book.model_changes.is_empty());
+}
+#[test]
+fn explicit_new_model_thinking_is_project_bound_and_only_new_payloads_get_overrides() {
+    let temp = Temp::new();
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    let mut d = draft(1, "私の下書き");
+    d.model_choice = Some(crate::chat_models::DraftChoice {
+        project_id: "project-a".into(),
+        cwd: "/tmp".into(),
+        choice: crate::chat_models::Choice {
+            model: "p/b".into(),
+            thinking: Some("low".into()),
+        },
+    });
+    let first = s.prepare("new:chosen", &d, true, false).unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(&first.operation.as_ref().unwrap().payload).unwrap();
+    assert_eq!(payload["model"], "p/b");
+    assert_eq!(payload["thinking"], "low");
+    assert!(payload.get("cwd").is_none());
+    let mut changed = d.clone();
+    changed.revision = 2;
+    changed.model_choice.as_mut().unwrap().choice.model = "q/c".into();
+    save(&mut s, "new:chosen", changed.clone());
+    assert!(s.book.pending[&first.id] == first);
+    assert!(s.book.drafts["new:chosen"].model_choice == d.model_choice);
+    let mut wrong = d.clone();
+    wrong.project_id = Some("project-b".into());
+    assert!(s.prepare("new:wrong", &wrong, true, false).is_err());
+    let existing = s.prepare("chat:existing", &d, true, false).unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(&existing.operation.unwrap().payload).unwrap();
+    assert!(payload.get("model").is_none() && payload.get("thinking").is_none());
+}
+#[test]
+fn default_and_legacy_pending_envelopes_remain_byte_identical_after_choice_support() {
+    let temp = Temp::new();
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    let d = draft(1, "legacy original");
+    let first = s.prepare("new:legacy-model", &d, true, false).unwrap();
+    let original = serde_json::to_vec(&first).unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(&first.operation.as_ref().unwrap().payload).unwrap();
+    assert_eq!(payload.as_object().unwrap().len(), 3);
+    assert!(payload.get("model").is_none() && payload.get("thinking").is_none());
+    drop(s);
+    let mut s = Store::open(temp.0.clone(), host()).unwrap();
+    let mut updated = d;
+    updated.revision += 1;
+    updated.model_choice = Some(crate::chat_models::DraftChoice {
+        project_id: "project-a".into(),
+        cwd: "/tmp".into(),
+        choice: crate::chat_models::Choice {
+            model: "p/b".into(),
+            thinking: Some("low".into()),
+        },
+    });
+    save(&mut s, "new:legacy-model", updated.clone());
+    let retry = s
+        .prepare("new:legacy-model", &updated, true, false)
+        .unwrap();
+    assert_eq!(serde_json::to_vec(&retry).unwrap(), original);
+    assert!(s.book.drafts["new:legacy-model"].model_choice.is_none());
+}
+
 #[test]
 fn mission_attempt_is_durable_one_shot_without_changing_chat_drafts() {
     use crate::mission_conversion::Outcome;

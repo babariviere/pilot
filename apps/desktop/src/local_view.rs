@@ -1,5 +1,8 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 #[cfg(feature = "native-probes")]
+#[path = "chat_model_probe.rs"]
+pub(crate) mod chat_model_probe;
+#[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
@@ -350,11 +353,7 @@ impl LocalViewer {
             .map(|root| root.join("settings"))
             .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
         view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
-        let models = cx.new(|cx| {
-            crate::scoped_models_view::ScopedModels::new(Some(options.clone()), window, cx)
-        });
-        view.settings
-            .update(cx, |owner, _| owner.models = Some(models));
+        view.connect_model_controls(options.clone(), window, cx);
         view.settings.update(cx, |owner, cx| owner.load(cx));
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
@@ -468,6 +467,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                model_configuration: None,
                 attention: None,
             },
             Chat {
@@ -482,6 +482,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                model_configuration: None,
                 attention: None,
             },
             Chat {
@@ -496,6 +497,7 @@ impl LocalViewer {
                 background_work: false,
                 cwd: String::new(),
                 project_id: None,
+                model_configuration: None,
                 attention: None,
             },
         ]);
@@ -655,6 +657,7 @@ impl LocalViewer {
             background_work: false,
             cwd: String::new(),
             project_id: None,
+            model_configuration: None,
             attention: None,
         });
         view.state.chats = Arc::new(chats);
@@ -926,6 +929,7 @@ impl LocalViewer {
                             background_work: false,
                             cwd: String::new(),
                             project_id: None,
+                            model_configuration: None,
                             attention: None,
                         },
                         window,
@@ -1046,6 +1050,26 @@ impl LocalViewer {
         }
     }
 
+    fn connect_model_controls(
+        &mut self,
+        options: LocalOptions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.editor
+            .update(cx, |e, cx| e.enable_models(options.clone(), window, cx));
+        let models =
+            cx.new(|cx| crate::scoped_models_view::ScopedModels::new(Some(options), window, cx));
+        self.settings
+            .update(cx, |owner, _| owner.models = Some(models.clone()));
+        self._subscriptions.push(cx.subscribe_in(
+            &models,
+            window,
+            |view, _, _: &crate::scoped_models_view::ScopeChanged, w, cx| {
+                view.editor.update(cx, |e, cx| e.invalidate_models(w, cx))
+            },
+        ));
+    }
     fn open(&mut self, chat: Chat, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.prepare_navigation(window, cx) {
             return false;
@@ -1194,6 +1218,9 @@ impl LocalViewer {
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
                 editor.background(chat.background_work, cx);
+                if let Some(configuration) = &chat.model_configuration {
+                    editor.model_context(&chat.id, &chat.cwd, configuration.clone(), window, cx);
+                }
             });
         }
         self.editor.update(cx, |editor, cx| {
@@ -1503,6 +1530,7 @@ impl LocalViewer {
             let mut all: Vec<_> = drafts
                 .into_iter()
                 .map(|(key, title)| Chat {
+                    model_configuration: None,
                     id: key,
                     title,
                     state: "Draft".into(),
@@ -1789,6 +1817,7 @@ mod refresh_tests {
             view.update(cx, |v, cx| {
                 v.open(
                     Chat {
+                        model_configuration: None,
                         id: "other".into(),
                         title: "Other".into(),
                         state: "idle".into(),

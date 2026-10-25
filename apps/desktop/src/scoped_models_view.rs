@@ -42,6 +42,8 @@ pub(crate) struct ScopedModels {
     active_save: bool,
     worker_stopped: bool,
 }
+pub(crate) struct ScopeChanged;
+impl gpui_kit::EventEmitter<ScopeChanged> for ScopedModels {}
 impl ScopedModels {
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_state(&self) -> (bool, bool, bool, bool, Option<Vec<String>>) {
@@ -262,6 +264,9 @@ impl ScopedModels {
     fn accept(&mut self, Update(id, reply): Update, w: &mut Window, cx: &mut Context<Self>) {
         if id != self.request {
             return;
+        }
+        if reply.attempted {
+            cx.emit(ScopeChanged);
         }
         self.busy = false;
         self.problem = reply.problem;

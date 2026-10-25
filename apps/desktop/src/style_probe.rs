@@ -77,6 +77,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                     background_work,
                                     cwd: String::new(),
                                     project_id: None,
+                                    model_configuration: None,
                                     attention: None,
                                 })
                                 .collect(),

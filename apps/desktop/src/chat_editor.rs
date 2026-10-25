@@ -6,6 +6,7 @@ use crate::{
 };
 #[cfg(any(test, feature = "native-probes"))]
 use gpui_kit::TestSupportExt;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, Styled, Subscription, Window,
@@ -20,6 +21,8 @@ use gpui_kit::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "chat_model_picker.rs"]
+mod model_picker;
 #[cfg(feature = "native-probes")]
 #[path = "project_creation_probe.rs"]
 pub(crate) mod project_creation_probe;
@@ -41,6 +44,7 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct ChatEditor {
+    models: Option<model_picker::Models>,
     client: Option<Interaction>,
     text: Entity<TextareaState>,
     cwd: Entity<InputState>,
@@ -93,6 +97,7 @@ impl ChatEditor {
             }
         });
         Self {
+            models: None,
             client,
             text,
             cwd,
@@ -292,6 +297,7 @@ impl ChatEditor {
         }) || self.cwd.update(cx, |state, cx| {
             state.marked_text_range(window, cx).is_some()
         }) || self.project_query_marked(window, cx)
+            || self.model_query_marked(window, cx)
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn shell_probe_setup(
@@ -346,6 +352,7 @@ impl ChatEditor {
                 .update(cx, |state, cx| state.set_value(cwd, window, cx));
         }
         self.sync_project_picker(window, cx);
+        self.sync_models(window, cx);
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -431,6 +438,7 @@ impl ChatEditor {
                 .is_none_or(|handled| handled < request)
         });
         self.state = state;
+        self.accept_model_action(window, cx);
         if self.state.error.is_some() {
             self.retiring.clear();
             if !self.state.flushed {
@@ -514,6 +522,7 @@ impl ChatEditor {
             || self.waiting()
             || self.marked(window, cx)
             || self.error.is_some()
+            || (!stop && self.models_block_send())
         {
             return;
         }
@@ -526,7 +535,10 @@ impl ChatEditor {
         {
             return;
         }
-        if !stop && key.starts_with("new:") && self.project_problem(&draft).is_some() {
+        if !stop
+            && key.starts_with("new:")
+            && (self.project_problem(&draft).is_some() || self.new_model_problem(&draft).is_some())
+        {
             // Catalog validation is derived and already shown beside the picker.
             // Do not latch it into the unrelated save/write error fence.
             cx.notify();
@@ -750,7 +762,8 @@ impl Render for ChatEditor {
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(if self.closing {
+                    .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
+                    .children(self.models.is_none().then_some(if self.closing {
                         "Saving before closing…"
                     } else if !self.writable {
                         "This chat is read-only."
@@ -758,7 +771,7 @@ impl Render for ChatEditor {
                         "Saved privately · Enter to send"
                     } else {
                         "Saving draft…"
-                    }),
+                    })),
             )
             .child(
                 div()
@@ -805,7 +818,9 @@ impl Render for ChatEditor {
                                     || settled
                                     || !draft.editable()
                                     || draft.text.trim().is_empty()
-                                    || (is_new && self.project_problem(draft).is_some()),
+                                    || (is_new && self.project_problem(draft).is_some())
+                                    || self.models_block_send()
+                                    || (is_new && self.new_model_problem(draft).is_some()),
                             )
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 if view.selected.as_ref() == Some(&send_key) {
@@ -817,6 +832,9 @@ impl Render for ChatEditor {
         #[cfg(any(test, feature = "native-probes"))]
         let controls = controls.test_support();
         footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
+        if self.models.is_some() && self.has_model_notice() {
+            footer = footer.child(self.model_notices(cx));
+        }
         if let Some(error) = self.error.or(self.state.error) {
             footer = footer.child(div().text_xs().text_color(cx.theme().danger).child(error));
         }

@@ -76,6 +76,7 @@ impl ChatEditor {
             error,
         };
         self.sync_project_picker(window, cx);
+        self.sync_models(window, cx);
         if changed {
             cx.notify();
         }
@@ -237,6 +238,7 @@ impl ChatEditor {
             .update(cx, |v, cx| v.set_value(project.path, window, cx));
         self.record_edit(true, cx);
         self.sync_project_picker(window, cx);
+        self.sync_models(window, cx);
     }
     pub(super) fn project_field(
         &self,

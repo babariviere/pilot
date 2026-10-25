@@ -24,11 +24,17 @@ pub(crate) struct WriteState {
     pub(crate) mission: Option<crate::mission_conversion::Reply>,
     pub(crate) project: Option<crate::project_registration::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
+    pub(crate) model: Option<crate::chat_models::Reply>,
     pub(crate) mission_receipts:
         Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
 }
 
 pub(crate) enum WriteCommand {
+    Model {
+        session: String,
+        request: u64,
+        action: crate::chat_models::Action,
+    },
     Project {
         id: String,
         path: Option<String>,
@@ -301,6 +307,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             _ => None,
         };
         status.notice_key = match &command {
+            Some(WriteCommand::Model { session, .. }) => Some(format!("chat:{session}")),
             Some(WriteCommand::Mission { target, .. }) => {
                 Some(format!("mission:{}", target.source))
             }
@@ -324,6 +331,29 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 Ok(()) => {
                     status.error = None;
                     match command {
+                        Some(WriteCommand::Model {
+                            session,
+                            request,
+                            action,
+                        }) => {
+                            use crate::chat_models::{Outcome, Reply};
+                            status.model = Some(Reply {
+                                session: session.clone(),
+                                request,
+                                outcome: Outcome::Pending,
+                            });
+                            publish(&updates, &replace, status.clone());
+                            tokio::select! {
+                                outcome=crate::chat_models::execute(&client,&options,store,action,|store|{
+                                    status.book=Some(Arc::new(store.book.clone()));publish(&updates,&replace,status.clone());
+                                })=>{
+                                    status.model=Some(Reply{session,request,outcome});
+                                    if store.is_faulted(){status.error=Some("Private model-switch receipt could not be saved. Keep unsaved text before restarting.");}
+                                    Ok("")
+                                },
+                                _=close.recv()=>{closing=true;Ok("Closing. Any admitted model switch remains unconfirmed and is never resent.")}
+                            }
+                        }
                         Some(WriteCommand::Project { id, path }) => {
                             use crate::project_registration::{Outcome, Reply};
                             status.project = Some(Reply {
@@ -548,6 +578,11 @@ async fn submit(
     } = request;
     gate(client, options).await?;
     if let Some(target) = key.strip_prefix("chat:") {
+        if !stop && store.book.model_changes.contains_key(target) {
+            return Err(
+                "A model switch is unconfirmed. Inspect and acknowledge it before sending; the draft is retained.",
+            );
+        }
         writable(client, options, target).await?;
     }
     if key.starts_with("new:")
