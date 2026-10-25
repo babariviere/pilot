@@ -144,14 +144,11 @@ pub(crate) async fn register(
         ));
     };
     let id_created = rows[0].id.clone();
-    let result = store.finish_project(id, &id_created);
-    if let Err(error) = result
-        && !store.is_faulted()
-    {
-        return Err(error);
-    }
-    // A private write fault cannot undo the daemon's known 201. The worker
-    // retains this receipt independently and exposes its persistence fault.
+    // No local settlement failure, including pre-I/O capacity refusal, can
+    // undo the known 201. Keep its ID in the worker's memory receipt while
+    // the original durable Unknown continues fencing replay. The UI compares
+    // that receipt with the private record, never claims it survived restart.
+    let _ = store.finish_project(id, &id_created);
     Ok(Outcome::Created(id_created))
 }
 

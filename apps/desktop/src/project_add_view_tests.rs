@@ -160,3 +160,91 @@ fn read_failures_never_claim_catalog_refreshed_and_preflight_errors_allow_explic
     assert!(commands.try_recv().is_ok());
     assert!(commands.try_recv().is_err());
 }
+#[gpui_kit::test]
+fn known_non_io_receipt_survives_closed_reopen_and_refresh_but_not_a_new_owner(
+    cx: &mut TestAppContext,
+) {
+    let (h, f, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        f.update(cx, |f, cx| {
+            f.path = Some("/synthetic/folder".into());
+            f.confirm(cx);
+            let id = f.request.clone();
+            f.close(cx);
+            let mut book = Book::shell_probe();
+            book.project_registrations.insert(
+                id.clone(),
+                crate::project_registration::Attempt {
+                    id: id.clone(),
+                    path: f.path.clone().unwrap(),
+                    created: None,
+                },
+            );
+            let mut state = WriteState {
+                book: Some(Arc::new(book)),
+                project_receipt: Some((id.clone(), "canonical-id".into())),
+                project: Some(crate::project_registration::Reply {
+                    id: id.clone(),
+                    result: Ok(Outcome::Created("canonical-id".into())),
+                    catalog: Some(Ok(vec![])),
+                }),
+                ..Default::default()
+            };
+            f.accept(&state, cx);
+            f.open(None, w, cx);
+            assert!(f.state_error.is_none());
+            assert_eq!(f.known(), Some("canonical-id"));
+            assert!(f.private_receipt_unconfirmed());
+            assert!(
+                f.known_detail("canonical-id")
+                    .contains("private receipt write is unconfirmed")
+            );
+            f.confirm(cx);
+            f.refresh(cx);
+            let read_id = f.request.clone();
+            state.project.as_mut().unwrap().id = read_id;
+            state.project.as_mut().unwrap().result = Ok(Outcome::Read);
+            state.project_receipt = None;
+            f.close(cx);
+            f.accept(&state, cx);
+            f.open(None, w, cx);
+            assert_eq!(f.known(), Some("canonical-id"));
+            assert!(f.private_receipt_unconfirmed());
+            f.confirm(cx);
+            // A recreated process/owner has only the durable Unknown, not invented memory.
+            let mut restarted = ProjectAdd::new(f.client.clone(), cx);
+            restarted.accept(&state, cx);
+            restarted.open(None, w, cx);
+            restarted.path = f.path.clone();
+            assert!(restarted.known().is_none());
+            restarted.confirm(cx);
+            // A genuinely settled private receipt is not mislabelled by an unrelated write error.
+            Arc::make_mut(state.book.as_mut().unwrap())
+                .project_registrations
+                .get_mut(&id)
+                .unwrap()
+                .created = Some("canonical-id".into());
+            state.error = Some("Unrelated later write error");
+            f.accept(&state, cx);
+            assert!(!f.private_receipt_unconfirmed());
+            assert!(
+                f.known_detail("canonical-id")
+                    .contains("Private state problem: Unrelated later write error")
+            );
+            assert!(
+                !f.known_detail("canonical-id")
+                    .contains("receipt write is unconfirmed")
+            );
+        })
+    })
+    .unwrap();
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(WriteCommand::Project { path: Some(_), .. })
+    ));
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(WriteCommand::Project { path: None, .. })
+    ));
+    assert!(commands.try_recv().is_err());
+}

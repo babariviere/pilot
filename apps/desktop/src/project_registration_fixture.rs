@@ -21,6 +21,7 @@ pub(crate) enum Behavior {
     Status(u16),
 }
 pub(crate) struct Seen {
+    pub(crate) created_id: String,
     pub(crate) requests: Vec<(String, String, Value)>,
     pub(crate) projects: Vec<Value>,
     pub(crate) hello: Value,
@@ -37,6 +38,7 @@ impl Server {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
         let seen = Arc::new(Mutex::new(Seen {
+            created_id: "registered-project".into(),
             requests: vec![],
             projects: vec![],
             behavior,
@@ -93,7 +95,7 @@ impl Server {
                         ("POST", "/api/projects") => {
                             assert_eq!(payload.as_object().unwrap().len(), 1);
                             assert!(payload["path"].as_str().is_some());
-                            let project = json!({"id":"registered-project","name":"Existing 日本語","path":payload["path"]});
+                            let project = json!({"id":s.created_id,"name":"Existing 日本語","path":payload["path"]});
                             s.projects = vec![project.clone()];
                             match s.behavior {
                                 Behavior::Lost => continue,

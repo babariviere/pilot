@@ -219,25 +219,38 @@ impl ProjectAdd {
                     .map(|(_, id)| id.as_str())
             })
     }
+    fn private_receipt_unconfirmed(&self) -> bool {
+        self.known().is_some_and(|id| {
+            self.attempt()
+                .is_none_or(|a| a.created.as_deref() != Some(id))
+        })
+    }
+    fn known_detail(&self, id: &str) -> String {
+        format!(
+            "Project {id}. Select it explicitly after refreshing.{}{}{}",
+            if self.private_receipt_unconfirmed() {
+                " Its private receipt write is unconfirmed. Do not resubmit."
+            } else {
+                " No chat was created or changed."
+            },
+            self.state_error
+                .map_or(String::new(), |e| format!(" Private state problem: {e}")),
+            self.catalog_error.map_or(String::new(), |e| format!(
+                " Project list refresh failed: {e}"
+            ))
+        )
+    }
     fn notice(&self) -> Notice {
         if let Some(id) = self.known() {
             return Notice::new("Project added to Local.")
-                .detail(SharedString::from(format!(
-                    "Project {id}. Select it explicitly after refreshing.{}{}",
-                    if self.state_error.is_some() {
-                        " Its private receipt write is unconfirmed. Do not resubmit."
+                .detail(SharedString::from(self.known_detail(id)))
+                .tone(
+                    if self.private_receipt_unconfirmed() || self.state_error.is_some() {
+                        Tone::Warning
                     } else {
-                        " No chat was created or changed."
+                        Tone::Success
                     },
-                    self.catalog_error.map_or(String::new(), |e| format!(
-                        " Project list refresh failed: {e}"
-                    ))
-                )))
-                .tone(if self.state_error.is_some() {
-                    Tone::Warning
-                } else {
-                    Tone::Success
-                });
+                );
         }
         if let Some(error) = self.state_error {
             return Notice::new(error).tone(Tone::Error);

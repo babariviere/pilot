@@ -21,6 +21,146 @@ fn client() -> reqwest::Client {
         .build()
         .unwrap()
 }
+
+// Legal recovery data leaves room for the pre-POST Unknown, but not its UUID receipt.
+fn fill_near_project_receipt_capacity(store: &mut Store) {
+    use crate::delivery_store::{Draft, RECOVER_CAP, STATE_CAP};
+    use std::{collections::BTreeMap, sync::Arc};
+    let original = Draft {
+        revision: 1,
+        text: "Original pending request must not change".into(),
+        cwd: "/synthetic/original".into(),
+        project_id: Some("original-project".into()),
+        ..Default::default()
+    };
+    store
+        .prepare("new:original", &original, false, false)
+        .unwrap();
+    let mut filler = Draft {
+        revision: 1,
+        recovered: Arc::new(vec![
+            "x".repeat(RECOVER_CAP),
+            "x".repeat(RECOVER_CAP),
+            "x".repeat(RECOVER_CAP),
+            String::new(),
+        ]),
+        ..Default::default()
+    };
+    let mut budget = store.book.clone();
+    budget.drafts.insert("chat:recovery".into(), filler.clone());
+    budget.project_registrations.insert(
+        "one".into(),
+        Attempt {
+            id: "one".into(),
+            path: "/synthetic/folder".into(),
+            created: None,
+        },
+    );
+    let room = STATE_CAP - serde_json::to_vec(&budget).unwrap().len() - 8;
+    assert!(room <= RECOVER_CAP);
+    *Arc::make_mut(&mut filler.recovered).last_mut().unwrap() = "x".repeat(room);
+    store
+        .save_edits(BTreeMap::from([("chat:recovery".into(), filler)]))
+        .unwrap();
+}
+async fn project_update(
+    updates: &async_channel::Receiver<crate::interaction::WriteState>,
+) -> crate::interaction::WriteState {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let s = updates.recv().await.unwrap();
+            if s.project
+                .as_ref()
+                .is_some_and(|r| !matches!(r.result, Ok(Outcome::Pending)))
+            {
+                return s;
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+#[tokio::test]
+async fn acknowledged_near_capacity_retains_worker_id_unknown_and_original_envelope_without_replay()
+{
+    use crate::{
+        delivery_store::STATE_CAP,
+        interaction::{Interaction, WriteCommand},
+    };
+    let s = Server::start(Behavior::Accept);
+    let created = "12345678-1234-4234-8234-123456789abc";
+    s.seen.lock().unwrap().created_id = created.into();
+    let t = Temp::new();
+    let mut store = Store::open(t.0.clone(), s.options.host()).unwrap();
+    fill_near_project_receipt_capacity(&mut store);
+    let original = serde_json::to_vec(&store.book.pending).unwrap();
+    drop(store);
+    let (writer, updates) = Interaction::start(s.options.clone(), Ok(t.0.clone()));
+    assert!(writer.command(WriteCommand::Project {
+        id: "one".into(),
+        path: Some("/synthetic/folder".into())
+    }));
+    let acknowledged = project_update(&updates).await;
+    let bytes = std::fs::read(t.0.join("state-v1.json")).unwrap();
+    assert_eq!(bytes.len(), STATE_CAP - 8);
+    assert!(writer.command(WriteCommand::Project {
+        id: "inspect".into(),
+        path: None
+    }));
+    let inspected = project_update(&updates).await;
+    assert!(writer.command(WriteCommand::Close));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut flushed = false;
+        while let Ok(state) = updates.recv().await {
+            flushed |= state.flushed;
+        }
+        assert!(flushed);
+    })
+    .await
+    .unwrap();
+    drop(writer);
+    let mut reopened = Store::open(t.0.clone(), s.options.host()).unwrap();
+    assert!(
+        !reopened.is_faulted(),
+        "STATE_CAP refusal is not an I/O failure"
+    );
+    assert!(reopened.book.project_registrations["one"].created.is_none());
+    assert_eq!(
+        serde_json::to_vec(&reopened.book.pending).unwrap(),
+        original
+    );
+    assert_eq!(std::fs::read(t.0.join("state-v1.json")).unwrap(), bytes);
+    s.seen.lock().unwrap().projects.clear();
+    assert!(
+        register(
+            &client(),
+            &s.options,
+            &mut reopened,
+            "new-attempt",
+            "/synthetic/folder",
+            |_| panic!("durable Unknown must fence a restarted resend")
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(s.posts(), 1);
+    assert_eq!(
+        acknowledged.project.as_ref().unwrap().result,
+        Ok(Outcome::Created(created.into()))
+    );
+    assert_eq!(
+        acknowledged.project_receipt,
+        Some(("one".into(), created.into()))
+    );
+    assert_eq!(
+        inspected.project_receipt, acknowledged.project_receipt,
+        "read-only refresh must not erase the in-process acknowledgment"
+    );
+    assert!(
+        acknowledged.error.is_none(),
+        "capacity does not falsely claim an I/O fault"
+    );
+}
 #[tokio::test]
 async fn exact_post_receipt_catalog_and_restart_never_replay() {
     let s = Server::start(Behavior::Accept);

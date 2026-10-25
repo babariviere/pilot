@@ -53,8 +53,14 @@ Existing source-qualified chat WebSocket behavior is unchanged.
 
 A valid201 canonical project identity/path is an acknowledgment, not proof of
 future availability or stronger daemon filesystem durability. A private receipt
-write fault does not roll it back: the worker also retains that known ID in memory
-for display after closing/reopening. Private faults fence further writes. Refresh
+settlement failure does not roll it back: the worker also retains that known ID in memory
+for display after closing/reopening the same process's dialog, including a pre-I/O
+16 MiB capacity refusal. The notice compares this memory acknowledgment against the
+actual private record and warns when its receipt remains unconfirmed. It does not
+mistake an unrelated later write error for loss of an already saved receipt.
+If receipt persistence truly failed, process restart restores only the original durable
+Unknown, not the lost memory ID, and still never replays it. The cap, retained data and
+original pending delivery envelopes remain unchanged. Private I/O faults fence further writes. Refresh
 errors retain previous project choices and are shown separately from registration
 acknowledgment, never as a successful catalog refresh.
 
@@ -79,6 +85,44 @@ with bounded5s HTTP timeouts and its bounded command/edit mailboxes. A submitted
 registration may temporarily serialize later courier work while it awaits Local;
 UI/native text remains live and unsaved edits remain retained in its mailbox.
 There is no new always-on thread, subscription, poll, timer or render-time I/O.
+
+### Capacity settlement regression
+
+The focused follow-up reproduces a legal snapshot whose pre-POST Unknown fits at
+`STATE_CAP - 8`. A canonical 36-byte UUID adds 34 encoded bytes, so local settlement
+fails before I/O without setting `Store.is_faulted`. The actual interaction worker
+must still retain the one faux 201's known ID through read-only refresh. Disk remains
+Unknown, an unrelated original pending operation is byte-identical, and a restarted
+store refuses resend even after the observed catalog is cleared. Dialog owner tests
+separately distinguish same-process close/reopen from a fresh owner with no memory ID.
+The existing atomic-write-fault case remains covered. No cap/schema/eviction or writer
+change is needed; no live service/account actions were used.
+
+Negative control `c9a59bd8-6809-4ce3-bbc1-6aa40f42e4a8` failed exactly at
+`Err("Private state is full. Nothing was discarded.")` versus acknowledged `Created`,
+on frozen `786a192c29f9bc7178635954e15da33abaadb3dc`; the earlier missing test-helper
+borrow compile failure is a separate retained receipt, not reproduction evidence.
+`e2efac33-c41d-4523-93cc-3a90db8fa023` passed matching lib Clippy and all six registration
+plus four dialog tests on `a81968ef7d4b6ee5d291b4fbf0a14bb4a75d6b91`. The final notice
+copy correction retains unrelated errors without mislabelling a saved receipt:
+`16bc8185-d45e-4b11-a9ff-018ab946a013` passed matching lib Clippy and the four affected
+dialog tests on `eb3b0a9ea0e7ab85629a41529b9c95ea0693621f`, tree
+`fb150924255d887b66a14fa072d2a832ef660198`. Its 12-input PRE/POST snapshots were identical;
+registration/store/writer inputs remain byte-identical to the qualified six-case run.
+Only this results documentation follows those checks. D46 uses scoped tests, not a
+full-suite/native sweep. The shared notice and layout are unchanged; no new native
+pixel, OS dialog/IME, motion, performance, Linux or release acceptance is claimed.
+
+Composition qualification after accepted bundled-runtime delivery preserved its 16
+file blobs and the previous model-selection source. Only these six receipt-fix files
+were applied atop `295ad854f3db1f7e9564bb71ffa00fc26e8d810c`, with an identical binary
+feature delta to the earlier `1ed94276` candidate. No foreign dependents existed.
+`927aa4de-2626-4adf-af36-953102e9075c`, EXIT 0: matching lib Clippy, six registration
+and four dialog tests, frozen head `2abb8cd45c1e4d6895af9a030e877aad5c927bd9` /
+tree `4a0dcd7465b0d58ff8c36a0da29eaa86015197e1` (empty checked child `e94c9725`).
+The 28-input composition PRE/POST snapshots were identical, with diff digest
+`cf8c296536ff05a26a7820dd2f91093278111f290fd665be5aa8493610c61510`.
+Only this receipt paragraph follows the composition checks. No broader gate was run.
 
 ## Synthetic qualification
 
