@@ -3,7 +3,7 @@ use super::*;
 use crate::navigation::{Location, Target};
 use gpui_kit::{
     Bounds, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, ThemeMode},
     point, size,
     test::TestWindowExt,
 };
@@ -62,7 +62,16 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
     }
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            cx.update(|cx| Theme::change(mode, None, cx));
+            cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if mode == ThemeMode::Dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                )
+            });
             let (client, reads) = LocalClient::synthetic_commands();
             let (writer, writes) = Interaction::recording();
             let catalog=crate::local_model::projects(&json!([{"id":"a","name":"Synthetic Atlas","path":"/synthetic/shared"},{"id":"b","name":"Synthetic Boreal","path":"/synthetic/shared"}])).unwrap();
@@ -141,6 +150,15 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
                     t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
                 });
                 let old = v.read(cx).location(cx);
+                for id in ["nav-back", "chat-filters", "history-menu", "latest"] {
+                    w.click(id, cx);
+                }
+                assert!(
+                    text.update(cx, |t, cx| t.marked_text_range(w, cx).is_some()),
+                    "pointer chrome must not commit/discard composition"
+                );
+                assert!(w.try_find("popup-menu").is_none());
+                assert_eq!(v.read(cx).location(cx), old);
                 w.press("secondary-[", cx);
                 assert_eq!(v.read(cx).location(cx), old);
                 text.update(cx, |t, cx| {
@@ -169,9 +187,15 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
                 );
                 let list = v.read(cx).chats.clone();
                 list.update(cx, |l, cx| l.set_query("Atlas", w, cx));
-                w.click("archives", cx);
             })
             .unwrap();
+            super::contextual_navigation::probe_menu_choice(
+                cx,
+                h,
+                "chat-filters",
+                0,
+                mode == ThemeMode::Dark,
+            );
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 w.scroll(
@@ -312,6 +336,7 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             );
             assert!(writes.try_recv().is_err());
             if let Some(d) = &captures {
+                cx.update(|cx| assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark));
                 cx.capture_screenshot(h)
                     .unwrap()
                     .save(d.join(format!("{}-{}-restored.png", width as u32, mode.name())))
@@ -493,6 +518,7 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
                 s.loaded = true;
                 s.generation = generation;
                 s.cursor = None;
+                s.limited = false;
                 s.chat_status = "Synthetic fresh reducer".into();
                 v.accept(s, w, cx);
             })
@@ -502,7 +528,16 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
     }
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            cx.update(|cx| Theme::change(mode, None, cx));
+            cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if mode == ThemeMode::Dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                )
+            });
             let (client, reads) = LocalClient::synthetic_commands();
             let (writer, writes) = Interaction::recording();
             let initial = snapshot(vec![entry(20, "OLD canonical entry20")]);
@@ -671,9 +706,103 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             });
             assert!(reads.try_recv().is_err(), "no restoration paging/draining");
             assert!(writes.try_recv().is_err());
+            // One contextual control still owns bounded-window refresh and retry,
+            // not merely a jump to the bottom of the old loaded rows.
+            let retained = cx
+                .update_window(h, |_, _, cx| {
+                    v.update(cx, |v, cx| {
+                        assert!(v.nav_error.is_some());
+                        let retained = v.transcript.read(cx).history_probe_row(old_render);
+                        v.state.limited = true;
+                        v.sync_history_controls(cx);
+                        retained
+                    })
+                })
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+                assert_eq!(w.find("latest").label(), Some("Refresh latest"));
+                w.click("latest", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(
+                matches!(reads.try_recv(),Ok(Command::Open{id,generation:15}) if id=="synthetic")
+            );
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut failed = v.state.clone();
+                    failed.generation = 15;
+                    failed.loaded = false;
+                    failed.page_busy = false;
+                    failed.chat_status =
+                        "Synthetic latest read failed. Last loaded page retained.".into();
+                    v.accept(failed, w, cx);
+                    assert_eq!(
+                        v.transcript
+                            .read(cx)
+                            .history_probe_row(old_render)
+                            .entity_id(),
+                        retained.entity_id()
+                    );
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_CONTEXTUAL_DIR") {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(std::path::PathBuf::from(dir).join(format!(
+                        "{}-{}-retry-latest.png",
+                        width as u32,
+                        mode.name()
+                    )))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("latest").label(), Some("Retry latest"));
+                w.click("latest", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(
+                matches!(reads.try_recv(),Ok(Command::Open{id,generation:16}) if id=="synthetic")
+            );
+            publish(
+                cx,
+                h,
+                &v,
+                15,
+                snapshot(vec![entry(50, "STALE latest completion")]),
+            );
+            cx.update(|cx| {
+                assert!(v.read(cx).refreshing);
+                assert_eq!(
+                    v.read(cx)
+                        .transcript
+                        .read(cx)
+                        .history_probe_row(old_render)
+                        .entity_id(),
+                    retained.entity_id()
+                );
+            });
+            publish(
+                cx,
+                h,
+                &v,
+                16,
+                snapshot(vec![entry(40, "CURRENT latest completion")]),
+            );
+            cx.update_window(h, |_, w, cx| {
+                assert!(v.read(cx).transcript.read(cx).history_probe_anchor(cx).2);
+                assert!(w.try_find("latest").is_none());
+            })
+            .unwrap();
+            assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"canonical_reader_fresh_open":true,"actual_reducer":true,"thinking_text_allocation_collision":true,"native_copy_proves_old_source":true,"missing_canonical_marker_no_numeric_fallback":true,"owner_generation_fences":true,"transcript_cache":false,"automatic_history_reads":0,"canonical_writes":0})
+                json!({"width":width,"mode":mode.name(),"canonical_reader_fresh_open":true,"actual_reducer":true,"thinking_text_allocation_collision":true,"native_copy_proves_old_source":true,"missing_canonical_marker_no_numeric_fallback":true,"owner_generation_fences":true,"contextual_bounded_latest_retry_stale_completion":true,"transcript_cache":false,"automatic_history_reads":0,"canonical_writes":0})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

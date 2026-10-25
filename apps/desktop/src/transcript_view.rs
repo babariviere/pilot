@@ -21,7 +21,16 @@ pub(crate) struct ArtifactOpen(pub(crate) crate::artifact_model::Reference);
 impl gpui_kit::EventEmitter<ArtifactOpen> for TranscriptView {}
 pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
+pub(crate) struct LatestRequested(pub(crate) u64);
+impl gpui_kit::EventEmitter<LatestRequested> for TranscriptView {}
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct HistoryControls {
+    pub(crate) limited: bool,
+    pub(crate) refreshing: bool,
+    pub(crate) recovery: bool,
+}
 
+type HistoryGuard = std::rc::Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub struct TranscriptView {
     transcript: Transcript,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
@@ -33,6 +42,8 @@ pub struct TranscriptView {
     stream_task: Option<Task<()>>,
     readonly: bool,
     history_scope: u64,
+    history_controls: HistoryControls,
+    history_guard: Option<HistoryGuard>,
     history_slack: gpui_kit::Pixels,
     text_subscriptions: HashMap<u64, Subscription>,
     work_ui: crate::work_view::WorkUi,
@@ -131,6 +142,8 @@ impl TranscriptView {
             stream_task: None,
             readonly,
             history_scope: 0,
+            history_controls: HistoryControls::default(),
+            history_guard: None,
             history_slack: px(0.),
             text_subscriptions: HashMap::new(),
             work_ui: Default::default(),
@@ -290,6 +303,18 @@ impl TranscriptView {
         self.scroller
             .update(cx, |state, cx| state.scroll_to_end(cx));
         cx.notify();
+    }
+    pub(crate) fn set_history_controls(&mut self, value: HistoryControls, cx: &mut Context<Self>) {
+        if self.history_controls != value {
+            self.history_controls = value;
+            cx.notify();
+        }
+    }
+    pub(crate) fn set_history_guard(
+        &mut self,
+        guard: impl Fn(&mut Window, &mut App) -> bool + 'static,
+    ) {
+        self.history_guard = Some(std::rc::Rc::new(guard));
     }
     pub(crate) fn reading_mark(&self, cx: &App) -> Option<crate::navigation::ReadingMark> {
         let s = self.scroller.read(cx);
@@ -671,6 +696,7 @@ impl Render for TranscriptView {
         let list_style = StyleRefinement::default().py_0().pb(self.history_slack);
         if self.readonly {
             return div()
+                .relative()
                 .v_flex()
                 .size_full()
                 .min_h_0()
@@ -693,6 +719,43 @@ impl Render for TranscriptView {
                         .with_list_style(list_style)
                         .jump_button(false),
                     ),
+                )
+                .when(
+                    self.history_guard.is_some()
+                        && (!following
+                            || self.history_controls.limited
+                            || self.history_controls.refreshing
+                            || self.history_controls.recovery),
+                    |v| {
+                        v.child(
+                            div()
+                                .absolute()
+                                .bottom_3()
+                                .right_3()
+                                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                                    if v.history_guard.as_ref().is_some_and(|guard| !guard(w, cx)) {
+                                        cx.stop_propagation();
+                                    }
+                                }))
+                                .child(
+                                    crate::ui::action(
+                                        "latest",
+                                        if self.history_controls.refreshing {
+                                            "Retry latest"
+                                        } else if self.history_controls.limited {
+                                            "Refresh latest"
+                                        } else {
+                                            "Latest"
+                                        },
+                                        crate::ui::Action::Secondary,
+                                    )
+                                    .icon(crate::app_icon::AppIcon::Latest.asset())
+                                    .on_click(cx.listener(
+                                        move |_, _, _, cx| cx.emit(LatestRequested(scope)),
+                                    )),
+                                ),
+                        )
+                    },
                 )
                 .into_any_element();
         }

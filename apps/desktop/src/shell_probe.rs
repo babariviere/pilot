@@ -3,7 +3,7 @@
 use super::*;
 use gpui_kit::{
     Bounds, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, Theme, ThemeMode},
     point, size,
     test::TestWindowExt,
 };
@@ -32,7 +32,16 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
     }
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            cx.update(|cx| Theme::change(mode, None, cx));
+            cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if mode == ThemeMode::Dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                )
+            });
             let (client, reads) = LocalClient::synthetic_commands();
             let (writer, writes) = Interaction::recording();
             let initial:Vec<_>=(100..120).map(|id|Message::live(id,"assistant".into(),format!("Synthetic message {id}: retain this 👩‍💻 e\u{301} selection while browsing projects.\n\n{}","A calm synthetic paragraph. ".repeat(16)))).collect();
@@ -80,6 +89,21 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 .unwrap()
             });
             settle(cx, handle);
+            cx.update_window(handle, |_, w, cx| {
+                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+                assert!(
+                    w.try_find("nav-back").is_none() && w.try_find("nav-forward").is_none(),
+                    "no empty navigation history chrome"
+                );
+                assert!(
+                    w.try_find("archives").is_none()
+                        && w.try_find("earlier").is_none()
+                        && w.try_find("latest").is_none(),
+                    "secondary history/filter actions are contextual"
+                );
+                assert!(w.try_find("chat-filters").is_some());
+            })
+            .unwrap();
             assert!(reads.try_recv().is_err());
             assert!(writes.try_recv().is_err());
             for _ in 0..20 {
@@ -172,7 +196,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, handle);
-            cx.update_window(handle, |_, window, cx| {
+            cx.update_window(handle, |_, _, cx| {
                 assert_eq!(view.read(cx).page, Page::Project("project-a".into()));
                 let v = view.read(cx);
                 let d = v.chats.read(cx).delegate();
@@ -182,9 +206,15 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     Arc::ptr_eq(&d.all, &v.state.chats),
                     "scope changes must share, not deep-clone, the loaded chat metadata"
                 );
-                window.click("archives", cx);
             })
             .unwrap();
+            super::contextual_navigation::probe_menu_choice(
+                cx,
+                handle,
+                "chat-filters",
+                0,
+                mode == ThemeMode::Dark,
+            );
             settle(cx, handle);
             cx.update_window(handle, |_, window, cx| {
                 let chats = view.read(cx).chats.clone();
@@ -204,12 +234,19 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, handle);
-            cx.update_window(handle, |_, window, cx| {
+            cx.update_window(handle, |_, _, cx| {
                 assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 2);
-                window.click("archives", cx);
-                window.click("nav-home", cx);
             })
             .unwrap();
+            super::contextual_navigation::probe_menu_choice(
+                cx,
+                handle,
+                "chat-filters",
+                0,
+                mode == ThemeMode::Dark,
+            );
+            cx.update_window(handle, |_, w, cx| w.click("nav-home", cx))
+                .unwrap();
             settle(cx, handle);
             if let Some(dir) = &captures {
                 cx.capture_screenshot(handle)

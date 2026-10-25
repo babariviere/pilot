@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "chat_model_probe.rs"]
 pub(crate) mod chat_model_probe;
+#[path = "contextual_navigation.rs"]
+mod contextual_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
@@ -75,7 +77,6 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, IconName, IndexPath, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        checkbox::Checkbox,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
     },
     div,
@@ -820,6 +821,14 @@ impl LocalViewer {
                 },
             );
         let transcript = cx.new(|cx| TranscriptView::readonly(window, cx));
+        let history_owner = cx.weak_entity();
+        transcript.update(cx, |view, _| {
+            view.set_history_guard(move |w, cx| {
+                history_owner
+                    .update(cx, |owner, cx| owner.project_choices_ready(w, cx))
+                    .unwrap_or(false)
+            })
+        });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
@@ -974,6 +983,20 @@ impl LocalViewer {
                 }
             },
         );
+        let latest_events = cx.subscribe_in(
+            &transcript,
+            window,
+            |view, _, event: &crate::transcript_view::LatestRequested, w, cx| {
+                if event.0 == view.generation
+                    && view.selected.is_some()
+                    && view.page == Page::Chat
+                    && !view.artifacts_open
+                    && view.project_choices_ready(w, cx)
+                {
+                    view.latest(cx);
+                }
+            },
+        );
         let (navigation, scope_states, reader_marks) = Self::navigation_state();
         let settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(None));
         settings.update(cx, |owner, cx| owner.load(cx));
@@ -1029,6 +1052,7 @@ impl LocalViewer {
                 editor_events,
                 artifact_events,
                 history_events,
+                latest_events,
                 project_events,
                 shell_events,
                 inbox_events,
@@ -1148,6 +1172,7 @@ impl LocalViewer {
         self.rebuild_nav(window, cx);
         self.transcript.update(cx, |view, cx| {
             view.history_scope(generation);
+            view.set_history_controls(Default::default(), cx);
             view.replace_readonly(Vec::new(), true, cx);
         });
         self.did_navigate(cx);
@@ -1227,6 +1252,7 @@ impl LocalViewer {
             editor.activity(self.state.thinking && self.selected.is_some(), cx)
         });
         self.restore_reader(cx);
+        self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);
         self.artifacts.update(cx, |pane, cx| {
             pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
@@ -1257,6 +1283,8 @@ impl LocalViewer {
         self.state.chat_status.clear();
         self.state.queued = 0;
         self.state.thinking = false;
+        self.transcript
+            .update(cx, |v, cx| v.set_history_controls(Default::default(), cx));
         if let Some(client) = &self.client {
             client.command(Command::Clear {
                 generation: self.generation,
@@ -1302,6 +1330,7 @@ impl LocalViewer {
             self.earlier_attempt = Some(key);
             self.earlier_request = Some((self.generation, before, self.state.page_revision));
             self.state.page_busy = true;
+            self.sync_history_controls(cx);
             self.transcript
                 .update(cx, |view, cx| view.hold_for_history(cx));
             cx.notify();
@@ -1329,11 +1358,13 @@ impl LocalViewer {
                     .update(cx, |editor, cx| editor.activity(false, cx));
                 self.state.page_busy = true;
                 self.state.chat_status = "Loading newest bounded window…".into();
+                self.sync_history_controls(cx);
                 cx.notify();
                 return;
             }
         }
         self.transcript.update(cx, |view, cx| view.latest(cx));
+        self.sync_history_controls(cx);
     }
     fn new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.editor.read(cx).ready() {
@@ -1370,6 +1401,7 @@ impl LocalViewer {
             });
         }
         self.restore_reader(cx);
+        self.sync_history_controls(cx);
     }
     fn leave_artifacts(&mut self, cx: &mut Context<Self>) {
         if self.artifacts_open {
@@ -1656,10 +1688,7 @@ impl Render for LocalViewer {
                         .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
-                            .child(Button::new("earlier").ghost().small().label("Earlier").icon(AppIcon::Earlier.asset()).disabled(self.state.cursor.is_none()||self.state.page_busy)
-                                .on_click(cx.listener(|view,_,_,cx|view.earlier(true,cx))))
-                            .child(Button::new("latest").ghost().small().icon(AppIcon::Latest.asset()).label(if self.refreshing{"Retry latest"}else if self.state.limited{"Refresh latest"}else{"Latest"})
-                                .on_click(cx.listener(|view,_,_,cx|view.latest(cx))))
+                            .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})

@@ -124,6 +124,11 @@
       "path": "src/select.rs",
       "old": "    /// Focus the select trigger input.\n    pub fn focus",
       "new": "    /// Current search input, for app-owned preedit/focus fencing before navigation.\n    /// Reading this handle does not clear the query or change selection.\n    pub fn query_input(&self, cx: &App) -> Entity<crate::input::InputState> {\n        self.state.list.read(cx).query_input()\n    }\n\n    /// Refuse navigation during search preedit; otherwise retire this popup\n    /// and return focus to its mounted trigger before an app opens another layer.\n    pub fn prepare_navigation(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {\n        let input = self.state.list.read(cx).query_input();\n        if input.update(cx, |input, cx| gpui::EntityInputHandler::marked_text_range(input, window, cx).is_some()) {\n            return false;\n        }\n        if self.state.open {\n            self.clear_query_and_restore_cursor(window, cx);\n            self.set_open(false, cx);\n            self.focus(window, cx);\n        }\n        true\n    }\n\n    /// Focus the select trigger input.\n    pub fn focus"
+    },
+    {
+      "path": "src/menu/popup_menu.rs",
+      "old": "            if let Some(handle) = self\n                .previous_focus_handle\n                .as_ref()\n                .or(self.action_context.as_ref())",
+      "new": "            if let Some(handle) = self\n                .trigger_focus_handle\n                .as_ref()\n                .or(self.previous_focus_handle.as_ref())\n                .or(self.action_context.as_ref())"
     }
   ]
 }

@@ -135,3 +135,16 @@ desktop's library tests (dependency packages cannot run their dev-tests as
 non-workspace members). This seam is absent from normal builds; it adds no tool,
 transport or host capability. The ordinary threshold/dead-entry/live-entry and
 cross-thread-drop regression therefore runs against the real patched code.
+
+## Dropdown dismissal focus
+
+One exact Component edit prefers an explicit retained menu trigger when restoring
+focus on dismissal. Dropdown menus are built after the containing popover takes
+focus, so their captured previous handle can name the disappearing popover
+content. With no focus before opening, Escape previously left that orphaned ID
+and an empty keyboard context. Ordinary menus without a trigger retain their
+previous/action-context fallback. The existing guard still leaves focus alone
+when a menu item has moved it to another input or dialog. No layout wrapper,
+activation, dependency version or default menu selection changes. A blurred
+keyboard unit is the negative regression; native history verifies the real
+Escape, Tab-to-trigger, Enter and arrow/Enter path.

@@ -83,7 +83,7 @@ impl LocalViewer {
         }
         true
     }
-    fn save_scope(&mut self, cx: &App) {
+    pub(super) fn save_scope(&mut self, cx: &App) {
         let list = self.chats.read(cx);
         let d = list.delegate();
         let state = ScopeState {
@@ -294,7 +294,7 @@ impl LocalViewer {
             .update(cx, |v, cx| v.restore_reading(mark, cx))
         {
             self.nav_error = Some(
-                "Previous read position is outside the loaded page. Earlier can load older messages.",
+                "Previous read position is outside the loaded page. Use Chat history or Latest.",
             );
         }
     }

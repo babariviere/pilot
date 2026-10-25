@@ -3,7 +3,7 @@
 use super::*;
 use gpui_kit::{
     Bounds, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, ThemeMode},
     point, size,
     test::TestWindowExt,
 };
@@ -70,6 +70,24 @@ fn page(
     assert!(cx.update(|cx| view.read(cx).text_parsers_ready(cx)));
 }
 pub fn run_history_probe(cx: &mut HeadlessAppContext) {
+    let only = std::env::var("PILOT_NEXT_HISTORY_CASE").ok();
+    if let Some(case) = &only {
+        assert!(
+            [
+                "680-light-long",
+                "680-light-fitting",
+                "680-dark-long",
+                "680-dark-fitting",
+                "1100-light-long",
+                "1100-light-fitting",
+                "1100-dark-long",
+                "1100-dark-fitting"
+            ]
+            .contains(&case.as_str()),
+            "unknown history case"
+        );
+    }
+    let mut cases = 0;
     let captures = std::env::var_os("PILOT_NEXT_HISTORY_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -77,7 +95,26 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             for fitting in [false, true] {
-                cx.update(|cx| Theme::change(mode, None, cx));
+                let key = format!(
+                    "{}-{}-{}",
+                    width as u32,
+                    mode.name(),
+                    if fitting { "fitting" } else { "long" }
+                );
+                if only.as_ref().is_some_and(|only| only != &key) {
+                    continue;
+                }
+                cases += 1;
+                cx.update(|cx| {
+                    crate::appearance::commit_appearance(
+                        if mode == ThemeMode::Dark {
+                            crate::settings_state::AppearancePreference::Dark
+                        } else {
+                            crate::settings_state::AppearancePreference::Light
+                        },
+                        cx,
+                    )
+                });
                 let (client, commands) = LocalClient::synthetic_commands();
                 let initial = rows(100, if fitting { 101 } else { 120 });
                 let original = initial.clone();
@@ -269,8 +306,13 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 }
                 settle(cx, handle);
                 assert!(commands.try_recv().is_err());
-                cx.update_window(handle, |_, window, cx| window.click("earlier", cx))
-                    .unwrap();
+                super::contextual_navigation::probe_menu_choice(
+                    cx,
+                    handle,
+                    "history-menu",
+                    0,
+                    mode == ThemeMode::Dark,
+                );
                 cx.run_until_parked();
                 assert!(
                     matches!(
@@ -305,11 +347,35 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                         "genuine bottom wheel releases short-history slack: {a:?}"
                     );
                 });
+                cx.update_window(handle, |_, w, _| {
+                    assert!(
+                        w.try_find("latest").is_none(),
+                        "followed ordinary history needs no persistent Latest"
+                    )
+                })
+                .unwrap();
                 up(cx, handle, &view);
                 settle(cx, handle);
                 assert!(commands.try_recv().is_err());
-                cx.update_window(handle, |_, window, cx| window.click("latest", cx))
-                    .unwrap();
+                cx.update_window(handle, |_, w, _| {
+                    let latest = w.find("latest").bounds();
+                    let viewport = w.find("viewport").bounds();
+                    assert!(
+                        latest.left() >= viewport.left()
+                            && latest.right() <= viewport.right()
+                            && latest.top() >= viewport.top()
+                            && latest.bottom() <= viewport.bottom(),
+                        "contextual Latest stays inside transcript: {latest:?} / {viewport:?}"
+                    );
+                })
+                .unwrap();
+                super::contextual_navigation::probe_menu_choice(
+                    cx,
+                    handle,
+                    "history-menu",
+                    1,
+                    mode == ThemeMode::Dark,
+                );
                 settle(cx, handle);
                 assert!(
                     cx.update(|cx| view.read(cx).transcript.read(cx).history_probe_anchor(cx).2)
@@ -322,6 +388,7 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 // which does not use the list/bounce wheel callback.
                 page(cx, handle, &view, expanded, Some(70), 4);
                 if let Some(dir) = &captures {
+                    cx.update(|cx| assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark));
                     cx.capture_screenshot(handle)
                         .unwrap()
                         .save(dir.join("before-scrollbar.png"))
@@ -369,4 +436,9 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
             }
         }
     }
+    assert_eq!(
+        cases,
+        if only.is_some() { 1 } else { 8 },
+        "history selection must run its cases"
+    );
 }
