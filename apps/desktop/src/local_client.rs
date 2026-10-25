@@ -16,12 +16,15 @@ use tokio_tungstenite::{
 const HTTP_CAP: usize = 4 * 1024 * 1024;
 const FRAME_CAP: usize = 8 * 1024 * 1024;
 type Failure = &'static str;
+#[path = "model_scope_access.rs"]
+mod model_scope_access;
 
 #[derive(Clone)]
 pub struct LocalOptions {
     port: u16,
     daemon_id: String,
     lineage_id: String,
+    native_home: Option<PathBuf>,
 }
 
 impl LocalOptions {
@@ -31,6 +34,7 @@ impl LocalOptions {
             port,
             daemon_id: "test-daemon".into(),
             lineage_id: "test-lineage".into(),
+            native_home: None,
         }
     }
     pub(crate) fn host(&self) -> crate::delivery_store::Host {
@@ -66,6 +70,7 @@ impl LocalOptions {
             port,
             daemon_id: identity_file(home.join("daemon-id"))?,
             lineage_id: identity_file(home.join("storage-lineage"))?,
+            native_home: Some(home),
         })
     }
 
@@ -761,6 +766,7 @@ mod tests {
             port: 4319,
             daemon_id: "daemon".into(),
             lineage_id: "lineage".into(),
+            native_home: None,
         };
         let mut hello = json!({"daemonId":"daemon","lineageId":"lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}});
         assert!(options.verify(&hello).is_ok());

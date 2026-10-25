@@ -78,6 +78,7 @@ impl Mock {
             port: listener.local_addr().unwrap().port(),
             daemon_id: "synthetic-daemon".into(),
             lineage_id: "synthetic-lineage".into(),
+            native_home: None,
         };
         let requests = Arc::new(Mutex::new(Vec::new()));
         let sockets = Arc::new(AtomicUsize::new(0));

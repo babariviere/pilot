@@ -27,6 +27,11 @@ mod project_add_view;
 mod project_registration;
 #[cfg(any(test, feature = "native-probes"))]
 mod project_registration_fixture;
+mod scoped_models;
+#[cfg(any(test, feature = "native-probes"))]
+mod scoped_models_fixture;
+mod scoped_models_view;
+mod scoped_models_worker;
 mod settings_state;
 mod settings_view;
 mod settings_worker;
@@ -36,6 +41,8 @@ pub use local_view::mission_browser_probe::run_mission_browser_probe;
 pub use local_view::mission_probe::run_mission_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_add_probe::run_project_add_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::scoped_models_probe::run_scoped_models_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::settings_probe::run_settings_probe;
 #[cfg(test)]

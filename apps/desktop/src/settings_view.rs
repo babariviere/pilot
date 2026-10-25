@@ -25,6 +25,7 @@ actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
 
 /// Non-rendering state owner retained by the Local window and any open Settings window.
 pub(crate) struct SettingsPreferences {
+    pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
     pub(super) state: SettingsState,
     source: Option<Result<PathBuf, SettingsError>>,
     worker: Option<SettingsWorker>,
@@ -36,6 +37,7 @@ pub(crate) struct SettingsPreferences {
 impl SettingsPreferences {
     pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
         Self {
+            models: None,
             state: SettingsState::default(),
             source,
             worker: None,
@@ -160,7 +162,13 @@ impl SettingsPreferences {
         self.load(cx);
     }
     pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        let ready = !self.state.saving() && !self.state.dirty() && !self.state.unconfirmed();
+        let ready = !self.state.saving()
+            && !self.state.dirty()
+            && !self.state.unconfirmed()
+            && self
+                .models
+                .as_ref()
+                .is_none_or(|m| !m.read(cx).unsettled(cx));
         if !ready {
             self.close_notice = true;
             cx.notify();
@@ -172,14 +180,21 @@ impl SettingsPreferences {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Category {
     Appearance,
+    Models,
     Updates,
     Availability,
 }
 impl Category {
-    const ALL: [Self; 3] = [Self::Appearance, Self::Updates, Self::Availability];
+    const ALL: [Self; 4] = [
+        Self::Appearance,
+        Self::Models,
+        Self::Updates,
+        Self::Availability,
+    ];
     fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Models => "Scoped models",
             Self::Updates => "Updates",
             Self::Availability => "Other settings",
         }
@@ -187,6 +202,7 @@ impl Category {
     fn id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
+            Self::Models => "settings-models",
             Self::Updates => "settings-updates",
             Self::Availability => "settings-availability",
         }
@@ -289,7 +305,10 @@ impl SettingsView {
             )
         });
         let observed = cx.observe(&preferences, |_, _, cx| cx.notify());
-        let selected = cx.subscribe_in(&categories, window, |view, list, event, _, cx| {
+        let selected = cx.subscribe_in(&categories, window, |view, list, event, window, cx| {
+            if view.models_marked(window, cx) {
+                return;
+            }
             if let ListEvent::Confirm(ix) = event
                 && let Some(category) = Category::ALL.get(ix.row).copied()
             {
@@ -302,6 +321,11 @@ impl SettingsView {
                     cx.notify();
                 });
                 view.confirm_reload = false;
+                if category == Category::Models
+                    && let Some(models) = view.preferences.read(cx).models.clone()
+                {
+                    models.update(cx, |m, cx| m.load(window, cx));
+                }
                 cx.notify();
             }
         });
@@ -321,9 +345,19 @@ impl SettingsView {
         self.categories
             .update(cx, |list, cx| list.focus(window, cx));
     }
-    pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.models_marked(window, cx) {
+            return false;
+        }
         self.preferences
             .update(cx, |owner, cx| owner.request_close(cx))
+    }
+    fn models_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.preferences
+            .read(cx)
+            .models
+            .clone()
+            .is_some_and(|m| m.update(cx, |m, cx| m.marked(w, cx)))
     }
     fn appearance(&self, window: &Window, cx: &mut Context<Self>) -> gpui_kit::Div {
         let owner = self.preferences.read(cx);
@@ -400,6 +434,19 @@ impl SettingsView {
         let writable = owner.writable();
         let source = owner.source.is_some();
         let close_notice = owner.close_notice;
+        if owner.category == Category::Models
+            && !dirty
+            && !saving
+            && !unconfirmed
+            && error.is_none()
+        {
+            let models_unsettled = owner
+                .models
+                .as_ref()
+                .is_some_and(|m| m.read(cx).unsettled(cx));
+            return div().v_flex().gap_2()
+                .children((close_notice&&models_unsettled).then(||Notice::new("Finish or review your scoped-model changes before closing. No request is resent by closing.").tone(Tone::Warning)));
+        }
         let mut panel = div().v_flex().gap_3().child(
             ui::text(Text::Caption, status)
                 .id("settings-status")
@@ -487,6 +534,7 @@ impl Render for SettingsView {
         let category = self.preferences.read(cx).category;
         let detail = match category {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
+            Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
             Category::Updates => div().v_flex().gap_4()
                 .child(ui::header("settings-page-title", "Updates", Text::Title))
                 .child(Notice::new("Updater integration is not available in this build.")
@@ -495,7 +543,7 @@ impl Render for SettingsView {
             Category::Availability => div().v_flex().gap_4()
                 .child(ui::header("settings-page-title", "Other settings", Text::Title))
                 .child(Notice::new("These settings are not available in this app yet.")
-                    .detail("Notifications, Connections, Scoped models, Diagnostics, Energy and project editing remain in Swift. This app does not copy or change those preferences."))
+                    .detail("Notifications, Connections, Diagnostics, Energy and project editing remain in Swift. Scoped models has its own Local category."))
                 .child(Notice::new("Embedded terminal support remains deferred. Project configuration and credentials keep their own authority.").tone(Tone::Quiet)).into_any_element(),
         };
         let status = self.status(cx);
@@ -509,13 +557,24 @@ impl Render for SettingsView {
             .items_stretch()
             .bg(Surface::Page.color(cx))
             .text_color(cx.theme().foreground)
+            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                if v.models_marked(w, cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|view, _: &CloseSettings, window, cx| {
-                if view.request_close(cx) {
+                if view.request_close(window, cx) {
                     window.remove_window();
                 }
             }))
-            .on_action(cx.listener(|view, _: &SaveSettings, _, cx| {
-                view.preferences.update(cx, |owner, cx| owner.save(cx));
+            .on_action(cx.listener(|view, _: &SaveSettings, window, cx| {
+                if view.preferences.read(cx).category == Category::Models {
+                    if let Some(models) = view.preferences.read(cx).models.clone() {
+                        models.update(cx, |m, cx| m.save(window, cx));
+                    }
+                } else {
+                    view.preferences.update(cx, |owner, cx| owner.save(cx));
+                }
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|_, _: &crate::transcript_view::Quit, _, cx| {
@@ -539,7 +598,7 @@ impl Render for SettingsView {
                     )
                     .child(div().flex_1().min_h_0().child(List::new(&self.categories)))
                     .child(
-                        ui::text(Text::Small, "App preferences only")
+                        ui::text(Text::Small, "This app and Local pi")
                             .p_3()
                             .text_color(cx.theme().muted_foreground),
                     ),
@@ -556,11 +615,17 @@ impl Render for SettingsView {
                     .child(
                         div()
                             .id("settings-scroll")
+                            .test_support()
+                            .v_flex()
                             .flex_1()
                             .min_h_0()
                             .min_w_0()
-                            .overflow_y_scrollbar()
-                            .child(ui::page().child(detail)),
+                            .child(
+                                div()
+                                    .size_full()
+                                    .overflow_y_scrollbar()
+                                    .child(ui::page().child(detail)),
+                            ),
                     )
                     .child(
                         div()

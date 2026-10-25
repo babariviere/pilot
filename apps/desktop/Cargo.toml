@@ -163,3 +163,9 @@ path = "tests/project_add.rs"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "scoped_models"
+harness = false
+test = false
+required-features = ["native-probes"]

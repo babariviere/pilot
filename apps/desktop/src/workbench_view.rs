@@ -38,8 +38,8 @@ impl LocalViewer {
                     cx.new(|cx| crate::settings_view::SettingsView::new(preferences, window, cx));
                 pane.update(cx, |pane, cx| pane.focus_categories(window, cx));
                 let weak = pane.downgrade();
-                window.on_window_should_close(cx, move |_, cx| {
-                    weak.update(cx, |pane, cx| pane.request_close(cx))
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |pane, cx| pane.request_close(window, cx))
                         .unwrap_or(true)
                 });
                 pane

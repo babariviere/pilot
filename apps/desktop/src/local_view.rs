@@ -35,6 +35,9 @@ mod project_add_navigation;
 #[path = "project_add_probe.rs"]
 pub(crate) mod project_add_probe;
 #[cfg(feature = "native-probes")]
+#[path = "scoped_models_probe.rs"]
+pub(crate) mod scoped_models_probe;
+#[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
@@ -347,6 +350,11 @@ impl LocalViewer {
             .map(|root| root.join("settings"))
             .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
         view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
+        let models = cx.new(|cx| {
+            crate::scoped_models_view::ScopedModels::new(Some(options.clone()), window, cx)
+        });
+        view.settings
+            .update(cx, |owner, _| owner.models = Some(models));
         view.settings.update(cx, |owner, cx| owner.load(cx));
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());

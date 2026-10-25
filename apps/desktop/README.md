@@ -6,8 +6,9 @@ This is an experimental draft source checkpoint, not a merge-ready replacement.
 The synthetic fixture, input/selection fixes, bounded Local viewer and explicit
 Local create/send/Stop with private durable drafts are implemented.
 Compact tool/work presentation, adaptive light/dark chrome and a partial native visual reader are implemented.
-The Local viewer has native Appearance Settings with explicit private preference saves;
-the remaining Settings categories are unavailable, not simulated controls.
+The Local viewer has native Appearance Settings with explicit private preference saves
+and Local global Scoped models with explicit native-authorized, CAS-checked saves and readback.
+Other Settings categories are unavailable, not simulated controls.
 The artifact reader remains incomplete, not a replacement/parity claim. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
@@ -40,10 +41,27 @@ resolved before managed close/quit; save errors keep the selection and offer ret
 
 Preferences belong only to Next's private `settings/preferences-v1.json` under its own state
 directory, separate from Swift defaults and draft/delivery state. Opening/loading never
-creates the file. There is no automatic Swift import, credential access or daemon settings
+creates the file. Appearance has no automatic Swift import, credential access or daemon settings
 mutation. Synthetic viewers do not resolve or change production preferences. Updates and
 other missing categories state their gaps explicitly. See `docs/settings-parity.md` and
 `evidence/settings-screen.md` for ownership, supported behavior and qualified checks.
+
+### Local Scoped models
+
+In **Settings → Scoped models**, choose **All authenticated models**, or search and check
+individual models. **Advanced literal patterns…** keeps ordered patterns, duplicates,
+unavailable entries, wildcards and thinking suffixes verbatim. Changes apply only through
+**Save changes** or **Cmd-S**. **Check Local** reads current values without resending a save.
+Conflicts or unconfirmed outcomes retain your selection and block another save until readback
+or explicit, confirmed **Use current pi values** review. Native composition and unsettled
+changes guard managed close; the conversation, unsent draft and reader stay mounted.
+
+This edits only Local pi's global `enabledModels`, not project overrides, defaults, sign-ins,
+current chat models or running work. Reads never acquire native authorization. Explicit Save
+uses the existing host-bound native-action capability; missing/unsupported authorization fails
+closed. There is no remote fanout or automatic write retry. Both daemon success arms require a
+literal GET readback, which confirms current values, not stronger disk durability.
+See [scoped-models.md](docs/scoped-models.md) for bounds, authority and synthetic verification.
 
 ## Use real Local chats
 
@@ -60,7 +78,9 @@ It reads `PILOT_PORT` (default 4319), and the existing `daemon-id` and
 `storage-lineage` under `PILOT_HOME`, or `$XDG_DATA_HOME/pilot`, or
 `~/.local/share/pilot`. Missing/corrupt identities fail closed, never create or
 replace them. Only 127.0.0.1 is accepted; no arbitrary host/URL, proxies,
-redirects, cookies, Origin, GitHub capability token or remote endpoint registry.
+redirects, cookies, Origin or remote endpoint registry. The separate explicit Scoped models
+writer alone reads the existing native-action capability for its allowlisted global-scope PUT;
+the chat and model-scope read transports never do.
 
 **Security boundary:** the current daemon does not authenticate Local
 requests. Loopback + Origin rejection and identity pinning are not cryptographic
