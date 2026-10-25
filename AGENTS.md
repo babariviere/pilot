@@ -52,6 +52,9 @@ Docs to use when the task touches them:
 
 - GPUI desktop components and contracts are indexed in `apps/desktop/docs/design-system.md`.
   Reuse `src/ui.rs` and its compiled native catalog; keep data, control state and guarded callbacks with callers.
+- For Pilot Next GPUI planning, implementation and visual review, read and use
+  [pilot-next-design](.agents/skills/pilot-next-design/SKILL.md). Its calm, just-enough-information
+  workflow applies the existing contracts; generic frontend-design boldness must not override that restraint.
 
 - For interface work, read and use `.agents/skills/frontend-design/SKILL.md` for
   planning and visual critique. Apply it within `DESIGN.md` and the approved product

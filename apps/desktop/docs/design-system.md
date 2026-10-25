@@ -5,6 +5,10 @@ in `src/catalog_probe.rs` compile and paint in the actual synthetic GPUI catalog
 Do not copy styles from a screenshot or add a second theme/framework.
 Paths in this guide are relative to `apps/desktop`.
 
+Use the [Pilot Next design skill](../../../.agents/skills/pilot-next-design/SKILL.md)
+for product hierarchy, progressive disclosure and design review. This guide remains
+the source of truth for components and their contracts, not a second specification.
+
 ## Direction and sources
 
 This is the existing calm native workbench, not a new visual direction. Reconcile:
