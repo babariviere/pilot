@@ -295,6 +295,14 @@ impl ChatEditor {
                     })
                 }),
             )
+            .child(
+                crate::ui::action(
+                    "new-chat-add-project",
+                    "Add project…",
+                    crate::ui::Action::Quiet,
+                )
+                .on_click(_cx.listener(|_, _, _, cx| cx.emit(EditorEvent::AddProject))),
+            )
     }
 }
 

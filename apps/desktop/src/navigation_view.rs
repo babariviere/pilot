@@ -50,7 +50,7 @@ impl LocalViewer {
     ) -> bool {
         // A resource search is newer user intent. Only its explicit activation
         // closes the palette before entering these existing guarded routes.
-        if self.jump.is_some() || self.mission_open {
+        if self.jump.is_some() || self.mission_open || self.add_project_open {
             return false;
         }
         if self.restoring_navigation {

@@ -59,3 +59,4 @@ bash scripts/cargo.sh test --locked --features native-probes --test mission
 bash scripts/cargo.sh test --locked --features native-probes --test project_creation
 # Read-only global mission discovery and existing-chat navigation, owned faux HTTP only.
 bash scripts/cargo.sh test --locked --features native-probes --test missions
+bash scripts/cargo.sh test --locked --features native-probes --test project_add

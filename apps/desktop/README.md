@@ -19,6 +19,17 @@ Local daemon capability; an older daemon is refused without a mutation. The defa
 network-free synthetic transcript and memory-only local-echo composer, without
 disk state. No read-status writes, service installation, updater or default switch.
 
+### Add a Local project
+
+Use **Add project…** beside project browsing or in the new-chat project chooser.
+Choose one existing folder in the native dialog, then confirm **Add project**.
+Cancellation sends nothing. Registration refreshes the canonical catalog but
+never selects a draft destination or creates/starts a chat. Select the project
+explicitly afterward. Lost/error outcomes are retained as unconfirmed and never
+automatically resent; **Refresh projects** observes current availability only.
+See [add-project.md](docs/add-project.md) for the audited contract, bounded private
+attempts, source/input safeguards and synthetic/native verification limits.
+
 ### Appearance Settings
 
 In the Local viewer, use **Settings…** in the sidebar or **Cmd-comma**. The separate native

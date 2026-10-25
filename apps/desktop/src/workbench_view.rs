@@ -82,7 +82,7 @@ impl LocalViewer {
         }
     }
     pub(super) fn project_choices_ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.jump.is_some() || self.mission_open {
+        if self.jump.is_some() || self.mission_open || self.add_project_open {
             return false;
         }
         let q = self.chats.read(cx).query_input();
@@ -154,6 +154,8 @@ impl LocalViewer {
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_projects(w,cx))))
                 .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0()
                     .child(div().h(px((self.state.projects.len().min(5)as f32*30.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects)))))
+                .child(crate::ui::action("add-project","Add project…",crate::ui::Action::Quiet).w_full().justify_start()
+                    .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|v.open_add_project(w,cx))))
                 .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Project list unavailable · last loaded choices retained")))
                 .when(self.project_scope.is_some(),|this|this.child(Button::new("project-overview").ghost().small().w_full().justify_start().accessibility_label("Overview").child(nav_label("project-overview-title","Overview",AppIcon::Overview)).on_click(cx.listener(|v,_,w,cx|{if let Some(id)=v.project_scope.clone(){v.show_project(id,w,cx);}}))))
                 .child(Button::new("nav-all-chats").ghost().small().w_full().justify_start().accessibility_label("All chats").child(nav_label("nav-all-chats-title","All chats",AppIcon::Chats)).selected(self.page==Page::Chat&&self.project_scope.is_none()).on_click(cx.listener(|v,_,w,cx|v.show_chats(w,cx))))

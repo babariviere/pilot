@@ -29,6 +29,11 @@ pub(crate) mod motion_probe;
 pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]
 mod navigation_view;
+#[path = "project_add_navigation.rs"]
+mod project_add_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "project_add_probe.rs"]
+pub(crate) mod project_add_probe;
 #[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
@@ -243,6 +248,10 @@ pub struct LocalViewer {
     mission: Entity<crate::mission_view::MissionForm>,
     mission_open: bool,
     mission_return: Option<gpui_kit::FocusHandle>,
+    add_project: Entity<crate::project_add_view::ProjectAdd>,
+    add_project_open: bool,
+    add_project_return: Option<gpui_kit::FocusHandle>,
+    project_catalog_reply: Option<String>,
     navigation: crate::navigation::History,
     navigation_seeded: bool,
     restoring_navigation: bool,
@@ -285,6 +294,16 @@ pub struct LocalViewer {
 impl LocalViewer {
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
+            KeyBinding::new(
+                "secondary-enter",
+                crate::project_add_view::ConfirmProject,
+                Some("AddProject"),
+            ),
+            KeyBinding::new(
+                "escape",
+                crate::project_add_view::CancelProject,
+                Some("AddProject"),
+            ),
             KeyBinding::new(
                 "secondary-enter",
                 crate::mission_view::ConfirmMission,
@@ -377,6 +396,24 @@ impl LocalViewer {
             while let Ok(state) = write_updates.recv().await {
                 if view
                     .update_in(cx, |view, window, cx| {
+                        view.add_project
+                            .update(cx, |form, cx| form.accept(&state, cx));
+                        if let Some(reply) = &state.project
+                            && let Some(catalog) = &reply.catalog
+                            && view.project_catalog_reply.as_ref() != Some(&reply.id)
+                        {
+                            view.project_catalog_reply = Some(reply.id.clone());
+                            match catalog {
+                                Ok(rows) => {
+                                    view.state.projects = Arc::new(rows.clone());
+                                    view.state.projects_loaded = true;
+                                    view.state.projects_error = None;
+                                }
+                                Err(error) => view.state.projects_error = Some(error),
+                            }
+                            view.rebuild_nav(window, cx);
+                            cx.notify();
+                        }
                         let had_attempt = view
                             .selected
                             .as_ref()
@@ -820,6 +857,14 @@ impl LocalViewer {
                 }
             },
         );
+        let add_project = cx.new(|cx| crate::project_add_view::ProjectAdd::new(writer.clone(), cx));
+        let add_project_events = cx.subscribe_in(&add_project, window, |v, _, _, w, cx| {
+            v.add_project_open = false;
+            if let Some(f) = v.add_project_return.take() {
+                f.focus(w, cx);
+            }
+            cx.notify();
+        });
         let mission_events = cx.subscribe_in(&mission, window, |view, _, _, window, cx| {
             view.mission_open = false;
             if let Some(focus) = view.mission_return.take() {
@@ -829,6 +874,7 @@ impl LocalViewer {
         });
         let editor_events =
             cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
+                EditorEvent::AddProject => view.open_add_project(window, cx),
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
                 EditorEvent::Flushed => cx.quit(),
                 EditorEvent::StopRequested { key } => {
@@ -946,6 +992,10 @@ impl LocalViewer {
             mission,
             mission_open: false,
             mission_return: None,
+            add_project,
+            add_project_open: false,
+            add_project_return: None,
+            project_catalog_reply: None,
             nav_projects: Arc::new(Vec::new()),
             pending_transcript: None,
             nav_error: None,
@@ -963,6 +1013,7 @@ impl LocalViewer {
                 subscription,
                 mission_events,
                 missions_events,
+                add_project_events,
                 editor_events,
                 artifact_events,
                 history_events,
@@ -1512,6 +1563,10 @@ impl Render for LocalViewer {
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
+                if v.add_project_open {
+                    let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
+                    if modified && !matches!(e.keystroke.key.as_str(),"c"|"q"|"enter") {cx.stop_propagation();}
+                }
                 if v.mission_open {
                     let marked=v.mission.update(cx,|f,cx|f.marked(w,cx));
                     let key=e.keystroke.key.as_str();let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
@@ -1528,7 +1583,7 @@ impl Render for LocalViewer {
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
-                if view.jump.is_none() && !view.mission_open && view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
+                if view.jump.is_none() && !view.mission_open && !view.add_project_open && view.page==Page::Chat && !view.artifacts_open && view.selected.is_some() {
                     view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
                 }
             }))
@@ -1538,7 +1593,7 @@ impl Render for LocalViewer {
                 if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
-                if view.jump.is_some()||view.mission_open{return;}
+                if view.jump.is_some()||view.mission_open||view.add_project_open{return;}
                 if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
@@ -1548,7 +1603,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
-            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
+            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open&&!view.add_project_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
             .child(self.sidebar(window,cx))
             .child(
                 if matches!(self.page,Page::Missions|Page::Mission(_)) {
@@ -1593,6 +1648,7 @@ impl Render for LocalViewer {
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
             .when(self.mission_open,|this|this.child(self.mission_overlay(window,cx)))
+            .when(self.add_project_open,|this|this.child(self.add_project_overlay(window,cx)))
     }
 }
 #[cfg(test)]
