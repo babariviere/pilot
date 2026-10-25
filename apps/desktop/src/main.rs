@@ -1,9 +1,12 @@
 use gpui_kit::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
-use pilot_desktop::{LocalOptions, LocalViewer, TranscriptView, fence_fixture, giant_fixture};
+use pilot_desktop::{
+    BundledRuntimeView, LocalOptions, LocalViewer, TranscriptView, fence_fixture, giant_fixture,
+};
 
 enum Desktop {
     Fixture(gpui_kit::Entity<TranscriptView>),
     Local(gpui_kit::Entity<LocalViewer>),
+    Bundled(gpui_kit::Entity<BundledRuntimeView>),
 }
 impl gpui_kit::Render for Desktop {
     fn render(
@@ -15,6 +18,7 @@ impl gpui_kit::Render for Desktop {
         match self {
             Self::Fixture(view) => view.clone().into_any_element(),
             Self::Local(view) => view.clone().into_any_element(),
+            Self::Bundled(view) => view.clone().into_any_element(),
         }
     }
 }
@@ -30,6 +34,13 @@ fn main() {
         return;
     }
     let local = args.as_slice() == ["--local"];
+    let bundled = pilot_desktop::bundled_runtime::requested(
+        &args,
+        &std::env::current_exe().unwrap_or_else(|_| {
+            eprintln!("Cannot locate this app executable.");
+            std::process::exit(1);
+        }),
+    );
     let options = if local {
         Some(LocalOptions::discover().unwrap_or_else(|error| {
             eprintln!("{error}");
@@ -46,11 +57,12 @@ fn main() {
     {
         [] => None,
         ["--local"] => None,
+        ["--bundled"] => None,
         ["--fixture", "giant"] => Some(giant_fixture()),
         ["--fixture", "fence"] => Some(fence_fixture()),
         ["--help"] => {
             println!(
-                "Pilot Next.\n--local: Local chats, explicit create/send/Stop and private durable drafts.\nExisting loopback API, no request authentication. Full hello identity is pinned.\nNo approvals, archive or read-status writes. --local-check stays read-only.\nNo args: synthetic fixture, memory-only local echo, no network or disk state.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to save and exit."
+                "Pilot Next.\n--bundled: guarded bundled Local runtime, arm64 macOS only.\n--local: explicit existing-daemon mode, Local chats/create/send/Stop and private durable drafts.\nExisting loopback API, no request authentication. Full hello identity is pinned.\nNo approvals, archive or read-status writes. --local-check stays read-only.\nNo args: packaged app uses its guarded runtime; unbundled executable uses a synthetic fixture.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to save and exit."
             );
             return;
         }
@@ -88,13 +100,17 @@ fn main() {
                 cx,
                 |window, cx| {
                     pilot_desktop::follow_appearance(window, cx);
-                    window.set_window_title(if local {
+                    window.set_window_title(if bundled {
+                        "Pilot Next · Starting Local"
+                    } else if local {
                         "Pilot Next · Local"
                     } else {
                         "Pilot Next · synthetic fixture"
                     });
                     cx.new(|cx| {
-                        if let Some(options) = options {
+                        if bundled {
+                            Desktop::Bundled(cx.new(|cx| BundledRuntimeView::new(window, cx)))
+                        } else if let Some(options) = options {
                             Desktop::Local(cx.new(|cx| LocalViewer::new(options, window, cx)))
                         } else {
                             Desktop::Fixture(

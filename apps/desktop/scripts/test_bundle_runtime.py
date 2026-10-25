@@ -1,0 +1,176 @@
+"""Portable synthetic staging fixtures. Mocked signing is NOT macOS bundle verification."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import bundle_runtime as bundle
+
+
+class BundleRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="next-bundle-faux-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.runtime = self.root / "runtime"
+        self.executables = self.root / "executables"
+        self.native = self.root / "native"
+        self.output = self.root / "Pilot Next.app"
+        self.source = "a" * 40
+        for directory in (self.runtime, self.executables, self.native):
+            directory.mkdir()
+        for name in bundle.REQUIRED:
+            path = self.runtime / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("synthetic resource")
+        bundle.write_json(self.runtime / "package.json", dict(version="1.64.0"))
+        bundle.write_json(self.runtime / "runtime-build.json", dict(schema=1, source=self.source, version="1.64.0", protocol=1, platform="darwin", arch="arm64", node="24.21.0"))
+        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker"]),
+                                 (self.native, ["PilotPower", "PilotSystemEvents"])]:
+            binaries = []
+            for name in names:
+                path = directory / name
+                path.write_text("faux executable, never executed")
+                path.chmod(0o755)
+                binaries.append(dict(name=name, bytes=path.stat().st_size, sha256=bundle.digest(path)))
+            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", binaries=binaries))
+
+    def assemble(self):
+        with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+
+    def test_relocatable_closed_inventory_without_checkout_or_external_runtime(self):
+        link = self.runtime / "node_modules/@pilot/daemon"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../../packages/daemon")
+        self.assemble()
+        relocated = self.root / "unrelated" / "Pilot Next.app"
+        relocated.parent.mkdir()
+        shutil.move(self.output, relocated)
+        shutil.rmtree(self.runtime)
+        shutil.rmtree(self.executables)
+        shutil.rmtree(self.native)
+        bundle.verify(relocated)
+        manifest = bundle.read_json(relocated / bundle.MANIFEST)
+        self.assertEqual(manifest["build"]["source"], self.source)
+        self.assertTrue((relocated / "Contents/Resources/runtime/node_modules/@pilot/daemon/src/main.ts").is_file())
+
+    def test_runtime_source_arch_protocol_version_and_node_mismatch(self):
+        path = self.runtime / "runtime-build.json"
+        original = bundle.read_json(path)
+        for changes in [dict(source="b" * 40), dict(arch="x86_64"), dict(protocol=2), dict(version="0.0.0"), dict(node="22.0.0")]:
+            with self.subTest(changes=changes):
+                bundle.write_json(path, original | changes)
+                with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                    self.assemble()
+                self.assertFalse(self.output.exists())
+        bundle.write_json(path, original)
+
+    def test_missing_required_resources_are_not_masked_by_developer_modules(self):
+        for name in bundle.REQUIRED:
+            with self.subTest(name=name):
+                path = self.runtime / name
+                original = path.read_bytes()
+                path.unlink()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.assemble()
+                path.write_bytes(original)
+
+    def test_source_and_executable_receipts_must_match(self):
+        (self.executables / "pilot-desktop").write_text("wrong build")
+        with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+            self.assemble()
+        self.assertFalse(self.output.exists())
+
+    def test_escape_links_and_unsafe_file_objects_are_refused_before_copy(self):
+        link = self.runtime / "escape"
+        link.symlink_to("../executables")
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            self.assemble()
+        link.unlink()
+        link.symlink_to(self.executables)
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            self.assemble()
+        link.unlink()
+        os.mkfifo(link)
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            self.assemble()
+        self.assertFalse(self.output.exists())
+
+    def test_tamper_added_missing_truncated_and_duplicate_manifest_data(self):
+        self.assemble()
+        manifest = self.output / bundle.MANIFEST
+        original = manifest.read_bytes()
+        for raw in [b"{", b'{"schema":1,"schema":1}', b"x" * (8 * 1024**2 + 1)]:
+            manifest.write_bytes(raw)
+            with self.assertRaises((ValueError, json.JSONDecodeError)):
+                bundle.verify(self.output)
+        manifest.write_bytes(original)
+        path = self.output / "Contents/Resources/runtime/node/bin/node"
+        path.write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "inventory/hash mismatch"):
+            bundle.verify(self.output)
+
+    def test_existing_destination_is_never_replaced_or_deleted(self):
+        self.output.mkdir()
+        retained = self.output / "retained"
+        retained.write_text("untouched")
+        with self.assertRaisesRegex(ValueError, "fresh output"):
+            self.assemble()
+        self.assertEqual(retained.read_text(), "untouched")
+
+    def test_platform_signing_failure_removes_only_fresh_staging(self):
+        with patch.object(bundle, "native_closure", side_effect=ValueError("wrong native architecture")):
+            with self.assertRaisesRegex(ValueError, "architecture"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+        self.assertFalse(self.output.exists())
+        self.assertTrue((self.runtime / "node/bin/node").exists())
+
+    def test_outer_build_metadata_must_match_the_hashed_runtime_stamp(self):
+        self.assemble()
+        path = self.output / bundle.MANIFEST
+        original = bundle.read_json(path)
+        for change in [dict(arch="x86_64"), dict(version="0.0.0"), dict(node="22.0.0")]:
+            with self.subTest(change=change):
+                value = original | {"build": original["build"] | change}
+                bundle.write_json(path, value)
+                with self.assertRaisesRegex(ValueError, "identity mismatch"):
+                    bundle.verify(self.output)
+
+    @unittest.skipUnless(sys.platform == "darwin" and os.environ.get("PILOT_DESKTOP_BUNDLE_NATIVE_TEST") == "1",
+                         "explicit macOS faux-Mach-O packaging lane only")
+    def test_native_faux_bundle_signs_and_relocates_without_installing_or_running(self):
+        # Real macOS tools, five synthetic executables. No Swift, real daemon,
+        # LaunchServices registration, application launch, user profile or production artifact.
+        source, binary = self.root / "faux.c", self.root / "faux-executable"
+        source.write_text("int main(void) { return 0; }\n")
+        subprocess.run(["/usr/bin/xcrun", "clang", "-target", "arm64-apple-macos15.0", str(source), "-o", str(binary)], check=True, timeout=30)
+        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker"]),
+                                 (self.native, ["PilotPower", "PilotSystemEvents"])]:
+            entries = []
+            for name in names:
+                shutil.copyfile(binary, directory / name)
+                (directory / name).chmod(0o755)
+                entries.append(dict(name=name, bytes=(directory / name).stat().st_size, sha256=bundle.digest(directory / name)))
+            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", binaries=entries))
+        node = self.runtime / "node/bin/node"
+        shutil.copyfile(binary, node)
+        node.chmod(0o755)
+        bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+        moved = self.root / "relocated" / "Pilot Next.app"
+        moved.parent.mkdir()
+        shutil.move(self.output, moved)
+        shutil.rmtree(self.runtime)
+        shutil.rmtree(self.executables)
+        shutil.rmtree(self.native)
+        bundle.verify(moved)
+        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(moved)], check=True, timeout=30)
+
+
+if __name__ == "__main__":
+    unittest.main()

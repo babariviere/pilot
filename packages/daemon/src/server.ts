@@ -324,6 +324,7 @@ export function createDaemonServer(
 	githubImport?: GitHubImportService,
 	catalog?: MissionCatalogSources,
 	environment?: import("./environment.ts").EnvironmentService,
+	bootstrap?: import("./runtime-owner.ts").RuntimeOwner,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
@@ -1660,7 +1661,7 @@ export function createDaemonServer(
 		throw new HttpError(404, "Not found");
 	};
 
-	const server = createServer((req, res) => {
+	const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
 		// Requests still open when the event loop stalls are reported with it. IDs stay local to the log.
 		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
 		res.once("close", done);
@@ -1715,7 +1716,8 @@ export function createDaemonServer(
 			if (!res.headersSent) json(res, status, { error: message });
 			else res.end();
 		});
-	});
+	};
+	const server = bootstrap ? (bootstrap.install(handleRequest), bootstrap.server) : createServer(handleRequest);
 
 	// The control socket carries only small subscription messages. Terminal pastes use the terminal socket.
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });

@@ -36,6 +36,7 @@ import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { RetiredDevboxes } from "./retired-devboxes.ts";
+import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
@@ -329,10 +330,12 @@ const server = createDaemonServer(
 	githubImport,
 	undefined,
 	environment,
+	runtimeOwner,
 );
-server.listen(config.port, config.host, () => {
+if (runtimeOwner) {
+	runtimeOwner.ready(hello);
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
-});
+} else throw new Error("Daemon profile owner is required");
 
 let stopping = false;
 async function stop(): Promise<void> {

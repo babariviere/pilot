@@ -1,4 +1,7 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
+pub mod bundled_runtime;
+mod bundled_runtime_view;
+pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_editor;
