@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.68.0](https://github.com/babariviere/pilot/compare/v1.67.0...v1.68.0) (2026-10-26)
+
+
+### Features
+
+* **desktop:** add guarded composer path completion ([a6e8486](https://github.com/babariviere/pilot/commit/a6e848603d137b4371ee056bffa1b77a19b45105))
+* **desktop:** fold long messages with exact source copy ([3c71cd8](https://github.com/babariviere/pilot/commit/3c71cd8e5aab30b3ddd609f04a65b0230410b0cc))
+* **desktop:** render bounded native Mermaid flowcharts ([ff47da9](https://github.com/babariviere/pilot/commit/ff47da9eb49e015fce45010d1ff31e93bfc477df))
+
+
+### Bug Fixes
+
+* **desktop:** fold only user messages with footer controls ([367dd60](https://github.com/babariviere/pilot/commit/367dd600f302318d5529ec89ac3c2ae583a0f9c8))
+* **desktop:** place message expansion below the preview ([a4bb509](https://github.com/babariviere/pilot/commit/a4bb50946f685a1e04948fb34c4d979b639e680b))
+* **updater:** gate native-only helpers by configuration ([b8387ea](https://github.com/babariviere/pilot/commit/b8387ea44713c60765aab9bdb670495f9e95797e))
+
 ## [1.67.0](https://github.com/babariviere/pilot/compare/v1.66.0...v1.67.0) (2026-10-26)
 
 
