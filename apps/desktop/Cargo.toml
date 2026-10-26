@@ -224,3 +224,9 @@ name = "composer_controls"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "mission_brief"
+harness = false
+test = false
+required-features = ["native-probes"]

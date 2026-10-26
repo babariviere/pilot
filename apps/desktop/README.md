@@ -175,6 +175,12 @@ The catalog API is partial beyond 50 rows/24 KB and has no pagination; that gap
 is shown explicitly. Client response, context and display limits also remain
 visible instead of claiming full management. See [contracts, bounds and evidence](docs/mission-browser.md).
 
+The Local mission overview also offers **Open brief workspace** for bounded
+Markdown-source reading, immutable revision history and explicit revision-checked
+editing. Per-source drafts survive navigation within the window. Conflicts retain
+text; unknown writes are never settled by later reads or retried automatically.
+This is not restart-durable draft storage. See [brief contracts and limits](docs/mission-brief.md).
+
 ### Make an existing chat a mission
 
 In an eligible Local chat, choose **Make a mission…**. Review the title and optional

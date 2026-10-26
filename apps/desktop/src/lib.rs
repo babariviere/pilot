@@ -34,6 +34,15 @@ mod mission_activity_reader;
 mod mission_activity_view;
 #[cfg(feature = "native-probes")]
 pub use mission_browser_view::mission_activity_probe::run_mission_activity_probe;
+mod mission_brief;
+#[cfg(any(test, feature = "native-probes"))]
+mod mission_brief_fixture;
+#[cfg(feature = "native-probes")]
+mod mission_brief_probe;
+mod mission_brief_reader;
+mod mission_brief_view;
+#[cfg(feature = "native-probes")]
+pub use mission_brief_probe::run_mission_brief_probe;
 mod mission_browser;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_browser_fixture;

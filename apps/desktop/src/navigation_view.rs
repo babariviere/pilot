@@ -53,6 +53,9 @@ impl LocalViewer {
         if self.jump.is_some() || self.mission_open || self.add_project_open {
             return false;
         }
+        if self.missions.update(cx, |m, cx| m.brief_marked(window, cx)) {
+            return false;
+        }
         if self.restoring_navigation {
             return true;
         }
@@ -82,6 +85,49 @@ impl LocalViewer {
             self.reader_marks.put(id.clone(), mark);
         }
         true
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn brief_fixture_setup(
+        &mut self,
+        options: LocalOptions,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::mission_browser_view::Browser> {
+        self.state.status = "Synthetic Local brief workspace".into();
+        self.state.projects=Arc::new(crate::local_model::projects(&serde_json::json!([{"id":"project-A","name":"Synthetic brief project","path":"/synthetic/A"}])).unwrap());
+        self.state.projects_loaded = true;
+        self.state.list_loaded = true;
+        self.missions.update(cx, |m, _| m.options(options));
+        self.page = Page::Missions;
+        self.rebuild_nav(w, cx);
+        cx.notify();
+        self.missions.clone()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn brief_fixture_bits(&self) -> (bool, bool, bool, bool) {
+        (
+            matches!(self.page, Page::Mission(_)),
+            self.jump.is_some(),
+            self.settings_window.is_some(),
+            self.projects_open,
+        )
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn brief_fixture_restoring_guard(
+        &mut self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.restoring_navigation = true;
+        let allowed = self.prepare_navigation(w, cx);
+        self.restoring_navigation = false;
+        allowed
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn brief_fixture_close_settings(&mut self, cx: &mut Context<Self>) {
+        if let Some(h) = self.settings_window.take() {
+            let _ = h.update(cx, |_, w, _| w.remove_window());
+        }
     }
     pub(super) fn save_scope(&mut self, cx: &App) {
         let list = self.chats.read(cx);

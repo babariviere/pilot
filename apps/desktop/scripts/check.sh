@@ -86,3 +86,5 @@ bash scripts/cargo.sh test --locked --features native-probes --test composer_con
 # Bounded read-only mission activity.
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission_activity -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission_activity
+bash scripts/cargo.sh clippy --locked --features native-probes --test mission_brief -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test mission_brief

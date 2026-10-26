@@ -71,6 +71,8 @@ pub(crate) struct Browser {
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
     activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
     activity_open: bool,
+    pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
+    brief_events: Option<gpui_kit::Subscription>,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
@@ -99,6 +101,8 @@ impl Browser {
             detail_scroll: gpui_kit::ScrollHandle::default(),
             activity_browser: None,
             activity_open: false,
+            brief: None,
+            brief_events: None,
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
@@ -190,6 +194,90 @@ impl Browser {
         } else if changed {
             cx.notify();
         }
+        let source = self.brief_source();
+        if let Some(brief) = &self.brief {
+            brief.update(cx, |v, cx| v.sync(source.as_ref(), self.online, cx));
+        }
+    }
+    fn brief_source(&self) -> Option<crate::mission_brief::Source> {
+        let Some(Route::Detail(key)) = &self.route else {
+            return None;
+        };
+        let d = self.detail.as_ref().filter(|d| &d.key == key)?;
+        if self.local_home().as_ref() != Some(&key.home) {
+            return None;
+        }
+        Some(crate::mission_brief::Source {
+            key: key.clone(),
+            project: d.project.clone(),
+        })
+    }
+    pub(crate) fn brief_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.brief
+            .as_ref()
+            .is_some_and(|brief| brief.update(cx, |v, cx| v.visible && v.marked(w, cx)))
+    }
+    pub(crate) fn open_brief(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.busy || self.error.is_some() || !self.online || self.brief_marked(w, cx) {
+            return;
+        }
+        let (Some(options), Some(source)) = (self.options.clone(), self.brief_source()) else {
+            return;
+        };
+        if let Some(brief) = &self.brief {
+            if !brief.read(cx).matches_options(&options) {
+                self.error = Some(
+                    "Brief workspace belongs to another Local connection. Existing drafts and save outcomes were retained; reopen this window to change profiles.",
+                );
+                cx.notify();
+                return;
+            }
+        } else {
+            let brief = cx.new(|cx| crate::mission_brief_view::Workspace::new(options, w, cx));
+            self.brief_events = Some(cx.subscribe_in(
+                &brief,
+                w,
+                |v, _, _: &crate::mission_brief_view::Event, w, cx| {
+                    if let Some(brief) = &v.brief {
+                        let owned = brief.read(cx).owns_focus(w, cx);
+                        if brief.update(cx, |b, cx| b.marked(w, cx)) {
+                            return;
+                        }
+                        brief.update(cx, |b, cx| b.hide(cx));
+                        let key = v.brief_source().map(|s| s.key).filter(|key| {
+                            v.catalog.as_ref().is_some_and(|c| {
+                                c.rows
+                                    .iter()
+                                    .any(|r| r.key == *key && r.local_definition(&key.home))
+                            })
+                        });
+                        v.tasks_browser
+                            .update(cx, |p, cx| p.sync(key, v.options.clone(), w, cx));
+                        if owned {
+                            v.focus(w, cx);
+                        }
+                    }
+                    cx.notify();
+                },
+            ));
+            self.brief = Some(brief);
+        }
+        let title: SharedString = self
+            .detail
+            .as_ref()
+            .map(|d| d.title.clone())
+            .unwrap_or_default()
+            .into();
+        if self.activity_open {
+            self.hide_activity(w, cx);
+        }
+        if let Some(brief) = &self.brief
+            && brief.update(cx, |v, cx| v.show(source, title, self.online, w, cx))
+        {
+            self.tasks_browser
+                .update(cx, |p, cx| p.sync(None, self.options.clone(), w, cx));
+        }
+        cx.notify();
     }
     fn link_availability_changed(&self, chats: &[Chat]) -> bool {
         self.detail.as_ref().is_some_and(|d| {
@@ -400,6 +488,7 @@ impl Browser {
         cx: &mut Context<Self>,
     ) {
         if !self.current(generation)
+            || self.brief_marked(w, cx)
             || !self.online
             || self.route != Some(Route::Detail(key.clone()))
             || self.local_home().as_ref() != Some(&key.home)
@@ -410,6 +499,9 @@ impl Browser {
         let Some(options) = self.options.clone() else {
             return;
         };
+        if let Some(brief) = &self.brief {
+            brief.update(cx, |b, cx| b.hide(cx));
+        }
         if self.activity_browser.is_none() {
             let activity = cx.new(crate::mission_activity_view::Activity::new);
             cx.subscribe_in(
@@ -468,6 +560,17 @@ impl Render for Browser {
             && let Some(activity) = &self.activity_browser
         {
             return div().size_full().child(activity.clone()).into_any_element();
+        }
+        if let Some(brief) = self.brief.as_ref().filter(|b| b.read(cx).visible) {
+            return div()
+                .id("missions-page")
+                .test_support()
+                .track_focus(&self.focus)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .child(brief.clone())
+                .into_any_element();
         }
         let generation = self.generation;
         let is_list = self.route == Some(Route::Catalog);
@@ -756,6 +859,20 @@ impl Render for Browser {
                 "Brief",
                 Text::Headline,
             ));
+            content = content.child(
+                ui::action(
+                    "mission-open-brief",
+                    "Open brief workspace",
+                    Action::Secondary,
+                )
+                .self_start()
+                .disabled(!self.online || self.busy || self.error.is_some())
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    if v.generation == generation {
+                        v.open_brief(w, cx);
+                    }
+                })),
+            );
             if let Some(text) = &d.brief {
                 let copy = text.clone();
                 let key = d.key.clone();
