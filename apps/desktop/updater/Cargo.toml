@@ -28,6 +28,11 @@ name = "pilot-desktop-update-helper"
 path = "src/bin/update-helper.rs"
 required-features = ["native-macos"]
 
+[[example]]
+name = "lifecycle-fixture"
+path = "examples/lifecycle-fixture.rs"
+required-features = ["native-macos"]
+
 [profile.dev]
 debug = 0
 

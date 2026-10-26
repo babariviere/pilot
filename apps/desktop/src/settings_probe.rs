@@ -357,6 +357,33 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                 assert!(window.find("settings-page-title").visible());
             })
             .unwrap();
+            cx.update_window(handle, |_, window, cx| {
+                assert!(window.find("updates-automatic").visible());
+                assert!(window.find("updates-check").visible());
+                assert!(window.try_find("updates-install").is_none());
+                window.click("updates-automatic", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update(|cx| {
+                assert!(owner.read(cx).state.dirty());
+                assert!(owner.read(cx).state.current().automatic_update_checks);
+            });
+            cx.update_window(handle, |_, window, cx| window.click("settings-save", cx))
+                .unwrap();
+            await_state(cx, handle, &owner, |state| {
+                state.persisted() && state.current().automatic_update_checks
+            });
+            cx.update_window(handle, |_, window, cx| {
+                window.click("updates-automatic", cx)
+            })
+            .unwrap();
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, cx| window.click("settings-save", cx))
+                .unwrap();
+            await_state(cx, handle, &owner, |state| {
+                state.persisted() && !state.current().automatic_update_checks
+            });
             capture(
                 cx,
                 handle,
@@ -364,6 +391,7 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                 &screenshot_name(width, mode, "updates-unavailable"),
             );
             cx.update_window(handle, |_, window, cx| {
+                pane.update(cx, |pane, cx| pane.focus_categories(window, cx));
                 window.press("down", cx);
                 window.press("enter", cx);
             })
@@ -494,7 +522,10 @@ fn state_scenes(
         &screenshot_name(width, mode, "loading-disabled"),
     );
     owner.update(cx, |owner, cx| {
-        owner.state = loaded(Preferences { appearance, ..Default::default() });
+        owner.state = loaded(Preferences {
+            appearance,
+            ..Default::default()
+        });
         owner.state.set_appearance(AppearancePreference::System);
         owner.state.begin_save();
         cx.notify();

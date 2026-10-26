@@ -1,5 +1,6 @@
 """Portable synthetic staging fixtures. Mocked signing is NOT macOS bundle verification."""
 import json
+import plistlib
 import os
 from pathlib import Path
 import shutil
@@ -10,9 +11,23 @@ import unittest
 from unittest.mock import patch
 
 import bundle_runtime as bundle
+import make_dev_icon
 
 
 class BundleRuntimeTests(unittest.TestCase):
+    def test_native_deployment_metadata_requires_macos_15_or_older(self):
+        current="Load command 1\n cmd LC_BUILD_VERSION\n platform 1\n minos 15.0\n sdk 26.2\n"
+        self.assertTrue(bundle.supports_macos_15(current))
+        self.assertTrue(bundle.supports_macos_15("Load command 0\n cmd LC_VERSION_MIN_MACOSX\n version 11.0\n"))
+        for bad in ("",current.replace("15.0","15.0.1"),current.replace("platform 1","platform 2"),current.replace("minos 15.0","minos unknown")):
+            self.assertFalse(bundle.supports_macos_15(bad))
+    def test_next_development_icon_is_deterministic_and_self_contained(self):
+        first = make_dev_icon.icon()
+        self.assertEqual(first, make_dev_icon.icon())
+        self.assertEqual(first[:4], b"icns")
+        self.assertEqual(int.from_bytes(first[4:8], "big"), len(first))
+        self.assertIn(b"ic09", first)
+        self.assertIn(b"\x89PNG\r\n\x1a\n", first)
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="next-bundle-faux-")
         self.addCleanup(self.temporary.cleanup)
@@ -30,7 +45,7 @@ class BundleRuntimeTests(unittest.TestCase):
             path.write_text("synthetic resource")
         bundle.write_json(self.runtime / "package.json", dict(version="1.64.0"))
         bundle.write_json(self.runtime / "runtime-build.json", dict(schema=1, source=self.source, version="1.64.0", protocol=1, platform="darwin", arch="arm64", node="24.21.0"))
-        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker"]),
+        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"]),
                                  (self.native, ["PilotPower", "PilotSystemEvents"])]:
             binaries = []
             for name in names:
@@ -38,7 +53,7 @@ class BundleRuntimeTests(unittest.TestCase):
                 path.write_text("faux executable, never executed")
                 path.chmod(0o755)
                 binaries.append(dict(name=name, bytes=path.stat().st_size, sha256=bundle.digest(path)))
-            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", binaries=binaries))
+            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", updater_configuration=dict(schema=1, mode="unconfigured"), binaries=binaries))
 
     def assemble(self):
         with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
@@ -86,6 +101,36 @@ class BundleRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receipt mismatch"):
             self.assemble()
         self.assertFalse(self.output.exists())
+
+    def test_version_helper_and_exact_runtime_policy_are_sealed_resources(self):
+        self.assemble()
+        with (self.output / "Contents/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        self.assertEqual(info["CFBundleVersion"], "1.64.0")
+        self.assertEqual(info["CFBundleShortVersionString"], "1.64.0")
+        self.assertNotEqual(info["CFBundleIdentifier"], "com.babariviere.pilot")
+        self.assertTrue((self.output / "Contents/Helpers/pilot-desktop-update-helper").is_file())
+        self.assertEqual(bundle.read_json(self.output / "Contents/Resources/update-runtime-policy.json"), dict(schema=1, accepted_capsules=[]))
+        self.assertTrue((self.output / "Contents/Resources/updater-inputs.json").is_file())
+
+    def test_missing_helper_mismatched_configuration_and_unbounded_policy_are_refused(self):
+        helper = self.executables / "pilot-desktop-update-helper"
+        original = helper.read_bytes()
+        helper.unlink()
+        with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+            self.assemble()
+        helper.write_bytes(original)
+        path = self.executables / "manifest.json"
+        original_receipt = bundle.read_json(path)
+        # A separate helper receipt must identify exactly the GUI's compiled public configuration.
+        separate = self.root / "updater"
+        shutil.copytree(self.executables, separate)
+        bundle.write_json(separate / "manifest.json", original_receipt | {"updater_configuration": "different"})
+        with self.assertRaisesRegex(ValueError, "configuration receipts differ"):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, separate)
+        for policy in [["wrong"], ["a" * 64] * 2, [str(i) * 64 for i in range(5)]]:
+            with self.subTest(policy=policy), self.assertRaisesRegex(ValueError, "exact bounded"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, accepted_capsules=policy)
 
     def test_escape_links_and_unsafe_file_objects_are_refused_before_copy(self):
         link = self.runtime / "escape"
@@ -150,14 +195,14 @@ class BundleRuntimeTests(unittest.TestCase):
         source, binary = self.root / "faux.c", self.root / "faux-executable"
         source.write_text("int main(void) { return 0; }\n")
         subprocess.run(["/usr/bin/xcrun", "clang", "-target", "arm64-apple-macos15.0", str(source), "-o", str(binary)], check=True, timeout=30)
-        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker"]),
+        for directory, names in [(self.executables, ["pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"]),
                                  (self.native, ["PilotPower", "PilotSystemEvents"])]:
             entries = []
             for name in names:
                 shutil.copyfile(binary, directory / name)
                 (directory / name).chmod(0o755)
                 entries.append(dict(name=name, bytes=(directory / name).stat().st_size, sha256=bundle.digest(directory / name)))
-            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", binaries=entries))
+            bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", updater_configuration=dict(schema=1, mode="unconfigured"), binaries=entries))
         node = self.runtime / "node/bin/node"
         shutil.copyfile(binary, node)
         node.chmod(0o755)

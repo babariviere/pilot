@@ -101,6 +101,17 @@ pub(crate) struct Pane {
     models: Vec<(Entity<crate::task_model_view::Form>, Subscription)>,
 }
 impl Pane {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_safe(&self) -> bool {
+        self.creation.is_none()
+            && self.creations.is_empty()
+            && self.status_form.is_none()
+            && self.statuses.is_empty()
+            && self.edit_form.is_none()
+            && self.edits.is_empty()
+            && self.model_form.is_none()
+            && self.models.is_empty()
+    }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {
             state: State::default(),

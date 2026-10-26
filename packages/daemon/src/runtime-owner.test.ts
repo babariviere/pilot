@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -7,6 +8,7 @@ import { test } from "node:test";
 import release from "../../../package.json" with { type: "json" };
 import { daemonHello } from "./hello.ts";
 import { inspectRuntime, OWNER_FILE, ownRuntime, type RuntimeBuild } from "./runtime-owner.ts";
+import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 
 const build: RuntimeBuild = {
 	schema: 1,
@@ -128,4 +130,77 @@ test("symlinked profile/lease, malformed/truncated and oversized owner records a
 	await rm(join(home, OWNER_FILE));
 	await symlink(join(home, "retained"), join(home, OWNER_FILE));
 	await assert.rejects(ownRuntime(home, p, true, build));
+});
+
+test("native update proof pins boot/root and an uninterrupted idle reservation without lifecycle signals", async (t) => {
+	const home = await fixture(t),
+		p = await port();
+	const runtimeRoot = "/synthetic/immutable/Contents/Resources/runtime";
+	const owner = await ownRuntime(home, p, true, build, runtimeRoot);
+	let frozen = 0,
+		clock = 0;
+	const gate = new UpdateReservation(
+		{
+			freezeAdmissions() {
+				frozen++;
+				return () => {
+					frozen--;
+				};
+			},
+			async blockers() {
+				return [];
+			},
+		},
+		() => clock,
+		100,
+	);
+	t.after(async () => {
+		gate.close();
+		await owner.close();
+	});
+	owner.updates(async (action, value) => {
+		const receipt = value as ReservationReceipt;
+		if (action === "prepare") return gate.prepare(receipt.operationId);
+		if (action === "cancel") {
+			gate.cancel(receipt);
+			return receipt;
+		}
+		return gate.verify(receipt);
+	});
+	owner.ready(await daemonHello(home, capabilities));
+	const record = JSON.parse(await readFile(join(home, ".daemon-owner.json"), "utf8"));
+	assert.equal(record.runtimeRoot, runtimeRoot);
+	const mac = (body: string) =>
+		createHmac("sha256", Buffer.from(record.secret, "hex")).update(`update/v1\n${body}`).digest("hex");
+	async function request(
+		action: string,
+		receipt: unknown,
+		altered: Record<string, unknown> = {},
+		headers: Record<string, string> = {},
+	) {
+		const raw = JSON.stringify({ boot: record.boot, nonce: "a".repeat(64), action, receipt, ...altered });
+		return fetch(`http://127.0.0.1:${p}/__pilot_runtime_update/v1`, {
+			method: "POST",
+			headers: { "x-pilot-update-proof": mac(raw), ...headers },
+			body: raw,
+		});
+	}
+	const input = { operationId: "12345678-1234-1234-1234-123456789abc" };
+	assert.equal((await request("prepare", input, {}, { origin: "https://untrusted.invalid" })).status, 403);
+	assert.equal((await request("prepare", input, { boot: "wrong" })).status, 409);
+	assert.equal((await request("prepare", input, {}, { "x-pilot-update-proof": "0".repeat(64) })).status, 409);
+	assert.equal(frozen, 0);
+	const response = await request("prepare", input);
+	assert.equal(response.status, 200);
+	const envelope = (await response.json()) as { body: string; mac: string };
+	assert.equal(envelope.mac, mac(envelope.body));
+	const proof = JSON.parse(envelope.body);
+	assert.equal(proof.runtimeRoot, runtimeRoot);
+	assert.deepEqual(proof.build, build);
+	assert.equal(frozen, 1);
+	assert.equal((await request("verify", proof.receipt)).status, 200);
+	clock = 100;
+	assert.equal((await request("verify", proof.receipt)).status, 409);
+	assert.equal(frozen, 0);
+	assert.equal((await request("prepare", input)).status, 409);
 });

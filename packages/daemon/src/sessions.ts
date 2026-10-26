@@ -4572,6 +4572,33 @@ export class SessionManager {
 	}
 
 	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
+	async idleUpdateBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		// Called only while the composite admission freeze is held. Unlike the legacy
+		// drain inspector, this never sends update.pause or changes worker lifecycle.
+		if (!this.updateGate.frozen || !this.checkUpdateReadiness().ready)
+			return [{ kind: "admission", id: "sessions-not-idle" }];
+		const workers = [...this.workers];
+		if (workers.length > 128) return [{ kind: "unknown", id: "worker-overflow" }];
+		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [];
+		for (let offset = 0; offset < workers.length; offset += 4) {
+			await Promise.all(
+				workers.slice(offset, offset + 4).map(async ([id, worker]) => {
+					try {
+						if (!worker.jobs || !worker.hasChildren) throw new Error("Uninspectable worker");
+						const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
+						if (jobs.length || children || this.workers.get(id) !== worker)
+							blockers.push({ kind: "active-work", id });
+					} catch {
+						blockers.push({ kind: "unknown", id });
+					}
+				}),
+			);
+		}
+		if (!this.updateGate.frozen || !this.checkUpdateReadiness().ready || workers.length !== this.workers.size)
+			blockers.push({ kind: "admission", id: "sessions-changed" });
+		return blockers;
+	}
+
 	prepareUpdate(): UpdatePreparation {
 		return operations.time("sessions.update.prepare", () => this.checkUpdateReadiness());
 	}

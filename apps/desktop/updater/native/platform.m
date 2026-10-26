@@ -6,6 +6,25 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <string.h>
+
+bool pnu_bundle_build(const char *path, char *output, size_t capacity) {
+    @autoreleasepool {
+        if (NSThread.isMainThread || !path || !output || capacity < 2) return false;
+        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+        NSDictionary *info = [NSDictionary dictionaryWithContentsOfURL:[url URLByAppendingPathComponent:@"Contents/Info.plist"] error:NULL];
+        id build = info[@"CFBundleVersion"];
+        if (![build isKindOfClass:NSString.class]) return false;
+        const char *text = [build UTF8String];
+        if (!text || strlen(text) >= capacity) return false;
+        memcpy(output, text, strlen(text) + 1);
+        return true;
+    }
+}
+
+int pnu_publish_capsule(const char *stage, const char *destination) {
+    return renamex_np(stage, destination, RENAME_EXCL);
+}
 
 // Worker-only. The caller has authenticated the signed manifest before extraction.
 // No updater networking, install-on-quit observer, app delegate patch or secret access.
@@ -40,7 +59,7 @@ int pnu_swap(int parent, const char *staged, const char *installed) {
 // policy1: strip ACLs ONLY on a just-created private stage, then require no allows.
 // policy2: existing private stage, require no extended allow entries at all.
 bool pnu_acl_policy(const char *path, int policy) {
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) return false;
     if (policy == 1) {
         acl_t empty = acl_init(0);

@@ -30,7 +30,9 @@ cargo() { bash scripts/cargo.sh "$@"; }
 # the desktop workspace alone does not register or execute these tests.
 updater=(--manifest-path updater/Cargo.toml)
 updater_test() {
-  if [[ $# -gt 0 ]]; then
+  if [[ "${1:-}" == --native-all ]]; then
+    cargo test --locked "${updater[@]}" --lib --features native-macos -- --test-threads=1 | tee target/ci-updater-result.txt
+  elif [[ $# -gt 0 ]]; then
     cargo test --locked "${updater[@]}" --lib --features native-macos "owned_tests::$1" -- --exact --test-threads=1 | tee target/ci-updater-result.txt
   else
     cargo test --locked "${updater[@]}" --lib -- --test-threads=1 | tee target/ci-updater-result.txt
@@ -150,6 +152,9 @@ PY
     for test in "${updater_native_tests[@]}"; do
       updater_test "$test"
     done
+    # Integrated capsule/reservation modules register their own native tests,
+    # beyond the original owned_tests subset. Execute the complete native lib.
+    updater_test --native-all
     ;;
   build)
     macos_host
@@ -209,6 +214,7 @@ PY
     # These existing tests are #[cfg(target_os = "macos")]. Never rerun the
     # portable library suite here or silently succeed with a zero-test filter.
     tests=(
+      visual_runtime::tests::restart_fence_reserves_all_capacity_and_releases_it_on_cancel
       visual_runtime::tests::shared_draw_errors_match_without_relaxing_the_production_budget
       visual_runtime::tests::native_canvas_packets_match_shared_commands_ops_and_strings
       visual_runtime::tests::shared_api_one_view_event_and_state_corpus_matches_the_native_worker

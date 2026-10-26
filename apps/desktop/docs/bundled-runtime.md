@@ -9,7 +9,7 @@ Host tools used by agents (such as Git, jj and language toolchains) remain host
 capabilities, not newly bundled or newly authorized software.
 
 This is ad-hoc development packaging, not a production release, notarized app,
-signed update feed, launchd installation or updater activation. The separate
+signed update feed, launchd installation or production updater activation. The separate
 identity is `com.babariviere.pilot-next`; the native event helper uses
 `com.babariviere.pilot-next.system-events`, not Swift's application identity.
 No signing secrets, existing application identifiers or permissions are changed.
@@ -18,16 +18,18 @@ No signing secrets, existing application identifiers or permissions are changed.
 
 Run on a macOS arm64 **build/CI host**. Native helper builds use the existing
 Swift build wrapper and its shared slot; do not run them in a no-local-Swift lane.
-Rust executables must come from the existing macOS CI `artifact` lane, with its
-`manifest.json` identifying the same tested40-character commit and binary hashes.
+Rust executables must have `manifest.json` identifying the same immutable
+40-character commit, configuration and binary hashes. The `rust` subcommand builds
+unconfigured development inputs from git objects using the pinned Rust/mbx tools.
 Linux CI executables cannot be relabeled as macOS inputs.
 
 ```sh
 SOURCE=<full-40-character-commit>
 python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output /fresh/runtime
 python3 apps/desktop/scripts/bundle_runtime.py native --source "$SOURCE" --output /fresh/native
+python3 apps/desktop/scripts/bundle_runtime.py rust --source "$SOURCE" --output /fresh/executables
 python3 apps/desktop/scripts/bundle_runtime.py bundle --source "$SOURCE" \
-  --runtime /fresh/runtime --native /fresh/native --executables /matching-macos-ci-executables \
+  --runtime /fresh/runtime --native /fresh/native --executables /fresh/executables \
   --output '/fresh/Pilot Next.app'
 python3 apps/desktop/scripts/bundle_runtime.py verify '/fresh/Pilot Next.app'
 ```

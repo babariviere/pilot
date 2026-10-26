@@ -22,6 +22,21 @@ const FILES: usize = 30_000;
 const TOTAL: u64 = 2 * 1024 * 1024 * 1024;
 const MANIFEST: &str = "Contents/Resources/bundled-runtime.json";
 type Failure = &'static str;
+#[cfg(target_os = "macos")]
+static UPDATE_RECEIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+#[cfg(target_os = "macos")]
+pub fn set_update_receipt(path: PathBuf) -> Result<(), Failure> {
+    if !path.is_absolute() {
+        return Err("Update startup receipt must be an absolute transaction path.");
+    }
+    UPDATE_RECEIPT
+        .set(path)
+        .map_err(|_| "Update startup receipt was already set.")
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn update_receipt() -> Option<PathBuf> {
+    UPDATE_RECEIPT.get().cloned()
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -340,7 +355,36 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         .and_then(Path::parent)
         .ok_or("Cannot locate bundled runtime.")?;
     validate(root, &cancel, deadline)?;
-    let runtime = root.join("Contents/Resources/runtime");
+    #[cfg(target_os = "macos")]
+    let pinned = if let Some(receipt) = update_receipt() {
+        let trust = pilot_desktop_updater::helper::compiled_trust()
+            .map_err(|_| "Update startup trust is unconfigured.")?;
+        Some(pilot_desktop_updater::coordination::Guard::startup_runtime(&receipt,&root.canonicalize().map_err(|_|"Cannot resolve app bundle.")?,&trust)
+            .map_err(|_|"Update startup configuration/retained-runtime proof failed. No daemon was started or update acknowledged.")?)
+    } else {
+        None
+    };
+    let runtime_root = root.to_path_buf();
+    #[cfg(target_os = "macos")]
+    let runtime_root = if let Some((root, _)) = &pinned {
+        root.clone()
+    } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
+        let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?);
+        let store = home
+            .join("Library/Application Support")
+            .join(pilot_desktop_updater::runtime::STORE_NAME);
+        let canonical = root
+            .canonicalize()
+            .map_err(|_| "Cannot resolve app bundle.")?;
+        let capsule=pilot_desktop_updater::runtime::publish_cancellable(&canonical,&store,&trust,&pilot_desktop_updater::installer::MacPlatform,deadline,&cancel)
+            .map_err(|_|"The immutable runtime capsule could not be verified/published. Existing runtimes were preserved.")?;
+        let location = runtime_location()?;
+        pilot_desktop_updater::coordination::selected(&location,&capsule,&trust)
+            .map_err(|_|"The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
+    } else {
+        runtime_root
+    };
+    let runtime = runtime_root.join("Contents/Resources/runtime");
     let home = std::env::var_os("HOME").ok_or("HOME is unavailable.")?;
     let mut command = tokio::process::Command::new(runtime.join("node/bin/node"));
     command
@@ -374,6 +418,20 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         }
         command.env(name, value);
     }
+    #[cfg(target_os = "macos")]
+    if let Some((_, location)) = &pinned {
+        // A relaunch receipt, not the launch-service environment, owns the exact
+        // configured profile and denial policies. Never silently retarget Local.
+        command
+            .env("PILOT_HOME", &location.home)
+            .env("PILOT_PORT", location.port.to_string());
+        for name in pilot_desktop_updater::coordination::POLICY_NAMES {
+            command.env_remove(name);
+        }
+        for (name, value) in &location.policy {
+            command.env(name, value);
+        }
+    }
     let executor = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -383,7 +441,44 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
             .spawn()
             .map_err(|_| "Cannot launch bundled Node runtime.")?;
         supervise(&mut child, &cancel, deadline).await?;
+        #[cfg(target_os = "macos")]
+        if let Some((_, location)) = pinned {
+            return crate::LocalOptions::discover_at(location);
+        }
         crate::LocalOptions::discover()
+    })
+}
+#[cfg(target_os = "macos")]
+fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, Failure> {
+    let port = std::env::var("PILOT_PORT")
+        .unwrap_or_else(|_| "4319".into())
+        .parse::<u16>()
+        .ok()
+        .filter(|p| *p > 0)
+        .ok_or("Invalid Local port.")?;
+    let home = if let Some(home) = std::env::var_os("PILOT_HOME") {
+        PathBuf::from(home)
+    } else {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or(
+                PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?)
+                    .join(".local/share"),
+            );
+        data.join("pilot")
+    };
+    let home = if home.is_absolute() {
+        home
+    } else {
+        std::env::current_dir()
+            .map_err(|_| "Cannot resolve Local profile.")?
+            .join(home)
+    };
+    Ok(pilot_desktop_updater::coordination::Location {
+        home,
+        port,
+        policy: pilot_desktop_updater::coordination::captured_policy()
+            .map_err(|_| "Configured runtime policy is invalid.")?,
     })
 }
 

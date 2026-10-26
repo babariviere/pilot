@@ -32,6 +32,8 @@ pub struct Preferences {
     pub appearance: AppearancePreference,
     #[serde(default)]
     pub fonts: FontPreferences,
+    #[serde(default)]
+    pub automatic_update_checks: bool,
 }
 
 /// A bounded UTF-8 installed font name. Empty keeps the existing app default.
@@ -179,6 +181,14 @@ impl SettingsState {
     pub fn persisted(&self) -> bool {
         !self.saving() && self.unconfirmed.is_none() && self.committed == Some(self.current)
     }
+    /// Loaded durable baseline (1), or one plus the latest exact SaveRequest ID.
+    /// Never valid for dirty, pending or unconfirmed current preferences.
+    #[cfg(any(test, target_os = "macos"))]
+    pub(crate) fn durability_token(&self) -> Option<u64> {
+        self.persisted()
+            .then(|| self.next_id.checked_add(1))
+            .flatten()
+    }
     pub fn unconfirmed(&self) -> bool {
         self.unconfirmed.is_some()
     }
@@ -224,6 +234,13 @@ impl SettingsState {
         self.current.fonts = fonts;
         true
     }
+    pub fn set_automatic_update_checks(&mut self, value: bool) -> bool {
+        if !self.loaded || self.current.automatic_update_checks == value {
+            return false;
+        }
+        self.current.automatic_update_checks = value;
+        true
+    }
     pub fn revert(&mut self) -> bool {
         // An unconfirmed write must be reconciled, not hidden by Revert.
         if !self.loaded || self.saving() || self.unconfirmed.is_some() {
@@ -242,6 +259,27 @@ impl SettingsState {
         let request = SaveRequest {
             id: self.next_id,
             preferences: self.unconfirmed.unwrap_or(self.current),
+        };
+        self.pending = Some(request);
+        self.error = None;
+        Some(request)
+    }
+    /// Explicit install-only checkpoint for usable but never-persisted defaults.
+    /// Ordinary Save keeps its existing clean-state no-op contract.
+    #[cfg(any(test, target_os = "macos"))]
+    pub(crate) fn begin_durability_checkpoint(&mut self) -> Option<SaveRequest> {
+        if !self.loaded
+            || self.saving()
+            || self.dirty()
+            || self.unconfirmed.is_some()
+            || self.committed.is_some()
+        {
+            return None;
+        }
+        self.next_id = self.next_id.checked_add(1)?;
+        let request = SaveRequest {
+            id: self.next_id,
+            preferences: self.current,
         };
         self.pending = Some(request);
         self.error = None;

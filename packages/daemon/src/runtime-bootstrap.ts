@@ -1,5 +1,6 @@
 /** Imported before the daemon graph, not from HTTP handlers. */
-import { open } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { DAEMON_PROTOCOL_VERSION } from "@pilot/protocol";
 import release from "../../../package.json" with { type: "json" };
 import { loadConfig } from "./config.ts";
@@ -41,7 +42,13 @@ export async function bootstrapRuntime(): Promise<void> {
 		bundled = process.argv.includes("--bundled-runtime");
 	const build = await runtimeBuild();
 	if (bundled && !build) throw new Error("runtime_build_missing");
-	runtimeOwner = await ownRuntime(config.home, config.port, bundled, build);
+	runtimeOwner = await ownRuntime(
+		config.home,
+		config.port,
+		bundled,
+		build,
+		build ? await realpath(fileURLToPath(new URL("../../../", import.meta.url))) : undefined,
+	);
 	if (bundled) {
 		await activateRuntime(runtimeOwner);
 	}

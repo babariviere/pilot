@@ -5076,6 +5076,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "libc",
+ "pilot-desktop-updater",
  "reqwest",
  "serde",
  "serde_json",
@@ -5085,6 +5086,21 @@ dependencies = [
  "unicode-normalization",
  "unicode-segmentation",
  "uuid",
+]
+
+[[package]]
+name = "pilot-desktop-updater"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "libc",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "url",
+ "zip",
 ]
 
 [[package]]
@@ -5798,21 +5814,29 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
  "hyper",
+ "hyper-rustls",
  "hyper-util",
  "js-sys",
  "log",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http",
  "tower-service",
@@ -7282,6 +7306,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8137,9 +8167,9 @@ dependencies = [
 
 [[package]]
 name = "which"
-version = "8.0.6"
+version = "8.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
+checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
 dependencies = [
  "libc",
 ]
@@ -9233,6 +9263,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "zip"
+version = "8.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "typed-path",
 ]
 
 [[package]]

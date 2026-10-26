@@ -399,6 +399,12 @@ pub fn run_native(
         return Err(Error::Busy);
     }
     let staged = Staged::reopen(&root, &target, &trust, lock)?;
+    let _guard = crate::coordination::Guard::load(
+        &root,
+        &root.join("payload").join(&trust.bundle_name),
+        staged.build(),
+        &trust,
+    )?;
     // SAFETY: checked descriptor is the inherited private handshake socket.
     let mut control = unsafe { UnixStream::from_raw_fd(control_fd) };
     control
@@ -418,11 +424,24 @@ pub fn run_native(
             return Err(error);
         }
     };
-    staged.apply_after_exit(&trust, &MacPlatform, exit)
+    staged.apply_after_exit_checked(&trust, &MacPlatform, exit, |candidate| {
+        // Successful verification after OS-observed parent exit proves the same
+        // reservation remained uninterrupted through exit. Expiry/owner death
+        // refuses installation even if COMMIT had already been acknowledged.
+        crate::coordination::Guard::load(&root, candidate, staged.build(), &trust).map(|_| ())
+    })
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub(crate) fn run_command(command: &mut Command, timeout: Duration) -> Result<(), Error> {
+    run_command_checked(command, timeout, || Ok(()))
+}
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub(crate) fn run_command_checked(
+    command: &mut Command,
+    timeout: Duration,
+    check: impl Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
     let mut child = command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
@@ -434,6 +453,11 @@ pub(crate) fn run_command(command: &mut Command, timeout: Duration) -> Result<()
         .map_err(|_| Error::Native)?;
     let deadline = Instant::now() + timeout;
     loop {
+        if let Err(error) = check() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
                 return if status.success() {

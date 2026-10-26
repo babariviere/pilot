@@ -26,6 +26,13 @@ actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
 
 /// Non-rendering state owner retained by the Local window and any open Settings window.
 pub(crate) struct SettingsPreferences {
+    #[cfg(target_os = "macos")]
+    pub(crate) updater: Option<Entity<crate::updates_view::Updates>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) update_location: Option<pilot_desktop_updater::coordination::Location>,
+    #[cfg(target_os = "macos")]
+    update_events: Vec<Subscription>,
+    pub(crate) restart_locked: bool,
     pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
     pub(super) state: SettingsState,
     source: Option<Result<PathBuf, SettingsError>>,
@@ -38,6 +45,13 @@ pub(crate) struct SettingsPreferences {
 impl SettingsPreferences {
     pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
         Self {
+            #[cfg(target_os = "macos")]
+            updater: None,
+            #[cfg(target_os = "macos")]
+            update_location: None,
+            #[cfg(target_os = "macos")]
+            update_events: Vec::new(),
+            restart_locked: false,
             models: None,
             state: SettingsState::default(),
             source,
@@ -49,9 +63,17 @@ impl SettingsPreferences {
         }
     }
     pub(crate) fn writable(&self) -> bool {
-        self.source.is_some() && self.state.loaded()
+        self.source.is_some() && self.state.loaded() && !self.restart_locked
     }
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        if self.updater.is_none() {
+            let location = self.update_location.clone();
+            let updater = cx.new(|cx| crate::updates_view::Updates::new(location, cx));
+            self.update_events
+                .push(cx.subscribe(&updater, |_, _, event, cx| cx.emit(*event)));
+            self.updater = Some(updater);
+        }
         crate::typography::prepare(cx);
         if !self.state.begin_load() {
             return;
@@ -118,6 +140,12 @@ impl SettingsPreferences {
             _ => return,
         };
         if let Some(preferences) = committed {
+            #[cfg(target_os = "macos")]
+            if let Some(updater) = &self.updater {
+                updater.update(cx, |updater, cx| {
+                    updater.automatic(preferences.automatic_update_checks, cx)
+                });
+            }
             self.close_notice = false;
             crate::appearance::commit_appearance(preferences.appearance, cx);
             crate::typography::commit(preferences.fonts, cx);
@@ -136,6 +164,22 @@ impl SettingsPreferences {
         let Some(request) = self.state.begin_save() else {
             return;
         };
+        self.dispatch_save(request, cx);
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn persist_update_checkpoint(&mut self, cx: &mut Context<Self>) {
+        if !self.writable() {
+            return;
+        }
+        if let Some(request) = self.state.begin_durability_checkpoint() {
+            self.dispatch_save(request, cx);
+        }
+    }
+    fn dispatch_save(
+        &mut self,
+        request: crate::settings_state::SaveRequest,
+        cx: &mut Context<Self>,
+    ) {
         let result = self
             .worker
             .as_ref()
@@ -174,7 +218,18 @@ impl SettingsPreferences {
         self.load(cx);
     }
     pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        let ready = !self.state.saving()
+        #[cfg(target_os = "macos")]
+        if self
+            .updater
+            .as_ref()
+            .is_some_and(|u| u.read(cx).unsaved_access(cx))
+        {
+            self.close_notice = true;
+            cx.notify();
+            return false;
+        }
+        let ready = !self.restart_locked
+            && !self.state.saving()
             && !self.state.dirty()
             && !self.state.unconfirmed()
             && self
@@ -188,6 +243,8 @@ impl SettingsPreferences {
         ready
     }
 }
+#[cfg(target_os = "macos")]
+impl EventEmitter<crate::updates_view::Event> for SettingsPreferences {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Category {
@@ -366,6 +423,16 @@ impl SettingsView {
             .update(cx, |owner, cx| owner.request_close(cx))
     }
     fn models_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        #[cfg(target_os = "macos")]
+        if self
+            .preferences
+            .read(cx)
+            .updater
+            .clone()
+            .is_some_and(|u| u.update(cx, |u, cx| u.marked(w, cx)))
+        {
+            return true;
+        }
         self.preferences
             .read(cx)
             .models
@@ -499,6 +566,17 @@ impl SettingsView {
             )
     }
     fn status(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
+        #[cfg(target_os = "macos")]
+        if self.preferences.read(cx).close_notice
+            && self
+                .preferences
+                .read(cx)
+                .updater
+                .as_ref()
+                .is_some_and(|u| u.read(cx).unsaved_access(cx))
+        {
+            return div().child(Notice::new("Use or clear the update access field before closing. It is never saved to disk.").tone(Tone::Warning));
+        }
         let owner = self.preferences.read(cx);
         let state = &owner.state;
         let status = if owner.source.is_none() {
@@ -617,21 +695,65 @@ impl SettingsView {
         }
     }
 }
+impl SettingsView {
+    fn updates(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::checkbox::Checkbox;
+        let preferences = self.preferences.clone();
+        let owner = preferences.read(cx);
+        let writable = owner.writable() && !owner.state.unconfirmed();
+        let automatic = owner.state.current().automatic_update_checks;
+        #[cfg(target_os = "macos")]
+        let updater = owner.updater.clone();
+        let mut view = div()
+            .v_flex()
+            .gap_4()
+            .child(ui::header("settings-page-title", "Updates", Text::Title))
+            .child(
+                Checkbox::new("updates-automatic")
+                    .label("Automatically check for updates")
+                    .checked(automatic)
+                    .disabled(!writable)
+                    .on_click(move |checked, _, cx| {
+                        preferences.update(cx, |owner, cx| {
+                            if owner.writable() && owner.state.set_automatic_update_checks(*checked)
+                            {
+                                cx.notify();
+                            }
+                        })
+                    }),
+            )
+            .child(ui::text(
+                Text::Caption,
+                "Save to apply this preference. Checks never authorize installation.",
+            ));
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(updater) = updater {
+                view = view.child(updater);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            view=view.child(Notice::new("Updates are available only for verified macOS arm64 bundles. No installer is enabled on this platform."));
+        }
+        view
+    }
+}
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(feature = "native-probes")]
         {
             self.render_count += 1;
         }
-        let category = self.preferences.read(cx).category;
+        let category = if self.preferences.read(cx).restart_locked {
+            Category::Updates
+        } else {
+            self.preferences.read(cx).category
+        };
         let detail = match category {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
             Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
-            Category::Updates => div().v_flex().gap_4()
-                .child(ui::header("settings-page-title", "Updates", Text::Title))
-                .child(Notice::new("Updater integration is not available in this build.")
-                    .detail("The app-owned updater and packaging are separate work. No update checks, credentials, installs or restart controls are active here."))
-                .child(Notice::new("Appearance settings remain available.").tone(Tone::Quiet)).into_any_element(),
+            Category::Updates => self.updates(cx).into_any_element(),
             Category::Availability => div().v_flex().gap_4()
                 .child(ui::header("settings-page-title", "Other settings", Text::Title))
                 .child(Notice::new("These settings are not available in this app yet.")
@@ -650,6 +772,11 @@ impl Render for SettingsView {
             .bg(Surface::Page.color(cx))
             .text_color(cx.theme().foreground)
             .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                if v.models_marked(w, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
                 if v.models_marked(w, cx) {
                     cx.stop_propagation();
                 }

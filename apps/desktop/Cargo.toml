@@ -42,6 +42,7 @@ required-features = ["native-probes"]
 
 [workspace]
 members = ["visual-worker"]
+exclude = ["updater"]
 default-members = ["."]
 
 [[test]]
@@ -79,6 +80,9 @@ tokio-tungstenite = { version = "=0.28.0", default-features = false, features = 
 
 [dev-dependencies]
 gpui-kit = { version = "=0.8.0", features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+pilot-desktop-updater = { path = "updater", features = ["native-macos"] }
 
 [profile.dev]
 debug = 0

@@ -12,7 +12,50 @@ import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
+import type { SessionWorker } from "./sessions.ts";
 import { SessionManager } from "./sessions.ts";
+
+test("idle-only update inspection never drains workers and refuses jobs, descendants and unknown IPC", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-idle-update-"));
+	const sessions = new SessionManager(home, new ProjectStore(home));
+	t.after(async () => {
+		await sessions.shutdown();
+		await rm(home, { recursive: true, force: true });
+	});
+	await sessions.load();
+	const commands: KernelCommand[] = [];
+	const worker: SessionWorker = {
+		ready: Promise.resolve(),
+		state: "idle",
+		busy: false,
+		send: (command) => {
+			commands.push(command);
+		},
+		request: async () => {},
+		close: async () => {},
+		jobs: async () => [],
+		hasChildren: async () => false,
+	};
+	const workers = (sessions as unknown as { workers: Map<string, SessionWorker> }).workers;
+	workers.set("synthetic-idle", worker);
+	assert.notDeepEqual(await sessions.idleUpdateBlockers(), []);
+	const release = sessions.freezeAdmissions();
+	try {
+		assert.deepEqual(await sessions.idleUpdateBlockers(), []);
+		worker.hasChildren = async () => true;
+		assert.equal((await sessions.idleUpdateBlockers())[0]?.kind, "active-work");
+		worker.hasChildren = async () => false;
+		worker.jobs = async () => {
+			throw new Error("fixture IPC failure");
+		};
+		assert.equal((await sessions.idleUpdateBlockers())[0]?.kind, "unknown");
+		await assert.rejects(sessions.spawn({ cwd: home, message: "must not start" }), ServiceUnavailable);
+		assert.deepEqual(commands, []);
+	} finally {
+		release();
+		workers.clear();
+	}
+});
 
 test("spawn is counted synchronously before metadata exists, and failures release it", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-admission-"));

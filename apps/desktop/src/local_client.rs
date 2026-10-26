@@ -25,9 +25,32 @@ pub struct LocalOptions {
     daemon_id: String,
     lineage_id: String,
     native_home: Option<PathBuf>,
+    #[cfg(target_os = "macos")]
+    update_policy: std::collections::BTreeMap<String, String>,
 }
 
 impl LocalOptions {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn update_location(&self) -> Option<pilot_desktop_updater::coordination::Location> {
+        Some(pilot_desktop_updater::coordination::Location {
+            home: self.native_home.clone()?,
+            port: self.port,
+            policy: self.update_policy.clone(),
+        })
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn discover_at(
+        location: pilot_desktop_updater::coordination::Location,
+    ) -> Result<Self, &'static str> {
+        let home = location.home;
+        Ok(Self {
+            port: location.port,
+            daemon_id: identity_file(home.join("daemon-id"))?,
+            lineage_id: identity_file(home.join("storage-lineage"))?,
+            native_home: Some(home),
+            update_policy: location.policy,
+        })
+    }
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic(port: u16) -> Self {
         Self {
@@ -35,6 +58,8 @@ impl LocalOptions {
             daemon_id: "test-daemon".into(),
             lineage_id: "test-lineage".into(),
             native_home: None,
+            #[cfg(target_os = "macos")]
+            update_policy: Default::default(),
         }
     }
     pub(crate) fn host(&self) -> crate::delivery_store::Host {
@@ -76,6 +101,9 @@ impl LocalOptions {
             daemon_id: identity_file(home.join("daemon-id"))?,
             lineage_id: identity_file(home.join("storage-lineage"))?,
             native_home: Some(home),
+            #[cfg(target_os = "macos")]
+            update_policy: pilot_desktop_updater::coordination::captured_policy()
+                .map_err(|_| "Configured runtime policy is invalid.")?,
         })
     }
 
@@ -838,6 +866,8 @@ mod tests {
             daemon_id: "daemon".into(),
             lineage_id: "lineage".into(),
             native_home: None,
+            #[cfg(target_os = "macos")]
+            update_policy: Default::default(),
         };
         let mut hello = json!({"daemonId":"daemon","lineageId":"lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}});
         assert!(options.verify(&hello).is_ok());

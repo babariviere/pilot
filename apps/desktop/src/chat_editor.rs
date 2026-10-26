@@ -31,13 +31,13 @@ pub(crate) mod composer_probe;
 pub(crate) mod delivery_probe;
 #[path = "chat_model_picker.rs"]
 mod model_picker;
+#[path = "new_chat_view.rs"]
+mod new_chat_view;
 #[cfg(feature = "native-probes")]
 #[path = "project_creation_probe.rs"]
 pub(crate) mod project_creation_probe;
 #[path = "chat_projects.rs"]
 mod projects;
-#[path = "new_chat_view.rs"]
-mod new_chat_view;
 #[cfg(feature = "native-probes")]
 #[path = "question_probe.rs"]
 pub(crate) mod question_probe;
@@ -47,6 +47,7 @@ mod questions;
 mod recovery;
 
 pub(crate) enum EditorEvent {
+    UpdateCheckpoint,
     AddProject,
     DraftsChanged,
     OpenCreated {
@@ -86,6 +87,7 @@ pub(crate) struct ChatEditor {
     state: WriteState,
     error: Option<&'static str>,
     closing: bool,
+    update_checkpoint: Option<u64>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<EditorEvent> for ChatEditor {}
@@ -170,6 +172,7 @@ impl ChatEditor {
             state: WriteState::default(),
             error: None,
             closing: false,
+            update_checkpoint: None,
             _subscriptions: vec![text_events, cwd_events, question_events, path_watch],
         }
     }
@@ -199,11 +202,15 @@ impl ChatEditor {
             && self.state.book.is_some()
             && self.state.error.is_none()
             && !self.closing
+            && self.update_checkpoint.is_none()
     }
     pub(crate) fn navigation_key(&self) -> Option<&str> {
         self.selected.as_deref()
     }
     pub(crate) fn browse_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.update_checkpoint.is_some() {
+            return;
+        }
         self.close_paths(cx);
         self.changed(cx);
         self.questions.reset();
@@ -296,6 +303,9 @@ impl ChatEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.update_checkpoint.is_some() {
+            return;
+        }
         self.close_paths(cx);
         self.changed(cx);
         self.questions.reset();
@@ -417,6 +427,9 @@ impl ChatEditor {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        if self.update_checkpoint.is_some() {
+            return;
+        }
         self.record_edit(false, cx);
         self.record_question_edit(false, cx);
     }
@@ -540,6 +553,11 @@ impl ChatEditor {
                 .is_none_or(|handled| handled < request)
         });
         self.state = state;
+        if self.update_checkpoint.is_some() {
+            cx.emit(EditorEvent::UpdateCheckpoint);
+            cx.notify();
+            return;
+        }
         self.accept_model_action(window, cx);
         if self.state.error.is_some() {
             self.retiring.clear();
@@ -714,6 +732,9 @@ impl ChatEditor {
     }
 
     pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.update_checkpoint.is_some() {
+            return false;
+        }
         self.changed(cx);
         if self.client.is_none() {
             return true;
@@ -733,6 +754,83 @@ impl ChatEditor {
         cx.notify();
         false
     }
+    /// Find must not steal keys from question fields or model/project editors.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn begin_update_checkpoint(
+        &mut self,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.ready()
+            || self.marked(window, cx)
+            || !self.unsaved_local.is_empty()
+            || !self.pending.is_empty()
+            || self
+                .state
+                .book
+                .as_ref()
+                .is_none_or(|b| !b.restart_settled())
+        {
+            return false;
+        }
+        self.close_paths(cx);
+        self.record_edit(true, cx);
+        self.record_question_edit(true, cx);
+        self.update_checkpoint = Some(generation);
+        if !self
+            .client
+            .as_ref()
+            .is_some_and(|client| client.command(WriteCommand::Checkpoint(generation)))
+        {
+            self.update_checkpoint = None;
+            return false;
+        }
+        cx.notify();
+        true
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn update_receipt(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let generation = self.update_checkpoint?;
+        if self.state.checkpoint != Some(generation)
+            || self.state.error.is_some()
+            || !self.unsaved_local.is_empty()
+            || self.marked(window, cx)
+        {
+            return None;
+        }
+        let book = self.state.book.as_ref()?;
+        if let Some(key) = &self.selected {
+            let draft = self.cache.get(key)?;
+            if draft.text != self.text.read(cx).value().as_ref()
+                || draft.cwd != self.cwd.read(cx).value().as_ref()
+            {
+                return None;
+            }
+            if !self.question_checkpoint_matches(cx) {
+                return None;
+            }
+        }
+        if !book.restart_settled()
+            || !self.cache.iter().all(|(key, draft)| {
+                book.drafts.get(key) == Some(draft)
+                    || (self.selected.as_ref() != Some(key) && draft == &Draft::default())
+            })
+        {
+            return None;
+        }
+        Some(generation)
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn end_update_checkpoint(&mut self, cx: &mut Context<Self>) {
+        self.update_checkpoint = None;
+        cx.notify();
+    }
+
     /// Find must not steal keys from question fields or model/project editors.
     pub(crate) fn conversation_find_ready(
         &self,
@@ -1147,7 +1245,8 @@ impl Render for ChatEditor {
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
         if is_new {
-            shell = shell.gap(px(crate::ui::Space::SIDEBAR))
+            shell = shell
+                .gap(px(crate::ui::Space::SIDEBAR))
                 .child(self.new_chat_setup(draft, blocked, window, cx));
         }
         if let Some(label) = self.activity_label() {

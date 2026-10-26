@@ -20,6 +20,7 @@ pub(crate) struct WriteState {
     pub(crate) error: Option<Failure>,
     pub(crate) notice: &'static str,
     pub(crate) flushed: bool,
+    pub(crate) checkpoint: Option<u64>,
     pub(crate) handled: BTreeMap<String, u64>,
     pub(crate) notice_key: Option<String>,
     pub(crate) delivery_notice: Option<String>,
@@ -138,6 +139,8 @@ pub(crate) enum WriteCommand {
         key: String,
         revision: u64,
     },
+    #[cfg(any(test, target_os = "macos"))]
+    Checkpoint(u64),
     Close,
 }
 
@@ -422,6 +425,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             _ => None,
         };
         let mut delivery_report = None;
+        status.checkpoint = None;
         let result = if let Ok(store) = &mut store {
             match flush(store, &edits) {
                 Err(error) => {
@@ -604,6 +608,15 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         }) => store
                             .retire_answer(&key, revision, &identity, recover)
                             .map(|_| "Question reply retained or settled privately."),
+                        #[cfg(any(test, target_os = "macos"))]
+                        Some(WriteCommand::Checkpoint(generation)) => {
+                            if store.is_faulted() {
+                                Err("Private state durability is unconfirmed.")
+                            } else {
+                                status.checkpoint = Some(generation);
+                                Ok("Update checkpoint saved.")
+                            }
+                        }
                         Some(WriteCommand::Close) => {
                             status.flushed = true;
                             Ok("Drafts saved.")

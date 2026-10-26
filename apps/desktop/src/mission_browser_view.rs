@@ -86,6 +86,15 @@ pub(crate) struct Browser {
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_safe(&self, cx: &App) -> bool {
+        self.creation.is_none()
+            && self.lifecycle.is_empty()
+            && self.metadata.is_empty()
+            && self.brief.is_none()
+            && self.activity_browser.is_none()
+            && self.tasks_browser.read(cx).restart_safe()
+    }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {
             decisions: Default::default(),

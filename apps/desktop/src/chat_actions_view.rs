@@ -27,6 +27,16 @@ pub(crate) struct Actions {
 }
 impl EventEmitter<Changed> for Actions {}
 impl Actions {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_safe(&self) -> bool {
+        self.renames.is_empty()
+            && self.reports.values().all(|r| {
+                matches!(
+                    r.outcome,
+                    Some(Outcome::Acknowledged | Outcome::Rejected(_))
+                )
+            })
+    }
     pub(crate) fn new(_: &mut Context<Self>) -> Self {
         Self {
             options: None,

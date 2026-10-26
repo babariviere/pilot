@@ -11,15 +11,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-struct Temp(PathBuf);
+pub(crate) struct Temp(PathBuf);
 impl Temp {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         use ring::rand::SecureRandom;
         let mut id = [0; 16];
         ring::rand::SystemRandom::new().fill(&mut id).unwrap();
         let path = std::env::temp_dir().join(format!("next-updater-test-{}", transport::hex(&id)));
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
+    }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
     }
 }
 impl Drop for Temp {

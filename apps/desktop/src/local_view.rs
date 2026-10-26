@@ -98,6 +98,9 @@ pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
 #[path = "transcript_find_probe.rs"]
 pub(crate) mod transcript_find_probe;
+#[cfg(target_os = "macos")]
+#[path = "update_lifecycle.rs"]
+mod update_lifecycle;
 #[cfg(feature = "native-probes")]
 #[path = "workbench_probe.rs"]
 pub(crate) mod workbench_probe;
@@ -391,6 +394,13 @@ pub struct LocalViewer {
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
     settings_events: Vec<Subscription>,
+    #[cfg(target_os = "macos")]
+    update_events: Vec<Subscription>,
+    #[cfg(target_os = "macos")]
+    restart_generation: u64,
+    pub(super) restart_pending: bool,
+    #[cfg(target_os = "macos")]
+    restart_timeout: Option<Task<()>>,
     #[cfg(feature = "native-probes")]
     settings_fixture_size: Option<gpui_kit::Size<gpui_kit::Pixels>>,
     projects_open: bool,
@@ -567,7 +577,15 @@ impl LocalViewer {
             .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
         view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
         view.connect_model_controls(options.clone(), window, cx);
-        view.settings.update(cx, |owner, cx| owner.load(cx));
+        view.settings.update(cx, |owner, cx| {
+            #[cfg(target_os = "macos")]
+            {
+                owner.update_location = options.update_location();
+            }
+            owner.load(cx);
+        });
+        #[cfg(target_os = "macos")]
+        view.connect_updates(window, cx);
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
         view.navigation_seeded = true;
@@ -598,6 +616,9 @@ impl LocalViewer {
                     .settings
                     .update(cx, |owner, cx| owner.request_close(cx))
                 {
+                    return false;
+                }
+                if view.restart_pending {
                     return false;
                 }
                 view.editor
@@ -651,7 +672,9 @@ impl LocalViewer {
                             cx.notify();
                         }
                         view.editor
-                            .update(cx, |editor, cx| editor.accept(state, window, cx))
+                            .update(cx, |editor, cx| editor.accept(state, window, cx));
+                        #[cfg(target_os = "macos")]
+                        view.acknowledge_update_startup(cx);
                     })
                     .is_err()
                 {
@@ -1130,6 +1153,10 @@ impl LocalViewer {
                 EditorEvent::AddProject => view.open_add_project(window, cx),
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
                 EditorEvent::Flushed => cx.quit(),
+                EditorEvent::UpdateCheckpoint => {
+                    #[cfg(target_os = "macos")]
+                    view.advance_update_restart(window, cx);
+                }
                 EditorEvent::StopRequested { key } => {
                     if view
                         .selected
@@ -1271,6 +1298,13 @@ impl LocalViewer {
             settings_pane: None,
             settings_return: None,
             settings_events: Vec::new(),
+            #[cfg(target_os = "macos")]
+            update_events: Vec::new(),
+            #[cfg(target_os = "macos")]
+            restart_generation: 0,
+            restart_pending: false,
+            #[cfg(target_os = "macos")]
+            restart_timeout: None,
             #[cfg(feature = "native-probes")]
             settings_fixture_size: None,
             navigation,
@@ -1981,6 +2015,7 @@ impl Render for LocalViewer {
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
+                if v.restart_pending {cx.stop_propagation();return;}
                 if let Some(form)=&v.queue_open {
                     let marked=form.update(cx,|f,cx|f.marked(w,cx));
                     let key=e.keystroke.key.as_str(); let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
@@ -2002,6 +2037,7 @@ impl Render for LocalViewer {
                     if key=="tab" || (marked && (matches!(key,"enter"|"escape") || (modified && key=="k"))) || (modified && !matches!(key,"c"|"v"|"x"|"a"|"k"|"q")) {cx.stop_propagation();}
                 }
             }))
+            .capture_any_mouse_down(cx.listener(|v,_,_,cx|{if v.restart_pending {cx.stop_propagation();}}))
             .on_action(cx.listener(|v,_:&ToggleJump,w,cx|{v.toggle_jump(w,cx);cx.stop_propagation();}))
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.

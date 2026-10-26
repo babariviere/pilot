@@ -181,6 +181,27 @@ pub(crate) struct Book {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) abandoned: Vec<String>,
 }
+impl Book {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_settled(&self) -> bool {
+        self.pending.is_empty()
+            && self.model_changes.is_empty()
+            && self
+                .project_registrations
+                .values()
+                .all(|a| a.created.is_some())
+            && self
+                .missions
+                .values()
+                .all(|a| !matches!(a.outcome, crate::mission_conversion::Outcome::Unknown))
+            && self.drafts.values().all(|draft| {
+                draft
+                    .last
+                    .as_ref()
+                    .is_none_or(|d| !matches!(d.state.as_str(), "pending" | "unknown"))
+            })
+    }
+}
 
 impl Delivery {
     pub(crate) fn from_intent(intent: &Intent) -> Self {

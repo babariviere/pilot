@@ -103,6 +103,7 @@ export interface RuntimeOwner {
 	server: Server;
 	install(handler: RequestListener): void;
 	ready(hello: DaemonHello): void;
+	updates(handler: (action: "prepare" | "verify" | "cancel" | "inspect", value: unknown) => Promise<unknown>): void;
 	close(): Promise<void>;
 }
 
@@ -112,6 +113,7 @@ export async function ownRuntime(
 	port: number,
 	bundled: boolean,
 	build: RuntimeBuild | null,
+	runtimeRoot?: string,
 ): Promise<RuntimeOwner> {
 	let fresh = false;
 	await mkdir(dirname(resolve(home)), { recursive: true, mode: 0o700 });
@@ -158,10 +160,60 @@ export async function ownRuntime(
 	}
 	const secret = randomBytes(32).toString("hex"),
 		boot = randomBytes(32).toString("hex");
-	const record = { schema: 1, boot, secret, home: homeHash(home), port, pid: process.pid, build };
+	const record = { schema: 1, boot, secret, home: homeHash(home), port, pid: process.pid, build, runtimeRoot };
 	let hello: DaemonHello | undefined;
 	let handler: RequestListener | undefined;
+	let updateHandler: Parameters<RuntimeOwner["updates"]>[0] | undefined;
 	const server = createServer({ requestTimeout: 2000, headersTimeout: 2000 }, (req, res) => {
+		if (req.url === "/__pilot_runtime_update/v1") {
+			if (req.method !== "POST" || req.headers.origin || !hello || !runtimeRoot || !updateHandler) {
+				res.writeHead(403).end();
+				return;
+			}
+			let raw = "";
+			req.setEncoding("utf8");
+			req.on("data", (part: string) => {
+				raw += part;
+				if (Buffer.byteLength(raw) > 4096) req.destroy();
+			});
+			req.on("end", () => {
+				void (async () => {
+					try {
+						const expected = mac(secret, `update/v1\n${raw}`);
+						const provided = req.headers["x-pilot-update-proof"];
+						if (
+							typeof provided !== "string" ||
+							!/^[a-f0-9]{64}$/.test(provided) ||
+							!timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(provided, "hex"))
+						)
+							throw new Error("proof");
+						const value = JSON.parse(raw);
+						if (
+							value.boot !== boot ||
+							!/^[a-f0-9]{64}$/.test(value.nonce) ||
+							!["prepare", "verify", "cancel", "inspect"].includes(value.action)
+						)
+							throw new Error("identity");
+						const receipt = await updateHandler!(value.action, value.receipt);
+						const body = JSON.stringify({
+							schema: 1,
+							boot,
+							home: record.home,
+							port,
+							build,
+							runtimeRoot,
+							nonce: value.nonce,
+							receipt,
+						});
+						res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+						res.end(JSON.stringify({ body, mac: mac(secret, `update/v1\n${body}`) }));
+					} catch {
+						res.writeHead(409).end();
+					}
+				})();
+			});
+			return;
+		}
 		if (req.url?.startsWith(ROUTE)) {
 			const challenge = req.url.slice(ROUTE.length);
 			if (req.method !== "GET" || req.headers.origin || !/^[a-f0-9]{64}$/.test(challenge)) {
@@ -175,6 +227,7 @@ export async function ownRuntime(
 				port,
 				pid: record.pid,
 				build,
+				runtimeRoot,
 				challenge,
 				ready: !!hello,
 				hello,
@@ -207,6 +260,9 @@ export async function ownRuntime(
 	let closed = false;
 	return {
 		server,
+		updates(value) {
+			updateHandler = value;
+		},
 		install(value) {
 			handler = value;
 		},

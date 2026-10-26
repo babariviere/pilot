@@ -1,9 +1,13 @@
 //! App-owned updater. Signed metadata, controlled transport, explicit staged restart.
 use std::time::Duration;
 pub mod archive;
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub mod coordination;
 pub mod helper;
 pub mod installer;
 pub mod manifest;
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub mod runtime;
 pub mod transport;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub mod worker;
@@ -60,6 +64,7 @@ pub enum Outcome {
     Staged(Candidate),
     ExitPrepared,
     ExitCommitted,
+    ExitAborted,
     HelperStopped(Error),
     Failed(Error),
     Cancelled,
@@ -111,6 +116,15 @@ pub struct Safety {
 }
 impl Safety {
     pub fn validate(&self) -> Result<(), Error> {
+        self.validate_client()?;
+        if !matches!(self.runtime, Runtime::Independent)
+            && !matches!(self.runtime, Runtime::SharedStopped { expected, observed } if expected == observed)
+        {
+            return Err(Error::RuntimeUnverified);
+        }
+        Ok(())
+    }
+    fn validate_client(&self) -> Result<(), Error> {
         for receipt in [self.drafts, self.deliveries, self.settings] {
             if receipt.failed {
                 return Err(Error::PersistenceFailed);
@@ -127,11 +141,6 @@ impl Safety {
         }
         if !self.admissions_fenced {
             return Err(Error::AdmissionsNotFenced);
-        }
-        if !matches!(self.runtime, Runtime::Independent)
-            && !matches!(self.runtime, Runtime::SharedStopped { expected, observed } if expected == observed)
-        {
-            return Err(Error::RuntimeUnverified);
         }
         Ok(())
     }
@@ -366,6 +375,13 @@ impl<B: Backend> Updater<B> {
                 self.helper_operation = Some(operation);
                 Ok(State::ExitPrepared)
             }
+            (Some(Work::PreparingExit), Outcome::ExitAborted) => {
+                self.helper_operation = None;
+                self.staged
+                    .clone()
+                    .map(State::ReadyToRestart)
+                    .ok_or(Error::Identity)
+            }
             (Some(Work::CommittingExit), Outcome::ExitCommitted) => Ok(State::ExitAuthorized),
             _ => Err(Error::InvalidResponse),
         };
@@ -399,6 +415,68 @@ impl<B: Backend> Updater<B> {
             self.backend.teardown();
             self.state = State::Stopped;
         }
+    }
+}
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+impl Updater<worker::Worker> {
+    /// Client receipts do not assert Runtime::Independent. The concrete native
+    /// worker must obtain and verify the retained-root reservation before READY.
+    pub fn prepare_retained(&mut self, safety: Safety, now: Duration) -> Result<(), Error> {
+        let candidate = match &self.state {
+            State::ReadyToRestart(c) | State::Deferred { candidate: c, .. } => c.clone(),
+            _ => return Err(Error::Busy),
+        };
+        if let Err(reason) = safety.validate_client() {
+            self.state = State::Deferred { candidate, reason };
+            return Err(reason);
+        }
+        let operation = self.start(Work::PreparingExit)?;
+        if let Err(error) = self.backend.prepare_exit(operation, safety) {
+            self.complete(
+                Completion {
+                    operation,
+                    outcome: Outcome::Failed(error),
+                },
+                now,
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+    pub fn commit_retained(&mut self, safety: Safety, now: Duration) -> Result<(), Error> {
+        if self.state != State::ExitPrepared {
+            return Err(Error::Busy);
+        }
+        safety.validate_client()?;
+        let operation = self.start(Work::CommittingExit)?;
+        if let Err(error) = self.backend.commit_exit(operation, safety) {
+            self.complete(
+                Completion {
+                    operation,
+                    outcome: Outcome::Failed(error),
+                },
+                now,
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+    pub fn abort_retained(&mut self, now: Duration) -> Result<(), Error> {
+        if self.state != State::ExitPrepared {
+            return Err(Error::Busy);
+        }
+        let operation = self.start(Work::PreparingExit)?;
+        if let Err(error) = self.backend.abort_exit(operation) {
+            self.complete(
+                Completion {
+                    operation,
+                    outcome: Outcome::Failed(error),
+                },
+                now,
+            );
+            return Err(error);
+        }
+        Ok(())
     }
 }
 impl<B: Backend> Drop for Updater<B> {

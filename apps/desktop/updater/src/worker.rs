@@ -17,8 +17,9 @@ use std::{
 enum Job {
     Check(u64, Access, Cancellation),
     Download(u64, Candidate, Access, Cancellation),
-    Prepare(u64, Safety),
+    Prepare(u64, Safety, Option<crate::coordination::Location>),
     Commit(u64, Safety),
+    Abort(u64),
     HelperStopped(u64, Error),
     Shutdown,
 }
@@ -29,18 +30,22 @@ impl Job {
             | Self::Download(id, ..)
             | Self::Prepare(id, ..)
             | Self::Commit(id, ..) => *id,
+            Self::Abort(id) => *id,
             Self::HelperStopped(id, _) => *id,
             Self::Shutdown => 0,
         }
     }
 }
 
+pub type Recovery = Result<Vec<(PathBuf, installer::Phase)>, Error>;
 pub struct Worker {
     sender: Option<SyncSender<Job>>,
     receiver: Option<Receiver<Completion>>,
     access: Option<Access>,
     cancellation: Option<(u64, Cancellation)>,
     stopped: Arc<AtomicBool>,
+    runtime: Option<crate::coordination::Location>,
+    recovery: Option<Receiver<Recovery>>,
 }
 impl Worker {
     /// No defaults or credential probing. Both GUI and helper need the same compiled
@@ -58,16 +63,26 @@ impl Worker {
             .to_owned();
         let (sender, jobs) = mpsc::sync_channel::<Job>(1);
         let (results, receiver) = mpsc::sync_channel(1);
+        let (recovery_send, recovery_receive) = mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
         let shutdown = stopped.clone();
         let event_sender = sender.clone();
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
+                let recovery = MacPlatform
+                    .verify(&target, &trust, &trust.current_build, None)
+                    .and_then(|()| installer::recoveries(&target, &trust));
+                if recovery_send.send(recovery).is_err() {
+                    return;
+                }
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&wakeup));
                 let mut verified = None;
                 let mut staged = None;
                 let mut prepared = None;
                 let mut helper_operation = None;
+                let mut runtime_guard: Option<crate::coordination::Guard> = None;
+                let mut commit_attempted = false;
                 while let Ok(job) = jobs.recv() {
                     if shutdown.load(Ordering::Acquire) || matches!(job, Job::Shutdown) {
                         break;
@@ -129,13 +144,26 @@ impl Worker {
                             }
                             Ok(Outcome::Staged(candidate))
                         }
-                        Job::Prepare(id, safety) => {
-                            safety.validate()?;
+                        Job::Prepare(id, safety, runtime) => {
+                            safety.validate_client()?;
                             if prepared.is_some() {
                                 return Err(Error::Busy);
                             }
                             installer::validate_target(&target, &trust)?;
                             MacPlatform.verify(&target, &trust, &trust.current_build, None)?;
+                            let stage = staged.as_ref().ok_or(Error::Identity)?;
+                            if let Some(old) = runtime_guard.take() {
+                                old.cancel();
+                            }
+                            let guard = crate::coordination::Guard::prepare(
+                                runtime.ok_or(Error::RuntimeUnverified)?,
+                                &stage.root.join("payload").join(&trust.bundle_name),
+                                &stage.root,
+                                stage.build(),
+                                &trust,
+                            )?;
+                            guard.save()?;
+                            runtime_guard = Some(guard);
                             let sender = event_sender.clone();
                             let stopped = shutdown.clone();
                             prepared = Some(PreparedExit::launch(
@@ -150,9 +178,22 @@ impl Worker {
                             Ok(Outcome::ExitPrepared)
                         }
                         Job::Commit(_, safety) => {
-                            safety.validate()?;
+                            safety.validate_client()?;
+                            runtime_guard
+                                .as_ref()
+                                .ok_or(Error::RuntimeUnverified)?
+                                .verify()?;
+                            commit_attempted = true;
                             prepared.as_mut().ok_or(Error::Identity)?.commit()?;
                             Ok(Outcome::ExitCommitted)
+                        }
+                        Job::Abort(_) => {
+                            prepared = None;
+                            helper_operation = None;
+                            if let Some(guard) = runtime_guard.take() {
+                                guard.cancel();
+                            }
+                            Ok(Outcome::ExitAborted)
                         }
                         Job::HelperStopped(_, error) => {
                             prepared = None;
@@ -176,6 +217,9 @@ impl Worker {
                     // execute UI work here. Panics cannot unwind across worker ownership.
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&wakeup));
                 }
+                if !commit_attempted && let Some(guard) = runtime_guard {
+                    guard.cancel();
+                }
             })
             .map_err(|_| Error::Native)?;
         Ok(Self {
@@ -184,15 +228,29 @@ impl Worker {
             access: None,
             cancellation: None,
             stopped,
+            runtime: None,
+            recovery: Some(recovery_receive),
         })
     }
     pub fn supply_access(&mut self, access: Access) {
         self.access = Some(access);
     }
+    pub fn clear_access(&mut self) {
+        self.access = None;
+    }
+    pub(crate) fn abort_exit(&mut self, operation: u64) -> Result<(), Error> {
+        self.send(Job::Abort(operation))
+    }
+    pub fn supply_runtime(&mut self, runtime: crate::coordination::Location) {
+        self.runtime = Some(runtime);
+    }
     pub fn take_completion(&mut self) -> Option<Completion> {
         let completion = self.receiver.as_ref()?.try_recv().ok()?;
         self.cancellation = None;
         Some(completion)
+    }
+    pub fn take_recovery(&mut self) -> Option<Recovery> {
+        self.recovery.as_ref()?.try_recv().ok()
     }
     fn send(&mut self, job: Job) -> Result<(), Error> {
         self.sender
@@ -216,7 +274,7 @@ impl Backend for Worker {
         self.send(Job::Download(operation, candidate.clone(), access, cancel))
     }
     fn prepare_exit(&mut self, operation: u64, safety: Safety) -> Result<(), Error> {
-        self.send(Job::Prepare(operation, safety))
+        self.send(Job::Prepare(operation, safety, self.runtime.clone()))
     }
     fn commit_exit(&mut self, operation: u64, safety: Safety) -> Result<(), Error> {
         self.send(Job::Commit(operation, safety))
@@ -238,6 +296,7 @@ impl Backend for Worker {
             let _ = sender.try_send(Job::Shutdown);
         }
         self.receiver = None; // unblock any pending result send; never strand the worker
+        self.recovery = None;
     }
 }
 impl Drop for Worker {

@@ -99,9 +99,11 @@ Older builds are rejected; an equal build is no update. No key rotation is imple
 
 ## Lifecycle/registration contract
 
-Later integration owns the shared Cargo registration, app-lifetime controller, Settings,
-compiled release configuration, helper packaging, persistence receipts and runtime
-coordination. This crate does not edit or register any of those seams.
+The desktop app now uses this crate as a macOS path dependency, with an app-lifetime
+controller, native Updates Settings, explicit durability checkpoints, helper packaging,
+retained-runtime reservation and startup/recovery handling. Shared CI also checks the
+standalone crate. See [GUI integration and limits](../docs/updates.md). Production
+trust/feed/signing configuration is deliberately absent from development assembly.
 
 1. Build GUI and helper with the **same** approved public configuration:
    `PILOT_NEXT_UPDATER_PUBLIC_KEY` (base64 raw32-byte Ed25519 key),
@@ -130,11 +132,12 @@ coordination. This crate does not edit or register any of those seams.
    the running version. No helper is armed by checks, download, scheduling or ordinary quit.
 5. Explicit Restart intent fences edits/admissions and captures fresh durable receipts
    for drafts, deliveries and Settings. Preserve uncommitted IME/preedit, active tools/jobs
-   and unsaved text. Wait/defer; do not force completion/cancellation. For shared resources,
-   integration must use the existing safe daemon preparation/shutdown contract, validate
-   the actual process and lifecycle generation, and keep it stopped/fenced through exit.
-   `Runtime::Independent` is valid only if packaging proves no shared resources are replaced.
-   No daemon APIs, lease renewal, stops, installs or mutations are added/called here.
+   and unsaved text. Wait/defer; do not force completion/cancellation. The concrete GUI
+   uses `prepare_retained`, not a client assertion of `Runtime::Independent` or
+   `SharedStopped`. Its native worker proves the exact sealed capsule/process/profile
+   and obtains a nonrenewable idle reservation. Legacy/app-root and unproven runtimes
+   refuse. The same reservation must remain valid after actual parent exit; no existing
+   daemon is paused, stopped, migrated, replaced or restarted.
 6. Call `request_install(safety, now)` only after those acknowledgements. It starts a
    helper that waits for COMMIT; the live app remains unchanged. When `ExitPrepared`
    arrives, capture/revalidate **fresh** exact-revision receipts and fences, then
@@ -185,9 +188,12 @@ is30s, COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs witho
 Helper EOF/abort is delivered through a blocking status watcher with generation fencing,
 not an idle polling timer; prepared/authorized UI cannot remain falsely ready after
 helper death. A lost COMMIT receipt is uncertain, not an undo of durable intent.
-There is no elevated install, Linux/Wayland implementation/validation, production feed,
-key provisioning, real access-provider integration, daemon update coordination, startup
-receipt UI, rollback UI or integrated GUI quit proof in this standalone checkpoint.
+There is no elevated install, Linux installer/updater implementation/validation,
+production feed/key provisioning, automatic provider-credential discovery, daemon
+replacement, rollback UI or production GUI update acceptance claim. GUI Settings,
+explicit quit coordination, session-only repository access, retained-runtime proof and
+startup/recovery handling are integrated; synthetic component/helper checks do not
+establish full production-bundle, Gatekeeper, notarization or macOS-version acceptance.
 
 ## Focused checks
 

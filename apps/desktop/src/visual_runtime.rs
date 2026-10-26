@@ -25,6 +25,31 @@ const RUNTIME: &str = include_str!("../../../packages/artifacts/src/visual/runti
 static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
 static TEARDOWN_FAILED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static RESTART_PERMITS: std::sync::Mutex<Option<tokio::sync::OwnedSemaphorePermit>> =
+    std::sync::Mutex::new(None);
+#[cfg(target_os = "macos")]
+pub(crate) fn fence_for_restart() -> bool {
+    let Ok(mut held) = RESTART_PERMITS.try_lock() else {
+        return false;
+    };
+    if held.is_some() || TEARDOWN_FAILED.load(Ordering::Acquire) {
+        return false;
+    }
+    // Reserve the whole capacity atomically, not a racy free-count snapshot.
+    let Ok(permits) = SLOTS.clone().try_acquire_many_owned(2) else {
+        return false;
+    };
+    *held = Some(permits);
+    true
+}
+#[cfg(target_os = "macos")]
+pub(crate) fn release_restart_fence() {
+    RESTART_PERMITS
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .take();
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Fault {
     pub(crate) kind: &'static str,
@@ -288,6 +313,16 @@ impl Process {
         }
     }
 }
+impl Drop for Process {
+    fn drop(&mut self) {
+        // A dropped child/permit is not proof of reaping. Retain a fail-closed
+        // veto until app restart rather than reporting a free native resource.
+        if let Some(permit) = self.permit.take() {
+            TEARDOWN_FAILED.store(true, Ordering::Release);
+            permit.forget();
+        }
+    }
+}
 fn script_fault(value: &Value) -> Fault {
     let e = &value["error"];
     let kind = match e["kind"].as_str() {
@@ -384,6 +419,19 @@ mod unsupported_platform_tests {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn restart_fence_reserves_all_capacity_and_releases_it_on_cancel() {
+        let active = super::SLOTS.clone().try_acquire_owned().unwrap();
+        assert!(!super::fence_for_restart());
+        drop(active);
+        assert!(super::fence_for_restart());
+        assert!(super::SLOTS.clone().try_acquire_owned().is_err());
+        assert!(!super::fence_for_restart());
+        super::release_restart_fence();
+        let all = super::SLOTS.clone().try_acquire_many_owned(2).unwrap();
+        drop(all);
+    }
     use super::*;
     #[tokio::test]
     async fn shared_draw_errors_match_without_relaxing_the_production_budget() {

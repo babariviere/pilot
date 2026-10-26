@@ -1,6 +1,35 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
 
+#[tokio::test]
+async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing_writer() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert!(client.edit("chat:a".into(), draft(7, "Retain 日本語 👩‍💻 before update")));
+    assert!(client.command(WriteCommand::Checkpoint(41)));
+    let state = until(&updates, |s| s.checkpoint == Some(41)).await;
+    assert!(!state.flushed);
+    assert!(state.error.is_none());
+    assert_eq!(state.book.unwrap().drafts["chat:a"].revision, 7);
+    assert!(client.edit(
+        "chat:a".into(),
+        draft(8, "Retained after cancelled preparation")
+    ));
+    assert!(client.command(WriteCommand::Checkpoint(42)));
+    let state = until(&updates, |s| s.checkpoint == Some(42)).await;
+    assert_eq!(state.book.unwrap().drafts["chat:a"].revision, 8);
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+    while updates.recv().await.is_ok() {}
+    drop(client);
+    let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    assert_eq!(
+        store.book.drafts["chat:a"].text,
+        "Retained after cancelled preparation"
+    );
+}
+
 fn question_answer_fixture() -> Arc<crate::question::Question> {
     Arc::new(crate::question::Question::parse(4,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true})).unwrap())
 }

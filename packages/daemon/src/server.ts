@@ -109,6 +109,7 @@ import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { validatePatch } from "./tracked-items.ts";
+import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
 
@@ -469,7 +470,7 @@ export function createDaemonServer(
 	const attachments = new AttachmentStore(_config.home);
 	const transfers = new RuntimeAdmission();
 	const mutations = new RuntimeAdmission();
-	const runtimeResources = new RuntimeResources([
+	const runtimeSources = [
 		terminals,
 		attachments,
 		sessions,
@@ -478,7 +479,31 @@ export function createDaemonServer(
 		...(githubSetup ? [githubSetup] : []),
 		...(githubImport ? [githubImport] : []),
 		...(setup ? [setup] : []),
-	]);
+	];
+	const runtimeResources = new RuntimeResources(runtimeSources);
+	const reservations = new UpdateReservation(
+		new RuntimeResources(
+			runtimeSources.map((source) =>
+				source === sessions
+					? {
+							freezeAdmissions: () => sessions.freezeAdmissions(),
+							blockers: () => sessions.idleUpdateBlockers(),
+						}
+					: source,
+			),
+		),
+	);
+	bootstrap?.updates(async (action, value) => {
+		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");
+		const receipt = value as ReservationReceipt;
+		if (action === "inspect") return receipt;
+		if (action === "prepare") return reservations.prepare(receipt.operationId);
+		if (action === "cancel") {
+			reservations.cancel(receipt);
+			return receipt;
+		}
+		return reservations.verify(receipt);
+	});
 	if (legacyAdmissionFrozen) runtimeResources.freezeAdmissions();
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
@@ -1865,6 +1890,7 @@ export function createDaemonServer(
 		});
 	};
 	const server = bootstrap ? (bootstrap.install(handleRequest), bootstrap.server) : createServer(handleRequest);
+	server.once("close", () => reservations.close());
 
 	// The control socket carries only small subscription messages. Terminal pastes use the terminal socket.
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });

@@ -234,7 +234,7 @@ fn validate_bundle_tree(root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn validate_parents(parent: &Path) -> Result<(), Error> {
+pub(crate) fn validate_parents(parent: &Path) -> Result<(), Error> {
     // A root-owned sticky ancestor (e.g. /private/tmp) protects our owned entry;
     // an immediately writable/sticky installation parent is deliberately refused.
     // SAFETY: geteuid is a process identity query.
@@ -348,6 +348,16 @@ impl Staged {
         platform: &impl Platform,
         parent_exited: crate::helper::ExitedParent,
     ) -> Result<(), Error> {
+        self.apply_after_exit_checked(trust, platform, parent_exited, |_| Ok(()))
+    }
+
+    pub(crate) fn apply_after_exit_checked(
+        &self,
+        trust: &Trust,
+        platform: &impl Platform,
+        parent_exited: crate::helper::ExitedParent,
+        check: impl FnOnce(&Path) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         parent_exited.consume();
         let mut journal = read_journal(&self.root)?;
         if journal.phase != Phase::Committed {
@@ -378,6 +388,7 @@ impl Staged {
             self.build(),
             Some(&self.verified.manifest().short_version),
         )?;
+        check(&candidate)?;
         // Keep the old app in the same directory as the actually swapped candidate.
         let relative = candidate
             .strip_prefix(self.target.parent().ok_or(Error::Filesystem)?)
@@ -434,6 +445,42 @@ impl Staged {
 /// Read-only recovery inspection. No automatic retry, deletion or rollback.
 pub fn recovery_phase(root: &Path) -> Result<Phase, Error> {
     Ok(read_journal(root)?.phase)
+}
+/// Read-only bounded startup inspection. Unknown/corrupt transactions are never
+/// retried, deleted, adopted or treated as successful installation.
+pub fn recoveries(target: &Path, trust: &Trust) -> Result<Vec<(PathBuf, Phase)>, Error> {
+    validate_target(target, trust)?;
+    let parent = target.parent().ok_or(Error::Identity)?;
+    let mut result = Vec::new();
+    for (count, entry) in fs::read_dir(parent)
+        .map_err(|_| Error::Filesystem)?
+        .enumerate()
+    {
+        if count >= 4096 {
+            return Err(Error::RecoveryRequired);
+        }
+        let entry = entry.map_err(|_| Error::Filesystem)?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(suffix) = name.strip_prefix(".pilot-next-update-") else {
+            continue;
+        };
+        if suffix.len() != 32 || !suffix.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::RecoveryRequired);
+        }
+        let root = entry.path();
+        validate_root(&root, target)?;
+        let phase = recovery_phase(&root)?;
+        if phase != Phase::StartupAcknowledged {
+            result.push((root, phase));
+        }
+        if result.len() > 2 {
+            return Err(Error::RecoveryRequired);
+        }
+    }
+    Ok(result)
 }
 
 /// Integration calls this only AFTER the new app has durably loaded its state.

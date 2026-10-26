@@ -35,6 +35,8 @@ async fn session_failure_summary_updates_and_reader_errors_stay_separate_and_cha
         daemon_id: "failure-daemon".into(),
         lineage_id: "failure-lineage".into(),
         native_home: None,
+        #[cfg(target_os = "macos")]
+        update_policy: Default::default(),
     };
     let (send, updates) = async_channel::bounded::<Value>(4);
     let requests = Arc::new(Mutex::new(Vec::new()));

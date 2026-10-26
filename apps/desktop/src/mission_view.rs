@@ -52,6 +52,13 @@ pub(crate) struct MissionForm {
 impl EventEmitter<Event> for MissionForm {}
 
 impl MissionForm {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn restart_safe(&self, cx: &gpui_kit::App) -> bool {
+        !self.pending
+            && !self.open
+            && self.title.read(cx).value().is_empty()
+            && self.goal.read(cx).value().is_empty()
+    }
     pub(crate) fn new(
         client: Option<Interaction>,
         window: &mut Window,

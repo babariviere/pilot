@@ -290,6 +290,23 @@ impl ChatEditor {
         cx.emit(EditorEvent::DraftsChanged);
         cx.notify();
     }
+    #[cfg(target_os = "macos")]
+    pub(super) fn question_checkpoint_matches(&self, cx: &gpui_kit::App) -> bool {
+        let Some(question) = &self.questions.current else {
+            return true;
+        };
+        let Some(answer) = self
+            .selected
+            .as_ref()
+            .and_then(|key| self.cache.get(key))
+            .and_then(|d| d.answer.as_ref())
+        else {
+            return false;
+        };
+        answer.identity.question == question.identity
+            && answer.text == self.questions.input.read(cx).value().as_ref()
+            && answer.selected == self.questions.selected
+    }
     fn pick_question(
         &mut self,
         identity: &Identity,

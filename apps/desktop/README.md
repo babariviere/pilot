@@ -8,7 +8,8 @@ Local create/send/Stop with private durable drafts are implemented.
 Compact tool/work presentation, adaptive light/dark chrome and a partial native visual reader are implemented.
 The Local viewer has native Appearance Settings with explicit private preference saves
 and Local global Scoped models with explicit native-authorized, CAS-checked saves and readback.
-Other Settings categories are unavailable, not simulated controls.
+macOS Updates Settings and explicit safe restart are implemented with fail-closed
+development configuration. Other missing categories are unavailable, not simulated controls.
 The artifact reader remains incomplete, not a replacement/parity claim. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
@@ -24,7 +25,7 @@ controls can create chats, send messages, Stop and convert an eligible existing
 chat into a mission with explicit confirmation. Conversion requires the guarded
 Local daemon capability; an older daemon is refused without a mutation. The default launch remains a
 network-free synthetic transcript and memory-only local-echo composer, without
-disk state. No read-status writes, service installation, updater or default switch.
+disk state. No read-status writes, service installation or default switch.
 
 ### Chat actions
 
@@ -93,8 +94,9 @@ resolved before managed close/quit; save errors keep the selection and offer ret
 Preferences belong only to Next's private `settings/preferences-v1.json` under its own state
 directory, separate from Swift defaults and draft/delivery state. Opening/loading never
 creates the file. Appearance has no automatic Swift import, credential access or daemon settings
-mutation. Synthetic viewers do not resolve or change production preferences. Updates and
-other missing categories state their gaps explicitly. See `docs/settings-parity.md` and
+mutation. Synthetic viewers do not resolve or change production preferences. See
+[Updates](docs/updates.md) for the macOS updater, immutable runtime and explicit restart.
+Other missing categories state their gaps explicitly. See `docs/settings-parity.md` and
 `evidence/settings-screen.md` for ownership, supported behavior and qualified checks.
 
 ### Local Scoped models

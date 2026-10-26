@@ -25,6 +25,26 @@ impl gpui_kit::Render for Desktop {
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    #[cfg(target_os = "macos")]
+    let mut args = args;
+    #[cfg(target_os = "macos")]
+    if args.first().is_some_and(|a| a == "--updater-receipt") {
+        let allowed = args.len() == 2
+            && std::env::current_exe().is_ok_and(|p| pilot_desktop::bundled_runtime::packaged(&p))
+            && pilot_desktop_updater::helper::compiled_trust().is_ok();
+        if !allowed
+            || pilot_desktop::bundled_runtime::set_update_receipt(std::path::PathBuf::from(
+                args.get(1).cloned().unwrap_or_default(),
+            ))
+            .is_err()
+        {
+            eprintln!(
+                "Update startup recovery is unavailable or has an invalid receipt. No update was acknowledged."
+            );
+            std::process::exit(2);
+        }
+        args.clear();
+    }
     if args.as_slice() == ["--local-check"] {
         let result = LocalOptions::discover().and_then(pilot_desktop::check_local_read);
         if let Err(error) = result {

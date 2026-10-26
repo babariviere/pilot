@@ -57,6 +57,33 @@ fn preferences(appearance: settings_state::AppearancePreference) -> Preferences 
 }
 
 #[test]
+fn automatic_checks_wait_for_exact_settings_durability_and_roundtrip_legacy_defaults() {
+    let mut state = SettingsState::default();
+    assert!(state.begin_load());
+    assert!(state.finish_load(Ok(LoadedPreferences {
+        preferences: Preferences::default(),
+        persisted: false
+    })));
+    assert!(!state.current().automatic_update_checks);
+    assert_eq!(state.durability_token(), None);
+    let initial = state
+        .begin_durability_checkpoint()
+        .expect("explicit restart may persist previously missing defaults");
+    assert!(state.finish_save(initial, Ok(())));
+    let first = state.durability_token().unwrap();
+    assert!(state.set_automatic_update_checks(true));
+    assert_eq!(state.durability_token(), None);
+    let requested = state.begin_save().unwrap();
+    assert_eq!(state.durability_token(), None);
+    assert!(state.finish_save(requested, Err(SettingsError::DurabilityUnknown)));
+    assert_eq!(state.durability_token(), None);
+    let retry = state.begin_save().unwrap();
+    assert!(state.finish_save(retry, Ok(())));
+    assert!(state.durability_token().unwrap() > first);
+    assert!(state.current().automatic_update_checks);
+}
+
+#[test]
 fn font_bounds_legacy_load_roundtrip_and_font_only_defaults() {
     use settings_state::{FontFamily, FontPreferences};
     assert!(FontFamily::new(&"x".repeat(97)).is_none());

@@ -137,6 +137,9 @@ impl LocalViewer {
         }
     }
     pub(super) fn project_choices_ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.restart_pending {
+            return false;
+        }
         if self.queue_open.is_some()
             || self.jump.is_some()
             || self.mission_open

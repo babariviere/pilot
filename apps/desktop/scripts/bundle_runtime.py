@@ -99,6 +99,25 @@ def inventory(root):
     return sorted(result, key=lambda item: item["path"])
 
 
+def supports_macos_15(load_commands):
+    versions = []
+    for block in re.split(r"Load command \d+\s*\n", load_commands)[1:]:
+        if re.search(r"\bcmd LC_BUILD_VERSION\b", block):
+            if not re.search(r"\bplatform (?:1|MACOS)\s*\n", block):
+                return False
+            field = "minos"
+        elif re.search(r"\bcmd LC_VERSION_MIN_MACOSX\b", block):
+            field = "version"
+        else:
+            continue
+        match = re.search(rf"\b{field} (\d+(?:\.\d+){{0,2}})\s*\n", block)
+        if not match:
+            return False
+        value = tuple(map(int, match[1].split(".")))
+        versions.append(value + (0,) * (3 - len(value)))
+    return bool(versions) and all(v <= (15, 0, 0) for v in versions)
+
+
 def native_closure(root):
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("App bundles require native arm64 macOS verification")
@@ -106,6 +125,7 @@ def native_closure(root):
     binaries = []
     required = {
         "Contents/MacOS/pilot-desktop", "Contents/MacOS/pilot-visual-worker",
+        "Contents/Helpers/pilot-desktop-update-helper",
         "Contents/Resources/runtime/node/bin/node", "Contents/Helpers/PilotPower",
         "Contents/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents",
     }
@@ -121,6 +141,8 @@ def native_closure(root):
             continue
         if run("/usr/bin/lipo", "-archs", str(path)) != "arm64":
             raise ValueError(f"Non-arm64 Mach-O: {item['path']}")
+        if any(ord(c) < 32 for c in str(path)) or not supports_macos_15(run("/usr/bin/otool", "-l", str(path))):
+            raise ValueError(f"Unverified macOS 15 deployment metadata: {item['path']}")
         for line in run("/usr/bin/otool", "-L", str(path)).splitlines()[1:]:
             dependency = line.strip().split(" (", 1)[0]
             if dependency.startswith(("/usr/lib/", "/System/Library/")):
@@ -160,11 +182,26 @@ def receipt(directory, expected_source, names):
             raise ValueError(f"Executable receipt mismatch: {name}")
 
 
-def assemble(runtime, executables, native, output, expected_source):
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=()):
     if output.exists() or output.is_symlink() or output.name != "Pilot Next.app":
         raise ValueError("Use a fresh output named Pilot Next.app")
     build = validate_runtime(runtime, expected_source)
+    bundle_build = bundle_build or build["version"]
+    if not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", bundle_build):
+        raise ValueError("Bundle build must be 1-4 bounded numeric components")
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", build["version"]):
+        raise ValueError("Bundle short version must be numeric")
+    if len(accepted_capsules) > 4 or len(set(accepted_capsules)) != len(accepted_capsules) or any(not re.fullmatch(r"[0-9a-f]{64}", v) for v in accepted_capsules):
+        raise ValueError("Runtime compatibility must list exact bounded capsule identities")
     receipt(executables, expected_source, ["pilot-desktop", "pilot-visual-worker"])
+    updater = updater or executables
+    receipt(updater, expected_source, ["pilot-desktop-update-helper"])
+    app_config = read_json(executables / "manifest.json").get("updater_configuration")
+    helper_config = read_json(updater / "manifest.json").get("updater_configuration")
+    if app_config != helper_config:
+        raise ValueError("App/helper updater configuration receipts differ")
+    if app_config != dict(schema=1, mode="unconfigured"):
+        raise ValueError("Development assembly requires explicit unconfigured app/helper input receipts")
     receipt(native, expected_source, ["PilotPower", "PilotSystemEvents"])
     inventory(runtime)  # Admission before any recursive copy can follow external input.
     output.mkdir(mode=0o755)
@@ -174,6 +211,8 @@ def assemble(runtime, executables, native, output, expected_source):
         (contents / "MacOS").mkdir()
         (contents / "Helpers").mkdir()
         (contents / "Resources").mkdir()
+        shutil.copyfile(updater / "pilot-desktop-update-helper", contents / "Helpers/pilot-desktop-update-helper")
+        (contents / "Helpers/pilot-desktop-update-helper").chmod(0o755)
         for name in ("pilot-desktop", "pilot-visual-worker"):
             shutil.copyfile(executables / name, contents / "MacOS" / name)
             (contents / "MacOS" / name).chmod(0o755)
@@ -182,6 +221,9 @@ def assemble(runtime, executables, native, output, expected_source):
         for name, directory in (("rust-inputs.json", executables), ("native-inputs.json", native)):
             value = read_json(directory / "manifest.json")
             write_json(contents / "Resources" / name, dict(schema=1, source=expected_source, binaries=value["binaries"]))
+        write_json(contents / "Resources/updater-inputs.json", dict(schema=1, source=expected_source,
+                   binaries=read_json(updater / "manifest.json")["binaries"], configuration=helper_config))
+        write_json(contents / "Resources/update-runtime-policy.json", dict(schema=1, accepted_capsules=list(accepted_capsules)))
         shutil.copyfile(native / "PilotPower", contents / "Helpers/PilotPower")
         (contents / "Helpers/PilotPower").chmod(0o755)
         helper = contents / "Helpers/PilotSystemEvents.app/Contents"
@@ -194,8 +236,8 @@ def assemble(runtime, executables, native, output, expected_source):
                                LSUIElement=True, LSMinimumSystemVersion="15.0"), stream)
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot Next", CFBundleDisplayName="Pilot Next",
-                               CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion="1",
-                               CFBundleShortVersionString="0.1.0", CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True), stream)
+                               CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
+                               CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True), stream)
         # Only ad-hoc development signing, never access a signing key or alter a production identity.
         for binary in native_closure(output):
             # Signing the bundle's main executable by its file path can also
@@ -266,17 +308,67 @@ def snapshot_build(expected_source, output, native=False):
             env["XDG_DATA_HOME"] = str(temporary / "data")
             subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/bundle-runtime.sh"), str(output)], env=env, check=True, timeout=1200)
             (output / "desktop-assets").mkdir()
-            shutil.copyfile(checkout / "apps/macos/Resources/AppIcon.icns", output / "desktop-assets/AppIcon.icns")
+            subprocess.run([sys.executable, str(checkout / "apps/desktop/scripts/make_dev_icon.py"),
+                            str(output / "desktop-assets/AppIcon.icns")], check=True, timeout=10)
             version = read_json(checkout / "package.json")["version"]
             node = run(str(output / "node/bin/node"), "--version").removeprefix("v")
             write_json(output / "runtime-build.json", dict(schema=1, source=expected_source, version=version, protocol=1, platform="darwin", arch="arm64", node=node))
             validate_runtime(output, expected_source)
 
 
+def snapshot_rust(expected_source, output):
+    """Build all three Rust inputs from immutable objects, unconfigured and non-release only."""
+    source(expected_source)
+    if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
+        raise ValueError("Rust bundle inputs require native arm64 macOS")
+    if output.exists() or output.is_symlink():
+        raise ValueError("Rust input output must be fresh")
+    if run("git", "cat-file", "-t", expected_source, cwd=ROOT) != "commit":
+        raise ValueError("Rust input source must identify a commit")
+    tools = ROOT / "apps/desktop/.tools"
+    if not (tools / "bin/mbx").is_file() or not (tools / "rustup").is_dir():
+        raise ValueError("Bootstrap the pinned build-host Rust tools first")
+    with tempfile.TemporaryDirectory(prefix="next-rust-input-source-") as temporary:
+        temporary = Path(temporary)
+        checkout, archive = temporary / "source", temporary / "source.tar"
+        checkout.mkdir()
+        with archive.open("wb") as stream:
+            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, check=True, timeout=60)
+        with tarfile.open(archive) as tar:
+            tar.extractall(checkout, filter="data")
+        desktop = checkout / "apps/desktop"
+        (desktop / ".tools/bin").mkdir(parents=True)
+        (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
+        (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
+        env = {key: value for key, value in os.environ.items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
+        # No trust/feed/public-key variables are inherited. This lane cannot
+        # become a production release or configured updater by ambient state.
+        subprocess.run([sys.executable, str(desktop / "scripts/prepare-visual-worker.py")], env=env, check=True, timeout=120)
+        slot = str(ROOT / "scripts/verification-slot.py")
+        cargo = str(desktop / "scripts/cargo.sh")
+        for command in (["build", "--locked", "-p", "pilot-desktop", "-p", "pilot-visual-worker"],
+                        ["build", "--manifest-path", "updater/Cargo.toml", "--locked", "--features", "native-macos", "--bin", "pilot-desktop-update-helper"]):
+            subprocess.run([sys.executable, slot, "swift", "--", "/bin/bash", cargo, *command], cwd=checkout, env=env, check=True, timeout=1200)
+        paths = [desktop / "target/dev/debug" / name for name in
+                 ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper")]
+        for path in paths:
+            if run("/usr/bin/lipo", "-archs", str(path)) != "arm64":
+                raise ValueError("Rust input architecture mismatch")
+        output.mkdir(mode=0o700)
+        binaries = []
+        for path in paths:
+            shutil.copyfile(path, output / path.name)
+            (output / path.name).chmod(0o755)
+            binaries.append(dict(name=path.name, bytes=path.stat().st_size, sha256=digest(path)))
+        write_json(output / "manifest.json", dict(schema=1, kind="development-rust-inputs", source=expected_source,
+                   target="aarch64-apple-darwin", deployment_target="15.0", profile="dev", installable_update=False,
+                   updater_configuration=dict(schema=1, mode="unconfigured"), binaries=binaries))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
-    for name in ("runtime", "native"):
+    for name in ("runtime", "native", "rust"):
         command = commands.add_parser(name)
         command.add_argument("--source", required=True)
         command.add_argument("--output", type=Path, required=True)
@@ -284,13 +376,18 @@ def main():
     for name in ("runtime", "executables", "native", "output"):
         bundle.add_argument("--" + name, type=Path, required=True)
     bundle.add_argument("--source", required=True)
+    bundle.add_argument("--updater", type=Path)
+    bundle.add_argument("--bundle-build")
+    bundle.add_argument("--accepted-capsule", action="append", default=[])
     check = commands.add_parser("verify")
     check.add_argument("output", type=Path)
     args = parser.parse_args()
-    if args.action in ("runtime", "native"):
+    if args.action == "rust":
+        snapshot_rust(args.source, args.output.absolute())
+    elif args.action in ("runtime", "native"):
         snapshot_build(args.source, args.output.absolute(), args.action == "native")
     elif args.action == "bundle":
-        assemble(args.runtime, args.executables, args.native, args.output, args.source)
+        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule)
     else:
         verify(args.output)
 

@@ -202,7 +202,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(calls[3:], [
             ["test", *base, "--lib", "--features", "native-macos", f"owned_tests::{name}",
              "--", "--exact", "--test-threads=1"] for name in self.updater_native_names()
-        ])
+        ] + [["test", *base, "--lib", "--features", "native-macos", "--", "--test-threads=1"]])
 
     def test_updater_missing_registration_zero_counts_and_failed_commands_are_failures(self):
         for phase in ["updater-check", "updater-mac-tests"]:
@@ -218,15 +218,17 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
                                 FAIL_MATCH=failure)
         self.run_ci("updater-check", expected=42, FAIL_MATCH="fmt")
         self.run_ci("updater-mac-tests", expected=42, FAIL_MATCH="build")
+        self.run_ci("updater-mac-tests", expected=42, UPDATER_TEST_LIST=self.updater_listing(),
+                    FAIL_MATCH="--lib --features native-macos -- --test-threads=1")
 
     def test_mac_specific_tests_are_list_verified_exact_and_not_portable_suite(self):
         selected = SCRIPT.read_text().split("  mac-tests)", 1)[1].split("    )", 1)[0]
         names = re.findall(r'^      ([\w:]+)$', selected, flags=re.M)
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 9)
         listing = "\n".join(f"{name}: test" for name in names)
         self.run_ci("mac-tests", MAC_TEST_LIST=listing)
         calls = self.calls()
-        self.assertEqual(len(calls), 10)  # helper build + list + 8 exact tests
+        self.assertEqual(len(calls), 2 + len(names))  # helper build, list, then each exact test
         self.assertTrue(all("--exact" in call for call in calls[2:]))
         self.assertEqual({call[5] for call in calls[2:]}, set(names))
 
@@ -420,7 +422,7 @@ class WorkflowTests(unittest.TestCase):
         harness = desktop / "tests/settings_state.rs"
         self.assertIn('#[path = "../src/settings_state.rs"]', harness.read_text())
         self.assertTrue((desktop / "src/settings_state.rs").is_file())
-        self.assertEqual(len(re.findall(r'#\[test\]', harness.read_text())), 20)
+        self.assertEqual(len(re.findall(r'#\[test\]', harness.read_text())), 21)
 
     def test_rust_is_parallel_sibling_reached_by_both_existing_wrappers(self):
         source = WORKFLOW.read_text()
@@ -523,7 +525,7 @@ class WorkflowTests(unittest.TestCase):
         for name in names:
             module, _, function = name.split("::")
             source = (SCRIPT.parents[1] / "src" / f"{module}.rs").read_text()
-            self.assertIn(f"async fn {function}(", source)
+            self.assertRegex(source, rf"\b(?:async\s+)?fn {re.escape(function)}\(")
             # Runtime has a macOS-only test module; the other two have cfg per test.
             self.assertIn('target_os = "macos"', source)
 
