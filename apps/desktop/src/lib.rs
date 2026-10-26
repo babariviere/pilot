@@ -65,6 +65,8 @@ mod work_view;
 pub use catalog_probe::run_catalog_probe;
 
 #[cfg(feature = "native-probes")]
+pub use artifact_view::image_probe::run_artifact_image_probe;
+#[cfg(feature = "native-probes")]
 pub use artifact_view::slider_probe::run_slider_probe;
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
@@ -95,6 +97,8 @@ mod icon_probe;
 #[cfg(feature = "native-probes")]
 pub use icon_probe::run_icon_probe;
 mod appearance;
+mod artifact_image;
+mod artifact_image_view;
 mod artifact_model;
 mod artifact_view;
 mod artifact_worker;

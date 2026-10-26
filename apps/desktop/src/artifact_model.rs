@@ -66,17 +66,25 @@ pub(crate) struct Revision {
     pub(crate) updated_at: f64,
 }
 impl Revision {
-    pub(crate) fn parse(value: Value, expected: &Reference) -> Result<Self, &'static str> {
+    pub(crate) fn parse(mut value: Value, expected: &Reference) -> Result<Self, &'static str> {
         let reference =
             Reference::parse(&value, &expected.session).ok_or("Invalid artifact metadata")?;
         if !reference.same_revision(expected) {
             return Err("Artifact revision/ownership changed; no preview was evaluated");
         }
+        if expected.kind != "unknown" && reference.kind != expected.kind {
+            return Err("Artifact kind changed; no preview was evaluated");
+        }
         let source = value["source"]
             .as_str()
             .ok_or("Artifact source is unavailable")?;
         // The HTTP envelope is independently capped. Visual source has its stricter VM cap.
-        if source.len() > 3 * 1024 * 1024 {
+        let source_cap = if reference.kind == "image" {
+            crate::artifact_image::SOURCE_CAP
+        } else {
+            3 * 1024 * 1024
+        };
+        if source.len() > source_cap {
             return Err("Artifact source exceeds the reader limit");
         }
         let created_at = value["createdAt"]
@@ -90,20 +98,98 @@ impl Revision {
         let visual_supported = reference.kind == "visual"
             && value["visual"]["api"] == 1
             && value["visual"]["engine"] == "quickjs-ng 0.17.0";
+        let source = match value.get_mut("source").map(std::mem::take) {
+            Some(Value::String(source)) => source,
+            _ => return Err("Artifact source is unavailable"),
+        };
         Ok(Self {
             reference,
-            source: Arc::new(source.into()),
-            data: value.get("data").cloned().unwrap_or(Value::Null),
+            source: Arc::new(source),
+            data: value
+                .get_mut("data")
+                .map(std::mem::take)
+                .unwrap_or(Value::Null),
             visual_supported,
             created_at,
             updated_at,
         })
+    }
+    /// A large raster envelope never materializes its redundant prepared HTML.
+    /// Struct deserialization also rejects duplicate recognized metadata fields.
+    pub(crate) fn image_bytes(bytes: &[u8], expected: &Reference) -> Result<Self, &'static str> {
+        if expected.kind != "image" {
+            return Err("Image read requires verified image metadata");
+        }
+        if bytes.len() > crate::artifact_image::HTTP_CAP {
+            return Err("Stored image envelope exceeds its read limit");
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Wire {
+            id: String,
+            session_id: String,
+            revision: u32,
+            title: String,
+            kind: String,
+            source: String,
+            created_at: f64,
+            updated_at: f64,
+        }
+        let w: Wire =
+            serde_json::from_slice(bytes).map_err(|_| "Invalid stored image revision JSON")?;
+        let value = Value::Object(serde_json::Map::from_iter([
+            ("id".into(), Value::String(w.id)),
+            ("sessionId".into(), Value::String(w.session_id)),
+            ("revision".into(), Value::from(w.revision)),
+            ("title".into(), Value::String(w.title)),
+            ("kind".into(), Value::String(w.kind)),
+            ("source".into(), Value::String(w.source)),
+            ("createdAt".into(), Value::from(w.created_at)),
+            ("updatedAt".into(), Value::from(w.updated_at)),
+        ]));
+        Self::parse(value, expected)
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn artifact_image_admission_does_not_raise_visual_limits_or_trust_mismatched_provenance() {
+        let v = json!({"id":"synthetic","sessionId":"owner","revision":2,"title":"Synthetic","kind":"image","source":"stored bytes","html":"ignored","createdAt":1,"updatedAt":2});
+        let expected = Reference::parse(&v, "owner").unwrap();
+        let bytes = serde_json::to_vec(&v).unwrap();
+        let mut wrong_kind = expected.clone();
+        wrong_kind.kind = "visual".into();
+        assert!(
+            Revision::parse(v.clone(), &wrong_kind).is_err(),
+            "known kinds must match in both directions"
+        );
+        let r = Revision::image_bytes(&bytes, &expected).unwrap();
+        assert_eq!(r.source.as_str(), "stored bytes");
+        assert!(!r.visual_supported);
+        assert!(r.data.is_null());
+        for (key, value) in [
+            ("sessionId", json!("other")),
+            ("id", json!("other")),
+            ("revision", json!(1)),
+            ("kind", json!("visual")),
+        ] {
+            let mut bad = v.clone();
+            bad[key] = value;
+            assert!(Revision::image_bytes(&serde_json::to_vec(&bad).unwrap(), &expected).is_err());
+        }
+        let mut pin = expected.clone();
+        pin.kind = "unknown".into();
+        assert!(Revision::image_bytes(&bytes, &pin).is_err());
+        assert!(Revision::parse(v.clone(), &pin).is_ok());
+        let mut large = v;
+        large["source"] = json!("a".repeat(3 * 1024 * 1024 + 1));
+        assert!(Revision::parse(large.clone(), &expected).is_ok());
+        large["kind"] = json!("visual");
+        assert!(Revision::parse(large, &pin).is_err());
+        assert!(Revision::image_bytes(br#"{"id":"synthetic","sessionId":"owner","revision":2,"title":"Synthetic","kind":"image","kind":"visual","source":"a","createdAt":1,"updatedAt":2}"#,&expected).is_err());
+    }
     #[test]
     fn scoped_revision_checks_do_not_trust_titles_or_html() {
         let v = json!({"id":"synthetic","sessionId":"owner","revision":2,"title":"Synthetic","kind":"visual","source":"()=>null","html":"not consumed","visual":{"api":1,"engine":"quickjs-ng 0.17.0"},"createdAt":1,"updatedAt":2});

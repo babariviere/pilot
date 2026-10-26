@@ -14,6 +14,8 @@ use std::{
 };
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
+    pub(crate) raster: Option<Arc<crate::artifact_image::Raster>>,
+    pub(crate) complete: bool,
     pub(crate) drawings: Arc<BTreeMap<String, DrawingFrame>>,
     pub(crate) revision: Option<Arc<Revision>>,
     pub(crate) scene: Option<Arc<Scene>>,
@@ -119,8 +121,25 @@ async fn run(
     replace: async_channel::Receiver<Snapshot>,
     cancelled: async_channel::Receiver<()>,
 ) {
-    let read = tokio::select! {biased;_=cancelled.recv()=>return,value=crate::local_client::artifact(&options,&reference)=>value};
     let mut snapshot = Snapshot::default();
+    let permit = if matches!(reference.kind.as_str(), "image" | "unknown") {
+        match crate::artifact_image::Permit::acquire() {
+            Ok(permit) => Some(permit),
+            Err(message) => {
+                snapshot.error = Some(Fault {
+                    kind: "image",
+                    message: message.into(),
+                    line: None,
+                    limit: None,
+                });
+                publish(&updates, &replace, snapshot);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let read = tokio::select! {biased;_=cancelled.recv()=>return,value=crate::local_client::artifact(&options,&reference)=>value};
     let revision = match read {
         Ok(v) => Arc::new(v),
         Err(message) => {
@@ -135,6 +154,31 @@ async fn run(
         }
     };
     snapshot.revision = Some(revision.clone());
+    if revision.reference.kind == "image" {
+        let permit = permit.map_or_else(crate::artifact_image::Permit::acquire, Ok);
+        let raster = permit.and_then(|_permit| {
+            crate::artifact_image::decode(&revision.source, || cancelled.is_closed())
+        });
+        if cancelled.is_closed() {
+            return;
+        }
+        snapshot.complete = true;
+        snapshot.version = 1;
+        match raster {
+            Ok(raster) => snapshot.raster = Some(Arc::new(raster)),
+            Err(message) => {
+                snapshot.error = Some(Fault {
+                    kind: "image",
+                    message: message.into(),
+                    line: None,
+                    limit: None,
+                })
+            }
+        }
+        publish(&updates, &replace, snapshot);
+        return;
+    }
+    drop(permit);
     if !revision.visual_supported {
         publish(&updates, &replace, snapshot);
         return;

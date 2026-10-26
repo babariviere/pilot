@@ -5071,6 +5071,7 @@ name = "pilot-desktop"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "base64 0.22.1",
  "futures-util",
  "gpui-kit",
  "image",

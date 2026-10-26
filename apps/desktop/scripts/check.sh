@@ -62,3 +62,6 @@ bash scripts/cargo.sh test --locked --features native-probes --test missions
 bash scripts/cargo.sh test --locked --features native-probes --test project_add
 # Explicit Local global model scope, owned faux HTTP/native capability only.
 bash scripts/cargo.sh test --locked --features native-probes --test scoped_models
+# Stored raster reader/pane against owned faux HTTP; no real Local data or actions.
+bash scripts/cargo.sh clippy --locked --features native-probes --test artifact_images -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test artifact_images

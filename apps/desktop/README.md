@@ -243,8 +243,14 @@ Category labels show all through12, sparse endpoints above; labels/legends/units
 are visibly elided after80 Unicode scalars; stored source/data remain intact.
 Static canvas supports trusted native path/text painting, limited transforms,
 viewport margins and approximated curves; animation/pointer scheduling and
-non-uniform strokes/transformed text remain unsupported. Mermaid, image/SwiftUI
-previews and stacked/out-of-domain charts currently show honest placeholders.
+non-uniform strokes/transformed text remain unsupported. Mermaid, SwiftUI
+previews, image nodes inside visuals and stacked/out-of-domain charts show honest placeholders.
+Stored raster image artifacts separately support native PNG/JPEG and labelled
+first-frame GIF previews, fit/actual-size viewing and explicit source copy.
+WebP previews remain unsupported with their stored source/provenance retained.
+See [stored image boundaries and checks](docs/stored-images.md) and the
+[pinned allocation audit](docs/image-allocation-audit.md); pixel/buffer limits
+are separate from encoded bytes, and no total-memory ceiling is claimed.
 HTML/React/browser libraries and shaders remain deferred and stored data is not
 deleted. Links are inert. No prepared HTML or external assets are consumed.
 

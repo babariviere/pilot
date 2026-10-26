@@ -1,5 +1,8 @@
 //! Native read-only artifact detail. User controls change isolated reader state only.
 #[cfg(feature = "native-probes")]
+#[path = "artifact_image_probe.rs"]
+pub(crate) mod image_probe;
+#[cfg(feature = "native-probes")]
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
 use crate::{
@@ -46,6 +49,9 @@ pub(crate) struct ArtifactPane {
     generation: u64,
     busy: bool,
     source: bool,
+    image_actual: bool,
+    retired_image: Option<Arc<gpui_kit::RenderImage>>,
+    source_copy: Option<Task<()>>,
     states: VecDeque<(Reference, String)>,
     sliders: BTreeMap<String, SliderBinding>,
     slider_flow: SliderFlow,
@@ -77,6 +83,9 @@ impl ArtifactPane {
             generation: 0,
             busy: false,
             source: false,
+            image_actual: false,
+            retired_image: None,
+            source_copy: None,
             states: VecDeque::new(),
             sliders: BTreeMap::new(),
             slider_flow: SliderFlow::default(),
@@ -114,6 +123,7 @@ impl ArtifactPane {
             version: 1,
             live: false,
             error: None,
+            ..Default::default()
         };
         cx.notify();
     }
@@ -212,6 +222,14 @@ impl ArtifactPane {
         }
     }
     pub(crate) fn close(&mut self) {
+        if let Some(raster) = self.snapshot.raster.take() {
+            debug_assert!(
+                self.retired_image.is_none(),
+                "flush retired pixels before starting another image"
+            );
+            self.retired_image = Some(raster.image.clone());
+        }
+        self.source_copy = None;
         self.cancel_slider_wake();
         self.sliders.clear();
         self.slider_flow.clear();
@@ -223,6 +241,38 @@ impl ArtifactPane {
         self.generation += 1;
         self.busy = false;
         self.source = false;
+        self.image_actual = false;
+    }
+    fn flush_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(image) = self.retired_image.take() {
+            cx.drop_image(image, Some(window));
+        }
+    }
+    fn copy_image_source(
+        &mut self,
+        source: Arc<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_copy.is_some() {
+            return;
+        }
+        let generation = self.generation;
+        self.source_copy = Some(cx.spawn_in(window, async move |view, cx| {
+            let text = cx
+                .background_executor()
+                .spawn(async move { (*source).clone() })
+                .await;
+            let _ = view.update_in(cx, |view, _, cx| {
+                if view.generation != generation {
+                    return;
+                }
+                view.source_copy = None;
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
     pub(crate) fn open(
         &mut self,
@@ -234,6 +284,18 @@ impl ArtifactPane {
             return;
         }
         self.close();
+        self.flush_image(window, cx);
+        // A transcript pin never grants the large-image budget by its text.
+        // Only exact current-chat canonical metadata may upgrade an unknown pin.
+        let reference = if reference.kind == "unknown" {
+            self.items
+                .iter()
+                .find(|r| r.same_revision(&reference))
+                .cloned()
+                .unwrap_or(reference)
+        } else {
+            reference
+        };
         self.reference = Some(reference.clone());
         self.busy = true;
         let Some(options) = self.options.clone() else {
@@ -354,7 +416,7 @@ impl ArtifactPane {
         self.sliders.clear();
         self.slider_synced = None;
         self.snapshot.live = false;
-        if self.snapshot.error.is_none() {
+        if self.snapshot.error.is_none() && !self.snapshot.complete {
             self.snapshot.error = Some(crate::visual_runtime::Fault {
                 kind: "unavailable",
                 message: "The isolated reader ended. Retry or reopen for a fresh preview.".into(),
@@ -1233,11 +1295,12 @@ impl Render for ArtifactPane {
                         .small()
                         .label("All artifacts")
                         .icon(AppIcon::Artifacts.asset())
-                        .on_click(cx.listener(move |v, _, _, cx| {
+                        .on_click(cx.listener(move |v, _, window, cx| {
                             if v.generation != generation {
                                 return;
                             }
                             v.close();
+                            v.flush_image(window, cx);
                             cx.notify();
                         })),
                 )
@@ -1258,7 +1321,17 @@ impl Render for ArtifactPane {
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child("Local · current chat · visual controls have no file/network/tool bridge"),
+                .child(
+                    if revision
+                        .as_ref()
+                        .is_some_and(|r| r.reference.kind == "image")
+                        || reference.kind == "image"
+                    {
+                        "Local · stored raster · static preview only"
+                    } else {
+                        "Local · current chat · visual controls have no file/network/tool bridge"
+                    },
+                ),
         );
         if self.busy && self.snapshot.scene.is_none() {
             view = view.child("Loading isolated preview…");
@@ -1278,14 +1351,26 @@ impl Render for ArtifactPane {
                 .snapshot
                 .revision
                 .as_ref()
-                .is_some_and(|r| r.visual_supported)
+                .is_some_and(|r| r.visual_supported || r.reference.kind == "image")
+                || reference.kind == "image"
+                || error.kind == "image"
             {
                 let retry_reference = reference.clone();
                 view = view.child(
                     Button::new("artifact-retry")
                         .ghost()
                         .small()
-                        .label("Retry in fresh worker")
+                        .label(
+                            if reference.kind == "image"
+                                || revision
+                                    .as_ref()
+                                    .is_some_and(|r| r.reference.kind == "image")
+                            {
+                                "Retry preview"
+                            } else {
+                                "Retry in fresh worker"
+                            },
+                        )
                         .icon(AppIcon::Retry.asset())
                         .disabled(self.busy)
                         .on_click(cx.listener(move |v, _, window, cx| {
@@ -1343,19 +1428,81 @@ impl Render for ArtifactPane {
                         Button::new("artifact-copy-source")
                             .ghost()
                             .small()
-                            .label("Copy source")
+                            .label(if self.source_copy.is_some() {
+                                "Copying source…"
+                            } else {
+                                "Copy source"
+                            })
+                            .disabled(self.source_copy.is_some())
                             .icon(AppIcon::Copy.asset())
-                            .on_click(cx.listener(move |v, _, _, cx| {
+                            .on_click(cx.listener(move |v, _, window, cx| {
                                 if v.generation == generation {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        (*source).clone(),
-                                    ));
+                                    if v.snapshot
+                                        .revision
+                                        .as_ref()
+                                        .is_some_and(|r| r.reference.kind == "image")
+                                    {
+                                        v.copy_image_source(source.clone(), window, cx);
+                                    } else {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            (*source).clone(),
+                                        ));
+                                    }
                                 }
                             })),
                     ),
             );
-            if !revision.visual_supported {
+            if !revision.visual_supported && revision.reference.kind != "image" {
                 view=view.child(Self::note("Preview family/runtime is unsupported here. Source/provenance is retained; no HTML, React, shader or external execution."));
+            }
+            if let Some(raster) = &self.snapshot.raster {
+                view = view.child(
+                    div()
+                        .h_flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            crate::ui::text(
+                                crate::ui::Text::Caption,
+                                format!(
+                                    "{} · {} × {} pixels · {} encoded bytes{}",
+                                    raster.mime,
+                                    raster.width,
+                                    raster.height,
+                                    raster.encoded_bytes,
+                                    if raster.first_frame {
+                                        " · first frame only"
+                                    } else {
+                                        ""
+                                    }
+                                ),
+                            )
+                            .text_color(cx.theme().muted_foreground),
+                        )
+                        .when(!self.source, |row| {
+                            row.child(
+                                crate::ui::action(
+                                    "artifact-image-scale",
+                                    if self.image_actual {
+                                        "Fit to window"
+                                    } else {
+                                        "Actual size"
+                                    },
+                                    crate::ui::Action::Quiet,
+                                )
+                                .on_click(cx.listener(
+                                    move |view, _, _, cx| {
+                                        if view.generation == generation
+                                            && view.snapshot.raster.is_some()
+                                        {
+                                            view.image_actual = !view.image_actual;
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            )
+                        }),
+                );
             }
             let mut content = div()
                 .id(SharedString::from(scope))
@@ -1363,11 +1510,36 @@ impl Render for ArtifactPane {
                 .v_flex()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
+                .min_w_0()
                 .gap_3();
             if self.source {
-                content=content.child(div().text_xs().child(SharedString::from(format!("{} · stored timestamps {} / {} ms Unix · source preview first8192 characters",revision.reference.kind,revision.created_at,revision.updated_at)))).child(self.text("artifact-source-text".into(),revision.source.chars().take(8192).collect()));
+                content =
+                    content
+                        .overflow_y_scroll()
+                        .child(div().text_xs().child(SharedString::from(format!(
+                            "{} · stored timestamps {} / {} ms Unix",
+                            revision.reference.kind, revision.created_at, revision.updated_at
+                        ))));
+                if revision.reference.kind == "image" {
+                    content=content.child(self.text("artifact-source-text".into(),format!("Stored embedded image source ({} bytes). Copy source explicitly to obtain the exact data URL.\nOwner: {}\nArtifact: {}\nRevision: {}",revision.source.len(),revision.reference.session,revision.reference.id,revision.reference.revision)));
+                    if let Some(raster) = &self.snapshot.raster {
+                        content = content.child(self.text(
+                            "artifact-source-hash".into(),
+                            format!("Source SHA-256: {}", raster.source_hash),
+                        ));
+                    }
+                } else {
+                    content = content.child(self.text(
+                        "artifact-source-text".into(),
+                        revision.source.chars().take(8192).collect(),
+                    ));
+                }
+            } else if let Some(raster) = &self.snapshot.raster {
+                content = content.relative().overflow_hidden().child(
+                    crate::artifact_image_view::preview(raster, self.image_actual, window),
+                );
             } else if let Some(scene) = scene {
+                content = content.overflow_y_scroll();
                 content = content.child(
                     div()
                         .text_xs()
@@ -1389,6 +1561,37 @@ impl Render for ArtifactPane {
 mod tests {
     use super::*;
     use gpui_kit::{AppContext, TestAppContext};
+    #[gpui_kit::test]
+    fn artifact_image_static_completion_and_stale_generation_fences(cx: &mut TestAppContext) {
+        let pane = cx.update(|cx| cx.new(|_| ArtifactPane::new()));
+        pane.update(cx, |p, cx| {
+            let mut r = reference(1);
+            r.kind = "image".into();
+            p.owner = Some(r.session.clone());
+            p.reference = Some(r.clone());
+            p.generation = 4;
+            p.busy = true;
+            let mut s = snapshot(r.clone());
+            s.scene = None;
+            s.state = None;
+            s.live = false;
+            s.complete = true;
+            s.version = 1;
+            p.accept(4, &r, s.clone(), cx);
+            p.reader_ended(4, &r, cx);
+            assert!(
+                p.snapshot.complete && p.snapshot.error.is_none() && !p.busy && p.worker.is_none()
+            );
+            p.close();
+            let generation = p.generation;
+            p.accept(4, &r, s.clone(), cx);
+            assert!(p.snapshot.revision.is_none());
+            assert_eq!(p.generation, generation);
+            p.reference = Some(r.clone());
+            p.accept(generation, &reference(2), s, cx);
+            assert!(p.snapshot.revision.is_none());
+        });
+    }
     fn reference(revision: u32) -> Reference {
         Reference {
             id: "synthetic".into(),
@@ -1399,7 +1602,7 @@ mod tests {
         }
     }
     fn snapshot(reference: Reference) -> Snapshot {
-        Snapshot{drawings:Default::default(),revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None}
+        Snapshot{drawings:Default::default(),revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None,..Default::default()}
     }
     fn slider_snapshot(version: u64, value: f64) -> Snapshot {
         let mut s = snapshot(reference(1));

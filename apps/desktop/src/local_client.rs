@@ -274,6 +274,24 @@ async fn get(
     options: &LocalOptions,
     route: ReadRoute,
 ) -> Result<Value, Failure> {
+    let body = get_bytes(
+        client,
+        options,
+        route,
+        HTTP_CAP,
+        "Local HTTP response exceeds the 4 MiB viewer limit.",
+    )
+    .await?;
+    serde_json::from_slice(&body).map_err(|_| "Invalid Local JSON response")
+}
+
+async fn get_bytes(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    route: ReadRoute,
+    cap: usize,
+    limit_message: &'static str,
+) -> Result<Vec<u8>, Failure> {
     let mut response = client
         .get(options.http_url(&route))
         .send()
@@ -282,11 +300,8 @@ async fn get(
     if response.status() != reqwest::StatusCode::OK {
         return Err("Local read refused (HTTP status). No redirect or authentication fallback.");
     }
-    if response
-        .content_length()
-        .is_some_and(|n| n > HTTP_CAP as u64)
-    {
-        return Err("Local HTTP response exceeds the 4 MiB viewer limit.");
+    if response.content_length().is_some_and(|n| n > cap as u64) {
+        return Err(limit_message);
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -294,12 +309,18 @@ async fn get(
         .await
         .map_err(|_| "Local response interrupted")?
     {
-        if body.len() + chunk.len() > HTTP_CAP {
-            return Err("Local HTTP response exceeds the 4 MiB viewer limit.");
+        if chunk.len() > cap.saturating_sub(body.len()) {
+            return Err(limit_message);
+        }
+        let needed = body.len() + chunk.len();
+        if needed > body.capacity() {
+            let target = body.capacity().saturating_mul(2).max(needed).min(cap);
+            body.try_reserve_exact(target - body.len())
+                .map_err(|_| "Cannot allocate the bounded Local response")?;
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|_| "Invalid Local JSON response")
+    Ok(body)
 }
 
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
@@ -320,6 +341,7 @@ pub(crate) async fn artifact(
     if !local_model::valid_id(&reference.session)
         || !local_model::valid_id(&reference.id)
         || reference.revision == 0
+        || reference.revision > 1_000_000
     {
         return Err("Invalid artifact read scope");
     }
@@ -331,16 +353,24 @@ pub(crate) async fn artifact(
         .build()
         .map_err(|_| "Cannot start artifact reader")?;
     gate(&client, options).await?;
-    let value = get(
-        &client,
-        options,
-        ReadRoute::Artifact {
-            owner: reference.session.clone(),
-            id: reference.id.clone(),
-            revision: reference.revision,
-        },
-    )
-    .await?;
+    let route = ReadRoute::Artifact {
+        owner: reference.session.clone(),
+        id: reference.id.clone(),
+        revision: reference.revision,
+    };
+    if reference.kind == "image" {
+        let bytes = get_bytes(
+            &client,
+            options,
+            route,
+            crate::artifact_image::HTTP_CAP,
+            "Stored image response exceeds the 44 MiB image-envelope limit.",
+        )
+        .await?;
+        gate(&client, options).await?;
+        return crate::artifact_model::Revision::image_bytes(&bytes, reference);
+    }
+    let value = get(&client, options, route).await?;
     gate(&client, options).await?;
     crate::artifact_model::Revision::parse(value, reference)
 }
@@ -755,6 +785,10 @@ pub fn read_local_capture(options: LocalOptions, id: &str) -> Result<LocalCaptur
 #[cfg(test)]
 #[path = "local_network_tests.rs"]
 mod network_tests;
+
+#[cfg(test)]
+#[path = "artifact_image_transport_tests.rs"]
+mod artifact_image_transport_tests;
 
 #[cfg(test)]
 mod tests {
