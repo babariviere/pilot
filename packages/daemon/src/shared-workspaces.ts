@@ -31,6 +31,7 @@ import {
 	validateBaseBranch,
 	type Workspace,
 } from "./workspaces.ts";
+import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
 
 export interface SharedWorkspace {
 	repository: string;
@@ -73,11 +74,9 @@ const maintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "f
 const baseRefs = "refs/pilot/origin/";
 const baseRemote = "pilot-base";
 const networkEnvironment = new Set([
-	"GIT_ASKPASS",
 	"GIT_SSH",
 	"GIT_SSH_COMMAND",
 	"GIT_SSH_VARIANT",
-	"GIT_TERMINAL_PROMPT",
 	"GIT_SSL_CAINFO",
 	"GIT_SSL_CAPATH",
 	"GIT_SSL_NO_VERIFY",
@@ -87,8 +86,12 @@ const networkEnvironment = new Set([
 
 function workspaceEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	return {
-		...Object.fromEntries(
-			Object.entries(env).filter(([key]) => !key.startsWith("GIT_") || networkEnvironment.has(key)),
+		...gitPromptlessEnvironment(
+			toolTrustEnvironment(
+				Object.fromEntries(
+					Object.entries(env).filter(([key]) => !key.startsWith("GIT_") || networkEnvironment.has(key)),
+				),
+			),
 		),
 		// jj may invoke Git too. This is command-scoped, never a change to the source's config.
 		GIT_CONFIG_COUNT: "2",
@@ -503,7 +506,8 @@ export class SharedWorkspaceStore {
 					repository,
 				);
 			} catch (error) {
-				throw new Error(`Origin branch unavailable: ${baseBranch}: ${error}`);
+				const reason = error instanceof Error ? error.message : String(error);
+				throw new Error(`Origin branch unavailable: ${baseBranch}: ${reason}${authenticationHint(reason)}`);
 			}
 			branch = baseBranch;
 		} else {

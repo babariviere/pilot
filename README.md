@@ -155,6 +155,10 @@ unzip it and move `Pilot.app` to Applications.
   your Home directory before cloning. GitHub authorization and existing-checkout reuse require explicit approval.
 - Install and authenticate [GitHub CLI](https://cli.github.com/) (`gh auth login`) if you want agents to create
   pull requests or Pilot to monitor them.
+- The daemon authenticates Git with your host credentials and never prompts for them: a missing credential
+  fails the workspace fetch with a plain message instead of asking for a username or password. It trusts the
+  project's own tool configuration (`mise.toml`) inside the workspaces it manages, so the host tool manager can
+  run the project's tools there without a separate trust step.
 - Install [Jujutsu](https://jj-vcs.github.io/jj/) **0.46+** and **Git 2.42+** for shared, isolated jj workspaces.
   Git-only projects use private clones instead.
 

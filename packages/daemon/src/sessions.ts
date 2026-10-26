@@ -166,6 +166,7 @@ import {
 	workspaceBorrowsObjects,
 	workspaceBranch,
 } from "./workspaces.ts";
+import { workspaceCommandEnvironment } from "./workspace-environment.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -648,7 +649,8 @@ function forkWorker(spec?: WorkerSpec): ChildProcess {
 	const view = spec?.pilot?.coordinatorView;
 	if (view) throw new Error("Coordinator workers require a fresh, validated isolated child; refusing warm-pool reuse");
 	return fork(fileURLToPath(workerEntry), [], {
-		env: { ...process.env, ...credentialEnvironment(spec?.credentials) },
+		// The worker runs the project's own tools: they must load the project config, and nothing may prompt.
+		env: workspaceCommandEnvironment({ ...process.env, ...credentialEnvironment(spec?.credentials) }),
 		execArgv: [],
 		serialization: "advanced",
 		stdio: ["ignore", "inherit", "inherit", "ipc"],

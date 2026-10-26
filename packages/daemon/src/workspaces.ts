@@ -6,6 +6,7 @@ import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import type { SharedWorkspace } from "./shared-workspaces.ts";
 import { subprocesses } from "./subprocess.ts";
+import { authenticationHint, workspaceCommandEnvironment } from "./workspace-environment.ts";
 
 export interface Workspace {
 	path: string;
@@ -37,7 +38,8 @@ export const run: Runner = async (file, args, cwd, timeoutMs = 120_000, signal, 
 	// Git can spawn fetch/SSH helpers. Detached children own a process group, which timeouts and aborts stop.
 	const result = await subprocesses.run(file, args, {
 		cwd,
-		...(env ? { env } : {}),
+		// The daemon never prompts for credentials, and the project's own tools always run here.
+		env: workspaceCommandEnvironment(env ?? process.env),
 		...(signal ? { signal } : {}),
 		timeoutMs,
 		detached: process.platform !== "win32",
@@ -303,7 +305,8 @@ export async function createWorkspace(
 				destination,
 			);
 		} catch (error) {
-			throw new Error(`Origin branch unavailable: ${baseBranch}: ${error instanceof Error ? error.message : error}`);
+			const reason = error instanceof Error ? error.message : String(error);
+			throw new Error(`Origin branch unavailable: ${baseBranch}: ${reason}${authenticationHint(reason)}`);
 		}
 		base = `origin/${baseBranch}`;
 	} else if (upstream) {
