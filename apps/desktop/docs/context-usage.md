@@ -1,17 +1,18 @@
 # Read-only chat context usage
 
-Use **Context…** in a Local chat's composer controls, beside model/thinking and Send. This native information dialog does
+Use the context gauge in a Local chat's composer controls, beside model/thinking
+and Send. Its tooltip and accessible name describe reported usage. The native information dialog does
 not resize the conversation/composer and has no policy or mutation actions.
 Escape, the close button, or Done dismiss it through Kit's existing focus owner.
 Opening is refused while an existing input has marked IME text.
 
-The same control now includes a compact neutral ring and **Context reported**
+The control shows only a compact neutral ring, with no visible text label,
 when the existing summary supplies both safe nonnegative integer tokens and a
 positive window. Hover or its accessible name reports exact used/window counts
 and the unclamped percentage; click or keyboard activation opens the unchanged
 details. The visual arc alone is bounded to 0–100%. Over-limit reports explicitly
-disclose that cap. Unknown, invalid and partial reports retain **Context…** without
-a gauge, including empty conversations. The control has fixed width across these
+disclose that cap. Unknown, invalid and partial reports retain an information icon
+without a fake gauge, including empty conversations. The control has a fixed 28pt width and the native small-button height across these
 states, no animation, polling, severity thresholds or compaction action.
 
 This is a native adaptation of MonoCode at
@@ -86,7 +87,7 @@ Linux/Wayland acceptance.
 
 The meter adds two pure cases and a mounted six-state matrix (reported, unknown,
 invalid, partial, reported zero and over-limit) at both widths/appearances. It
-checks stable control bounds, exact descriptions, ring absence/presence, native
+checks stable 28pt-wide control bounds, centered 14pt ring, exact descriptions, ring absence/presence, native
 Tab traversal/Enter activation/Escape focus restoration and same-ID generation
 invalidation. Existing composer IME and late other-chat source checks remain.
 Captures include both the unobstructed composer and open details. Checks use

@@ -47,7 +47,7 @@ pub(super) fn states(
             cx.capture_screenshot(h)
                 .unwrap()
                 .save(p.join(format!(
-                    "meter-header-{name}-{width}-{}.png",
+                    "meter-composer-{name}-{width}-{}.png",
                     if dark { "dark" } else { "light" }
                 )))
                 .unwrap();
@@ -55,9 +55,11 @@ pub(super) fn states(
         cx.update_window(h, |_, w, cx| {
             let control = w.find("context-usage");
             assert!(control.visible());
+            assert_eq!(control.bounds().size.width, px(28.));
             let tray = w.find("composer-tray").bounds();
             let input = w.find("composer-input").bounds();
             let send = w.find("local-send").bounds();
+            assert_eq!(control.bounds().size.height, send.size.height);
             assert_eq!(tray.size.height, px(76.));
             assert_eq!(input.size.height, px(34.));
             assert!(
@@ -74,7 +76,11 @@ pub(super) fn states(
             );
             assert!(control.bounds().right() <= w.viewport_size().width);
             if let Some(b) = bounds {
-                assert_eq!(b, control.bounds(), "usage changes must not reflow header");
+                assert_eq!(
+                    b,
+                    control.bounds(),
+                    "usage changes must not reflow composer"
+                );
             }
             bounds = Some(control.bounds());
             assert!(control.label().unwrap().contains("Freshness unknown"));
@@ -86,6 +92,7 @@ pub(super) fn states(
                 assert!(control.label().unwrap().contains(percent));
                 let ring = w.find("context-meter-ring").bounds();
                 assert_eq!(ring.size, size(px(14.), px(14.)));
+                assert_eq!(ring.center(), control.bounds().center());
                 assert!(
                     ring.left() >= control.bounds().left()
                         && ring.right() <= control.bounds().right()

@@ -1,7 +1,10 @@
 //! Composer disclosure. Reads only the existing bounded Local summary feed.
 use super::*;
 use crate::ui::{self, Action, Text};
-use gpui_kit::component::WindowExt;
+use gpui_kit::component::{
+    Sizable, WindowExt,
+    button::{Button, ButtonVariants},
+};
 
 struct Info {
     viewer: gpui_kit::WeakEntity<LocalViewer>,
@@ -100,19 +103,14 @@ impl Render for Entry {
             .unwrap_or_else(|| {
                 "Context details. Comparable reported usage unknown. Freshness unknown.".into()
             });
-        let mut button = ui::action(
-            "context-usage",
-            if meter.is_some() {
-                "Context reported"
-            } else {
-                "Context…"
-            },
-            Action::Quiet,
-        )
-        .w(px(142.))
-        .accessibility_label(SharedString::from(description.clone()))
-        .tooltip(SharedString::from(description))
-        .disabled(chat.is_none());
+        let mut button = Button::new("context-usage")
+            .ghost()
+            .small()
+            .w(px(28.))
+            .p_0()
+            .accessibility_label(SharedString::from(description.clone()))
+            .tooltip(SharedString::from(description))
+            .disabled(chat.is_none());
         if let Some(meter) = meter {
             button = button.child(meter.ring(cx));
         } else {
