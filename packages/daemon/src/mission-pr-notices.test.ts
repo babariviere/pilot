@@ -252,10 +252,6 @@ test("chat-only merge after a finished chat is observed without changing its out
 		const finished = { ...idle, runningJobs: [] };
 		chats.set("second", finished);
 		observe(finished);
-		t.mock.timers.tick(29_999);
-		await delivery.flush();
-		assert.equal(delivered.length, 0);
-		t.mock.timers.tick(1);
 		await delivery.flush();
 		assert.equal(delivered.length, 1);
 		assert.match(delivered[0]!, /PR #1 Change 1 merged \(chat Implementation\)/);

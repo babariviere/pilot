@@ -2028,7 +2028,7 @@ test("user input wins while notice persistence is in flight, without acknowledgi
 	}
 });
 
-test("a member resuming during notice persistence revokes admission until a new settle window", async (t) => {
+test("a member resuming during notice persistence revokes admission until all members are idle again", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
 	const member = await f.spawn();
@@ -2057,13 +2057,7 @@ test("a member resuming during notice persistence revokes admission until a new 
 	assert.ok(f.store.pendingNotice(detail.mission.id));
 	f.workers.get(member.id)!.state = "idle";
 	f.workers.get(member.id)!.onPacket({ type: "working", working: false });
-	await f.service.notices.flush(now + 29_999);
-	assert.equal(
-		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
-		0,
-	);
-	t.mock.method(Date, "now", () => now + 30_000);
-	await f.service.notices.flush(now + 30_000);
+	await f.service.notices.flush(now);
 	assert.equal(
 		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
 		1,

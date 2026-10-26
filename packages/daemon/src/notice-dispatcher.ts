@@ -17,12 +17,15 @@ export function noticeDeadline(
 		busy: boolean;
 		retry: boolean;
 		cappedAt?: number;
+		/** Mission members have all stopped; no additional settlement window is needed. */
+		immediateWhenIdle?: boolean;
 	},
 	now: number,
 ): number {
-	const settled = input.busy ? Infinity : Math.max(input.lastAt, input.idleAt) + NOTICE_DEBOUNCE_MS;
+	const delay = input.immediateWhenIdle ? 0 : NOTICE_DEBOUNCE_MS;
+	const settled = input.busy ? Infinity : Math.max(input.lastAt, input.idleAt) + delay;
 	const due = Math.min(
-		input.retry && !input.busy ? Math.max(now, input.idleAt + NOTICE_DEBOUNCE_MS) : settled,
+		input.retry && !input.busy ? Math.max(now, input.idleAt + delay) : settled,
 		input.firstAt + NOTICE_MAX_DELAY_MS,
 	);
 	return input.cappedAt === undefined ? due : Math.max(due, input.cappedAt + NOTICE_WINDOW_MS);

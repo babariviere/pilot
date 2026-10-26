@@ -208,10 +208,6 @@ test("turn end with a job holds completion, then one final notice includes the f
 			outcomeAt: Date.now(),
 			pullRequest: completion("done", 0).pullRequest,
 		});
-		t.mock.timers.tick(29_999);
-		await f.delivery.flush();
-		assert.equal(f.sent.length, 0);
-		t.mock.timers.tick(1);
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 1);
 		assert.match(f.sent[0]!, /#1 Pagination: chat finished, PR #12 open/);
@@ -260,10 +256,6 @@ test("pending updates stay unsettled between job exit and follow-up admission", 
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 0, "the job-exit gap is still busy");
 		f.change({ working: false });
-		t.mock.timers.tick(29_999);
-		await f.delivery.flush();
-		assert.equal(f.sent.length, 0);
-		t.mock.timers.tick(1);
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 1);
 		assert.match(f.sent[0]!, /A real update/);
@@ -310,8 +302,7 @@ test("pending job holds recover across daemon restart; dead jobs cannot leave ac
 	const next = jobDelivery(store, original.id);
 	try {
 		next.change({ state: "parked", outcome: "done", outcomeAt: 1_000, runningJobs: undefined });
-		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now() + 30_000);
-		t.mock.timers.tick(30_000);
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now());
 		await next.delivery.flush();
 		assert.equal(next.sent.length, 1);
 		assert.match(next.sent[0]!, /chat finished/);
@@ -627,23 +618,22 @@ test("active-role guards preserve events and revoke a frozen notice when the rol
 	}
 });
 
-test("rolling hourly cap allows 20 notices, holds excess, and resumes at the exact window boundary", (t) => {
+test("all-idle immediate delivery still respects the rolling hourly cap and exact window boundary", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	try {
+		store.setNoticeActivity(id, false, Date.now());
 		for (let index = 0; index < 20; index++) {
 			store.addComment(id, { text: `notice ${index}` });
-			t.mock.timers.tick(30_000);
 			const notice = store.prepareNotice(id, "lead", Date.now())!;
 			assert.ok(notice, `notice ${index} admitted`);
 			store.acknowledgeNotice(notice, Date.now());
 		}
 		store.addComment(id, { text: "over cap" });
-		t.mock.timers.tick(30_000);
 		assert.equal(store.prepareNotice(id, "lead", Date.now()), undefined);
-		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, 31_000 + NOTICE_WINDOW_MS);
-		assert.equal(store.prepareNotice(id, "lead", 31_000 + NOTICE_WINDOW_MS - 1), undefined);
-		const resumed = store.prepareNotice(id, "lead", 31_000 + NOTICE_WINDOW_MS)!;
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, 1_000 + NOTICE_WINDOW_MS);
+		assert.equal(store.prepareNotice(id, "lead", 1_000 + NOTICE_WINDOW_MS - 1), undefined);
+		const resumed = store.prepareNotice(id, "lead", 1_000 + NOTICE_WINDOW_MS)!;
 		assert.match(resumed.content, /over cap/);
 	} finally {
 		store.close();
@@ -763,7 +753,7 @@ test("streaming summary updates do not rescan SQLite or reschedule unchanged lif
 	}
 });
 
-test("the timer delivers at debounce and shutdown drains admission before storage can close", async (t) => {
+test("the timer delivers promptly when members are idle and shutdown drains admission before storage can close", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
 	const { store, id } = setup();
 	let release!: () => void;
@@ -787,7 +777,7 @@ test("the timer delivers at debounce and shutdown drains admission before storag
 	try {
 		store.addComment(id, { text: "first event" });
 		await Promise.resolve();
-		t.mock.timers.tick(29_999);
+		t.mock.timers.tick(999);
 		assert.equal(admissions, 0);
 		t.mock.timers.tick(1);
 		assert.equal(admissions, 1);
@@ -809,7 +799,7 @@ test("the timer delivers at debounce and shutdown drains admission before storag
 	}
 });
 
-test("one working or starting member holds all notices, and the last settlement starts a fresh settle delay", async (t) => {
+test("one working or starting member holds notices; the last settlement makes them immediately eligible", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	store.join("second", id);
@@ -853,18 +843,15 @@ test("one working or starting member holds all notices, and the last settlement 
 		await delivery.flush();
 		assert.equal(notices.length, 0);
 		change("second", "failed", "failed");
-		t.mock.timers.tick(29_000);
-		await delivery.flush();
-		assert.equal(notices.length, 0);
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now());
 		change("second", "working");
 		t.mock.timers.tick(2_000);
 		await delivery.flush();
 		assert.equal(notices.length, 0, "an immediate resume cancels settlement");
 		change("second", "idle", "done");
 		change("lead", "working");
-		t.mock.timers.tick(30_000);
 		await delivery.flush();
-		assert.equal(notices.length, 0, "lead must also be idle, but does not reset member settlement");
+		assert.equal(notices.length, 0, "lead must also be idle");
 		change("lead", "idle");
 		await delivery.flush();
 		assert.equal(notices.length, 1);

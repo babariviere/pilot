@@ -661,9 +661,11 @@ contain no subscription usage, and no account, billing or cost details are expos
 
 Coordinator updates wait while member chats are working or have running background jobs. An idle chat
 with jobs counts as working: it is not reported as finished, and its jobs never create an update or wake
-the coordinator. Updates settle for 30 seconds after activity stops, with a 30-minute safety cap measured
-from the oldest pending event. The coordinator's own jobs do not hold updates back. Pending updates are durable;
-running job processes belong to their live worker and do not survive orderly shutdown or replacement.
+the coordinator. Pending updates become eligible as soon as all members are idle, without an additional
+settlement delay. A 30-minute safety cap is measured from the oldest pending event. The coordinator's own
+jobs do not hold updates back. Delivery still waits for an available coordinator and respects rate limits.
+Pending updates are durable; running job processes belong to their live worker and do not survive orderly
+shutdown or replacement.
 A job still running after one hour moves its chat to **Needs you**, with its name and elapsed time.
 This fixed threshold is user-only attention, including inside missions: it never wakes a coordinator
 and clears when the job ends or is stopped.

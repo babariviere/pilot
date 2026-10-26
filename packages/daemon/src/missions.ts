@@ -1761,6 +1761,7 @@ export class MissionStore {
 						lastAt: num(row.last_at!),
 						idleAt: num(row.idle_at ?? 0),
 						busy: row.busy === 1,
+						immediateWhenIdle: row.busy === 0,
 						retry: !!row.request_id,
 						cappedAt: row.capped_at === null ? undefined : num(row.capped_at!),
 					},
