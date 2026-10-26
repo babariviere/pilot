@@ -1,5 +1,7 @@
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
+#[path = "message_fold_view.rs"]
+pub(crate) mod message_fold_view;
 #[path = "transcript_find.rs"]
 mod transcript_find;
 #[path = "transcript_find_view.rs"]
@@ -8,8 +10,8 @@ use std::{collections::HashMap, time::Duration};
 
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, EntityInputHandler, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, SharedString, StyleRefinement, Styled,
-    Subscription, Task, TestSupportExt, Window,
+    IntoElement, KeyBinding, ParentElement, Render, SharedString, StatefulInteractiveElement,
+    StyleRefinement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -40,6 +42,9 @@ type HistoryGuard = std::rc::Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub struct TranscriptView {
     transcript: Transcript,
     find: transcript_find_view::Find,
+    folds: crate::message_fold::Folds,
+    fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
+    fold_retired: Vec<gpui_kit::FocusHandle>,
     images: conversation_images_view::Preview,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
     // for real histories rather than retaining one parser per historical row.
@@ -75,7 +80,7 @@ impl TranscriptView {
                 .zip(&self.text_states)
                 .all(|(row, state)| {
                     state.as_ref().is_none_or(|state| {
-                        state.read(cx).rendered_text().source() == row.display_source()
+                        state.read(cx).rendered_text().source() == self.fold_source(row)
                     })
                 })
     }
@@ -158,6 +163,9 @@ impl TranscriptView {
         let find = transcript_find_view::Find::new(window, cx);
         let mut view = Self {
             find,
+            folds: Default::default(),
+            fold_focus: Default::default(),
+            fold_retired: Vec::new(),
             transcript,
             images: Default::default(),
             text_states: Vec::new(),
@@ -206,9 +214,16 @@ impl TranscriptView {
             return None;
         }
         let id = row.id();
+        if self.folds.long(row)
+            && let Some(key) = row.reader_key()
+        {
+            self.fold_focus
+                .entry(key)
+                .or_insert_with(|| cx.focus_handle().tab_stop(false));
+        }
         let text = cx.new(|cx| {
-            let state = if row.is_plain() {
-                TextViewState::html(row.display_source(), cx)
+            let state = if row.is_plain() || self.folds.collapsed(row) {
+                TextViewState::html(self.fold_source(row), cx)
             } else {
                 TextViewState::markdown(row.source(), cx)
             };
@@ -263,6 +278,15 @@ impl TranscriptView {
             .flatten()
             .filter(|m| !m.following);
         let old = self.transcript.messages();
+        let old_long: std::collections::BTreeSet<_> = old
+            .iter()
+            .filter(|r| self.folds.long(r))
+            .map(Message::id)
+            .collect();
+        let old_folded: HashMap<_, _> = old
+            .iter()
+            .map(|r| (r.id(), self.folds.collapsed(r)))
+            .collect();
         let old_ids: Vec<_> = old.iter().map(Message::id).collect();
         let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
         let mut retained: HashMap<_, _> = old
@@ -272,8 +296,23 @@ impl TranscriptView {
             .map(|(row, state)| (row.id(), (row, state)))
             .collect();
         if reset {
+            self.fold_retired.extend(
+                retained
+                    .values()
+                    .filter(|(r, _)| old_long.contains(&r.id()))
+                    .filter_map(|(_, s)| s.as_ref().map(|s| s.read(cx).focus_handle().clone())),
+            );
+            self.fold_retired.truncate(1024);
             retained.clear();
             self.text_subscriptions.clear();
+        }
+        self.folds.sync(&rows);
+        for row in rows.iter().filter(|r| self.folds.long(r)) {
+            if let Some(key) = row.reader_key() {
+                self.fold_focus
+                    .entry(key)
+                    .or_insert_with(|| cx.focus_handle().tab_stop(false));
+            }
         }
         self.transcript.replace_readonly(rows);
         let adopted = retained
@@ -307,9 +346,26 @@ impl TranscriptView {
                 if state.is_none() {
                     self.create_text_state(ix, cx)
                 } else {
+                    if old.reader_key() != row.reader_key()
+                        || old.is_plain() != row.is_plain()
+                        || old_folded.get(&row.id()).copied().unwrap_or(false)
+                            != self.folds.collapsed(row)
+                        || ((old_long.contains(&row.id()) || self.folds.long(row))
+                            && !row.source().starts_with(old.source()))
+                    {
+                        self.text_subscriptions.remove(&row.id());
+                        self.fold_retired
+                            .extend(state.as_ref().map(|s| s.read(cx).focus_handle().clone()));
+                        self.fold_retired.truncate(1024);
+                        let fresh = self.create_text_state(ix, cx);
+                        self.text_states.push(fresh);
+                        self.scroller
+                            .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+                        continue;
+                    }
                     if old.source() != row.source() {
                         if let Some(text) = &state {
-                            text.update(cx, |state, cx| state.set_text(row.display_source(), cx));
+                            text.update(cx, |state, cx| state.set_text(self.fold_source(row), cx));
                         }
                         self.scroller.update(cx, |state, cx| {
                             state.remeasure_items(ix..ix + 1, cx);
@@ -322,6 +378,25 @@ impl TranscriptView {
             };
             self.text_states.push(state);
         }
+        self.fold_retired.extend(
+            self.fold_focus
+                .iter()
+                .filter(|(key, _)| {
+                    !self
+                        .transcript
+                        .messages()
+                        .iter()
+                        .any(|r| r.reader_key().as_ref() == Some(*key))
+                })
+                .map(|(_, focus)| focus.clone()),
+        );
+        self.fold_retired.truncate(1024);
+        self.fold_focus.retain(|key, _| {
+            self.transcript
+                .messages()
+                .iter()
+                .any(|r| r.reader_key().as_ref() == Some(key))
+        });
         self.text_subscriptions.retain(|id, _| new_ids.contains(id));
         self.scroller.update(cx, |state, cx| {
             if reset {
@@ -697,13 +772,15 @@ impl TranscriptView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .when(found.is_none(), |d| d.truncate())
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(if let Some(text) = found {
                                 div()
                                     .id(("find-target", row.id()))
                                     .test_support()
+                                    .aria_label(text.clone())
+                                    .whitespace_normal()
                                     .child(text)
                                     .into_any_element()
                             } else {
@@ -716,7 +793,14 @@ impl TranscriptView {
                         Button::new(("copy-source", row.id()))
                             .ghost()
                             .small()
-                            .label("Copy source")
+                            .label(if self.folds.long(row) {
+                                "Copy full source"
+                            } else {
+                                "Copy source"
+                            })
+                            .when(self.folds.long(row), |b| {
+                                b.tooltip("Copies the exact loaded source, not content omitted by viewer limits.")
+                            })
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     source.as_ref().clone(),
@@ -724,6 +808,7 @@ impl TranscriptView {
                             }),
                     ),
             )
+            .children(self.fold_controls(row, cx, owner))
             .child(match &self.text_states[ix] {
                 Some(state) => crate::typography::rich(
                     TextView::new(state),
@@ -737,7 +822,7 @@ impl TranscriptView {
                 )
                 .selectable(true)
                 .scrollable(false)
-                .stream_fade(true)
+                .stream_fade(!self.folds.collapsed(row))
                 .on_link_click(|_, _, _, _| {})
                 .into_any_element(),
                 None => div()
@@ -754,6 +839,14 @@ impl Render for TranscriptView {
         {
             self.render_count += 1;
         }
+        if self
+            .fold_retired
+            .iter()
+            .any(|s| s.contains_focused(window, cx))
+        {
+            self.find.focus.focus(window, cx);
+        }
+        self.fold_retired.clear();
         self.finish_find_reset(window, cx);
         let busy = self.transcript.is_streaming();
         let full = self.transcript.is_full();

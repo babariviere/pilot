@@ -1367,8 +1367,14 @@ impl LocalViewer {
         self.state.queued = 0;
         self.state.thinking = false;
         self.rebuild_nav(window, cx);
+        let fold_scope = self
+            .usage_options
+            .clone()
+            .zip(self.selected.clone())
+            .map(|(o, id)| crate::session_todos::Source::new(o, id, generation));
         self.transcript.update(cx, |view, cx| {
             view.history_scope(generation);
+            view.fold_scope(fold_scope);
             view.set_history_controls(Default::default(), cx);
             view.replace_readonly(Vec::new(), true, cx);
         });
@@ -2338,3 +2344,7 @@ mod refresh_tests {
 #[cfg(feature = "native-probes")]
 #[path = "tool_diff_preview_probe.rs"]
 pub(crate) mod tool_diff_preview_probe;
+
+#[cfg(feature = "native-probes")]
+#[path = "message_fold_probe.rs"]
+pub(crate) mod message_fold_probe;

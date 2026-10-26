@@ -108,3 +108,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test session_fail
 # Exact captured queued USER-message edits/removals, owned faux transport only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test queued_message -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test queued_message
+
+# Bounded ordinary-message folding, exact loaded copy and source Find composition.
+bash scripts/cargo.sh clippy --locked --features native-probes --test message_fold -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test message_fold

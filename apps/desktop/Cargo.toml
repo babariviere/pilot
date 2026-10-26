@@ -64,6 +64,7 @@ serde = { version = "=1.0.229", features = ["derive", "rc"] }
 sha2 = "=0.10.9"
 uuid = { version = "=1.28.0", features = ["v4"] }
 unicode-normalization = "=0.1.25"
+unicode-segmentation = "=1.13.3"
 libc = "=0.2.191"
 base64 = "=0.22.1"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif"] }
@@ -352,5 +353,10 @@ required-features = ["native-probes"]
 
 [[test]]
 name = "tool_diff_preview"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
+name = "message_fold"
 harness = false
 required-features = ["native-probes"]

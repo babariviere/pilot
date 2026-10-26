@@ -331,6 +331,13 @@ the tail preserves the anchor. Retained message entities preserve selection
 through prepend, updates and streaming-to-commit; switching chats clears it.
 Assistant Markdown uses Kit's built-in word fade. User/tool text is escaped
 into inert preformatted content, not interpreted markup. Copy source is explicit.
+
+Ordinary long user/assistant messages offer native **Show more / Show less**
+disclosure and exact loaded **Copy full source**. Collapsed selection copies
+only the labeled plain-source prefix; loaded-source Find keeps its visible
+match excerpt without changing disclosure intent. See [message folding](docs/message-folding.md)
+for Unicode, identity, streaming, focus and admission limits.
+
 Document images (remote/file/data) are disabled for both measurement and paint;
 links have no open handler. Structured/unsupported content has honest placeholders.
 Tool calls use semantic summaries and grouped work. Edit/patch file chips explicitly
