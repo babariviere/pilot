@@ -144,6 +144,10 @@ Moving a bundle before launch is supported. Moving/replacing it while its daemon
 is using its runtime is not an authorized update flow. Production signing,
 release/upload, updater activation and coordinated safe replacement remain separate.
 
+The [immutable runtime retention proposal](runtime-retention-design.md) compares
+safe future layouts and required identity/admission receipts. It is design only,
+not an implemented retention, compatibility, cleanup or installation contract.
+
 The startup-view probe exercises the real GPUI entity at680/1100pt in both
 appearances, including loading/unconfirmed wrapping and control bounds,
 closed-worker errors, immediate window-close cancellation and the Local-view
