@@ -112,7 +112,7 @@ test("read-only prompts suppress delivery while ordinary and inherited Build inc
 					/gh pr create|jj git push|commit it and push it|default branch within|Open one pull request per task/,
 				);
 			} else {
-				assert.match(prompt!, /Open one pull request per task/);
+				assert.match(prompt!, requirePullRequest ? /Open one pull request per task/ : /does not use pull requests/);
 				assert.match(prompt!, requirePullRequest ? /gh pr create/ : /Do not open a PR unless the user asks/);
 				assert.doesNotMatch(prompt!, /locally only|only the app's Allow|Do not push, open/);
 				assert.match(prompt!, /repository credentials and remote access/);
@@ -263,6 +263,33 @@ test("stack guidance uses existing PR URLs, preserves sibling work and explains 
 		assert.match(prompt, /If the repository rejects stacks, keep the plain chained PRs/);
 		assert.match(prompt, available ? /github\/gh-stack is installed/ : /If gh extension list shows github\/gh-stack/);
 	}
+});
+
+test("members of projects without required PRs get direct delivery, not PR or stack guidance", async () => {
+	const workspace = { source: "/source", base: "base", jj: true, shared: { repository: "/repo", name: "member" } };
+	for (const requirePullRequest of [true, false, undefined]) {
+		const extension = withPilotPolicy(
+			{ name: "test" },
+			{ workspace, requirePullRequest, ghStack: true },
+			() => false,
+			() => mission,
+		);
+		const prompt = (await extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT))!;
+		assert.match(prompt, /without mentioning the mission/);
+		if (requirePullRequest !== false) {
+			assert.match(prompt, /Open one pull request per task/);
+			assert.match(prompt, /gh stack link/);
+			continue;
+		}
+		assert.doesNotMatch(prompt, /Open one pull request per task|gh pr create|gh stack|chained PRs/);
+		assert.match(prompt, /directly to the remote's default branch/);
+		assert.match(prompt, /This project does not use pull requests: deliver each finished task by pushing/);
+		assert.match(prompt, /Open a PR only when the user asks, and link it to the task/);
+		assert.match(prompt, /never rewrite or push branches of PRs owned by other chats/);
+	}
+	const local = missionPrompt(mission, undefined, true, false);
+	assert.match(local, /Report local results without pushing/);
+	assert.doesNotMatch(local, /does not use pull requests/);
 });
 
 test("deliverable guard blocks mission references in commits, bookmarks and pull requests only", () => {

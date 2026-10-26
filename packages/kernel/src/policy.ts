@@ -112,7 +112,12 @@ export function missionLeak(arguments_: unknown, mission: MissionContext | undef
 	return match ? `"${match[0]}"` : undefined;
 }
 
-export function missionPrompt(mission: MissionContext, ghStack?: boolean, localOnly = false): string {
+export function missionPrompt(
+	mission: MissionContext,
+	ghStack?: boolean,
+	localOnly = false,
+	requirePullRequest = true,
+): string {
 	const stackLink =
 		"link dependent PRs bottom-to-top with gh stack link <bottom-pr-url> … <top-pr-url>. Pass existing PR URLs, not branch names (with branch arguments, the command pushes them itself), keep the existing stack order and members, and use only link and view. If the repository rejects stacks, keep the plain chained PRs and report it.";
 	const lines = [
@@ -142,12 +147,18 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean, localO
 						"- Work only within this chat's permission level. Report local results without pushing or opening a pull request.",
 					]
 				: [
-						"- Open one pull request per task and link it to the task with the link action and taskId. In multi-task chats, this explicit link is required; PR creation and discovery never infer the task. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
-						ghStack === true
-							? `- github/gh-stack is installed: ${stackLink}`
-							: ghStack === false
-								? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
-								: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
+						...(requirePullRequest
+							? [
+									"- Open one pull request per task and link it to the task with the link action and taskId. In multi-task chats, this explicit link is required; PR creation and discovery never infer the task. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
+									ghStack === true
+										? `- github/gh-stack is installed: ${stackLink}`
+										: ghStack === false
+											? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
+											: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
+								]
+							: [
+									"- This project does not use pull requests: deliver each finished task by pushing to the default branch as described above, then mark it done. Open a PR only when the user asks, and link it to the task with the link action and taskId. A PR bound to you is yours; never rewrite or push branches of PRs owned by other chats.",
+								]),
 						"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
 					]),
 	];
@@ -379,7 +390,7 @@ export function withPilotPolicy(
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current && context.role !== "diagnostics"
-					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate")}`
+					? `${prompt}\n${missionPrompt(current, context.ghStack, context.executionPermission?.level === "investigate", context.requirePullRequest !== false)}`
 					: prompt;
 			}),
 		],
