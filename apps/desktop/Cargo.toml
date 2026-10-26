@@ -370,3 +370,8 @@ required-features = ["native-probes"]
 name = "new_chat_view"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "native_mermaid"
+harness = false
+required-features = ["native-probes"]

@@ -203,6 +203,8 @@ pub use artifact_view::gallery::probe::run_artifact_gallery_probe;
 #[cfg(feature = "native-probes")]
 pub use artifact_view::image_probe::run_artifact_image_probe;
 #[cfg(feature = "native-probes")]
+pub use artifact_view::mermaid_probe::run_native_mermaid_probe;
+#[cfg(feature = "native-probes")]
 pub use artifact_view::slider_probe::run_slider_probe;
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
@@ -215,6 +217,8 @@ pub use local_view::inbox_probe::run_inbox_probe;
 pub use local_view::jump_probe::run_jump_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::motion_probe::run_motion_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::native_mermaid_root_probe::run_native_mermaid_root_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]
@@ -244,6 +248,8 @@ mod attention;
 mod dither;
 mod dither_view;
 mod inbox;
+mod native_mermaid;
+mod native_mermaid_view;
 mod visual_canvas_plan;
 mod visual_canvas_view;
 mod visual_chart;

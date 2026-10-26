@@ -5,6 +5,9 @@ pub(crate) mod gallery;
 #[path = "artifact_image_probe.rs"]
 pub(crate) mod image_probe;
 #[cfg(feature = "native-probes")]
+#[path = "native_mermaid_probe.rs"]
+pub(crate) mod mermaid_probe;
+#[cfg(feature = "native-probes")]
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
 use crate::{
@@ -1134,9 +1137,12 @@ impl ArtifactPane {
             "shader" => Self::note(
                 "Shader rendering is deferred. Stored shader source/translation remains intact; other nodes remain usable.",
             ),
-            "mermaid" => Self::note(
-                "Native Mermaid renderer is not validated yet. Diagram source is retained; no browser fallback or external fetch.",
-            ),
+            "mermaid" => self.snapshot.scene.as_ref().and_then(|scene| scene.mermaids.get(path)).map(|prepared| {
+                let cost = prepared.diagram.as_ref().map_or(128, |p| p.nodes.len()*8+p.routes.iter().map(|r|r.points.len()*2).sum::<usize>());
+                if cost > *budget { return Self::note("Diagram exceeds aggregate native display budget. Exact source is retained."); }
+                *budget -= cost;
+                crate::native_mermaid_view::Element::new(format!("mermaid-{}-{path}", cx.entity_id()), prepared.clone()).scope(self.generation).into_any_element()
+            }).unwrap_or_else(|| Self::note("Native diagram display limit reached (8). Exact source remains in the artifact source; no browser fallback.")),
             "canvas" => {
                 if value["animated"] == true {
                     return Self::note(

@@ -12,6 +12,12 @@ Other Settings categories are unavailable, not simulated controls.
 The artifact reader remains incomplete, not a replacement/parity claim. Swift remains unchanged and operational. See `evidence/` for the exact
 focused checks and explicit platform/performance gaps.
 
+`ui.mermaid` artifacts have a bounded native **flowchart subset**, with exact
+Mermaid source/copy, expansion and natural-size scrolling. Unsupported or partial
+syntax shows its source and reason, never a browser fallback or incomplete graph.
+This is not full Mermaid or ordinary Markdown-fence support.
+See [native-mermaid.md](docs/native-mermaid.md) for syntax and limits.
+
 Experimental Rust desktop, kept separate from the production Swift app.
 `pilot-desktop --local` uses the existing loopback API. Its user-driven write
 controls can create chats, send messages, Stop and convert an eligible existing

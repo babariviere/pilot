@@ -36,6 +36,7 @@ pub(crate) struct Scene {
     pub(crate) canvases: Vec<(String, f64)>,
     pub(crate) nodes: usize,
     pub(crate) charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
+    pub(crate) mermaids: BTreeMap<String, Arc<crate::native_mermaid::Prepared>>,
 }
 struct Check {
     controls: BTreeMap<String, Control>,
@@ -45,6 +46,7 @@ struct Check {
     text: usize,
     chart_points: usize,
     charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
+    mermaids: BTreeMap<String, Arc<crate::native_mermaid::Prepared>>,
 }
 fn object<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, Bad> {
     let o = v.as_object().ok_or("Expected object")?;
@@ -126,6 +128,7 @@ impl Scene {
             text: 0,
             chart_points: 0,
             charts: BTreeMap::new(),
+            mermaids: BTreeMap::new(),
         };
         c.node(&value["root"], "0", 0)?;
         Ok(Self {
@@ -135,6 +138,7 @@ impl Scene {
             canvases: c.canvases,
             nodes: c.nodes,
             charts: c.charts,
+            mermaids: c.mermaids,
         })
     }
 }
@@ -428,6 +432,16 @@ impl Check {
             }
             "mermaid" => {
                 self.text(&v["source"], 20 * 1024)?;
+                // Scene validation/preparation runs in the isolated reader, not render.
+                // A local diagram refusal must not blank charts or sibling controls.
+                if self.mermaids.len() < 8 {
+                    self.mermaids.insert(
+                        path.into(),
+                        Arc::new(crate::native_mermaid::Prepared::new(
+                            v["source"].as_str().unwrap(),
+                        )),
+                    );
+                }
             }
             _ => unreachable!(),
         }

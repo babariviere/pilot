@@ -56,6 +56,9 @@ pub(crate) mod mission_probe;
 #[path = "motion_probe.rs"]
 pub(crate) mod motion_probe;
 #[cfg(feature = "native-probes")]
+#[path = "native_mermaid_root_probe.rs"]
+pub(crate) mod native_mermaid_root_probe;
+#[cfg(feature = "native-probes")]
 #[path = "navigation_probe.rs"]
 pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]
