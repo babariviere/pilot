@@ -447,7 +447,6 @@ pub struct LocalViewer {
     refreshing: bool,
     earlier_attempt: Option<(u64, u64)>,
     earlier_request: Option<(u64, u64, u64)>,
-    details_open: bool,
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
     #[cfg(feature = "native-probes")]
@@ -1386,7 +1385,6 @@ impl LocalViewer {
             refreshing: false,
             earlier_attempt: None,
             earlier_request: None,
-            details_open: false,
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
             #[cfg(feature = "native-probes")]
@@ -2015,11 +2013,6 @@ impl Render for LocalViewer {
             .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
             .map(|c| c.cwd.clone())
             .unwrap_or_default();
-        let footer = if self.state.limited {
-            "Bounded history window. Refresh latest for newer messages. Full history remains available in Swift."
-        } else {
-            "Images and links are disabled. Some structured content remains unsupported. Swift remains available."
-        };
         let history_status = if self.earlier_request.is_some() {
             "Loading earlier messages…"
         } else {
@@ -2136,11 +2129,6 @@ impl Render for LocalViewer {
                         .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
                     .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.editor.clone()))
-                    .child(div().v_flex().px_3().py_1().gap_1().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground)
-                        .child(Button::new("view-details").ghost().small().self_start().icon(AppIcon::Info.asset()).label(if self.details_open{"Hide details"}else{"Details"})
-                            .on_click(cx.listener(|view,_,_,cx|{view.details_open = !view.details_open;cx.notify();})))
-                        .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
-                        .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
                         .into_any_element();
                 let conversation = self.mission_companion(conversation, window, cx);
                 let conversation = self.conversation_links_companion(conversation, window, cx);
@@ -2415,8 +2403,10 @@ mod refresh_tests {
         cx.run_until_parked();
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
-            window.click("view-details", cx);
-            assert!(view.read(cx).details_open);
+            assert!(window.try_find("view-details").is_none());
+            let conversation = window.find("conversation").bounds();
+            let editor = window.find("conversation-editor").bounds();
+            assert_eq!(editor.bottom(), conversation.bottom(), "No footer gap");
             window.press("secondary-f", cx);
             window.input("review", cx);
         })

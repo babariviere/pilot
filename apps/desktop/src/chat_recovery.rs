@@ -57,6 +57,21 @@ impl ChatEditor {
             .p_2()
             .w(px(300.))
             .max_w(px(320.));
+        if (pending.is_some()
+            || draft
+                .last
+                .as_ref()
+                .is_some_and(|last| last.state == "rejected"))
+            && let Some((_, caption)) = self.delivery_detail(&key, draft)
+        {
+            let detail = div()
+                .id("delivery-diagnostic")
+                .min_w_0()
+                .child(crate::ui::text(crate::ui::Text::Caption, caption));
+            #[cfg(any(test, feature = "native-probes"))]
+            let detail = detail.test_support();
+            actions = actions.child(detail);
+        }
         if let Some(intent) = pending {
             let id = intent.id.clone();
             let retry_id = id.clone();

@@ -65,7 +65,10 @@ fn main() {
                         assert!(composer.right() <= px(width + 1.));
                         assert!(window.find("local-send").disabled().unwrap_or(false));
                     }
-                    window.click("view-details", cx);
+                    assert!(window.try_find("view-details").is_none());
+                    assert!(window.try_find("delivery-diagnostic").is_none());
+                    let editor = window.find("conversation-editor").bounds();
+                    assert_eq!(editor.bottom(), conversation.bottom(), "No footer gap");
                 })
                 .unwrap();
                 cx.run_until_parked();

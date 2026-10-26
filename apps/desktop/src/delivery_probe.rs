@@ -130,12 +130,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(cx.theme().mode, mode);
                 assert!((f32::from(w.viewport_size().width) - width).abs() < 1.);
                 let tray = w.find("composer-tray").bounds();
-                for id in [
-                    "composer-input",
-                    "composer-controls",
-                    "delivery-diagnostic",
-                    "composer-recovery",
-                ] {
+                for id in ["composer-input", "composer-controls"] {
                     let b = w.find(id).bounds();
                     assert!(
                         b.left() >= tray.left() && b.right() <= tray.right(),
@@ -143,7 +138,13 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     );
                     assert!(b.top() >= tray.top() && b.bottom() <= tray.bottom());
                 }
-                assert!(w.find("delivery-diagnostic").visible());
+                assert!(w.try_find("delivery-diagnostic").is_none());
+                let status = w.find("delivery-recovery-status");
+                assert_eq!(
+                    status.label(),
+                    Some("Delivery unknown. Check before retrying.")
+                );
+                assert!(status.bounds().bottom() < tray.top());
                 assert_eq!(w.find("local-send").disabled(), Some(true));
                 assert!(
                     editor
@@ -165,8 +166,11 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("composer-recovery", cx))
                 .unwrap();
             frame(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("check-delivery", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.find("delivery-diagnostic").visible());
+                w.click("check-delivery", cx);
+            })
+            .unwrap();
             frame(cx, h);
             assert!(
                 matches!(commands.try_recv(),Ok(WriteCommand::Check {id,retry:false}) if id==intent.id)
@@ -284,6 +288,86 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     .unwrap(),
                 original
             );
+            // A routine successful send retains its diagnostic without mounting
+            // any recovery row, stale receipt notice or copy/disclosure control.
+            for outcome in ["accepted", "rejected"] {
+                let key = format!("chat:{outcome}");
+                let mut book = store.book.clone();
+                let mut settled = delivery.clone();
+                settled.state = outcome.into();
+                settled.diagnostic = Some(Diagnostic {
+                    stage: Stage::Execute,
+                    category: if outcome == "accepted" {
+                        Category::Accepted
+                    } else {
+                        Category::Rejected
+                    },
+                    status: Some(200),
+                    acknowledgment: if outcome == "accepted" {
+                        Acknowledgment::Accepted
+                    } else {
+                        Acknowledgment::Rejected
+                    },
+                });
+                book.drafts.insert(
+                    key.clone(),
+                    Draft {
+                        last: Some(settled.clone()),
+                        text: if outcome == "rejected" {
+                            "Keep rejected draft 👩‍💻".into()
+                        } else {
+                            String::new()
+                        },
+                        ..Default::default()
+                    },
+                );
+                cx.update_window(h, |_, w, cx| {
+                    // Close the existing contextual disclosure before navigation.
+                    w.press("escape", cx);
+                    editor.update(cx, |e, cx| {
+                        e.accept(
+                            WriteState {
+                                book: Some(Arc::new(book)),
+                                notice: "Receipt accepted. Original intent retained.",
+                                notice_key: Some(key.clone()),
+                                delivery_notice: Some(intent.id.clone()),
+                                ..Default::default()
+                            },
+                            w,
+                            cx,
+                        );
+                        e.select(key.clone(), true, false, w, cx);
+                    });
+                })
+                .unwrap();
+                frame(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    assert!(w.try_find("delivery-diagnostic").is_none());
+                    assert!(w.try_find("copy-recovered").is_none());
+                    assert!(editor.read(cx).cache[&key].last.as_ref() == Some(&settled));
+                    if outcome == "accepted" {
+                        assert!(w.try_find("composer-recovery-region").is_none());
+                        assert!(w.try_find("composer-recovery").is_none());
+                    } else {
+                        assert_eq!(
+                            w.find("delivery-recovery-status").label(),
+                            Some("Delivery rejected. Edit the draft before trying again.")
+                        );
+                        assert!(w.find("composer-recovery").visible());
+                        assert_eq!(
+                            editor.read(cx).text.read(cx).value().as_ref(),
+                            "Keep rejected draft 👩‍💻"
+                        );
+                    }
+                })
+                .unwrap();
+                if let Some(dir) = &captures {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(dir.join(format!("{}-{}-{outcome}.png", width as u32, mode.name())))
+                        .unwrap();
+                }
+            }
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             drop(store);

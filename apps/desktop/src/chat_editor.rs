@@ -9,7 +9,7 @@ use gpui_kit::TestSupportExt;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -1177,48 +1177,40 @@ impl Render for ChatEditor {
                     .into_any_element(),
             );
         }
-        if let Some(intent) = pending {
-            recovery.push(
-                crate::ui::text(
-                    crate::ui::Text::Caption,
-                    format!("Delivery {}. Original intent retained.", intent.state),
-                )
-                .into_any_element(),
-            );
-        } else if let Some(last) = &draft.last {
-            recovery.push(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(format!(
-                        "{}: {}. {}",
-                        last.kind,
-                        last.state,
-                        if last.state == "rejected" {
-                            "Edit the draft before another attempt."
-                        } else {
-                            ""
-                        }
-                    )))
-                    .into_any_element(),
-            );
-        }
-        let delivery_detail = self.delivery_detail(&key, draft);
-        if let Some((_, caption)) = &delivery_detail {
-            let detail = div()
-                .id("delivery-diagnostic")
-                .min_w_0()
-                .child(crate::ui::text(crate::ui::Text::Caption, caption.clone()));
-            #[cfg(any(test, feature = "native-probes"))]
-            let detail = detail.test_support();
-            recovery.push(detail.into_any_element());
-        }
-        if !self.state.notice.is_empty()
-            && !(is_new && matches!(self.state.notice, "Draft saved." | "Drafts saved."))
-            && !delivery_detail.as_ref().is_some_and(|(id, _)| {
-                self.state.delivery_notice.as_ref() == Some(id)
-                    || matches!(self.state.notice, "Draft saved." | "Drafts saved.")
+        let delivery_status = if let Some(intent) = pending {
+            Some(if intent.state == "pending" {
+                "Delivery pending."
+            } else {
+                "Delivery unknown. Check before retrying."
             })
+        } else if draft
+            .last
+            .as_ref()
+            .is_some_and(|last| last.state == "rejected")
+        {
+            Some("Delivery rejected. Edit the draft before trying again.")
+        } else {
+            None
+        };
+        if let Some(message) = delivery_status {
+            let status = div()
+                .id("delivery-recovery-status")
+                .aria_label(message)
+                .child(crate::ui::text(crate::ui::Text::Caption, message));
+            #[cfg(any(test, feature = "native-probes"))]
+            let status = status.test_support();
+            recovery.push(status.into_any_element());
+        }
+        // Reports remain retained; transport and receipt detail is available
+        // only inside contextual Recovery, never as successful-send chatter.
+        let delivery_id = draft
+            .pending
+            .as_ref()
+            .or_else(|| draft.last.as_ref().map(|last| &last.id));
+        if !self.state.notice.is_empty()
+            && !matches!(self.state.notice, "Draft saved." | "Drafts saved.")
+            && pending.is_none()
+            && !delivery_id.is_some_and(|id| self.state.delivery_notice.as_ref() == Some(id))
             && self
                 .state
                 .notice_key

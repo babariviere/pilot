@@ -414,6 +414,10 @@ fn delivery_diagnostic_stays_with_exact_owner_after_autosave_navigation_and_lega
     cx.run_until_parked();
     cx.update_window(handle, |_, w, cx| {
         w.render_frame(cx);
+        assert!(w.try_find("delivery-diagnostic").is_none());
+        assert!(w.try_find("delivery-recovery-status").is_some());
+        w.click("composer-recovery", cx);
+        w.render_frame(cx);
         assert!(w.try_find("delivery-diagnostic").is_some());
     })
     .unwrap();
