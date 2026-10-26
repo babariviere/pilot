@@ -156,7 +156,7 @@ PY
     echo 'Native capability/probes started; no success recorded.' > "$status"
     trap 'code=$?; if [[ $code -ne 0 ]]; then echo "FAILED (exit $code), not skipped/passed" >> "$status"; fi' EXIT
     # Compile every ordinary probe even on hosts without a Metal device.
-    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench catalog settings mission project_creation missions project_add scoped_models artifact_images artifact_gallery delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls)
+    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench catalog settings mission project_creation missions project_add scoped_models artifact_images artifact_gallery delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls mission_activity)
     args=()
     for test in "${tests[@]}"; do args+=(--test "$test"); done
     cargo test --locked --features native-probes --no-run "${args[@]}"

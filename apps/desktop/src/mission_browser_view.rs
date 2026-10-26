@@ -1,4 +1,7 @@
 //! Read-only mission page. Navigation and draft ownership remain with LocalViewer.
+#[cfg(feature = "native-probes")]
+#[path = "mission_activity_probe.rs"]
+pub(crate) mod mission_activity_probe;
 #[cfg(test)]
 #[path = "mission_browser_view_tests.rs"]
 mod tests;
@@ -66,6 +69,8 @@ pub(crate) struct Browser {
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
+    activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
+    activity_open: bool,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
@@ -92,6 +97,8 @@ impl Browser {
             focus: cx.focus_handle(),
             catalog_scroll: gpui_kit::ScrollHandle::default(),
             detail_scroll: gpui_kit::ScrollHandle::default(),
+            activity_browser: None,
+            activity_open: false,
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
@@ -139,6 +146,13 @@ impl Browser {
             })
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        if self.activity_open
+            && let Some(activity) = &self.activity_browser
+        {
+            let focus = activity.read(cx).focus_handle();
+            focus.focus(w, cx);
+            return;
+        }
         self.focus.focus(w, cx);
     }
     pub(crate) fn sync(&mut self, input: Input, w: &mut Window, cx: &mut Context<Self>) {
@@ -164,6 +178,12 @@ impl Browser {
         self.chats = chats;
         self.online = online;
         self.loaded = loaded;
+        if self.activity_open && (!online || self.route != route) {
+            self.hide_activity(w, cx);
+            if self.route == route {
+                self.focus(w, cx);
+            }
+        }
         if self.route != route {
             self.route = route;
             self.read(w, cx);
@@ -214,6 +234,10 @@ impl Browser {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.activity_open {
+            self.hide_activity(w, cx);
+            self.focus(w, cx);
+        }
         let tasks_key = match &self.route {
             Some(Route::Detail(key))
                 if self.local_home().as_ref().is_some_and(|h| {
@@ -352,6 +376,65 @@ impl Browser {
             .map(|p| format!("{} · {}", p.name, id))
             .unwrap_or_else(|| format!("Project unavailable · {id}"))
     }
+    fn hide_activity(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.activity_open = false;
+        if let Some(activity) = &self.activity_browser {
+            activity.update(cx, |v, cx| v.hide(cx));
+        }
+        let key = self
+            .detail
+            .as_ref()
+            .filter(|d| {
+                self.route == Some(Route::Detail(d.key.clone()))
+                    && self.local_home().as_ref() == Some(&d.key.home)
+            })
+            .map(|d| d.key.clone());
+        self.tasks_browser
+            .update(cx, |tasks, cx| tasks.sync(key, self.options.clone(), w, cx));
+    }
+    fn open_activity(
+        &mut self,
+        key: &Key,
+        generation: u64,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.current(generation)
+            || !self.online
+            || self.route != Some(Route::Detail(key.clone()))
+            || self.local_home().as_ref() != Some(&key.home)
+            || !self.detail.as_ref().is_some_and(|d| &d.key == key)
+        {
+            return;
+        }
+        let Some(options) = self.options.clone() else {
+            return;
+        };
+        if self.activity_browser.is_none() {
+            let activity = cx.new(crate::mission_activity_view::Activity::new);
+            cx.subscribe_in(
+                &activity,
+                w,
+                |v, _, _: &crate::mission_activity_view::Close, w, cx| {
+                    v.hide_activity(w, cx);
+                    v.focus(w, cx);
+                    cx.notify();
+                },
+            )
+            .detach();
+            self.activity_browser = Some(activity);
+        }
+        self.activity_open = true;
+        self.tasks_browser.update(cx, |tasks, cx| {
+            tasks.sync(None, self.options.clone(), w, cx)
+        });
+        let title = self.detail.as_ref().unwrap().title.clone();
+        self.activity_browser
+            .as_ref()
+            .unwrap()
+            .update(cx, |v, cx| v.open(key.clone(), title, options, w, cx));
+        cx.notify();
+    }
     fn plain(&self, id: &'static str, text: String) -> impl IntoElement {
         let focus = self.focus.clone();
         div()
@@ -381,6 +464,11 @@ impl Browser {
 }
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.activity_open
+            && let Some(activity) = &self.activity_browser
+        {
+            return div().size_full().child(activity.clone()).into_any_element();
+        }
         let generation = self.generation;
         let is_list = self.route == Some(Route::Catalog);
         let title = if is_list {
@@ -553,6 +641,15 @@ impl Render for Browser {
                         d.key.id, d.key.home.daemon, d.key.home.lineage
                     ),
                 ));
+            let activity_key = d.key.clone();
+            content = content.child(
+                ui::action("mission-open-activity", "Browse activity", Action::Quiet)
+                    .self_start()
+                    .disabled(!self.online || !self.current(generation))
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        v.open_activity(&activity_key, generation, w, cx)
+                    })),
+            );
             content = content
                 .child(ui::heading("mission-goal-heading", "Goal", Text::Headline))
                 .child(self.plain(
@@ -712,5 +809,6 @@ impl Render for Browser {
                 }
             }))
             .child(content)
+            .into_any_element()
     }
 }

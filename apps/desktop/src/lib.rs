@@ -29,6 +29,11 @@ mod jump_view;
 mod local_client;
 mod local_model;
 mod local_view;
+mod mission_activity;
+mod mission_activity_reader;
+mod mission_activity_view;
+#[cfg(feature = "native-probes")]
+pub use mission_browser_view::mission_activity_probe::run_mission_activity_probe;
 mod mission_browser;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_browser_fixture;
