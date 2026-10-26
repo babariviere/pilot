@@ -209,7 +209,7 @@ the window, not app restart. Pending/unconfirmed creates cannot be resent;
 validated 201 responses provide the actual task ID/number. Creation never starts
 or assigns a chat. See [task creation and recovery](docs/mission-task-creation.md).
 
-Task details offer **Edit title and body…** with explicit **Save** (⌘Enter).
+Task details offer **Edit title and body…** in a popup with explicit **Save** (⌘Enter).
 Text and exact pending/unconfirmed outcomes stay retained through navigation
 within the window. There is no version check; concurrent edits can be overwritten.
 Unknown saves cannot be replayed or settled by refresh. No status, ownership,

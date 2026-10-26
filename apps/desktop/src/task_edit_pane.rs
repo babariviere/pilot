@@ -4,11 +4,19 @@ use crate::{
     task_edit::Target,
     task_edit_view::{Close, Form},
 };
+use gpui_kit::component::WindowExt;
 impl Pane {
     pub(super) fn hide_edit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if let Some(f) = self.edit_form.take() {
-            if f.read(cx).owns_focus(w, cx) {
+            let owned = f.read(cx).owns_focus(w, cx);
+            let moved_focus = w.focused(cx);
+            w.close_dialog(cx);
+            if owned {
                 self.trigger.focus(w, cx);
+            } else if let Some(focus) = moved_focus {
+                // Navigation may already have focused the mounted page before
+                // hiding this dialog. Do not restore its now-unmounted trigger.
+                focus.focus(w, cx);
             }
             f.update(cx, |f, cx| {
                 f.visible = false;
@@ -81,10 +89,10 @@ impl Pane {
         form.update(cx, |f, cx| {
             f.visible = true;
             f.load(w, cx);
-            f.focus(w, cx);
             cx.notify();
         });
-        self.edit_form = Some(form);
+        self.edit_form = Some(form.clone());
+        Form::open(form, w, cx);
         cx.notify();
     }
 }

@@ -11,7 +11,7 @@ use gpui_kit::{
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, TestSupportExt, Window,
     component::{
-        Disableable, StyledExt,
+        Disableable, StyledExt, WindowExt,
         input::{InputEvent, Textarea, TextareaState},
     },
     div,
@@ -155,6 +155,23 @@ impl Form {
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         self.title.read(cx).focus_handle(cx).focus(w, cx);
     }
+    pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
+        w.open_dialog(cx, {
+            let form = form.clone();
+            move |dialog, _, _| {
+                dialog
+                    .title("Edit task")
+                    .w(gpui_kit::px(520.))
+                    .overlay_closable(false)
+                    .close_button(false)
+                    .keyboard(false)
+                    // All dismissal goes through the retained form's IME guard.
+                    .on_cancel(|_, _, _| false)
+                    .child(form.clone())
+            }
+        });
+        form.update(cx, |f, cx| f.focus(w, cx));
+    }
     fn close(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.visible && !self.marked(w, cx) {
             cx.emit(Close);
@@ -260,11 +277,6 @@ impl Render for Form {
             }))
             .on_action(cx.listener(|v, _: &SaveTaskEdit, w, cx| v.submit(w, cx)))
             .on_action(cx.listener(|v, _: &CloseTaskEdit, w, cx| v.close(w, cx)))
-            .child(ui::heading(
-                "task-edit-heading",
-                "Edit task",
-                Text::Headline,
-            ))
             .child(ui::text(
                 Text::Caption,
                 SharedString::from(format!(

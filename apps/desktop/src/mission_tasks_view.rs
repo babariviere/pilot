@@ -685,9 +685,6 @@ impl Render for Pane {
                 );
             }
         }
-        if let Some(form) = &self.edit_form {
-            root = root.child(form.clone());
-        }
         if let Some(form) = &self.status_form {
             root = root.child(form.clone());
         }

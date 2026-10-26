@@ -1,7 +1,10 @@
 # Edit an exact Local task
 
-Task details offer **Edit title and body…**. The retained native form has one
+Task details offer **Edit title and body…** in a focused popup dialog, not an
+inline section. The retained native form has one
 explicit Save (Command-Return). Plain Return edits; Close/Escape retains text.
+Outside clicks do not dismiss it; Close/Escape respect active preedit. The
+shared dialog owns modal focus, viewport bounds, scrolling and presentation.
 Only title and body are sent. Status, ownership, model, dependencies, phase,
 deletion and Start are not fields or outgoing operations.
 

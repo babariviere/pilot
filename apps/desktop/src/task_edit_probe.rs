@@ -49,6 +49,11 @@ fn input(route: Option<Route>) -> Input {
     }
 }
 fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
+    if id.starts_with("task-edit-") {
+        // The editor is in the root dialog layer, not the page scroll view.
+        settle(cx, h);
+        return;
+    }
     cx.update_window(h, |_, w, cx| {
         let viewport = w.find("missions-page").bounds();
         let target = w.find(id).bounds();
@@ -118,6 +123,8 @@ fn open_editor(cx: &mut HeadlessAppContext, h: AnyWindowHandle, b: &Entity<Brows
     });
     click(cx, h, "mission-tasks-row-task-A");
     click(cx, h, "mission-task-edit");
+    cx.advance_clock(Duration::from_millis(300));
+    settle(cx, h);
 }
 
 pub fn run_task_edit_probe(cx: &mut HeadlessAppContext) {
@@ -199,12 +206,28 @@ pub fn run_task_edit_probe(cx: &mut HeadlessAppContext) {
                 assert!(b.left() >= px(0.) && b.right() <= px(width));
                 assert!(b.size.width > px(300.));
                 assert!(
+                    w.try_find("dialog").is_some(),
+                    "editor is presented as a modal popup"
+                );
+                assert!(
+                    w.within("mission-tasks-browser")
+                        .try_find("task-edit-form")
+                        .is_none(),
+                    "no inline editor remains"
+                );
+                assert!(
                     w.find("task-edit-submit").visible(),
                     "Save is visible with the full form revealed"
                 );
             })
             .unwrap();
             capture(cx, h, &dir, format!("task-edit-{name}.png"));
+            // Backdrop clicks neither discard text nor dispatch a write.
+            cx.update_window(h, |_, w, cx| w.click("mission-tasks-back", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| form.read(cx).visible));
+            assert!(cx.update(|cx| form.read(cx).state.attempt.is_none()));
             // IME fences both the real sibling pointer path and submit/close keys.
             cx.update_window(h, |_, w, cx| {
                 form.read(cx).body.clone().update(cx, |i, cx| {
@@ -526,6 +549,8 @@ fn root(cx: &mut HeadlessAppContext) {
     })
     .unwrap();
     settle(cx, h);
+    click(cx, h, "task-edit-close");
+    assert!(!cx.update(|cx| form.read(cx).visible));
     cx.update_window(h, |_, w, cx| w.press("secondary-k", cx))
         .unwrap();
     settle(cx, h);
