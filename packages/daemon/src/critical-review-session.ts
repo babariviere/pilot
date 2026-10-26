@@ -4,6 +4,7 @@ import type { ReviewHistoryExport, ReviewHistoryPin } from "@pilot/kernel/review
 import { REVIEW_HISTORY_LIMITS } from "@pilot/kernel/review-history";
 import type { CriticalReviewEvidence } from "@pilot/protocol";
 import type { CriticalReviewVault, ReviewCapture, ReviewSelection } from "./critical-review-vault.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 export interface SessionHistorySelection {
 	sourceId: string;
@@ -97,7 +98,9 @@ export async function captureSessionHistory(
 		const exports = await new Promise<ReviewHistoryExport[]>((resolve, reject) => {
 			const cancel = () => reject(new Error("Session capture cancelled or invalidated"));
 			controller.signal.addEventListener("abort", cancel, { once: true });
-			worker!.once("message", (value) => {
+			worker!.on("message", (value) => {
+				// Node's watch mode posts module-watch notices to the worker's parent port.
+				if (isWatchNotice(value)) return;
 				controller.signal.removeEventListener("abort", cancel);
 				resolve(value);
 			});

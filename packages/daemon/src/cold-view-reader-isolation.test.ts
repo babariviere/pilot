@@ -35,6 +35,18 @@ test("cold todo counts read committed progress under a live writer lease without
 	assert.equal(await reader.readTodoCount(join(directory, "unopened")), 0);
 });
 
+test("a watch-mode notice never consumes the one real read result", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-watch-notice-reader-"));
+	const reader = new ColdViewReader(new URL("./testing/watch-notice-reader-worker.ts", import.meta.url));
+	t.after(async () => {
+		await reader.close();
+		await rm(directory, { recursive: true, force: true });
+	});
+	const view = await reader.read(directory, directory, false);
+	assert.deepEqual(view.events, []);
+	assert.equal(view.bytes, 24);
+});
+
 test("cold reader returns explicit unavailable metadata for missing diagnostic target history", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "pilot-diagnostic-history-reader-"));
 	const reader = new ColdViewReader();

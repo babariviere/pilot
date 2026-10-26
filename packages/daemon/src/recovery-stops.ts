@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import { type KernelSubagent, type RecoveryStop, stopRecoveryWorkerEntry } from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 
 /** Rare explicit recovery cancellations, bounded independently of model startup admission. */
@@ -22,7 +23,9 @@ export class RecoveryStops {
 						failure = new Error("Recovery stop timed out");
 						void worker.terminate();
 					}, 60_000);
-					worker.once("message", (value) => {
+					worker.on("message", (value) => {
+						// Node's watch mode posts module-watch notices to the worker's parent port.
+						if (isWatchNotice(value)) return;
 						packet = value;
 					});
 					worker.once("error", (error) => {

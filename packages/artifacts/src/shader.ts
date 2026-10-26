@@ -7,6 +7,15 @@ const WRAPPER_LINE = 100_000;
 const CHECK_TIMEOUT_MS = 10_000;
 const MAX_ERRORS = 10;
 
+/** Node's watch mode posts module-watch notices to a worker's parent port. They are not check results. */
+function isWatchNotice(message: unknown): boolean {
+	return (
+		typeof message === "object" &&
+		message !== null &&
+		Array.isArray((message as { "watch:import"?: unknown })["watch:import"])
+	);
+}
+
 const PRELUDE = [
 	"#version 300 es",
 	"precision highp float;",
@@ -110,11 +119,12 @@ export async function checkShader(
 	let abort: (() => void) | undefined;
 	try {
 		const diagnostics = await new Promise<GlslangDiagnostic[]>((resolve, reject) => {
-			worker.once("message", (message: { diagnostics?: GlslangDiagnostic[]; error?: string }) =>
+			worker.on("message", (message: { diagnostics?: GlslangDiagnostic[]; error?: string }) => {
+				if (isWatchNotice(message)) return;
 				message.diagnostics
 					? resolve(message.diagnostics)
-					: reject(new Error(message.error ?? "Shader check failed")),
-			);
+					: reject(new Error(message.error ?? "Shader check failed"));
+			});
 			worker.once("error", reject);
 			worker.once("exit", (code) => reject(new Error(`Shader check stopped (exit ${code})`)));
 			timer = setTimeout(() => reject(new ShaderCheckTimeout()), options.timeoutMs ?? CHECK_TIMEOUT_MS);

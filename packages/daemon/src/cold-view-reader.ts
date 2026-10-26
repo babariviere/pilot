@@ -8,6 +8,7 @@ import {
 } from "@pilot/kernel";
 import type { DiagnosticHistoryPage, DiagnosticTargetReference } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 const MAX_QUEUED_READS = 32;
 
@@ -34,6 +35,12 @@ export class ColdViewReader {
 	private readonly waiting: Job[] = [];
 	private readonly active = new Set<Worker>();
 	private closed = false;
+	/** The reader entry is injectable so a test can post a foreign message first. */
+	private readonly entry: URL;
+
+	constructor(entry: URL = snapshotWorkerEntry) {
+		this.entry = entry;
+	}
 
 	/** Abort only queued work. Once started, a read can still populate a shared snapshot cache. */
 	read(directory: string, cwd: string, includeTodos = true, signal?: AbortSignal): Promise<SizedSessionView> {
@@ -149,7 +156,7 @@ export class ColdViewReader {
 			job.unlisten?.();
 			let worker: Worker;
 			try {
-				worker = new Worker(snapshotWorkerEntry, {
+				worker = new Worker(this.entry, {
 					workerData: {
 						directory: job.directory,
 						cwd: job.cwd,
@@ -173,8 +180,13 @@ export class ColdViewReader {
 				void worker.terminate();
 			}, 30_000);
 			timer.unref();
-			worker.once("message", (packet: { view?: PersistedSessionView; bytes?: number; error?: string }) => {
+			worker.on("message", (packet: { view?: PersistedSessionView; bytes?: number; error?: string }) => {
+				// Node's watch mode posts module-watch notices to the worker's parent port.
+				// They are not read results and must not consume the one real answer.
+				if (isWatchNotice(packet)) return;
+				if (received) return;
 				received = true;
+				clearTimeout(timer);
 				if (packet.view && typeof packet.bytes === "number") job.resolve({ ...packet.view, bytes: packet.bytes });
 				else job.reject(new Error(packet.error ?? "Invalid session snapshot result"));
 			});
