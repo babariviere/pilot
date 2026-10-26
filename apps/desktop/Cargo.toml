@@ -286,6 +286,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "task_model"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "context_usage"
 harness = false
 test = false

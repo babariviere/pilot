@@ -487,7 +487,7 @@ export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
 	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
 	private db: DatabaseSync;
-	private readonly listeners = new Set<(missionId: string, passive?: boolean) => void>();
+	private readonly listeners = new Set<(missionId: string, passive?: boolean, preferenceOnly?: boolean) => void>();
 	private readonly linearSyncListeners = new Set<() => void>();
 	private readonly linearSyncChanged = new Set<string>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
@@ -1248,7 +1248,7 @@ export class MissionStore {
 	}
 
 	/** Called after every committed change of a mission, including membership and deletion. */
-	onChange(listener: (missionId: string, passive?: boolean) => void): () => void {
+	onChange(listener: (missionId: string, passive?: boolean, preferenceOnly?: boolean) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -1269,7 +1269,7 @@ export class MissionStore {
 		return () => this.memberListeners.delete(listener);
 	}
 
-	private changed(missionId: string, sessions: string[] = [], passive = false): void {
+	private changed(missionId: string, sessions: string[] = [], passive = false, preferenceOnly = false): void {
 		if (this.batchedChanges) {
 			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
 			for (const session of sessions) pending.add(session);
@@ -1278,7 +1278,7 @@ export class MissionStore {
 		}
 		if (this.referenceBatch === missionId) return;
 		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
-		for (const listener of this.listeners) listener(missionId, passive);
+		for (const listener of this.listeners) listener(missionId, passive, preferenceOnly);
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
 
@@ -1306,7 +1306,7 @@ export class MissionStore {
 		this.timed(sql, () => this.db.prepare(sql).run(...params));
 	}
 
-	private transaction<T>(work: () => T): T {
+	private transaction<T>(work: () => T, preferenceOnly = false): T {
 		// Reference batches reuse the ordinary validators/writers inside one outer transaction.
 		if (this.writing) return work();
 		return operations.time("missions.sqlite transaction", () => {
@@ -1314,8 +1314,9 @@ export class MissionStore {
 			this.writing = true;
 			try {
 				const result = work();
-				if (!this.initializing) for (const id of this.phaseReconciliations) this.reconcilePhases(id);
-				if (!this.initializing) this.reconcileLinearSync();
+				if (!this.initializing && !preferenceOnly)
+					for (const id of this.phaseReconciliations) this.reconcilePhases(id);
+				if (!this.initializing && !preferenceOnly) this.reconcileLinearSync();
 				this.run("UPDATE watch_activity SET annotated=1 WHERE annotated=0");
 				this.db.exec("COMMIT");
 				return result;
@@ -2862,6 +2863,7 @@ export class MissionStore {
 		write: { model?: string | null; thinking?: string | null },
 		actor: MissionActor,
 		now: number,
+		passive = false,
 	): void {
 		if (actor.sessionId && task.preferredModelSetBy === "user")
 			throw new Conflict(
@@ -2881,7 +2883,7 @@ export class MissionStore {
 		);
 		this.event(
 			id,
-			"task",
+			passive ? "update" : "task",
 			model
 				? `Task #${task.number} preferred model ${model}${thinking ? `, thinking ${thinking}` : ""}: ${task.title}`
 				: `Task #${task.number} preferred model cleared: ${task.title}`,
@@ -2903,6 +2905,23 @@ export class MissionStore {
 		const phaseId = randomUUID();
 		this.insertPhase(id, phaseId, { name: fields.milestone }, actor);
 		return this.resolvePhase(id, phaseId);
+	}
+
+	/** Dedicated user preference only: no member callbacks, reconciliation or automation. */
+	taskModel(id: string, projectId: string, taskId: string, write: MissionTaskWrite): MissionTask {
+		if (this.writing || this.batchedChanges || this.referenceBatch)
+			throw new Conflict("Preference changes cannot be batched");
+		if (this.require(id).projectId !== projectId) throw new Conflict("The confirmed project changed");
+		if (!taskId || /^\d+$/.test(taskId)) throw new Error("An exact task ID is required");
+		if (Object.keys(write).some((key) => key !== "preferredModel" && key !== "preferredThinking"))
+			throw new Error("Preference fields only");
+		const task = this.rawTask(this.task(id, taskId));
+		const fields = preference(write);
+		if (!fields || fields.model === undefined || fields.thinking === undefined)
+			throw new Error("Both preference fields are required");
+		this.transaction(() => this.writePreference(id, task, fields, USER, Date.now(), true), true);
+		this.changed(id, [], true, true);
+		return this.task(id, taskId);
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {

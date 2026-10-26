@@ -100,7 +100,9 @@ export class MissionLinearPrChecks {
 	}
 	start(): void {
 		if (this.unsubscribe || this.stopped) return;
-		this.unsubscribe = this.store.onChange((id) => this.enqueue(id));
+		this.unsubscribe = this.store.onChange((id, _, preferenceOnly) => {
+			if (!preferenceOnly) this.enqueue(id);
+		});
 		for (const mission of this.store.pullRequestMissions()) this.enqueue(mission.id);
 	}
 	private enqueue(id: string): void {

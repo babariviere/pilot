@@ -282,7 +282,8 @@ export class MissionService {
 			this.contexts.set(sessionId, JSON.stringify(context ?? null));
 			sessions.missionChanged(sessionId, context);
 		});
-		store.onChange((missionId, passive) => {
+		store.onChange((missionId, passive, preferenceOnly) => {
+			if (preferenceOnly) return;
 			if (!store.get(missionId)) return;
 			if (!passive) {
 				sessions.refreshMissionPullRequests();
@@ -578,6 +579,22 @@ export class MissionService {
 		const taskId = this.store.resolveTask(missionId, taskRef).id;
 		const validated = await this.validatePreference(missionId, write, taskId, actor);
 		return this.store.updateTask(missionId, taskId, validated, actor);
+	}
+
+	async taskModel(missionId: string, taskId: string, request: import("@pilot/protocol").TaskModelRequest) {
+		if (this.store.require(missionId).projectId !== request.projectId)
+			throw new Conflict("The confirmed project changed");
+		if (!taskId || /^\d+$/.test(taskId)) throw new Error("An exact task ID is required");
+		const write = await this.validatePreference(
+			missionId,
+			{
+				preferredModel: request.preferredModel,
+				preferredThinking: request.preferredThinking,
+			},
+			this.store.task(missionId, taskId).id,
+			{},
+		);
+		return this.store.taskModel(missionId, request.projectId, taskId, write);
 	}
 
 	private async validatePreference(

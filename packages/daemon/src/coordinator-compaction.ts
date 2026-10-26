@@ -53,7 +53,9 @@ export class CoordinatorCompaction {
 		this.sessions = sessions;
 		this.idleMs = idleMs;
 		this.unsubscribe = [
-			store.onChange(() => this.schedule()),
+			store.onChange((_, __, preferenceOnly) => {
+				if (!preferenceOnly) this.schedule();
+			}),
 			sessions.onChange((session) => {
 				this.observe(session);
 				this.schedule();

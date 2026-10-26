@@ -101,6 +101,7 @@ import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
+import { parseTaskModel } from "./task-model.ts";
 import type { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { terminalSender } from "./terminal-output.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -708,6 +709,7 @@ export function createDaemonServer(
 					...hello.capabilities,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
+					passiveTaskModel: missions ? true : undefined,
 				},
 			});
 		}
@@ -981,6 +983,24 @@ export function createDaemonServer(
 			const write = parseMissionLifecycle(await readJson(req), catalogHost);
 			const mission = missions.service.lifecycle(parts[2]!, write);
 			return json(res, 200, { operationId: write.operationId, mission });
+		}
+		if (
+			missions &&
+			parts[1] === "missions" &&
+			parts.length === 6 &&
+			parts[3] === "tasks" &&
+			parts[5] === "model" &&
+			req.method === "POST"
+		) {
+			const write = parseTaskModel(await readJson(req), catalogHost);
+			const task = await missions.service.taskModel(parts[2]!, parts[4]!, write);
+			return json(res, 200, {
+				operationId: write.operationId,
+				home: write.home,
+				missionId: parts[2]!,
+				projectId: write.projectId,
+				task,
+			});
 		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "projects" && parts[3] === "databases" && parts.length === 4) {

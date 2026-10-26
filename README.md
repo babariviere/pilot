@@ -618,6 +618,12 @@ A task can have a preferred model and thinking level, set from the task's menu i
 coordinator. It uses the same scoped, price-capped model list as coordinator starts. New chats for the task
 start on it unless a start picks another model; the coordinator cannot change or override a preference you set.
 
+Pilot Next offers **Preferred model…** in a task's details. Its explicit Save requires a daemon with passive
+task-preference support: only future-chat preferences change, without task reconciliation or agent starts.
+Default thinking follows the model configuration at start time. Pending or uncertain saves remain retained
+in that window and are never retried automatically; a later matching read is not a save receipt.
+See the [task preference contract](apps/desktop/docs/task-model.md) for scope and safety details.
+
 Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
 Choose it when recording or editing a decision, or change it from the row's context menu.
 Decisions have stable numbers (D1, D2, …). The coordinator can propose edits or removals for the user

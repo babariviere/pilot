@@ -1905,3 +1905,19 @@ export interface MissionLifecycleResponse {
 	operationId: string;
 	mission: Mission;
 }
+
+/** Passive future-chat preference only. Operation ID correlates ACK, never authorizes replay. */
+export interface TaskModelRequest {
+	operationId: string;
+	home: { daemonId: string; lineageId: string };
+	projectId: string;
+	preferredModel: string | null;
+	preferredThinking: string | null;
+}
+export interface TaskModelResponse {
+	operationId: string;
+	home: { daemonId: string; lineageId: string };
+	missionId: string;
+	projectId: string;
+	task: MissionTask;
+}

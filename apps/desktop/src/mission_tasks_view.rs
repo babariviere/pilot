@@ -20,6 +20,8 @@ use gpui_kit::{
 use std::sync::Arc;
 #[path = "task_edit_pane.rs"]
 mod task_edit_pane;
+#[path = "task_model_pane.rs"]
+mod task_model_pane;
 
 pub(crate) struct Rows {
     owner: WeakEntity<Pane>,
@@ -95,6 +97,8 @@ pub(crate) struct Pane {
     statuses: Vec<(Entity<crate::task_status_view::Form>, Subscription)>,
     pub(crate) edit_form: Option<Entity<crate::task_edit_view::Form>>,
     edits: Vec<(Entity<crate::task_edit_view::Form>, Subscription)>,
+    pub(crate) model_form: Option<Entity<crate::task_model_view::Form>>,
+    models: Vec<(Entity<crate::task_model_view::Form>, Subscription)>,
 }
 impl Pane {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -116,12 +120,18 @@ impl Pane {
             statuses: Vec::new(),
             edit_form: None,
             edits: Vec::new(),
+            model_form: None,
+            models: Vec::new(),
         }
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
-        self.edit_form
+        self.model_form
             .as_ref()
             .is_some_and(|f| f.read(cx).owns_focus(w, cx))
+            || self
+                .edit_form
+                .as_ref()
+                .is_some_and(|f| f.read(cx).owns_focus(w, cx))
             || self
                 .status_form
                 .as_ref()
@@ -228,6 +238,7 @@ impl Pane {
         cx.notify();
     }
     fn hide_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.hide_model(w, cx);
         self.hide_edit(w, cx);
         if let Some(f) = self.status_form.take() {
             if f.read(cx).owns_focus(w, cx) {
@@ -639,6 +650,14 @@ impl Render for Pane {
                                         Action::Quiet,
                                     )
                                     .on_click(cx.listener(|v, _, w, cx| v.edit_task(w, cx))),
+                                )
+                                .child(
+                                    ui::action(
+                                        "mission-task-model",
+                                        "Preferred model…",
+                                        Action::Quiet,
+                                    )
+                                    .on_click(cx.listener(|v, _, w, cx| v.task_model(w, cx))),
                                 )
                                 .child(
                                     ui::action("mission-tasks-copy", "Copy task", Action::Quiet)

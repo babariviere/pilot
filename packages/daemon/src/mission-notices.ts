@@ -35,7 +35,12 @@ export class MissionNotices {
 		});
 		this.store = store;
 		this.sessions = sessions;
-		this.unsubscribe = [store.onChange(() => this.schedule()), sessions.onChange((session) => this.observe(session))];
+		this.unsubscribe = [
+			store.onChange((_, __, preferenceOnly) => {
+				if (!preferenceOnly) this.schedule();
+			}),
+			sessions.onChange((session) => this.observe(session)),
+		];
 	}
 
 	start(): void {

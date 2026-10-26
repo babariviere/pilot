@@ -237,6 +237,15 @@ mod task_edit_fixture;
 mod task_edit_probe;
 mod task_edit_transport;
 mod task_edit_view;
+mod task_model;
+#[cfg(any(test, feature = "native-probes"))]
+mod task_model_fixture;
+#[cfg(feature = "native-probes")]
+mod task_model_probe;
+#[cfg(feature = "native-probes")]
+pub use task_model_probe::run_task_model_probe;
+mod task_model_transport;
+mod task_model_view;
 #[cfg(feature = "native-probes")]
 pub use task_edit_probe::run_task_edit_probe;
 

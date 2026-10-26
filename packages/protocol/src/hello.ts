@@ -35,4 +35,6 @@ export interface DaemonCapabilities {
 	guardedMissionConversion?: true;
 	/** Status-only mission lifecycle with durable chat/wake suppression. */
 	passiveMissionLifecycle?: true;
+	/** Explicit task preference saves without reconciliation or agent work. */
+	passiveTaskModel?: true;
 }

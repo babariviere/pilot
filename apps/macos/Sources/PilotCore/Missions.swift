@@ -806,3 +806,37 @@ public struct MissionLifecycleResponse: Decodable, Sendable {
     public let operationId: String
     public let mission: Mission
 }
+
+/// Passive future-chat preferences. Operation ID correlates the response, not replay.
+public struct TaskModelRequest: Encodable, Sendable {
+    public let operationId: String
+    public let home: MissionLifecycleRequest.Home
+    public let projectId: String
+    public let preferredModel: String?
+    public let preferredThinking: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case operationId, home, projectId, preferredModel, preferredThinking
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(operationId, forKey: .operationId)
+        try container.encode(home, forKey: .home)
+        try container.encode(projectId, forKey: .projectId)
+        try container.encode(preferredModel, forKey: .preferredModel)
+        try container.encode(preferredThinking, forKey: .preferredThinking)
+    }
+}
+
+public struct TaskModelResponse: Decodable, Sendable {
+    public struct Home: Decodable, Sendable {
+        public let daemonId: String
+        public let lineageId: String
+    }
+    public let operationId: String
+    public let home: Home
+    public let missionId: String
+    public let projectId: String
+    public let task: MissionTask
+}

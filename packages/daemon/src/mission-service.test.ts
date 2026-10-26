@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
@@ -4523,6 +4524,151 @@ test("a rejected task claim does not move a chat or release its previous work", 
 	assert.deepEqual(f.store.members(target.mission.id), [owner.id]);
 	// Repeating an existing owner's join remains idempotent.
 	f.service.join(owner.id, { missionId: target.mission.id, taskId: "1" });
+});
+
+test("passive task model HTTP validates scope and ACK after durability without role work", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const m = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Keep", body: "Body" }] });
+	f.store.join(member.id, m.id);
+	const task = f.store.tasks(m.id)[0]!;
+	f.store.updateTask(m.id, task.id, { sessionId: member.id });
+	const changed = t.mock.method(f.sessions, "missionChanged");
+	const start = t.mock.method(f.sessions as unknown as { start(id: string): Promise<void> }, "start", async () => {
+		throw new Error("must not start");
+	});
+	const select = t.mock.method(
+		f.sessions,
+		"selectTaskModel",
+		async (cwd: string, model?: string, thinking?: string) => {
+			assert.equal(cwd, f.project.path);
+			if (model !== "test/allowed" || (thinking !== undefined && thinking !== "high"))
+				throw new Error("unsupported scope/thinking");
+			return { model, thinking: thinking ?? "high" };
+		},
+	);
+	const noticeSchedule = t.mock.method(f.service.notices as unknown as { schedule(): void }, "schedule", () => {});
+	const compactSchedule = t.mock.method(f.service.compaction as unknown as { schedule(): void }, "schedule", () => {});
+	const phases = t.mock.method(f.store as unknown as { reconcilePhases(id: string): void }, "reconcilePhases", () =>
+		assert.fail("no phase reconciliation"),
+	);
+	const linear = t.mock.method(f.store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () =>
+		assert.fail("no Linear reconciliation"),
+	);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const hello = await fetch(`${base}/hello`).then((r) => r.json());
+	assert.equal(hello.capabilities.passiveTaskModel, true);
+	const payload = {
+		operationId: randomUUID(),
+		home: { daemonId: hello.daemonId, lineageId: hello.lineageId },
+		projectId: f.project.id,
+		preferredModel: "test/allowed",
+		preferredThinking: null,
+	};
+	const post = (value: unknown, id = task.id) =>
+		fetch(`${base}/missions/${m.id}/tasks/${id}/model`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+	for (const bad of [
+		{ ...payload, preferredModel: "test/outside" },
+		{ ...payload, preferredThinking: "unsupported" },
+		{ ...payload, projectId: f.other.id },
+		{ ...payload, home: { ...payload.home, lineageId: "foreign" } },
+		{ ...payload, status: "done" },
+	]) {
+		const r = await post(bad);
+		assert.notEqual(r.status, 200);
+		await r.arrayBuffer();
+	}
+	const numeric = await post(payload, String(task.number));
+	assert.notEqual(numeric.status, 200);
+	await numeric.arrayBuffer();
+	assert.equal(f.store.task(m.id, task.id).preferredModel, undefined);
+	let release!: () => void;
+	const hold = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const durable = f.store.durable.bind(f.store);
+	const wait = t.mock.method(f.store, "durable", async () => {
+		await hold;
+		await durable();
+	});
+	let received = false;
+	const response = post(payload).then(async (r) => {
+		const body = await r.json();
+		received = true;
+		return { status: r.status, body };
+	});
+	await until(() => wait.mock.calls.length > 0);
+	assert.equal(received, false);
+	assert.equal(f.store.task(m.id, task.id).preferredModel, "test/allowed");
+	release();
+	const ack = await response;
+	assert.equal(ack.status, 200);
+	assert.deepEqual(
+		{
+			operationId: ack.body.operationId,
+			home: ack.body.home,
+			projectId: ack.body.projectId,
+			missionId: ack.body.missionId,
+		},
+		{ operationId: payload.operationId, home: payload.home, projectId: f.project.id, missionId: m.id },
+	);
+	assert.equal(ack.body.task.id, task.id);
+	assert.equal(ack.body.task.preferredThinking, undefined);
+	assert.equal(ack.body.task.preferredModelSetBy, "user");
+	assert.equal(changed.mock.calls.length, 0);
+	assert.equal(start.mock.calls.length, 0);
+	assert.ok(select.mock.calls.length > 0);
+	assert.equal(noticeSchedule.mock.calls.length, 0);
+	assert.equal(compactSchedule.mock.calls.length, 0);
+	assert.equal(phases.mock.calls.length, 0);
+	assert.equal(linear.mock.calls.length, 0);
+	phases.mock.restore();
+	linear.mock.restore();
+	// Legacy updates keep their member callbacks and semantics.
+	f.store.updateTask(m.id, task.id, { body: "Legacy" });
+	assert.ok(changed.mock.calls.length > 0);
 });
 
 test("HTTP routes and WebSocket mission subscriptions", async (t) => {
