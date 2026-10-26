@@ -111,6 +111,10 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 );
                 let b = w.find(("message-fold", 1u64)).bounds();
                 assert!(b.size.width > px(40.) && b.right() <= w.find("viewport").bounds().right());
+                assert!(
+                    b.top() >= state.read(cx).bounds().bottom(),
+                    "Show more follows the preview"
+                );
                 w.click(("copy-source", 1u64), cx);
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source());
             })
@@ -135,6 +139,11 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                     source()
                 );
                 assert!(!t.read(cx).reading_mark(cx).unwrap().following);
+                assert!(
+                    w.find(("message-fold", 1u64)).bounds().bottom()
+                        <= t.read(cx).history_probe_row(1).read(cx).bounds().top(),
+                    "Show less stays reachable before expanded content"
+                );
                 assert!(
                     w.focused(cx).is_some(),
                     "mounted focus before parser replacement"

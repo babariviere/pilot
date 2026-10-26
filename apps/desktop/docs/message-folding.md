@@ -26,6 +26,8 @@ expanded; source-matching commit promotion also remains expanded. No live row
 is automatically folded when it grows past the threshold.
 
 Kit Buttons provide a calm chevron and explicit Show more/Show less action.
+Show more follows the collapsed preview; Show less stays above expanded content
+so a long message can be collapsed without scrolling to its end.
 Enter/Space toggle within the mounted disclosure; Escape collapses it. These
 keys cannot submit the composer. Pointer disclosure is guarded before sibling
 IME blur, and mutation rechecks source/key/history generation. Focus moves to
