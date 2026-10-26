@@ -1262,6 +1262,23 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
+test("a session whose worker failed on a stale credential endpoint recovers on the next daemon", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await sessions.shutdown();
+	// A daemon restart leaves the credential endpoint behind, and the worker cannot reach it.
+	const persisted = await f.stored(created.id);
+	persisted.failure =
+		"Session startup: Kernel failed to start: Credential broker stale. Sign in again if a refresh outcome is uncertain.";
+	await writeFile(join(f.home, "sessions", created.id, "meta.json"), JSON.stringify(persisted));
+	const restarted = await f.manager();
+	const recovered = restarted["metas"].get(created.id)!;
+	assert.equal(recovered.failure, undefined, "a stale credential endpoint must not keep a chat broken");
+	assert.equal(recovered.kernelRestartPending, true);
+});
+
 test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();

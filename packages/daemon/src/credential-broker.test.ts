@@ -169,7 +169,8 @@ test("lost exchange/worker and broker restart never replay an uncertain refresh;
 	);
 	assert.equal(exchanges, 1);
 	await broker.close();
-	await assert.rejects(client.pi.read("fixture"), /unavailable/);
+	// The broker that issued this endpoint is gone, so the endpoint is stale, not broken.
+	await assert.rejects(client.pi.read("fixture"), /stale/);
 	const restarted = new CredentialBroker(dir);
 	await restarted.start();
 	t.after(() => restarted.close());

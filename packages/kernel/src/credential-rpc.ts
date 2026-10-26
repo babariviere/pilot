@@ -45,6 +45,8 @@ export function authError(code = "unavailable"): CredentialBrokerError {
 }
 export class CredentialChannel {
 	private socket: Socket;
+	/** Why the channel closed. A stale endpoint needs a fresh one, a broken broker does not. */
+	private code?: string;
 	private pending?: { resolve(value: unknown): void; reject(error: Error): void };
 	private deadline?: NodeJS.Timeout;
 	private buffer = Buffer.alloc(0);
@@ -55,7 +57,13 @@ export class CredentialChannel {
 		this.endpoint = endpoint;
 		this.socket = connect(endpoint.socket);
 		this.socket.setTimeout(310_000, () => this.close());
-		this.socket.on("error", () => this.close());
+		this.socket.on("error", (error) => {
+			// A missing or refused socket means the daemon that issued this endpoint is gone or
+			// restarting. The endpoint is stale, not a broken broker: a fresh one is needed.
+			const code = (error as NodeJS.ErrnoException).code;
+			this.code = code === "ENOENT" || code === "ECONNREFUSED" ? "stale" : undefined;
+			this.close();
+		});
 		this.socket.on("close", () => this.close());
 		this.socket.on("data", (bytes) => {
 			this.buffer = Buffer.concat([this.buffer, bytes]);
@@ -81,7 +89,7 @@ export class CredentialChannel {
 		});
 	}
 	request(request: CredentialRequest): Promise<unknown> {
-		if (this.closed || this.pending) return Promise.reject(authError());
+		if (this.closed || this.pending) return Promise.reject(authError(this.code));
 		this.responseLimit = request.op === "catalog" ? CATALOG_FRAME_LIMIT : AUTH_FRAME_LIMIT;
 		const frame = JSON.stringify({ ...request, token: this.endpoint.token }) + "\n";
 		if (Buffer.byteLength(frame) > AUTH_FRAME_LIMIT) return Promise.reject(authError("invalid"));
@@ -97,7 +105,7 @@ export class CredentialChannel {
 		if (this.closed) return;
 		this.closed = true;
 		clearTimeout(this.deadline);
-		this.pending?.reject(authError());
+		this.pending?.reject(authError(this.code));
 		this.pending = undefined;
 		this.socket.destroy();
 	}

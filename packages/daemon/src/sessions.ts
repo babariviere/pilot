@@ -522,6 +522,14 @@ const emptySnapshot: AgentEvent = {
 const ID_PATTERN = /^[0-9a-f-]{36}$/i;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+/**
+ * The credential endpoint's daemon is gone. The kernel reports a stale broker, and a fresh
+ * endpoint is needed. The message is the kernel's stable credential error text.
+ */
+function staleCredentialEndpoint(failure: string): boolean {
+	return failure.includes("Credential broker stale");
+}
+
 function reviewThreadKey(url: string, id: string, commentId: string): string {
 	return createHash("sha256").update(`${url.toLowerCase()}\0${id}\0${commentId}`).digest("hex");
 }
@@ -1768,6 +1776,16 @@ export class SessionManager {
 			if (this.missions && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				this.missionChanged(meta.id);
 		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
+		// A daemon restart invalidates the credential endpoint its workers were given. A session whose
+		// worker failed to start for that reason must not stay broken: this daemon has its own broker.
+		for (const meta of this.metas.values())
+			if (meta.failure !== undefined && staleCredentialEndpoint(meta.failure)) {
+				delete meta.failure;
+				delete meta.inputError;
+				clearOutcome(meta);
+				meta.kernelRestartPending = true;
+				await this.save(meta);
+			}
 		for (const meta of this.metas.values())
 			if (
 				meta.archivedAt === undefined &&
@@ -7011,7 +7029,20 @@ export class SessionManager {
 					this.emit(meta);
 					return;
 				}
-				meta.failure = formatFailure(error, "Session startup");
+				const failure = formatFailure(error, "Session startup");
+				if (staleCredentialEndpoint(failure)) {
+					// The daemon that issued the credential endpoint is gone. The worker never started,
+					// so nothing was admitted: the queued commands stay and the next start uses a
+					// fresh endpoint. A session must not stay broken because the daemon restarted.
+					delete meta.failure;
+					delete meta.inputError;
+					clearOutcome(meta);
+					delete meta.initializing;
+					await this.save(meta);
+					this.emit(meta);
+					return;
+				}
+				meta.failure = failure;
 				const now = Date.now();
 				applyFailure(meta, meta.failure, now);
 				meta.updatedAt = now;
