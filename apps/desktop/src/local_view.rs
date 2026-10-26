@@ -219,6 +219,16 @@ impl ListDelegate for ChatList {
         let button_chat = chat.clone();
         Some(
             ListItem::new(SharedString::from(chat.id.clone()))
+                .pl_2()
+                .pr_0()
+                .py_0()
+                .rounded(px(appearance::Radius::ROW))
+                .accessibility_label(SharedString::from(format!(
+                    "{} · {}{}",
+                    chat.title,
+                    chat.signal_label(),
+                    if chat.archived { " · Archived" } else { "" }
+                )))
                 .hover_fill(!has_corner)
                 .confirmed(self.opened.as_ref() == Some(&chat.id))
                 .child(
@@ -237,13 +247,17 @@ impl ListDelegate for ChatList {
                         .relative()
                         .overflow_hidden()
                         .rounded(px(appearance::Radius::ROW))
-                        .px_2()
+                        .px_0()
                         .py_1()
-                        .bg(if self.opened.as_ref() == Some(&chat.id) {
-                            appearance::selected(cx)
-                        } else {
-                            cx.theme().transparent
-                        })
+                        .min_h(px(appearance::Space::ROW))
+                        .justify_center()
+                        .bg(
+                            if self.opened.as_ref() == Some(&chat.id) && self.selected != Some(ix) {
+                                appearance::selected(cx)
+                            } else {
+                                cx.theme().transparent
+                            },
+                        )
                         .min_w_0()
                         .w_full()
                         .gap_1()
@@ -255,6 +269,8 @@ impl ListDelegate for ChatList {
                                 .gap_1()
                                 .child(
                                     div()
+                                        .id("sidebar-chat-title")
+                                        .test_support()
                                         .flex_1()
                                         .min_w_0()
                                         .truncate()
@@ -268,6 +284,7 @@ impl ListDelegate for ChatList {
                                         AppIcon::More,
                                         crate::ui::Action::Quiet,
                                     )
+                                    .size_8()
                                     .disabled(chat.local_draft)
                                     .dropdown_menu(
                                         move |menu, w, cx| {
@@ -284,6 +301,10 @@ impl ListDelegate for ChatList {
                         )
                         .child(
                             div()
+                                .id("sidebar-chat-detail")
+                                .test_support()
+                                .min_w_0()
+                                .truncate()
                                 .text_size(px(appearance::TextRole::CAPTION))
                                 .text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!(
@@ -329,16 +350,22 @@ impl ListDelegate for ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         div()
-            .p_4()
-            .text_sm()
+            .px_2()
+            .py_3()
+            .text_size(px(appearance::TextRole::BODY))
             .text_color(cx.theme().muted_foreground)
-            .child(if !self.loaded {
-                "Loading chats…"
-            } else if self.all.is_empty() {
-                "No Local chats yet."
-            } else {
-                "No matching chats."
-            })
+            .child(
+                div()
+                    .id("sidebar-empty-message")
+                    .test_support()
+                    .child(if !self.loaded {
+                        "Loading chats…"
+                    } else if self.all.is_empty() {
+                        "No Local chats yet."
+                    } else {
+                        "No matching chats."
+                    }),
+            )
     }
 }
 

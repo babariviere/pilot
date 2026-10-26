@@ -5,7 +5,8 @@ use crate::{
     project_registration_fixture::{Behavior, Server},
 };
 use gpui_kit::{
-    AnyWindowHandle, Bounds, EntityInputHandler, HeadlessAppContext, WindowBounds, WindowOptions,
+    AnyWindowHandle, Bounds, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds,
+    WindowOptions,
     component::{Theme, ThemeMode},
     size,
     test::TestWindowExt,
@@ -73,11 +74,63 @@ pub fn run_project_add_probe(cx: &mut HeadlessAppContext) {
                 assert!(!view.read(cx).add_project_open);
                 input.update(cx, |t, cx| t.unmark_text(w, cx));
                 input.update(cx, |t, cx| t.set_value("Keep unsent 私 👩‍💻", w, cx));
-                w.click("add-project", cx);
+                assert!(
+                    w.try_find("add-project").is_none(),
+                    "no permanent Add project row"
+                );
+                w.click("project-scope", cx);
             })
             .unwrap();
             settle(cx, handle);
+            if mode == ThemeMode::Dark {
+                cx.update_window(handle, |_, w, cx| w.press("escape", cx))
+                    .unwrap();
+                settle(cx, handle);
+                // Reach the selector through the native Tab order, not a
+                // direct invocation or synthetic replacement focus handle.
+                for _ in 0..8 {
+                    if cx
+                        .update_window(handle, |_, w, _| {
+                            w.find("project-scope").focused() == Some(true)
+                        })
+                        .unwrap()
+                    {
+                        break;
+                    }
+                    cx.update_window(handle, |_, w, cx| w.press("shift-tab", cx))
+                        .unwrap();
+                    settle(cx, handle);
+                }
+                cx.update_window(handle, |_, w, cx| {
+                    assert_eq!(w.find("project-scope").focused(), Some(true));
+                    w.press("enter", cx);
+                })
+                .unwrap();
+                settle(cx, handle);
+            }
+            cx.update_window(handle, |_, w, cx| {
+                assert_eq!(w.find("add-project").label(), Some("Add project…"));
+                assert!(view.read(cx).projects.focus_handle(cx).is_focused(w));
+                // The first Tab from the nonsearchable project list reaches the
+                // disclosed action. Exercise real native keyboard activation.
+                if mode == ThemeMode::Dark {
+                    w.press("tab", cx);
+                } else {
+                    w.click("add-project", cx);
+                }
+            })
+            .unwrap();
+            settle(cx, handle);
+            if mode == ThemeMode::Dark {
+                cx.update_window(handle, |_, w, cx| {
+                    assert_eq!(w.find("add-project").focused(), Some(true));
+                    w.press("enter", cx);
+                })
+                .unwrap();
+                settle(cx, handle);
+            }
             assert!(cx.update(|cx| view.read(cx).add_project_open));
+            assert_eq!(server.posts(), 0);
             cx.update_window(handle, |_, w, cx| {
                 let root = w.find("desktop-root").bounds();
                 let sheet = w.find("add-project-sheet").bounds();
@@ -110,6 +163,20 @@ pub fn run_project_add_probe(cx: &mut HeadlessAppContext) {
             settle(cx, handle);
             assert!(!cx.update(|cx| view.read(cx).add_project_open));
             assert_eq!(server.posts(), 0);
+            cx.update_window(handle, |_, w, cx| {
+                assert!(
+                    view.read(cx)
+                        .chats
+                        .read(cx)
+                        .query_input()
+                        .focus_handle(cx)
+                        .is_focused(w),
+                    "close restores a mounted sidebar input"
+                );
+                w.click("project-scope", cx);
+            })
+            .unwrap();
+            settle(cx, handle);
             cx.update_window(handle, |_, w, cx| {
                 w.click("add-project", cx);
             })
@@ -207,7 +274,7 @@ pub fn run_project_add_probe(cx: &mut HeadlessAppContext) {
             std::fs::remove_dir_all(private).unwrap();
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"actual_local_viewer":true,"cancel_posts":0,"explicit_posts":server.posts(),"no_chat_create_send":true,"canonical_refresh":true,"retained_editor_reader_draft":true,"preedit_fenced":true,"private_flush":true})
+                json!({"width":width,"mode":mode.name(),"actual_local_viewer":true,"pointer_and_native_tab_enter_selector_action":true,"mounted_focus_return":true,"cancel_posts":0,"explicit_posts":server.posts(),"no_chat_create_send":true,"canonical_refresh":true,"retained_editor_reader_draft":true,"preedit_fenced":true,"private_flush":true})
             );
         }
     }

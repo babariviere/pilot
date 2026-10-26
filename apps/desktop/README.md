@@ -66,7 +66,8 @@ the mounted conversation and draft. See [usage-overview.md](docs/usage-overview.
 
 ### Add a Local project
 
-Use **Add project…** beside project browsing or in the new-chat project chooser.
+Open the sidebar project selector for **Add project…** (Tab to the action, then
+Return), or use it in the new-chat project chooser.
 Choose one existing folder in the native dialog, then confirm **Add project**.
 Cancellation sends nothing. Registration refreshes the canonical catalog but
 never selects a draft destination or creates/starts a chat. Select the project

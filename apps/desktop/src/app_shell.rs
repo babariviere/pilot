@@ -119,6 +119,10 @@ impl ListDelegate for ProjectList {
         let p = self.at(ix)?;
         Some(
             ListItem::new(SharedString::from(format!("project-{}", p.id)))
+                .px_2()
+                .py_0()
+                .min_h_8()
+                .accessibility_label(SharedString::from(p.name.clone()))
                 .confirmed(self.selected.as_ref() == Some(&p.id))
                 .child(
                     div()
@@ -126,11 +130,21 @@ impl ListDelegate for ProjectList {
                         .w_full()
                         .min_w_0()
                         .gap_2()
+                        .items_center()
                         .text_size(px(crate::appearance::TextRole::BODY))
                         .text_color(cx.theme().foreground)
-                        .child(AppIcon::Project.icon())
                         .child(
                             div()
+                                .id("scope-project-icon")
+                                .test_support()
+                                .size_4()
+                                .flex_shrink_0()
+                                .child(AppIcon::Project.icon()),
+                        )
+                        .child(
+                            div()
+                                .id("scope-project-title")
+                                .test_support()
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
@@ -162,7 +176,9 @@ impl ListDelegate for ProjectList {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         div()
-            .text_xs()
+            .px_2()
+            .py_1()
+            .text_size(px(crate::appearance::TextRole::BODY))
             .text_color(cx.theme().muted_foreground)
             .child(self.empty_label)
     }

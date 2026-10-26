@@ -52,6 +52,7 @@ impl LocalViewer {
                     AppIcon::Filter,
                     crate::ui::Action::Quiet,
                 )
+                .size_8()
                 .selected(archived)
                 .dropdown_menu(move |menu, _, _| {
                     let weak = weak.clone();

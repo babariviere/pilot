@@ -190,64 +190,102 @@ impl LocalViewer {
         let healthy = self.state.status.starts_with("Connected")
             || self.state.status.starts_with("Synthetic")
             || self.state.status.starts_with("Read-only captured");
+        // Compose belongs with Home, as in Swift's SidebarHeader. Project
+        // management lives in the disclosed selector, not a permanent row.
         div().id("chat-sidebar").test_support().v_flex().w(width).min_w(width).max_w(width).h_full()
             .bg(cx.theme().sidebar).border_r(appearance::hairline(w)).border_color(cx.theme().border)
-            .child(div().h_flex().items_center().justify_between().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL))
-                .child(div().flex_1().min_w_0().text_size(px(TextRole::BODY)).font_semibold().child("Pilot Next"))
-                .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().gap_1()
-                    .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))
-                    .child(crate::ui::icon_action("nav-back","Back (⌘[)",AppIcon::Back,crate::ui::Action::Quiet).disabled(!self.navigation.can_move(false)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(false,w,cx))))
-                    .child(crate::ui::icon_action("nav-forward","Forward (⌘])",AppIcon::Forward,crate::ui::Action::Quiet).disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx))))))
-                .child(Button::new("new-local-chat").ghost().small().icon(AppIcon::NewChat.asset()).accessibility_label("New chat")
-                    .tooltip("New Local chat with an explicit folder. Project scope is browse-only.").disabled(!self.editor.read(cx).ready())
-                    .on_click(cx.listener(|v,_,w,cx|v.new_chat(w,cx)))))
-            .child(div().id("global-navigation").test_support().v_flex().px(px(Space::SIDEBAR)).gap(px(Space::META))
-                .child(Button::new("nav-home").ghost().small().w_full().justify_start().accessibility_label("Home").child(nav_label("nav-home-title","Home",AppIcon::Home)).selected(self.page==Page::Home).on_click(cx.listener(|v,_,w,cx|v.show_home(w,cx))))
-                .child(Button::new("nav-inbox").ghost().small().w_full().justify_start().accessibility_label("Inbox").child(nav_label("nav-inbox-title","Inbox",AppIcon::Inbox)).selected(matches!(self.page,Page::Inbox(_))).on_click(cx.listener(|v,_,w,cx|v.show_inbox(v.project_scope.clone(),w,cx))))
-                .child(Button::new("nav-missions").ghost().small().w_full().justify_start().accessibility_label("Missions (Command-3)").child(nav_label("nav-missions-title","Missions",AppIcon::Overview)).selected(matches!(self.page,Page::Missions|Page::Mission(_))).on_click(cx.listener(|v,_,w,cx|{v.show_missions(w,cx);})))
-                .child(div().text_size(px(TextRole::SMALL)).text_color(cx.theme().muted_foreground).child("⌘K Jump to…")))
-            .child(div().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL))
-                .child(div().id("scope-heading").test_support().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Browse scope"))
-                .child(Button::new("project-scope").ghost().small().w_full().min_w_0().h(px(32.)).justify_start()
-                    .accessibility_label(SharedString::from(format!("Project scope: {scope}")))
-                    .tooltip("Choose a project for browsing. This never selects a new-chat working folder. Escape closes the choices.")
-                    .child(div().h_flex().w_full().min_w_0().items_center().gap_2()
-                        .child(if self.project_scope.is_some(){AppIcon::Project.icon()}else{AppIcon::Projects.icon()})
-                        .child(div().id("project-scope-title").test_support().flex_1().min_w_0().truncate().text_size(px(TextRole::BODY)).font_medium().child(SharedString::from(scope)))
-                        .child(gpui_kit::component::Icon::new(if self.projects_open{IconName::ChevronUp}else{IconName::ChevronDown}).small()))
+            .child(div().id("global-navigation").test_support().v_flex().px(px(Space::SIDEBAR)).pt_2().gap_0p5().flex_shrink_0()
+                .child(div().h_flex().min_w_0()
+                    .child(sidebar_row("nav-home","Home",AppIcon::Home).flex_1().selected(self.page==Page::Home)
+                        .on_click(cx.listener(|v,_,w,cx|v.show_home(w,cx))))
+                    .child(crate::ui::icon_action("new-local-chat","New chat (⌘N)",AppIcon::NewChat,crate::ui::Action::Quiet)
+                        .size_8().flex_shrink_0().disabled(!self.editor.read(cx).ready())
+                        .tooltip("New Local chat (⌘N). Choose its working folder explicitly; browse scope never chooses it.")
+                        .on_click(cx.listener(|v,_,w,cx|v.new_chat(w,cx)))))
+                .child(sidebar_row("nav-inbox","Inbox",AppIcon::Inbox).selected(matches!(self.page,Page::Inbox(_)))
+                    .on_click(cx.listener(|v,_,w,cx|v.show_inbox(v.project_scope.clone(),w,cx))))
+                .child(sidebar_row("nav-missions","Missions",AppIcon::Overview).accessibility_label("Missions (Command-3)")
+                    .selected(matches!(self.page,Page::Missions|Page::Mission(_)))
+                    .on_click(cx.listener(|v,_,w,cx|{v.show_missions(w,cx);}))))
+            .child(div().v_flex().px(px(Space::SIDEBAR)).pt_3().gap_0p5().flex_shrink_0()
+                .child(Button::new("project-scope").ghost().small().w_full().min_w_0().h_8().px_2().justify_start()
+                    .selected(self.projects_open)
+                    .accessibility_label(SharedString::from(format!("Project scope: {scope}. Choose projects or Add project")))
+                    .tooltip("Choose a browse scope. Open, then Tab for Add project. Escape closes choices. New-chat folders are separate.")
+                    .child(nav_label("project-scope-title", SharedString::from(scope),if self.project_scope.is_some(){AppIcon::Project}else{AppIcon::Projects})
+                        .child(gpui_kit::component::Icon::new(if self.projects_open{IconName::ChevronUp}else{IconName::ChevronDown}).small().flex_shrink_0()))
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_projects(w,cx))))
-                .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0()
-                    .child(div().h(px((self.state.projects.len().min(5)as f32*30.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects)))))
-                .child(crate::ui::action("add-project","Add project…",crate::ui::Action::Quiet).w_full().justify_start()
-                    .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|v.open_add_project(w,cx))))
-                .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Project list unavailable · last loaded choices retained")))
-                .when(self.project_scope.is_some(),|this|this.child(Button::new("project-overview").ghost().small().w_full().justify_start().accessibility_label("Overview").child(nav_label("project-overview-title","Overview",AppIcon::Overview)).on_click(cx.listener(|v,_,w,cx|{if let Some(id)=v.project_scope.clone(){v.show_project(id,w,cx);}}))))
-                .child(Button::new("nav-all-chats").ghost().small().w_full().justify_start().accessibility_label("All chats").child(nav_label("nav-all-chats-title","All chats",AppIcon::Chats)).selected(self.page==Page::Chat&&self.project_scope.is_none()).on_click(cx.listener(|v,_,w,cx|v.show_chats(w,cx))))
-                .child(div().h_flex().justify_between().gap_1()
-                    .child(div().min_w_0().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child(SharedString::from(format!("Chats · {count} shown"))))
+                .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0().py_1()
+                    .child(div().h(px((self.state.projects.len().min(5)as f32*28.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects)))
+                    .child(sidebar_row("add-project","Add project…",AppIcon::AddProject)
+                        .tooltip("Add a Local project. Choose a folder, then explicitly confirm. Opening this form never creates a project.")
+                        .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|{
+                            if !v.project_choices_ready(w,cx){return;}
+                            // The selector list unmounts as the sheet opens.
+                            // Capture a mounted return target for the existing flow.
+                            v.chats.update(cx,|l,cx|l.focus(w,cx));
+                            v.open_add_project(w,cx);
+                        })))))
+                .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().px_2().py_1().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Project list unavailable · last loaded choices retained")))
+                .when(self.project_scope.is_some(),|this|this.child(sidebar_row("project-overview","Overview",AppIcon::Overview)
+                    .selected(matches!(&self.page,Page::Project(id) if self.project_scope.as_ref()==Some(id)))
+                    .on_click(cx.listener(|v,_,w,cx|{if let Some(id)=v.project_scope.clone(){v.show_project(id,w,cx);}}))))
+                .child(sidebar_row("nav-all-chats","All chats",AppIcon::Chats).selected(self.page==Page::Chat&&self.project_scope.is_none())
+                    .on_click(cx.listener(|v,_,w,cx|v.show_chats(w,cx))))
+                .child(div().h_flex().min_w_0().pl_2().pt_2().items_center().gap_1()
+                    .child(div().id("sidebar-chat-count").test_support().flex_1().min_w_0().truncate().text_size(px(TextRole::LABEL)).text_color(cx.theme().muted_foreground)
+                        .child(SharedString::from(format!("Chats · {count} shown"))))
                     .child(self.chat_filter(cx)))
-                .when(archived,|this|this.child(div().id("archives-active").test_support().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
-            .child(div().id("chat-list-pane").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+                .when(archived,|this|this.child(div().id("archives-active").test_support().px_2().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
+            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
             .child(self.chat_actions.clone())
-            .child(crate::ui::action("open-usage", "Usage…", crate::ui::Action::Quiet)
-                .w_full().justify_start().accessibility_label("Open Local Usage")
-                .on_click(cx.listener(|view,_,window,cx|view.open_usage(window,cx))))
-            .child(crate::ui::action("open-settings", "Settings…", crate::ui::Action::Quiet)
-                .w_full().justify_start().accessibility_label("Settings (Command-comma)")
-                .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx))))
+            .child(div().id("sidebar-footer").test_support().v_flex().px(px(Space::SIDEBAR)).pb_2().pt_1().gap_0p5().flex_shrink_0()
+                .child(div().h_flex().min_w_0()
+                    .child(sidebar_row("sidebar-jump","Jump to…",AppIcon::Search).flex_1().tooltip("Jump to a page, project or chat (⌘K)")
+                        .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
+                    .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()
+                        .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))
+                        .child(crate::ui::icon_action("nav-back","Back (⌘[)",AppIcon::Back,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(false)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(false,w,cx))))
+                        .child(crate::ui::icon_action("nav-forward","Forward (⌘])",AppIcon::Forward,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx)))))))
+                .child(sidebar_row("open-usage", "Usage…", AppIcon::Usage).accessibility_label("Open Local Usage")
+                    .on_click(cx.listener(|view,_,window,cx|view.open_usage(window,cx))))
+                .child(sidebar_row("open-settings", "Settings…", AppIcon::Settings).accessibility_label("Settings (Command-comma)")
+                    .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx)))))
             .when_some(self.nav_error,|this,error|this.child(div().p(px(Space::SIDEBAR)).text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(error)))
-            .children((!healthy).then(||div().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL)).border_t(appearance::hairline(w)).border_color(cx.theme().border)
+            .children((!healthy).then(||div().id("sidebar-connection").test_support().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL)).flex_shrink_0().border_t(appearance::hairline(w)).border_color(cx.theme().border)
                 .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
                 .child(Button::new("reconnect").ghost().small().label("Reconnect").icon(AppIcon::Retry.asset()).disabled(self.client.is_none()).on_click(cx.listener(|v,_,_,_|{if let Some(c)=&v.client{c.command(Command::Reconnect);}})))))
     }
 }
 
 // Fill the inner Button content slot, not just its outer Base wrapper.
-fn nav_label(id: &'static str, title: &'static str, icon: AppIcon) -> impl IntoElement {
+fn sidebar_row(id: &'static str, title: &'static str, icon: AppIcon) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .w_full()
+        .min_w_0()
+        .h_8()
+        .px_2()
+        .justify_start()
+        .accessibility_label(title)
+        .child(nav_label(
+            SharedString::from(format!("{id}-title")),
+            title,
+            icon,
+        ))
+}
+fn nav_label(
+    id: impl Into<SharedString>,
+    title: impl Into<SharedString>,
+    icon: AppIcon,
+) -> gpui_kit::Div {
+    let id = id.into();
     div()
         .h_flex()
         .w_full()
         .min_w_0()
+        .items_center()
         .gap_2()
         .text_left()
         .text_size(px(TextRole::BODY))
@@ -266,6 +304,6 @@ fn nav_label(id: &'static str, title: &'static str, icon: AppIcon) -> impl IntoE
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .child(title),
+                .child(title.into()),
         )
 }

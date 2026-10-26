@@ -168,6 +168,31 @@ adoption by itself; functional Settings is a separate implementation.
 
 ## Verification
 
+### Sidebar presentation
+
+`workbench_view::sidebar` keeps compose beside Home, matching Swift's
+`SidebarHeader`. Add project is a named folder-plus action inside the disclosed
+project selector, not a permanent full-width label. Open the selector, Tab to
+Add project and press Return; Escape closes the existing guarded sheet and
+returns focus to mounted sidebar search. Opening, cancelling or browsing choices
+never creates a project or chooses a new-chat folder.
+
+Navigation, scope choices and footer use the same 12pt outer inset, one-rem
+glyph slot, half-rem gap and two-rem control height (28pt at the app's 14pt rem).
+Chat rows have no phantom glyph column: their title and status align with the
+leading resource column. Compose, filters and chat menus share a trailing action
+column and 28pt targets. Long names truncate without shrinking body text; actual
+owners retain full accessible names. Search, filters, archive, navigation history,
+Usage, Settings and connection/recovery state keep their existing owners.
+
+The `workbench` native target measures these columns/hit bounds and glyph paint,
+including long Unicode, empty/loading/unavailable and retained-error states at
+680/1100 light/dark. `project_add` dispatches actual pointer/Tab/Return/Escape
+through the selector and checks mounted focus restoration, zero POSTs before
+confirmation and retained conversation/draft identity. `navigation` covers
+scope/filter/search/scroll/history and preedit. These synthetic offscreen checks
+are not OS IME, screen-reader, motion/performance or user acceptance.
+
 Use the shared serial slot and `scripts/cargo.sh`. Focused native target:
 `bash scripts/cargo.sh test --locked --features native-probes --test catalog`.
 It uses isolated synthetic content, not Local clients, actions or user state.

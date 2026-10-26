@@ -69,6 +69,8 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                             "nav-home-title-icon",
                             "nav-inbox-title-icon",
                             "nav-all-chats-title-icon",
+                            "open-usage-title-icon",
+                            "open-settings-title-icon",
                         ]
                         .map(|id| (id, w.find(id).bounds()))
                     })
@@ -90,12 +92,10 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 for id in [
                     "new-local-chat",
-                    "archives",
+                    "chat-filters",
                     "nav-home",
                     "nav-inbox",
                     "nav-all-chats",
-                    "nav-back",
-                    "nav-forward",
                 ] {
                     let b = w.find(id).bounds();
                     assert!(
@@ -105,6 +105,8 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                     );
                 }
                 if !baseline {
+                    sidebar_alignment(w, width);
+                    assert!(w.try_find("add-project").is_none(), "management is disclosed, not permanent");
                     for id in ["nav-home", "nav-inbox", "nav-all-chats"] {
                         let button = w.find(id).bounds();
                         let label = w.find(format!("{id}-title")).bounds();
@@ -158,6 +160,45 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 &captures,
                 format!("{}-{}-scope.png", width as u32, mode.name()),
             );
+            if !baseline {
+                let icon = cx
+                    .update_window(h, |_, w, _| {
+                        let leading = w.find("nav-home-title-icon").bounds().left();
+                        let text = w.find("nav-home-title").bounds().left();
+                        for id in ["project-a", "project-b"] {
+                            let row = w.find(id).bounds();
+                            let glyph = w.within(id).find("scope-project-icon").bounds();
+                            let label = w.within(id).find("scope-project-title").bounds();
+                            assert!(
+                                (glyph.left() - leading).abs() < px(0.5),
+                                "{id} leading column"
+                            );
+                            assert!((label.left() - text).abs() < px(0.5), "{id} text column");
+                            assert!(
+                                label.right() <= row.right()
+                                    && row.size.height >= w.rem_size() * 2.
+                            );
+                        }
+                        let add = w.find("add-project").bounds();
+                        assert!(
+                            add.left() >= px(12.)
+                                && add.right() <= px(if width < 800. { 172. } else { 220. })
+                        );
+                        assert_eq!(add.size.height, w.rem_size() * 2.);
+                        assert!(
+                            (w.find("add-project-title").bounds().left() - text).abs() < px(0.5)
+                        );
+                        w.find("add-project-title-icon").bounds()
+                    })
+                    .unwrap();
+                let image = cx.capture_screenshot(h).unwrap();
+                crate::icon_probe::assert_painted(
+                    icon,
+                    image.width() as f32 / width,
+                    "Add project glyph",
+                    |x, y| image.get_pixel(x, y).0,
+                );
+            }
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("project-b").bounds();
                 assert!(b.right() <= px(if width < 800. { 184. } else { 232. }));
@@ -232,6 +273,14 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 &captures,
                 format!("{}-{}-loading.png", width as u32, mode.name()),
             );
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(
+                    w.find("sidebar-empty-message").bounds().left(),
+                    w.find("nav-home-title-icon").bounds().left(),
+                    "loading message keeps the common leading column"
+                );
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| {
                 v.update(cx, |v, cx| {
                     v.state.projects_loaded = true;
@@ -247,10 +296,47 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 &captures,
                 format!("{}-{}-empty.png", width as u32, mode.name()),
             );
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(
+                    w.find("sidebar-empty-message").bounds().left(),
+                    w.find("nav-home-title-icon").bounds().left(),
+                    "empty message keeps the common leading column"
+                );
+            })
+            .unwrap();
             assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
             if !baseline {
                 chooser_checks(cx, h, &v, fixture);
                 assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+                cx.update_window(h, |_, w, cx| {
+                    v.update(cx, |v, cx| {
+                        v.state.status = "Unavailable · synthetic Local connection refused".into();
+                        v.state.projects_error = Some("Synthetic catalog unavailable");
+                        let mut chats = v.state.chats.as_ref().clone();
+                        chats[0].title = "資料 👩‍💻 e\u{301} Ελληνικά ".repeat(30);
+                        v.state.chats = Arc::new(chats);
+                        v.rebuild_nav(w, cx);
+                    });
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.try_find("sidebar-connection").is_some());
+                    sidebar_alignment(w, width);
+                    let footer = w.find("sidebar-footer").bounds();
+                    let connection = w.find("sidebar-connection").bounds();
+                    assert!(
+                        footer.bottom() <= connection.top()
+                            && connection.bottom() <= w.viewport_size().height
+                    );
+                })
+                .unwrap();
+                capture(
+                    cx,
+                    h,
+                    &captures,
+                    format!("{}-{}-unavailable-unicode.png", width as u32, mode.name()),
+                );
             }
             println!(
                 "{}",
@@ -260,6 +346,82 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+}
+
+// Assert measured columns, not arbitrary wider allowances after adding glyphs.
+fn sidebar_alignment(w: &mut Window, width: f32) {
+    let leading = w.find("nav-home-title-icon").bounds().left();
+    let text = w.find("nav-home-title").bounds().left();
+    let right = px(if width < 800. { 172. } else { 220. });
+    for id in [
+        "nav-home",
+        "nav-inbox",
+        "nav-missions",
+        "nav-all-chats",
+        "open-usage",
+        "open-settings",
+        "sidebar-jump",
+    ] {
+        let row = w.find(id).bounds();
+        let glyph = w.find(format!("{id}-title-icon")).bounds();
+        let label = w.find(format!("{id}-title")).bounds();
+        assert_eq!(row.left(), px(12.), "{id} common inset");
+        assert_eq!(
+            row.size.height,
+            w.rem_size() * 2.,
+            "{id} usable native row height"
+        );
+        assert!(
+            (glyph.left() - leading).abs() < px(0.5),
+            "{id} leading slot"
+        );
+        assert!((label.left() - text).abs() < px(0.5), "{id} text column");
+        assert!(
+            (glyph.center().y - label.center().y).abs() < px(0.5),
+            "{id} centered baseline"
+        );
+        assert!(
+            label.right() <= row.right() && row.right() <= right,
+            "{id} bounded label and target"
+        );
+    }
+    let scope = w.find("project-scope-title").bounds();
+    assert!((scope.left() - text).abs() < px(0.5));
+    let count = w.find("sidebar-chat-count").bounds();
+    assert!((count.left() - leading).abs() < px(0.5));
+    let row = w.find("chat-row-synthetic").bounds();
+    let title = w
+        .within("chat-row-synthetic")
+        .find("sidebar-chat-title")
+        .bounds();
+    let detail = w
+        .within("chat-row-synthetic")
+        .find("sidebar-chat-detail")
+        .bounds();
+    let menu = w.find("chat-menu-synthetic").bounds();
+    let compose = w.find("new-local-chat").bounds();
+    let filter = w.find("chat-filters").bounds();
+    assert!(
+        (title.left() - leading).abs() < px(0.5) && title.left() == detail.left(),
+        "chat text has no phantom icon column"
+    );
+    assert!(
+        title.right() <= menu.left()
+            && menu.right() <= right
+            && row.size.height >= px(crate::appearance::Space::ROW)
+    );
+    assert!(
+        (menu.center().x - compose.center().x).abs() < px(0.5)
+            && (filter.center().x - compose.center().x).abs() < px(0.5),
+        "common trailing action column"
+    );
+    for bounds in [compose, filter, menu] {
+        assert_eq!(bounds.size, size(w.rem_size() * 2., w.rem_size() * 2.));
+    }
+    println!(
+        "{}",
+        json!({"sidebar_columns":true,"width":width,"leading":f32::from(leading),"text":f32::from(text),"trailing_action_center":f32::from(compose.center().x),"row_height":f32::from(compose.size.height)})
+    );
 }
 
 // Runs after all matched captures: extra interaction state never changes their fixture.
@@ -358,7 +520,9 @@ fn chooser_checks(
             // the app-owned saved draft later in this interaction sequence.
             t.replace_text_in_range(None, "にほん", w, cx);
         });
-        w.press("secondary-f", cx);
+        // Conversation Cmd-F now belongs to loaded-conversation find.
+        // Focus the actual sidebar search owner for its separate IME contract.
+        v.read(cx).chats.clone().update(cx, |l, cx| l.focus(w, cx));
     })
     .unwrap();
     settle(cx, h);

@@ -497,7 +497,14 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
 fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
     use crate::{local_model::LiveTranscript, model::ReaderKey};
     fn entry(id: u64, label: &str) -> serde_json::Value {
-        json!({"id":id,"head":id,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden synthetic"},{"type":"text","text":format!("{label}\n\n{}","A stable canonical reader position, not a render allocation.\n\n".repeat(80))}]}]})
+        // Exercise canonical reader identity, not ordinary-message folding.
+        // Bounded headings stay unfolded but make a genuinely scrollable row.
+        let text = format!(
+            "{label}\n\n{}",
+            "## A stable canonical reader position, not a render allocation.\n".repeat(12)
+        );
+        assert!(!crate::message_fold::preview(&text).long);
+        json!({"id":id,"head":id,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"thinking","thinking":"hidden synthetic"},{"type":"text","text":text}]}]})
     }
     fn snapshot(values: Vec<serde_json::Value>) -> Vec<Message> {
         let mut r = LiveTranscript::default();
