@@ -18,6 +18,8 @@ export interface DaemonHello {
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
 export interface DaemonCapabilities {
+	/** Atomic captured-row admission for queue edits/removals. */
+	guardedQueue?: true;
 	powerManagement: boolean;
 	systemSleepEvents: boolean;
 	swiftUIArtifacts: boolean;

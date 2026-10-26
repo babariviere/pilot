@@ -106,6 +106,7 @@ public struct LiveTool: Equatable, Sendable {
 
 /// Mirrors packages/protocol's QueuedMessage, not the agent stream's content-free inbox IDs.
 public struct QueuedMessage: Identifiable, Codable, Equatable, Sendable {
+    public let guardToken: String?
     public let id: Int
     public let mode: DeliveryMode
     public let text: String
@@ -117,6 +118,7 @@ public struct QueuedMessage: Identifiable, Codable, Equatable, Sendable {
         else { return nil }
         self.id = id
         self.mode = mode
+        guardToken = json["guardToken"]?.string
         text = ChatMessage(json: .object(["role": .string("user"), "content": json["content"] ?? .string("")])).text
     }
 }

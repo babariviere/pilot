@@ -1631,6 +1631,15 @@ test("queued message DELETE forwards only the ID, reports stale removal, and rej
 	assert.equal(response.status, 200);
 	assert.deepEqual(await response.json(), { ok: true });
 	assert.deepEqual(remove.mock.calls[0]?.arguments, ["session-1", 42]);
+	for (const body of [undefined, "{}"]) {
+		const legacy = await fetch(`${base}/42`, {
+			method: "DELETE",
+			headers: { "content-type": "application/json" },
+			body,
+		});
+		assert.equal(legacy.status, 200);
+		assert.deepEqual(await legacy.json(), { ok: true });
+	}
 	stale = true;
 	const rejected = await fetch(`${base}/42`, { method: "DELETE" });
 	assert.equal(rejected.status, 400);
@@ -1643,7 +1652,7 @@ test("queued message DELETE forwards only the ID, reports stale removal, and rej
 	const browser = await fetch(`${base}/42`, { method: "DELETE", headers: { origin: "https://example.com" } });
 	assert.equal(browser.status, 403);
 	await browser.arrayBuffer();
-	assert.equal(remove.mock.callCount(), 2);
+	assert.equal(remove.mock.callCount(), 4);
 	assert.equal(send.mock.callCount(), 0);
 });
 
@@ -1756,4 +1765,96 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 		await rejected.arrayBuffer();
 	}
 	assert.equal(command.mock.callCount(), 2);
+});
+
+test("guarded queue routes pin home, forward exact precondition and return operation-specific ACK without legacy fallback", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-queue-guard-"));
+	const projects = new ProjectStore(home);
+	const sessions = new SessionManager(home, projects);
+	const terminals = new TerminalManager();
+	const edit = t.mock.method(sessions, "editQueuedMessage", async () => {});
+	const remove = t.mock.method(sessions, "removeQueuedMessage", async () => {});
+	const hello: DaemonHello = {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "1",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin",
+		arch: "arm64",
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: true,
+			coordinatorIsolation: true,
+			independentExecution: true,
+		},
+	};
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(home),
+		terminals,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		hello,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((r) => server.close(() => r()));
+		rmSync(home, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const handshake = await fetch(`${base}/api/hello`);
+	assert.equal(((await handshake.json()) as DaemonHello).capabilities.guardedQueue, true);
+	const guard = { token: "a".repeat(64), operationId: "exact-operation", daemonId: "daemon", lineageId: "lineage" };
+	for (const method of ["PATCH", "DELETE"]) {
+		const response = await fetch(`${base}/api/sessions/source/queue/42`, {
+			method,
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ guard, ...(method === "PATCH" ? { message: "Captured edit" } : {}) }),
+		});
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), {
+			ok: true,
+			guard,
+			sessionId: "source",
+			submissionId: 42,
+			action: method === "PATCH" ? "edit" : "remove",
+		});
+	}
+	assert.deepEqual(edit.mock.calls[0]?.arguments, ["source", 42, "Captured edit", undefined, guard.token]);
+	assert.deepEqual(remove.mock.calls[0]?.arguments, ["source", 42, guard.token]);
+	for (const bad of [
+		{ ...guard, lineageId: "other" },
+		{ ...guard, token: "bad" },
+		{ ...guard, operationId: "bad/id" },
+	]) {
+		for (const method of ["PATCH", "DELETE"]) {
+			const response = await fetch(`${base}/api/sessions/source/queue/42`, {
+				method,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ guard: bad, message: "x" }),
+			});
+			assert.ok(response.status >= 400);
+			await response.arrayBuffer();
+		}
+	}
+	const tooLarge = await fetch(`${base}/api/sessions/source/queue/42`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ guard, message: "x".repeat(65537) }),
+	});
+	assert.equal(tooLarge.status, 400);
+	await tooLarge.arrayBuffer();
+	assert.equal(edit.mock.callCount(), 1);
+	assert.equal(remove.mock.callCount(), 1);
 });

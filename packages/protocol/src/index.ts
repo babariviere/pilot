@@ -165,6 +165,8 @@ export interface AutomaticInputProvenance {
 
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {
+	/** Opaque captured-row precondition for opt-in guarded edits/removals. */
+	guardToken?: string;
 	id: number;
 	mode: DeliveryMode;
 	content: UserMessage["content"];
@@ -1759,16 +1761,32 @@ export interface CompactRequest {
 	instructions?: string;
 }
 
+/** Guard is not a replay key. A lost response remains uncertain; never retry automatically. */
+export interface QueuedMessageGuard {
+	token: string;
+	operationId: string;
+	daemonId: string;
+	lineageId: string;
+}
+export interface GuardedQueueResponse {
+	ok: true;
+	guard: QueuedMessageGuard;
+	sessionId: string;
+	submissionId: number;
+	action: "edit" | "remove";
+}
 /**
  * PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position. Without `mode`, the delivery mode
  * is unchanged; with it, the message is delivered as steering or as a follow-up from then on.
  */
 export interface EditQueuedMessageRequest {
+	guard?: QueuedMessageGuard;
 	message: string;
 	mode?: DeliveryMode;
 }
 
-/** DELETE /api/sessions/:id/queue/:submissionId. No body. Only withdraws an input still in the durable queue. */
+/** DELETE /api/sessions/:id/queue/:submissionId. Legacy: no body; guarded: {guard: QueuedMessageGuard}.
+ * Only withdraws an input still in the durable queue. Guarded success returns GuardedQueueResponse. */
 export interface RemoveQueuedMessageResponse {
 	ok: true;
 }

@@ -269,6 +269,7 @@ pub(crate) struct LiveTranscript {
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
     pub(crate) queued: usize,
+    pub(crate) user_queue: std::sync::Arc<crate::queued_message::Snapshot>,
     active_head: Option<u64>,
     saved_history: Option<SavedHistory>,
     pub(crate) limited: bool,
@@ -734,6 +735,8 @@ impl LiveTranscript {
             }
             "entry_appended" => self.entry(&event["entry"], None),
             "queue_update" => {
+                self.user_queue =
+                    std::sync::Arc::new(crate::queued_message::Snapshot::read(&event["items"]));
                 self.queued = event["items"].as_array().map_or(0, Vec::len)
                     + event["automatic"].as_array().map_or(0, Vec::len);
             }

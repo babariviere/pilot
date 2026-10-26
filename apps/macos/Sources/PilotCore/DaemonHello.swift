@@ -34,6 +34,7 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let guardedMissionConversion: Bool?
     public let passiveMissionLifecycle: Bool?
     public let passiveTaskModel: Bool?
+    public let guardedQueue: Bool?
 
     public var supportsEnvironmentSetup: Bool { environmentSetup == 1 }
 }

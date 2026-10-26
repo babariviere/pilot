@@ -205,6 +205,7 @@ pub(crate) struct Presentation {
     pub(crate) page_revision: u64,
     pub(crate) batches: u64,
     pub(crate) queued: usize,
+    pub(crate) user_queue: Arc<crate::queued_message::Snapshot>,
     pub(crate) thinking: bool,
     #[cfg(test)]
     pub(crate) test_publications: u64,
@@ -607,7 +608,7 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
+                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
@@ -619,7 +620,7 @@ async fn run(
                     model = LiveTranscript::default();
                     model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
-                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
+                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;view.user_queue=Arc::default();
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
                 Ok(Command::Earlier { before, generation }) => {
@@ -716,6 +717,14 @@ async fn run(
         view.omitted = model.unsupported;
         view.loaded = model.loaded && !model.prefix_pending;
         view.queued = model.queued;
+        view.user_queue = if fenced {
+            Arc::new(crate::queued_message::Snapshot {
+                unavailable: true,
+                ..Default::default()
+            })
+        } else {
+            model.user_queue.clone()
+        };
         view.thinking = model.thinking && !fenced;
         view.failure_run_serial = model.failure_run_serial;
         view.question = if fenced {

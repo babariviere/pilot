@@ -30,11 +30,47 @@ import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
 import { KernelSession } from "./session.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
+import { queueGuardToken } from "./queue.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
 import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+test("guarded queued text edits are literal and stale capture cannot invoke input extensions", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const prepare = t.mock.method(f.adapters[0]!, "prepareInput", async () => {
+		throw new Error("Guarded edit must not invoke native input hooks");
+	});
+	const input = await session.harness.commit(async (tx) => {
+		const input = await tx.createSubmission({
+			conversationId: session.conversation.id,
+			type: "input",
+			status: "queued",
+			requestId: "user:guarded",
+		});
+		(await tx.doc(HeldInputsDoc, session.conversation.id)).items.push({
+			id: input.id,
+			mode: "followUp",
+			content: "Already expanded",
+		});
+		return input;
+	}, context);
+	const read = () => session.harness.snapshot(HeldInputsDoc, session.conversation.id, context);
+	const before = (await read())!.items[0]!;
+	const token = queueGuardToken(before);
+	await session.editQueuedMessage(input.id, "/literal no re-expansion", undefined, token);
+	const row = (await read())!.items[0]!;
+	assert.equal(row.mode, "followUp");
+	assert.equal(row.content, "/literal no re-expansion");
+	await assert.rejects(session.editQueuedMessage(input.id, "Stale", undefined, token), /changed/);
+	assert.equal(prepare.mock.callCount(), 0);
+	assert.equal(f.a.state.callCount, 0);
+	await session.removeQueuedMessage(input.id, queueGuardToken(row));
+	assert.equal((await read())!.items.length, 0);
+});
 
 test("host jobs inspection reads the callable registry without model work, history or completion claims", async (t) => {
 	let action: unknown;

@@ -104,3 +104,7 @@ bash scripts/cargo.sh clippy --locked --features native-probes --test mission_me
 bash scripts/cargo.sh test --locked --features native-probes --test mission_metadata
 bash scripts/cargo.sh clippy --locked --features native-probes --test session_failure -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test session_failure
+
+# Exact captured queued USER-message edits/removals, owned faux transport only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test queued_message -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test queued_message

@@ -36,6 +36,7 @@ import type {
 	NativeDiagnosticsBatch,
 	OperationHost,
 	ProjectRequest,
+	QueuedMessageGuard,
 	RenameSessionRequest,
 	RepositorySelection,
 	ReviewRequest,
@@ -197,7 +198,7 @@ function jsonText(res: ServerResponse, status: number, body: string): void {
 	res.end(body);
 }
 
-async function readJson<T>(req: IncomingMessage, maxBytes = MAX_BODY): Promise<T> {
+async function readJson<T>(req: IncomingMessage, maxBytes = MAX_BODY, allowEmpty = false): Promise<T> {
 	if (!req.headers["content-type"]?.startsWith("application/json"))
 		throw new HttpError(415, "Expected application/json");
 	let size = 0;
@@ -207,6 +208,8 @@ async function readJson<T>(req: IncomingMessage, maxBytes = MAX_BODY): Promise<T
 		if (size > maxBytes) throw new HttpError(413, "Request body too large");
 		chunks.push(chunk as Buffer);
 	}
+	// Queue DELETE historically allowed an empty body even with a JSON header.
+	if (allowEmpty && size === 0) return undefined as T;
 	try {
 		return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
 	} catch {
@@ -710,6 +713,7 @@ export function createDaemonServer(
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
 					passiveTaskModel: missions ? true : undefined,
+					guardedQueue: true,
 				},
 			});
 		}
@@ -1672,12 +1676,36 @@ export function createDaemonServer(
 				return json(res, 202, { ok: true });
 			}
 		}
+		const queueGuard = (g: QueuedMessageGuard | undefined): QueuedMessageGuard | undefined => {
+			if (g === undefined) return undefined;
+			if (
+				!g ||
+				typeof g.token !== "string" ||
+				!/^[a-f0-9]{64}$/.test(g.token) ||
+				typeof g.operationId !== "string" ||
+				!/^[a-zA-Z0-9_-]{1,128}$/.test(g.operationId)
+			)
+				throw new HttpError(400, "Invalid queued message guard");
+			if (!hello?.lineageId || g.daemonId !== hello.daemonId || g.lineageId !== hello.lineageId)
+				throw new HttpError(409, "Queued message home changed");
+			return { token: g.token, operationId: g.operationId, daemonId: g.daemonId, lineageId: g.lineageId };
+		};
 		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "PATCH") {
 			const body = await readJson<EditQueuedMessageRequest>(req);
 			if (body?.mode !== undefined && body.mode !== "steer" && body.mode !== "followUp")
 				throw new HttpError(400, "mode must be steer or followUp");
-			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message, body.mode);
-			return json(res, 200, { ok: true });
+			const guard = queueGuard(body.guard);
+			if (guard && (typeof body.message !== "string" || Buffer.byteLength(body.message) > 64 * 1024))
+				throw new HttpError(400, "Guarded message must be text of at most 64 KiB");
+			if (guard) await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message, body.mode, guard.token);
+			else await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message, body.mode);
+			return json(
+				res,
+				200,
+				guard
+					? { ok: true, guard, sessionId: parts[2], submissionId: Number(parts[4]), action: "edit" }
+					: { ok: true },
+			);
 		}
 		if (
 			parts[1] === "sessions" &&
@@ -1703,8 +1731,20 @@ export function createDaemonServer(
 		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "DELETE") {
 			if (!/^[1-9]\d*$/.test(parts[4]!) || !Number.isSafeInteger(Number(parts[4])))
 				throw new HttpError(400, "Invalid queued message ID");
-			await sessions.removeQueuedMessage(parts[2]!, Number(parts[4]));
-			return json(res, 200, { ok: true });
+			// Legacy DELETE has no body. Guarded callers opt in with an explicit JSON body.
+			const body = req.headers["content-type"]?.includes("application/json")
+				? await readJson<{ guard?: QueuedMessageGuard } | undefined>(req, MAX_BODY, true)
+				: undefined;
+			const guard = queueGuard(body?.guard);
+			if (guard) await sessions.removeQueuedMessage(parts[2]!, Number(parts[4]), guard.token);
+			else await sessions.removeQueuedMessage(parts[2]!, Number(parts[4]));
+			return json(
+				res,
+				200,
+				guard
+					? { ok: true, guard, sessionId: parts[2], submissionId: Number(parts[4]), action: "remove" }
+					: { ok: true },
+			);
 		}
 		throw new HttpError(404, "Not found");
 	};

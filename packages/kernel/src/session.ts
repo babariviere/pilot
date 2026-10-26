@@ -1254,16 +1254,21 @@ export class KernelSession {
 	}
 
 	/** Edit in place only if the input is still queued when the commit runs. */
-	async editQueuedMessage(submissionId: number, content: string, mode?: DeliveryMode): Promise<void> {
+	async editQueuedMessage(
+		submissionId: number,
+		content: string,
+		mode?: DeliveryMode,
+		guardToken?: string,
+	): Promise<void> {
 		if (this.#moving) throw new ConversationBusy(this.conversation.id);
 		if (inputOrigin((await this.#storage.submission(submissionId as SubmissionId, context))?.requestId))
 			throw new Error("Waiting system messages are read-only");
-		const prepared = await this.adapter.prepareInput(content);
-		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context, mode);
+		const prepared = guardToken === undefined ? await this.adapter.prepareInput(content) : content;
+		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context, mode, guardToken);
 	}
 
 	/** Withdraw one queued input without stopping the active run. */
-	async removeQueuedMessage(submissionId: number): Promise<void> {
+	async removeQueuedMessage(submissionId: number, guardToken?: string): Promise<void> {
 		if (this.#moving) throw new ConversationBusy(this.conversation.id);
 		if (
 			inputOrigin(
@@ -1272,7 +1277,7 @@ export class KernelSession {
 			)
 		)
 			throw new Error("Waiting system messages are read-only");
-		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context);
+		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context, guardToken);
 	}
 
 	/** Prompt templates and skill commands that input admission expands. */

@@ -890,6 +890,49 @@ test("restore does not start an agent, and permits the next input admission", as
 	}
 });
 
+test("guarded queued edit forwards its capture and reserves admission through ACK", async (t) => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const worker = new FakeWorker();
+	const ack = deferred();
+	const requested = deferred();
+	t.mock.method(worker, "request", async (command: Command) => {
+		worker.commands.push(command);
+		requested.resolve();
+		await ack.promise;
+	});
+	try {
+		sessions["workers"].set(id, worker);
+		const edit = sessions.editQueuedMessage(id, 42, "Literal captured text", undefined, "a".repeat(64));
+		worker.gate.resolve();
+		await requested.promise;
+		assert.equal(sessions["sending"].get(id), 1);
+		await assert.rejects(sessions.archive(id), Conflict);
+		assert.deepEqual(
+			worker.commands.map(({ requestId: _, ...command }) => command),
+			[
+				{
+					type: "editQueuedMessage",
+					submissionId: 42,
+					content: "Literal captured text",
+					guardToken: "a".repeat(64),
+				},
+			],
+		);
+		ack.resolve();
+		await edit;
+		assert.equal(sessions["sending"].has(id), false);
+		await sessions.removeQueuedMessage(id, 42, "b".repeat(64));
+		const removal = worker.commands[1]!;
+		assert.equal(removal.type, "removeQueuedMessage");
+		if (removal.type === "removeQueuedMessage") assert.equal(removal.guardToken, "b".repeat(64));
+	} finally {
+		ack.resolve();
+		worker.gate.resolve();
+		await cleanup();
+	}
+});
+
 test("queued removal respects archive transitions and holds archive/admission until acknowledged", async (t) => {
 	const { sessions, ids, cleanup } = await fixture();
 	const id = ids[0]!;

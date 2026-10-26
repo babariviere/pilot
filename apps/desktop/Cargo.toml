@@ -323,3 +323,9 @@ name = "conversation_images"
 path = "tests/conversation_images.rs"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "queued_message"
+path = "tests/queued_message.rs"
+harness = false
+required-features = ["native-probes"]

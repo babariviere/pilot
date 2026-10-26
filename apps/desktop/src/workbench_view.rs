@@ -137,7 +137,11 @@ impl LocalViewer {
         }
     }
     pub(super) fn project_choices_ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.jump.is_some() || self.mission_open || self.add_project_open {
+        if self.queue_open.is_some()
+            || self.jump.is_some()
+            || self.mission_open
+            || self.add_project_open
+        {
             return false;
         }
         let q = self.chats.read(cx).query_input();

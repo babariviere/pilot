@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import {
 	type ConversationId,
@@ -11,6 +12,16 @@ import type { PendingAutomaticInput, QueueUpdateEvent } from "@pilot/protocol";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
 
+/** Hashes full content, including unsupported blocks, without sending attachment bytes back in writes. */
+export function queueGuardToken(item: { id: number; mode: string; content?: unknown }): string {
+	return createHash("sha256")
+		.update(JSON.stringify([item.id, item.mode, item.content]))
+		.digest("hex");
+}
+function checkGuard(item: { id: number; mode: string; content?: unknown }, token?: string): void {
+	if (token !== undefined && (!/^[a-f0-9]{64}$/.test(token) || queueGuardToken(item) !== token))
+		throw new Error("Queued message changed. Nothing was changed by this operation.");
+}
 export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEvent {
 	return {
 		type: "queue_update",
@@ -56,7 +67,13 @@ export async function queueUpdateForDisplay(
 		const pending = new Set(automatic.map((item) => item.id));
 		for (const id of pendingSince.keys()) if (!pending.has(id)) pendingSince.delete(id);
 	}
-	return { ...event, items: event.items.filter((_, index) => origins[index] === undefined), automatic };
+	return {
+		...event,
+		items: event.items
+			.filter((_, index) => origins[index] === undefined)
+			.map((item) => ({ ...item, guardToken: queueGuardToken(item) })),
+		automatic,
+	};
 }
 
 const PREVIEW_LIMIT = 200;
@@ -79,6 +96,7 @@ export async function removeQueuedMessage(
 	conversationId: ConversationId,
 	submissionId: number,
 	context: Context,
+	guardToken?: string,
 ): Promise<void> {
 	if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 	await session.commit(async (tx) => {
@@ -88,6 +106,7 @@ export async function removeQueuedMessage(
 		const index = inbox.items.findIndex((item) => item.id === submissionId);
 		const item = inbox.items[index];
 		if (!item || item.mode === "write") throw new Error("Message is no longer queued. It has not been removed.");
+		checkGuard(item, guardToken);
 		// Match pi-durable's queued withdrawal semantics, including waiter publication.
 		tx.settleSubmission(item.id, { status: "unanswered", reason: "aborted" });
 		inbox.items.splice(index, 1);
@@ -173,6 +192,7 @@ export async function editQueuedMessage(
 	content: string,
 	context: Context,
 	mode?: "steer" | "followUp",
+	guardToken?: string,
 ): Promise<void> {
 	if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 	if (typeof content !== "string" || !content.trim()) throw new Error("message is required");
@@ -184,6 +204,10 @@ export async function editQueuedMessage(
 		const inbox = held.items.some((item) => item.id === submissionId) ? held : live;
 		const item = inbox.items.find((item) => item.id === submissionId);
 		if (!item || item.mode === "write") throw new Error("Message is no longer queued. Your edit has not been sent.");
+		checkGuard(item, guardToken);
+		// The guarded text editor cannot silently discard structured/image content.
+		if (guardToken !== undefined && typeof item.content !== "string")
+			throw new Error("Structured queued messages cannot be edited as text. Original content is unchanged.");
 		item.content = content;
 		if (mode !== undefined) item.mode = mode;
 	}, context);

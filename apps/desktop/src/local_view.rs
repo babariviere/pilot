@@ -62,6 +62,8 @@ mod project_add_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "project_add_probe.rs"]
 pub(crate) mod project_add_probe;
+#[path = "queued_message_view.rs"]
+pub(crate) mod queued_message_view;
 #[cfg(feature = "native-probes")]
 #[path = "scoped_models_probe.rs"]
 pub(crate) mod scoped_models_probe;
@@ -330,6 +332,8 @@ impl ListDelegate for ChatList {
 pub struct LocalViewer {
     session_failure_fence: crate::session_failure::Fence,
     session_failure_focus: gpui_kit::FocusHandle,
+    queue_forms: Vec<(Entity<queued_message_view::Popup>, Subscription)>,
+    queue_open: Option<Entity<queued_message_view::Popup>>,
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
     workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
@@ -429,6 +433,16 @@ impl LocalViewer {
             ),
             KeyBinding::new("secondary-alt-d", workspace_changes_view::Toggle, None),
             KeyBinding::new("secondary-alt-l", conversation_links_view::Toggle, None),
+            KeyBinding::new(
+                "escape",
+                queued_message_view::CloseQueue,
+                Some("QueuedMessage"),
+            ),
+            KeyBinding::new(
+                "secondary-enter",
+                queued_message_view::SaveQueue,
+                Some("QueuedMessage"),
+            ),
             KeyBinding::new("secondary-k", ToggleJump, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
@@ -1174,6 +1188,8 @@ impl LocalViewer {
             inbox,
             missions,
             mission_context,
+            queue_forms: Vec::new(),
+            queue_open: None,
             conversation_links: None,
             workspace_changes: None,
             session_failure_fence: Default::default(),
@@ -1441,6 +1457,7 @@ impl LocalViewer {
             pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
         });
         self.sync_chat_action_permission(cx);
+        self.sync_queue(cx);
         cx.notify();
     }
 
@@ -1821,6 +1838,11 @@ impl Render for LocalViewer {
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
+                if let Some(form)=&v.queue_open {
+                    let marked=form.update(cx,|f,cx|f.marked(w,cx));
+                    let key=e.keystroke.key.as_str(); let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
+                    if (marked && matches!(key,"enter"|"escape"|"tab")) || (modified && !matches!(key,"c"|"v"|"x"|"a"|"z"|"q"|"enter")) {cx.stop_propagation();}
+                }
                 if v.add_project_open {
                     let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
                     if modified && !matches!(e.keystroke.key.as_str(),"c"|"q"|"enter") {cx.stop_propagation();}
@@ -1885,6 +1907,7 @@ impl Render for LocalViewer {
                             .child(self.context_usage_action(cx))
                             .child(self.conversation_links_action(cx))
                             .child(self.workspace_changes_action(cx))
+                            .child(self.queued_message_action(cx))
                             .child(self.mission_context_action(cx))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))

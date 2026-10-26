@@ -5556,8 +5556,15 @@ export class SessionManager {
 		}
 	}
 
-	async editQueuedMessage(id: string, submissionId: number, message: string, mode?: DeliveryMode): Promise<void> {
+	async editQueuedMessage(
+		id: string,
+		submissionId: number,
+		message: string,
+		mode?: DeliveryMode,
+		guardToken?: string,
+	): Promise<void> {
 		const end = this.updateGate.begin();
+		let admitted = false;
 		try {
 			const meta = this.require(id);
 			const transition = this.archiveTransitions.get(id);
@@ -5568,6 +5575,10 @@ export class SessionManager {
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 			if (mode !== undefined && mode !== "steer" && mode !== "followUp")
 				throw new Error("mode must be steer or followUp");
+			if (guardToken !== undefined) {
+				this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+				admitted = true;
+			}
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
@@ -5576,12 +5587,18 @@ export class SessionManager {
 				requestId: randomUUID(),
 				submissionId,
 				content: message,
+				...(guardToken === undefined ? {} : { guardToken }),
 				...(mode === undefined ? {} : { mode }),
 			});
 			meta.updatedAt = Date.now();
 			await this.save(meta);
 			this.emit(meta);
 		} finally {
+			if (admitted) {
+				const count = (this.sending.get(id) ?? 1) - 1;
+				if (count) this.sending.set(id, count);
+				else this.sending.delete(id);
+			}
 			end();
 		}
 	}
@@ -6140,7 +6157,7 @@ export class SessionManager {
 	}
 
 	/** Withdraw durable queued input, never daemon outbox commands or placed messages. */
-	async removeQueuedMessage(id: string, submissionId: number): Promise<void> {
+	async removeQueuedMessage(id: string, submissionId: number, guardToken?: string): Promise<void> {
 		const end = this.updateGate.begin();
 		let admitted = false;
 		try {
@@ -6155,7 +6172,12 @@ export class SessionManager {
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
-			await worker.request({ type: "removeQueuedMessage", requestId: randomUUID(), submissionId });
+			await worker.request({
+				type: "removeQueuedMessage",
+				requestId: randomUUID(),
+				submissionId,
+				...(guardToken === undefined ? {} : { guardToken }),
+			});
 			meta.updatedAt = Date.now();
 			await this.save(meta);
 			this.emit(meta);

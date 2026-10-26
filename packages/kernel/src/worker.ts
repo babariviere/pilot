@@ -366,7 +366,7 @@ export function runKernelWorker(): void {
 				break;
 			}
 			case "editQueuedMessage":
-				await session.editQueuedMessage(command.submissionId, command.content, command.mode);
+				await session.editQueuedMessage(command.submissionId, command.content, command.mode, command.guardToken);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "changeModel": {
@@ -386,7 +386,7 @@ export function runKernelWorker(): void {
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "removeQueuedMessage":
-				await session.removeQueuedMessage(command.submissionId);
+				await session.removeQueuedMessage(command.submissionId, command.guardToken);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "compact":

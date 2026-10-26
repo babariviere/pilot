@@ -240,6 +240,12 @@ mod visual_slider;
 mod visual_wire;
 pub use appearance::{ChromeAssets, follow_appearance, init_appearance};
 
+mod queued_message;
+#[cfg(any(test, feature = "native-probes"))]
+mod queued_message_fixture;
+#[cfg(feature = "native-probes")]
+pub use local_view::queued_message_view::probe::run_queued_message_probe;
+mod queued_message_transport;
 mod task_edit;
 #[cfg(any(test, feature = "native-probes"))]
 mod task_edit_fixture;

@@ -332,6 +332,13 @@ tools, not the user-message HTTP endpoint; unsupported cross-mission sends must 
 The **Agents** tab opens each subagent's live transcript, with its model and thinking level visible beneath
 the header. Unreported thinking levels are labelled as such rather than inferred from the parent chat.
 
+Pilot Next's contextual **Queued (n)** header opens a separate retained popup for
+queued user messages. Save preserves the original delivery mode unless explicitly
+changed; Remove asks for confirmation. Safe editing requires a daemon advertising
+captured-row queue guards. Missing/changed messages never become new sends, and
+uncertain writes cannot be retried automatically. Structured/image-bearing messages
+remain intact and cannot be edited as text. See [queued messages](apps/desktop/docs/queued-messages.md).
+
 ### Stopping and system messages
 
 Stop ends the current run and returns your undelivered queued messages to the composer. System messages

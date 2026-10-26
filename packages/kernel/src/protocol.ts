@@ -203,11 +203,18 @@ export type KernelCommand =
 	  }
 	/** Passive, display-only daemon activity. Never schedules a model turn. */
 	| { type: "activity"; requestId: string; text: string }
-	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
+	| {
+			type: "editQueuedMessage";
+			requestId: string;
+			submissionId: number;
+			content: string;
+			mode?: DeliveryMode;
+			guardToken?: string;
+	  }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	/** Drain committed tool effects and quiesce children before relinquishing workspace ownership. */
 	| { type: "continuation.pause"; requestId: string }
-	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
+	| { type: "removeQueuedMessage"; requestId: string; submissionId: number; guardToken?: string }
 	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
 	| { type: "compact"; requestId: string; instructions?: string }
 	| { type: "abort"; requestId: string }
