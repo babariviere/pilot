@@ -22,7 +22,7 @@ disk state. No read-status writes, service installation, updater or default swit
 
 ### Chat actions
 
-Right-click a Local chat row, including an unselected row, for **Archive**,
+Right-click a Local chat row, including an unselected row, for **Rename…**, **Archive**,
 **Restore** or the existing confirmed **Make a mission…** flow. The row's
 **Chat actions** ellipsis button also works with Tab and Return. Opening or
 dismissing a menu never selects/opens the chat or performs a mutation. Working
@@ -31,6 +31,15 @@ failed-before-submit and unconfirmed actions name their original target. Lost
 archive/restore acknowledgments are never automatically retried or settled by
 later list visibility. See [chat-actions.md](docs/chat-actions.md) for the exact
 contract, existing cleanup side effects, bounds and synthetic checks.
+
+Rename opens a focused title dialog for the clicked canonical Local chat without
+selecting it. Cancel leaves its title, conversation and drafts unchanged. Titles
+are limited to 200 UTF-16 units and normalized like the existing daemon endpoint.
+Only an exact successful title response confirms Rename. Missing, malformed or
+error responses stay unconfirmed, including after reopening the dialog; matching
+later titles/GETs never settle them or trigger a replay. Reports are retained only
+in this window, not persisted across app restart. See [chat-rename.md](docs/chat-rename.md).
+
 
 ### Add a Local project
 

@@ -89,6 +89,17 @@ impl LocalViewer {
                             })
                             .unwrap_or(Some("The source window is unavailable."));
                         let blocked = reason.is_some();
+                        let rename_owner = owner.clone();
+                        let rename = evidence.clone();
+                        let rename_blocked = owner
+                            .update(cx, |v, cx| {
+                                v.chat_actions
+                                    .read(cx)
+                                    .renames
+                                    .values()
+                                    .any(|f| f.read(cx).pending)
+                            })
+                            .unwrap_or(true);
                         let a = owner.clone();
                         let archive = evidence.clone();
                         let b = owner.clone();
@@ -98,6 +109,15 @@ impl LocalViewer {
                         menu.max_w(px(310.))
                             .label(SharedString::from(evidence.target.chat.title.clone()))
                             .when_some(reason, |menu, reason| menu.label(reason))
+                            .item(
+                                PopupMenuItem::new("Rename…")
+                                    .disabled(blocked || rename_blocked)
+                                    .on_click(move |_, w, cx| {
+                                        let _ = rename_owner.update(cx, |v, cx| {
+                                            v.open_row_rename(rename.clone(), w, cx)
+                                        });
+                                    }),
+                            )
                             .item(
                                 PopupMenuItem::new(if evidence.archive {
                                     if evidence.can_archive {
@@ -229,5 +249,43 @@ impl LocalViewer {
         self.editor.update(cx, |e, cx| {
             e.permission(writable, chat.busy || self.state.queued > 0, cx)
         });
+    }
+}
+
+impl LocalViewer {
+    fn open_row_rename(&mut self, evidence: Evidence, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.chat_action_ready(&evidence.target, w, cx)
+            || self.chat_actions.read(cx).blocked(&evidence.target.chat.id)
+            || !self.editor.update(cx, |e, cx| e.capture_navigation(w, cx))
+        {
+            return;
+        }
+        let form = self.chat_actions.update(cx, |a, cx| {
+            // Keep unknown/pending operations and their captured identity across reopen.
+            if let Some(form) = a.renames.get(&evidence.target.chat.id)
+                && form.read(cx).blocked()
+            {
+                return Some(form.clone());
+            }
+            if a.renames.values().any(|f| f.read(cx).pending) {
+                return None;
+            }
+            if !a.renames.contains_key(&evidence.target.chat.id) && a.renames.len() >= 16 {
+                a.error("This window has reached its rename report limit.", cx);
+                return None;
+            }
+            let options = a.options.clone()?;
+            let id = evidence.target.chat.id.clone();
+            let form = cx.new(|cx| crate::chat_rename_view::Rename::new(options, evidence, w, cx));
+            let observer = cx.observe(&form, |_, _, cx| cx.notify());
+            a.rename_observers.insert(id.clone(), observer);
+            a.latest_rename = Some(id.clone());
+            a.renames.insert(id, form.clone());
+            Some(form)
+        });
+        if let Some(form) = form {
+            self.chats.update(cx, |list, cx| list.focus(w, cx));
+            crate::chat_rename_view::Rename::open(form, w, cx);
+        }
     }
 }

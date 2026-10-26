@@ -7,6 +7,9 @@ pub(crate) mod chat_actions_probe;
 #[cfg(feature = "native-probes")]
 #[path = "chat_model_probe.rs"]
 pub(crate) mod chat_model_probe;
+#[cfg(feature = "native-probes")]
+#[path = "chat_rename_probe.rs"]
+pub(crate) mod chat_rename_probe;
 #[path = "contextual_navigation.rs"]
 mod contextual_navigation;
 #[cfg(feature = "native-probes")]

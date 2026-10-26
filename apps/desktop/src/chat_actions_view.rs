@@ -21,6 +21,9 @@ pub(crate) struct Actions {
     latest: Option<String>,
     error: Option<Failure>,
     next: u64,
+    pub(crate) rename_observers: BTreeMap<String, gpui_kit::Subscription>,
+    pub(crate) latest_rename: Option<String>,
+    pub(crate) renames: BTreeMap<String, gpui_kit::Entity<crate::chat_rename_view::Rename>>,
 }
 impl EventEmitter<Changed> for Actions {}
 impl Actions {
@@ -32,6 +35,9 @@ impl Actions {
             latest: None,
             error: None,
             next: 0,
+            renames: BTreeMap::new(),
+            latest_rename: None,
+            rename_observers: BTreeMap::new(),
         }
     }
     pub(crate) fn connect(&mut self, options: LocalOptions, cx: &mut Context<Self>) {
@@ -182,7 +188,7 @@ impl Actions {
     }
 }
 impl Render for Actions {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::ui::{Notice, Tone};
         let report = self.latest.as_ref().and_then(|id| self.reports.get(id));
         div().id("chat-action-status").test_support().w_full().min_w_0()
@@ -197,6 +203,7 @@ impl Render for Actions {
                 div().p_2().child(Notice::new(SharedString::from(format!("{verb} · {status}")))
                     .detail(SharedString::from(format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id))).tone(tone))
             }))
+            .children(self.latest_rename.as_ref().and_then(|id| self.renames.get(id)).and_then(|form| form.read(cx).status()).map(|(text,tone)|div().p_2().child(Notice::new(text).tone(tone))))
             .children(self.error.map(|e| div().p_2().child(Notice::new(e).tone(Tone::Error))))
     }
 }

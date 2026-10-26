@@ -5,8 +5,14 @@ pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_actions;
+mod chat_rename;
+mod chat_rename_view;
+#[cfg(feature = "native-probes")]
+pub use local_view::chat_rename_probe::run_chat_rename_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_actions_fixture;
+#[cfg(any(test, feature = "native-probes"))]
+mod chat_rename_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_actions_probe::run_chat_actions_probe;
 mod chat_actions_view;

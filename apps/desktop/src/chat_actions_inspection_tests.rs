@@ -6,6 +6,9 @@ fn chat_actions_inspection_started_before_ack_cannot_release_its_editor_fence() 
     let target = Target::new(&options, crate::local_model::chat(&raw).unwrap());
     let evidence = Evidence::read(&target, &raw, true).unwrap();
     let mut actions = Actions {
+        renames: Default::default(),
+        latest_rename: None,
+        rename_observers: Default::default(),
         options: Some(options),
         worker: None,
         reports: BTreeMap::from([(
