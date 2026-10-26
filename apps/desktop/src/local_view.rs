@@ -1934,6 +1934,17 @@ impl Render for LocalViewer {
                     div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else {
+                let new_draft = self.editor.read(cx).navigation_key().is_some_and(|key| key.starts_with("new:"));
+                if new_draft {
+                    use gpui_kit::component::scroll::ScrollableElement;
+                    let content = div().v_flex().w_full().min_h_full().justify_center()
+                        .py(px(crate::ui::Space::HOME)).px_3()
+                        .child(div().id("conversation-editor").test_support().w_full().min_w_0()
+                            .max_w(px(760.)).mx_auto().child(self.editor.clone()));
+                    div().id("new-chat-page").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                        .child(div().size_full().min_w_0().child(content).overflow_y_scrollbar())
+                        .into_any_element()
+                } else {
                 let conversation = div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                     .child(div().v_flex().px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
                         .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
@@ -1968,6 +1979,7 @@ impl Render for LocalViewer {
                 let conversation = self.mission_companion(conversation, window, cx);
                 let conversation = self.conversation_links_companion(conversation, window, cx);
                 self.workspace_changes_companion(conversation, window, cx)
+                }
                 }
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
@@ -2348,3 +2360,7 @@ pub(crate) mod tool_diff_preview_probe;
 #[cfg(feature = "native-probes")]
 #[path = "message_fold_probe.rs"]
 pub(crate) mod message_fold_probe;
+
+#[cfg(feature = "native-probes")]
+#[path = "new_chat_view_probe.rs"]
+pub(crate) mod new_chat_view_probe;

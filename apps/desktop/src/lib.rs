@@ -301,3 +301,6 @@ pub use local_view::tool_diff_preview_probe::run_tool_diff_preview_probe;
 mod message_fold;
 #[cfg(feature = "native-probes")]
 pub use local_view::message_fold_probe::run_message_fold_probe;
+
+#[cfg(feature = "native-probes")]
+pub use local_view::new_chat_view_probe::run_new_chat_view_probe;

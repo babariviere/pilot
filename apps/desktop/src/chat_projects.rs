@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     local_model::Project,
-    ui::{FieldRow, Notice, Tone},
+    ui,
 };
 use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::component::FocusableExt;
@@ -19,6 +19,7 @@ pub(super) struct Catalog {
 struct Choice {
     id: String,
     title: SharedString,
+    detail: SharedString,
     unavailable: bool,
 }
 impl SelectItem for Choice {
@@ -32,14 +33,19 @@ impl SelectItem for Choice {
     fn disabled(&self) -> bool {
         self.unavailable
     }
+    fn matches(&self, query: &str) -> bool {
+        let query = query.to_lowercase();
+        self.title.to_lowercase().contains(&query) || self.detail.to_lowercase().contains(&query)
+    }
     fn render(&self, _: &mut Window, _: &mut gpui_kit::App) -> impl IntoElement {
         let row = div()
             .id(SharedString::from(format!("new-project-{}", self.id)))
             .w_full()
             .min_w_0()
-            .truncate()
-            .aria_label(self.title.clone())
-            .child(self.title.clone());
+            .v_flex()
+            .aria_label(SharedString::from(format!("{} · {}", self.title, self.detail)))
+            .child(div().min_w_0().truncate().child(self.title.clone()))
+            .child(ui::text(ui::Text::Caption, self.detail.clone()).min_w_0().truncate());
         #[cfg(any(test, feature = "native-probes"))]
         let row = row.test_support();
         row
@@ -110,7 +116,7 @@ impl ChatEditor {
         }
         let Some(id) = draft.project_id.as_ref() else {
             return Some(if self.project_catalog.rows.is_empty() {
-                "No configured Local projects. Add a project in Pilot first."
+                "No projects yet. Add a project to start a chat."
             } else {
                 "Choose a Local project before creating this chat."
             });
@@ -167,13 +173,22 @@ impl ChatEditor {
         if Arc::ptr_eq(&picker.catalog, &self.project_catalog.rows) && picker.selected == selected {
             return;
         }
+        let mut names = BTreeMap::<&str, usize>::new();
+        for project in self.project_catalog.rows.iter() {
+            *names.entry(&project.name).or_default() += 1;
+        }
         let mut choices: Vec<_> = self
             .project_catalog
             .rows
             .iter()
             .map(|p| Choice {
                 id: p.id.clone(),
-                title: format!("{} · {}", p.name, p.id).into(),
+                title: if names[p.name.as_str()] > 1 {
+                    format!("{} · {}", p.name, p.id).into()
+                } else {
+                    p.name.clone().into()
+                },
+                detail: format!("{} · {}", p.path, p.id).into(),
                 unavailable: false,
             })
             .collect();
@@ -182,7 +197,8 @@ impl ChatEditor {
         {
             choices.push(Choice {
                 id: id.clone(),
-                title: format!("Project unavailable · {id}").into(),
+                title: "Project unavailable".into(),
+                detail: id.clone().into(),
                 unavailable: true,
             });
         }
@@ -240,6 +256,17 @@ impl ChatEditor {
         self.sync_project_picker(window, cx);
         self.sync_models(window, cx);
     }
+    pub(super) fn project_setup_problem(&self, draft: &Draft) -> Option<&'static str> {
+        if !draft.editable() {
+            return None;
+        }
+        self.project_problem(draft).filter(|_| {
+            draft.project_id.is_some()
+                || !self.project_catalog.loaded
+                || self.project_catalog.error.is_some()
+                || self.project_catalog.rows.is_empty()
+        })
+    }
     pub(super) fn project_field(
         &self,
         draft: &Draft,
@@ -253,58 +280,37 @@ impl ChatEditor {
             && self.project_catalog.loaded
             && !self.project_catalog.rows.is_empty()
             && self.project_catalog.error.is_none();
-        let description = match &draft.project_id {
-            Some(id) => format!("Local project {id} · {}", draft.cwd),
-            None => {
-                if draft.pending.is_some() {
-                    "Existing delivery keeps its original destination.".into()
-                } else {
-                    "Choose a project. Its configured directory is used; chat permissions stay unchanged.".into()
-                }
-            }
-        };
-        div()
-            .v_flex()
-            .gap_1()
-            .min_w_0()
-            .children(self.project_picker.as_ref().map(|picker| {
-                FieldRow::new(
-                    "new-project-row",
-                    "Project",
-                    Select::new(&picker.state)
-                        .id("new-chat-project")
-                        .small()
-                        .w_full()
-                        .focus_ring(false)
-                        .menu_max_h(px(260.))
-                        .disabled(!editable)
-                        .accessibility_label("New chat project")
-                        .search_placeholder("Find a Local project…"),
-                )
-                .description(SharedString::from(description))
-            }))
-            .children(
-                if draft.editable() {
-                    self.project_problem(draft)
-                } else {
-                    None
-                }
-                .map(|error| {
-                    Notice::new(error).tone(if self.project_catalog.loaded {
-                        Tone::Warning
-                    } else {
-                        Tone::Quiet
-                    })
-                }),
-            )
-            .child(
-                crate::ui::action(
-                    "new-chat-add-project",
-                    "Add project…",
-                    crate::ui::Action::Quiet,
-                )
-                .on_click(_cx.listener(|_, _, _, cx| cx.emit(EditorEvent::AddProject))),
-            )
+        div().v_flex().gap_1().min_w_0().child(
+            div()
+                .h_flex()
+                .gap_1()
+                .min_w_0()
+                .children(self.project_picker.as_ref().map(|picker| {
+                    div().flex_1().min_w_0().h(px(28.)).child(
+                        Select::new(&picker.state)
+                            .id("new-chat-project")
+                            .small()
+                            .w_full()
+                            .appearance(false)
+                            .focus_ring(false)
+                            .menu_width(px(320.))
+                            .menu_max_h(px(260.))
+                            .disabled(!editable)
+                            .placeholder("Choose project…")
+                            .accessibility_label("New chat project")
+                            .search_placeholder("Find a project…"),
+                    )
+                }))
+                .child(
+                    ui::action("new-chat-add-project", "Add project…", ui::Action::Quiet)
+                        .disabled(!self.ready() || self.waiting() || !draft.editable())
+                        .on_click(_cx.listener(|view, _, window, cx| {
+                            if !view.marked(window, cx) {
+                                cx.emit(EditorEvent::AddProject);
+                            }
+                        })),
+                ),
+        )
     }
 }
 

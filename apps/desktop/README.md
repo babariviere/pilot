@@ -270,6 +270,11 @@ uncertain work. This is not a mission dashboard or permission promotion. See
 
 ### Messages and private drafts
 
+New chat uses a centered native setup: project and Ask/Build above the compact
+composer, with model/thinking below the editor. Destination details live in the
+project chooser; exceptional delivery and recovery stay above the tray. Existing
+chats keep their bottom composer. See [new-chat layout](docs/new-chat-layout.md).
+
 New chat requires an explicit configured Local **project**, selected with the
 searchable project picker, and an Ask/Build choice (Ask by default). The canonical
 project ID, not a guessed folder match, determines the chat association and daemon-owned

@@ -945,10 +945,45 @@ impl ChatEditor {
                 )
             }))
     }
+    fn visible_model_restriction(&self) -> Option<&'static str> {
+        let is_new = self
+            .selected
+            .as_ref()
+            .is_some_and(|key| key.starts_with("new:"));
+        // Exact delivery/error notices already explain a locked new draft.
+        // Actual model errors are rendered independently below.
+        if is_new
+            && (self.state.error.is_some()
+                || self.error.is_some()
+                || self.waiting()
+                || self.draft().is_some_and(|draft| !draft.editable()))
+        {
+            return None;
+        }
+        // Before a new draft has a destination, its project chooser explains the
+        // next step. Do not duplicate it with a technical missing-catalog notice.
+        // This is presentation only; model_restriction still gates admission.
+        if is_new
+            && self
+                .draft()
+                .is_some_and(|draft| draft.project_id.is_none() && draft.editable())
+            && self.ready()
+            && self.writable
+            && !self.waiting()
+            && self.error.is_none()
+            && self
+                .models
+                .as_ref()
+                .is_some_and(|m| m.picker.is_none() && m.error.is_none() && !m.busy)
+        {
+            return None;
+        }
+        self.model_restriction()
+    }
     pub(super) fn has_model_notice(&self) -> bool {
         self.model_target()
             .is_some_and(|t| t.failed_source.is_some())
-            || self.model_restriction().is_some()
+            || self.visible_model_restriction().is_some()
             || self.models.as_ref().is_some_and(|m| {
                 m.error.is_some() || m.picker.as_ref().is_some_and(|p| p.error.is_some())
             })
@@ -983,7 +1018,7 @@ impl ChatEditor {
                 let view=view.test_support();
                 view
             }))
-            .children(self.model_restriction().filter(|_|error.is_none() && uncertain.is_none()).map(|reason|{
+            .children(self.visible_model_restriction().filter(|_|error.is_none() && uncertain.is_none()).map(|reason|{
                 let view = ui::text(ui::Text::Caption,reason).id("chat-model-restriction");
                 #[cfg(any(test, feature = "native-probes"))]
                 let view = view.test_support();

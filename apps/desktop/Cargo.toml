@@ -360,3 +360,8 @@ required-features = ["native-probes"]
 name = "message_fold"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "new_chat_view"
+harness = false
+required-features = ["native-probes"]

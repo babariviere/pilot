@@ -112,3 +112,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test queued_messa
 # Bounded ordinary-message folding, exact loaded copy and source Find composition.
 bash scripts/cargo.sh clippy --locked --features native-probes --test message_fold -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test message_fold
+
+# Focused new-chat setup, retained native input and unchanged creation guards.
+bash scripts/cargo.sh clippy --locked --features native-probes --test new_chat_view -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test new_chat_view

@@ -33,6 +33,8 @@ mod model_picker;
 pub(crate) mod project_creation_probe;
 #[path = "chat_projects.rs"]
 mod projects;
+#[path = "new_chat_view.rs"]
+mod new_chat_view;
 #[cfg(feature = "native-probes")]
 #[path = "question_probe.rs"]
 pub(crate) mod question_probe;
@@ -882,40 +884,6 @@ impl Render for ChatEditor {
         #[cfg(any(test, feature = "native-probes"))]
         let footer = footer.test_support();
         let mut footer = footer;
-        if is_new {
-            footer = footer.child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(self.project_field(draft, window, cx)),
-                    )
-                    .child(
-                        RadioGroup::new("new-chat-mode")
-                            .children(["Ask", "Build"])
-                            .selected_index(Some(usize::from(draft.mode == "build")))
-                            .disabled(blocked || !draft.editable())
-                            .on_change(cx.listener(|view, index, window, cx| {
-                                if !view.ready()
-                                    || view.waiting()
-                                    || view.marked(window, cx)
-                                    || !view.draft().is_some_and(Draft::editable)
-                                {
-                                    return;
-                                }
-                                if let Some(key) = &view.selected
-                                    && let Some(draft) = view.cache.get_mut(key)
-                                {
-                                    draft.mode = if *index == 0 { "ask" } else { "build" }.into();
-                                }
-                                view.record_edit(true, cx);
-                            })),
-                    ),
-            );
-        }
         // Kit owns the editor's text padding. Keep its opaque card on the tray
         // without adding a second padded wrapper or outline; dither stays behind text.
         let input = div()
@@ -977,7 +945,7 @@ impl Render for ChatEditor {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
-                    .children((self.models.is_none() || submitting).then_some(if submitting {
+                    .children((submitting || (self.models.is_none() && (!is_new || !saved))).then_some(if submitting {
                         "Waiting for Local action…"
                     } else if self.closing {
                         "Saving before closing…"
@@ -1086,6 +1054,7 @@ impl Render for ChatEditor {
             recovery.push(detail.into_any_element());
         }
         if !self.state.notice.is_empty()
+            && !(is_new && matches!(self.state.notice, "Draft saved." | "Drafts saved."))
             && !delivery_detail.as_ref().is_some_and(|(id, _)| {
                 self.state.delivery_notice.as_ref() == Some(id)
                     || matches!(self.state.notice, "Draft saved." | "Drafts saved.")
@@ -1115,6 +1084,10 @@ impl Render for ChatEditor {
             recovery.push(self.recovery_menu(&key, window, cx).into_any_element());
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
+        if is_new {
+            shell = shell.gap(px(crate::ui::Space::SIDEBAR))
+                .child(self.new_chat_setup(draft, blocked, window, cx));
+        }
         if let Some(label) = self.activity_label() {
             let indicator = div()
                 .id("activity-indicator")
