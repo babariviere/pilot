@@ -5196,7 +5196,12 @@ export class SessionManager {
 			// A concurrent user drain may have removed this reservation while its save awaited I/O.
 			// Do not mistake an empty new drain for acknowledgement of this input.
 			if (!meta.pending.some((pending) => pending === command)) return false;
-			if (!this.missions?.noticeAllowed?.(id, requestId)) return false;
+			if (!this.missions?.noticeAllowed?.(id, requestId)) {
+				// Revoke only this reservation. The mission retains its frozen batch for a safe retry.
+				meta.pending = meta.pending.filter((pending) => pending !== command);
+				await this.save(meta);
+				return false;
+			}
 			const rejected = await this.start(id, true);
 			const error = rejected.get(requestId);
 			if (error instanceof CommandRejected && error.code === "busy") return false;

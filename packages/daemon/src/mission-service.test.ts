@@ -1974,6 +1974,8 @@ test("role and active-state changes during persistence revoke notice delivery", 
 		);
 		assert.equal(f.store.noticeDeadlines(Date.now()).length, 1, `${change} retains the events`);
 		assert.deepEqual(f.sessions["require"](lead.id).pending, []);
+		const saved = JSON.parse(await readFile(join(f.home, "data", "sessions", lead.id, "meta.json"), "utf8"));
+		assert.deepEqual(saved.pending, [], "revoked reservation is removed from persisted metadata too");
 	}
 });
 
@@ -2055,6 +2057,7 @@ test("a member resuming during notice persistence revokes admission until all me
 		0,
 	);
 	assert.ok(f.store.pendingNotice(detail.mission.id));
+	assert.deepEqual(f.sessions["require"](lead.id).pending, [], "member activity revokes the session reservation");
 	f.workers.get(member.id)!.state = "idle";
 	f.workers.get(member.id)!.onPacket({ type: "working", working: false });
 	await f.service.notices.flush(now);
