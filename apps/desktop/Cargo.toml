@@ -238,6 +238,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "mission_update"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "mission_create"
 harness = false
 test = false

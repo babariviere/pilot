@@ -1,4 +1,4 @@
-//! Explicit, read-only activity page. No timers, transcript reads or mutations.
+//! Activity reads plus a contextual, explicit user-update form. No automatic posts.
 use crate::{
     LocalOptions,
     mission_activity::{ROW_CAP, Timeline},
@@ -7,9 +7,9 @@ use crate::{
     ui::{self, Action, Notice, Space, Text, Tone},
 };
 use gpui_kit::{
-    App, ClipboardItem, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt,
-    Window,
+    App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
+    TestSupportExt, Window,
     base::SelectableText,
     component::{ActiveTheme, Disableable, StyledExt},
     div, px,
@@ -27,6 +27,9 @@ pub(crate) struct Activity {
     focus: FocusHandle,
     scope_open: bool,
     title: String,
+    pub(crate) update: gpui_kit::Entity<crate::mission_update_view::Shelf>,
+    update_events: Option<gpui_kit::Subscription>,
+    update_error: Option<&'static str>,
 }
 impl EventEmitter<Close> for Activity {}
 fn relative_time(at: u64) -> String {
@@ -57,6 +60,9 @@ impl Activity {
             focus: cx.focus_handle(),
             scope_open: false,
             title: String::new(),
+            update: cx.new(crate::mission_update_view::Shelf::new),
+            update_events: None,
+            update_error: None,
         }
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
@@ -66,6 +72,7 @@ impl Activity {
         self.focus.clone()
     }
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
+        self.update.update(cx, |s, cx| s.hide(cx));
         self.reader = None;
         self.updates = None;
         self.state.select(None);
@@ -84,10 +91,35 @@ impl Activity {
         self.options = Some(options);
         self.title = title;
         self.scope_open = false;
+        self.update_error = None;
         self.state.select(Some(key));
         self.scroll.set_offset(gpui_kit::point(px(0.), px(0.)));
         self.focus(w, cx);
         self.load(false, w, cx);
+    }
+    pub(crate) fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.update.update(cx, |s, cx| s.marked(w, cx))
+    }
+    fn open_update(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let (Some(key), Some(options)) = (self.state.key.clone(), self.options.clone()) else {
+            return;
+        };
+        if self.update_events.is_none() {
+            self.update_events = Some(cx.subscribe_in(
+                &self.update,
+                w,
+                |v, _, _: &crate::mission_update_view::Close, w, cx| {
+                    v.focus(w, cx);
+                    v.update.update(cx, |s, cx| s.hide(cx));
+                    cx.notify();
+                },
+            ));
+        }
+        self.update_error = self
+            .update
+            .update(cx, |s, cx| s.show(key, options, w, cx))
+            .err();
+        cx.notify();
     }
     fn load(&mut self, earlier: bool, w: &mut Window, cx: &mut Context<Self>) {
         let Some((generation, key, before)) = self.state.begin(earlier) else {
@@ -163,8 +195,13 @@ impl Render for Activity {
                     .justify_between()
                     .items_center()
                     .child(
-                        ui::action("activity-overview", "Back to mission", Action::Quiet)
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(Close))),
+                        ui::action("activity-overview", "Back to mission", Action::Quiet).on_click(
+                            cx.listener(|v, _, w, cx| {
+                                if !v.marked(w, cx) {
+                                    cx.emit(Close);
+                                }
+                            }),
+                        ),
                     )
                     .child(
                         ui::action("activity-refresh", "Refresh", Action::Secondary)
@@ -213,6 +250,17 @@ impl Render for Activity {
                         })),
                     ),
             );
+        content = content.child(
+            ui::action("activity-post-update", "Post an update…", Action::Secondary)
+                .self_start()
+                .on_click(cx.listener(|v, _, w, cx| v.open_update(w, cx))),
+        );
+        if let Some(e) = self.update_error {
+            content = content.child(Notice::new(e).tone(Tone::Error));
+        }
+        if self.update.read(cx).current.is_some() {
+            content = content.child(self.update.clone());
+        }
         if self.scope_open {
             if let Some(key) = &self.state.key {
                 content = content.child(ui::text(

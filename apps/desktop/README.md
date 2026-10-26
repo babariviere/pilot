@@ -201,6 +201,13 @@ submission. The form discloses delegation, linked-PR sync and coordinator/phase
 side effects; uncertain writes cannot be retried or settled by refresh. See
 [task status and authority](docs/task-status.md).
 
+Activity offers **Post an update…** with a bounded retained text field and explicit
+**Submit** (⌘Enter). It uses the existing user-update endpoint, without health,
+handoff or agent-start controls. A lost acknowledgment stays Unknown even if a
+matching event appears on Refresh; it cannot be resent. Forms survive navigation,
+not app restart. Historical user/system attribution remains ambiguous. See
+[update contract and recovery](docs/mission-update.md).
+
 ### Make an existing chat a mission
 
 In an eligible Local chat, choose **Make a mission…**. Review the title and optional

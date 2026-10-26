@@ -69,7 +69,7 @@ pub(crate) struct Browser {
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
-    activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
+    pub(crate) activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
     activity_open: bool,
     pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
     brief_events: Option<gpui_kit::Subscription>,
@@ -273,6 +273,11 @@ impl Browser {
                 .as_ref()
                 .is_some_and(|brief| brief.update(cx, |v, cx| v.visible && v.marked(w, cx)))
             || self.tasks_browser.update(cx, |v, cx| v.marked(w, cx))
+            || (self.activity_open
+                && self
+                    .activity_browser
+                    .as_ref()
+                    .is_some_and(|a| a.update(cx, |a, cx| a.marked(w, cx))))
     }
     pub(crate) fn open_brief(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.error.is_some() || !self.online || self.brief_marked(w, cx) {
