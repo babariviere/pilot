@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { getPilotConfigDir } from "./config.ts";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 /** Fixed dedicated tools. Linear start/synchronization writes change state only; Slack writes are reactions. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
@@ -210,6 +211,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			};
 			signal.addEventListener("abort", abort, { once: true });
 			worker.on("message", (message: { open?: string; ok?: true; cancelled?: true; error?: string }) => {
+				if (isWatchNotice(message)) return;
 				if (typeof message.open === "string") {
 					let url: URL | undefined;
 					try {

@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import { subagentWatchWorkerEntry } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 export type SubagentWatchUpdate = { full: boolean; events: AgentEvent[] } | { error: string };
 /** Starts one watcher and returns its stop function. Injectable for tests. */
@@ -24,7 +25,7 @@ export const startSubagentWatchWorker: SubagentWatchStarter = (directory, conver
 	const worker = new Worker(subagentWatchWorkerEntry, { workerData: { directory, conversationId }, execArgv: [] });
 	let stopped = false;
 	worker.on("message", (update: SubagentWatchUpdate | { ready: true }) => {
-		if (stopped) return;
+		if (stopped || isWatchNotice(update)) return;
 		if ("ready" in update) onReady?.();
 		else onUpdate(update);
 	});

@@ -12,6 +12,7 @@ import type {
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
 import type { MemoryTreeOptions } from "./memory-disk.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
 export type MemorySummarizer = (
@@ -185,7 +186,10 @@ export class ProjectMemoryService {
 				() => finish(new Error("Memory search exceeded its 5-second limit; narrow the regex")),
 				5_000,
 			);
-			worker.on("message", (reply) => finish(reply.error ? new Error(reply.error) : undefined, reply.value));
+			worker.on("message", (reply) => {
+				if (isWatchNotice(reply)) return;
+				finish(reply.error ? new Error(reply.error) : undefined, reply.value);
+			});
 			worker.on("error", (error) => finish(error));
 			worker.on("exit", (code) => finish(new Error(`Memory search exited (${code})`)));
 		});

@@ -149,6 +149,9 @@ class HttpError extends Error {
 	}
 }
 
+/** How long a mutation may wait for mission durability before pilotd says so in its log. */
+const DURABLE_WAIT_WARN_MS = 5_000;
+
 /**
  * Mission writes commit without waiting for the disk, which a worker thread syncs. Hold a mutating request's
  * response until they are durable, so no client sees a write acknowledged that a power loss could undo.
@@ -156,9 +159,18 @@ class HttpError extends Error {
 export function acknowledgeWhenDurable(res: ServerResponse, store: Pick<MissionStore, "durable">): void {
 	const end = res.end.bind(res) as (...args: unknown[]) => ServerResponse;
 	res.end = ((...args: unknown[]) => {
+		// A withheld response looks like an unanswered request. Say so instead of failing silently.
+		const timer = setTimeout(() => {
+			console.warn("pilotd: mutation response still waiting for mission durability");
+		}, DURABLE_WAIT_WARN_MS);
+		timer.unref?.();
 		store.durable().then(
-			() => end(...args),
+			() => {
+				clearTimeout(timer);
+				end(...args);
+			},
 			(error: unknown) => {
+				clearTimeout(timer);
 				console.warn(`pilotd: response withheld, mission store not durable: ${error}`);
 				res.destroy(error instanceof Error ? error : new Error(String(error)));
 			},

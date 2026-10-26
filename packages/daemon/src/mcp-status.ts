@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import type { McpServerState, McpServerStatus, McpSignInState, McpStatus } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { type SignInState, SourceSignIns } from "./source-sign-in.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 /** What one check found for a server, before pilotd adds timing and sign-in progress. */
 export type McpProbeServer = Omit<McpServerStatus, "checkedAt" | "signIn">;
@@ -39,6 +40,7 @@ export function workerProbe(agentDir?: string, timeoutMs?: number): McpProbe {
 			};
 			signal.addEventListener("abort", abort, { once: true });
 			worker.on("message", (message: McpProbeResult) => {
+				if (isWatchNotice(message)) return;
 				reply = message;
 			});
 			worker.once("error", () => {});

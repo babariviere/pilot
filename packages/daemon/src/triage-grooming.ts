@@ -5,6 +5,7 @@ import type { BackgroundAttribution, BackgroundUsage } from "./background-usage.
 import type { ProjectStore } from "./projects.ts";
 import { CASE_SCHEMA, parseCases } from "./slack-cases.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
+import { isWatchNotice } from "./worker-notice.ts";
 
 export const GUIDE_SCHEMA = {
 	type: "object",
@@ -62,6 +63,7 @@ export function workerTriage(
 			const timer = setTimeout(() => finish(new Error("Triage timed out")), 90_000);
 			signal.addEventListener("abort", abort, { once: true });
 			worker.on("message", (result) => {
+				if (isWatchNotice(result)) return;
 				if (result.usage) {
 					void observe?.(result.usage)
 						.catch(() => undefined)

@@ -3,9 +3,19 @@
  * it to missions.sqlite; durable() resolves once every commit so far is on disk.
  */
 import { Worker } from "node:worker_threads";
+import { isWatchNotice } from "./worker-notice.ts";
 
 /** How long close() blocks pilotd's shutdown waiting for the last changesets. */
 const CLOSE_TIMEOUT_MS = 10_000;
+
+/** A replica reply carries a finite sequence number. Node's watch mode posts module-watch notices to the same port. */
+export function replicaReply(reply: unknown): { seq: number; error?: string } | undefined {
+	if (typeof reply !== "object" || reply === null) return undefined;
+	const record = reply as { seq?: unknown; error?: unknown };
+	if (typeof record.seq !== "number" || !Number.isFinite(record.seq)) return undefined;
+	if (record.error !== undefined && typeof record.error !== "string") return undefined;
+	return { seq: record.seq, error: record.error };
+}
 
 export class MissionReplica {
 	private readonly worker: Worker;
@@ -25,19 +35,7 @@ export class MissionReplica {
 		});
 		// Never keeps pilotd or a test process alive; close() drains on the caller's thread.
 		this.worker.unref();
-		this.worker.on("message", (reply: { seq: number; error?: string }) => {
-			if (reply.error) {
-				const error = new Error(`Mission store could not be saved: ${reply.error}`);
-				// Acknowledgements waiting now fail; later ones wait for the worker's retry to succeed.
-				for (const waiter of this.waiters.splice(0)) waiter.reject(error);
-				if (!this.failure) this.onFailure(error);
-				this.failure = error;
-				return;
-			}
-			this.failure = undefined;
-			this.synced = Math.max(this.synced, reply.seq);
-			this.settle();
-		});
+		this.worker.on("message", (reply: unknown) => this.applyReply(reply));
 		this.worker.on("error", (error) => this.fail(error));
 		this.worker.on("exit", (code) => {
 			if (!this.closed) this.fail(new Error(`Mission store replica exited with code ${code}`));
@@ -48,6 +46,24 @@ export class MissionReplica {
 		if (this.closed) throw new Error("Mission store is closed");
 		const seq = ++this.requested;
 		this.worker.postMessage({ seq, changes }, [changes.buffer as ArrayBuffer]);
+	}
+
+	/** Accepts only this replica's own replies. A foreign message must never change the saved sequence. */
+	applyReply(reply: unknown): void {
+		if (isWatchNotice(reply)) return;
+		const message = replicaReply(reply);
+		if (!message) return;
+		if (message.error !== undefined) {
+			const error = new Error(`Mission store could not be saved: ${message.error}`);
+			// Acknowledgements waiting now fail; later ones wait for the worker's retry to succeed.
+			for (const waiter of this.waiters.splice(0)) waiter.reject(error);
+			if (!this.failure) this.onFailure(error);
+			this.failure = error;
+			return;
+		}
+		this.failure = undefined;
+		this.synced = Math.max(this.synced, message.seq);
+		this.settle();
 	}
 
 	/** Resolves when every commit so far is on disk. */

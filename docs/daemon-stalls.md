@@ -57,6 +57,9 @@ The store now runs in memory:
 - **Acknowledgement waits for the disk.** Mutating HTTP responses, `mission` tool results, system-message
   acknowledgements, coordinator notices and new mission chats are released only after `durable()`. A power loss
   can only lose changes nobody was told about.
+- Only the replica's own replies advance the saved sequence. Node's watch mode (`node --watch`, the development
+  daemon) posts module-watch notices to the same worker port; they are ignored, so the daemon still answers every
+  mutation instead of waiting for a save that never happens.
 - A daemon crash loses internal bookkeeping committed in the last moments before its save (usually milliseconds,
   up to about a second on a saturated disk). These are rederived on startup or retried with stable request IDs.
 - Shutdown waits up to 10 seconds for the last changes. If a save fails, waiting acknowledgements fail and the
