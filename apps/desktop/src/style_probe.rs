@@ -66,6 +66,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                 ]
                                 .into_iter()
                                 .map(|(id, title, signal, background_work)| Chat {
+                                    context_usage: Default::default(),
                                     id: id.into(),
                                     title: title.into(),
                                     state: title.into(),

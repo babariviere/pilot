@@ -242,6 +242,7 @@ impl LocalViewer {
             }
             Target::Draft(key) => self.open(
                 Chat {
+                    context_usage: Default::default(),
                     id: key.clone(),
                     title: "New Local chat draft".into(),
                     state: "Draft".into(),

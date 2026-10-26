@@ -100,6 +100,7 @@ mod project_tests {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) context_usage: crate::context_usage::Usage,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
     pub(crate) attention: Option<crate::attention::Attention>,
     pub(crate) id: String,
@@ -143,6 +144,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     }
     let (signal, background_work) = decoration(value);
     Some(Chat {
+        context_usage: crate::context_usage::Usage::read(&value["usage"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),
         attention: crate::attention::project(value, signal),
         id: id.into(),

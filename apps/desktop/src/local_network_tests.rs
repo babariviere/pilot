@@ -23,6 +23,7 @@ enum Scenario {
     Resume,
     Refused,
     Thinking,
+    ContextUsage,
 }
 
 #[tokio::test]
@@ -132,6 +133,12 @@ impl Mock {
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
                                 socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working","projectId":"p-a"},{"id":"b","title":"Synthetic B","state":"idle","projectId":"p-b"}]}).to_string().into())).await.unwrap();
+                                if matches!(scenario, Scenario::ContextUsage) {
+                                    for usage in [json!({"context":{"tokens":42,"contextWindow":100}}), json!({"context":{"tokens":80,"contextWindow":100}}), json!({})] {
+                                        if steps.recv().await.is_err() { return; }
+                                        socket.send(Frame::Text(json!({"type":"session","session":{"id":"a","title":"Synthetic A","usage":usage}}).to_string().into())).await.unwrap();
+                                    }
+                                }
                             } else {
                                 let id=if path.contains("/b/"){ "b" }else{ "a" };
                                 if matches!(scenario,Scenario::Refused) {
@@ -343,3 +350,6 @@ async fn final_close_does_not_automatically_reopen() {
         1
     );
 }
+
+#[path = "context_usage_reader_tests.rs"]
+mod context_usage_reader_tests;

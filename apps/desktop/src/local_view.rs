@@ -12,6 +12,11 @@ pub(crate) mod chat_model_probe;
 pub(crate) mod chat_rename_probe;
 #[path = "contextual_navigation.rs"]
 mod contextual_navigation;
+#[path = "context_usage_view.rs"]
+mod context_usage_view;
+#[cfg(feature = "native-probes")]
+#[path = "context_usage_probe.rs"]
+pub(crate) mod context_usage_probe;
 #[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
@@ -540,6 +545,7 @@ impl LocalViewer {
         view.state.list_loaded = true;
         view.state.chats = Arc::new(vec![
             Chat {
+                context_usage: Default::default(),
                 id: "synthetic".into(),
                 title: "Synthetic Local chat".into(),
                 state: "working".into(),
@@ -555,6 +561,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                context_usage: Default::default(),
                 id: "synthetic-two".into(),
                 title: "Transcript review".into(),
                 state: "idle".into(),
@@ -570,6 +577,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                context_usage: Default::default(),
                 id: "synthetic-archive".into(),
                 title: "Earlier conversation".into(),
                 state: "parked".into(),
@@ -730,6 +738,7 @@ impl LocalViewer {
         let mut view = Self::synthetic(window, cx);
         let mut chats = view.state.chats.as_ref().clone();
         chats.push(Chat {
+            context_usage: Default::default(),
             id: "synthetic-failed".into(),
             title: "Review a failed check with a long title that stays on one line".into(),
             state: "failed".into(),
@@ -1013,6 +1022,7 @@ impl LocalViewer {
                     }
                     view.open(
                         Chat {
+                            context_usage: Default::default(),
                             id: target.clone(),
                             title: "Local chat".into(),
                             state: "starting".into(),
@@ -1692,6 +1702,7 @@ impl LocalViewer {
             let mut all: Vec<_> = drafts
                 .into_iter()
                 .map(|(key, title)| Chat {
+                    context_usage: Default::default(),
                     model_configuration: None,
                     id: key,
                     title,
@@ -1820,6 +1831,7 @@ impl Render for LocalViewer {
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
+                            .child(self.context_usage_action(cx))
                             .child(self.mission_context_action(cx))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
@@ -1979,6 +1991,7 @@ mod refresh_tests {
             view.update(cx, |v, cx| {
                 v.open(
                     Chat {
+                        context_usage: Default::default(),
                         model_configuration: None,
                         id: "other".into(),
                         title: "Other".into(),

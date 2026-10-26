@@ -41,6 +41,13 @@ later titles/GETs never settle them or trigger a replay. Reports are retained on
 in this window, not persisted across app restart. See [chat-rename.md](docs/chat-rename.md).
 
 
+### Chat context usage
+
+Use **Context…** in a Local chat header for read-only reported context and separate
+direct/child token accounting. Missing values and context freshness stay unknown;
+costs and subscription controls are not included. No composer geometry changes
+or extra network reads. See [context-usage.md](docs/context-usage.md).
+
 ### Add a Local project
 
 Use **Add project…** beside project browsing or in the new-chat project chooser.
