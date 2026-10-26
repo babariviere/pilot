@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
+import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
@@ -41,6 +42,16 @@ test("private write roots reject symlink roots, protected overlaps, hardlinks, b
 	execFileSync("mkfifo", [join(scratch, "fifo")]);
 	await assert.rejects(validateCoordinatorWrites([scratch], [source]), /special file/);
 	await rm(join(scratch, "fifo"));
+	// The coordinator's own IPC socket lives in its private state. It cannot alias a file's content,
+	// so it is not a write escape into the readonly root and must not refuse the worker.
+	const socket = createServer();
+	await new Promise<void>((resolve) => socket.listen(join(scratch, "bridge.s"), resolve));
+	try {
+		assert.deepEqual(await validateCoordinatorWrites([scratch], [source]), [scratch]);
+	} finally {
+		await new Promise<void>((resolve) => socket.close(() => resolve()));
+		await rm(join(scratch, "bridge.s"), { force: true });
+	}
 	await chmod(scratch, 0o770);
 	await assert.rejects(validateCoordinatorWrites([scratch], [source]), /private/);
 	await chmod(scratch, 0o700);

@@ -131,14 +131,14 @@ async fn inspection_is_get_only_then_exact_archive_and_restore_paths_with_no_bod
             .iter()
             .all(|r| r.0 == "GET")
     );
-    assert!(transport::set(&client, &daemon.options, &e).await == Outcome::Acknowledged);
+    assert!(transport::set(&client, &daemon.options, &e, Action::Archive).await == Outcome::Acknowledged);
     let raw = daemon.seen.lock().unwrap().source.clone();
     let t = target(&daemon.options, &raw);
     let e = transport::inspect(&client, &daemon.options, &t)
         .await
         .unwrap();
     assert!(!e.archive);
-    assert!(transport::set(&client, &daemon.options, &e).await == Outcome::Acknowledged);
+    assert!(transport::set(&client, &daemon.options, &e, Action::Archive).await == Outcome::Acknowledged);
     let seen = daemon.seen.lock().unwrap();
     let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
     assert_eq!(posts.len(), 2);
@@ -173,7 +173,7 @@ async fn stale_metadata_working_and_wrong_hello_fail_before_any_post() {
             }
         }
         assert!(matches!(
-            transport::set(&c, &d.options, &e).await,
+            transport::set(&c, &d.options, &e, Action::Archive).await,
             Outcome::Rejected(_)
         ));
         assert!(d.seen.lock().unwrap().requests.iter().all(|r| r.0 == "GET"));
@@ -188,7 +188,7 @@ async fn post_dispatch_failures_are_unknown_and_readback_never_replays_or_settle
         let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
             .await
             .unwrap();
-        let outcome = transport::set(&c, &d.options, &e).await;
+        let outcome = transport::set(&c, &d.options, &e, Action::Archive).await;
         assert!(outcome == Outcome::Unknown);
         let raw = d.seen.lock().unwrap().source.clone();
         assert!(raw["archivedAt"].is_number());
@@ -232,7 +232,7 @@ async fn late_ack_stays_original_and_only_explicit_set_submits() {
         .unwrap();
         release.notify_one();
     });
-    assert!(transport::set(&c, &d.options, &e).await == Outcome::Acknowledged);
+    assert!(transport::set(&c, &d.options, &e, Action::Archive).await == Outcome::Acknowledged);
     release_task.await.unwrap();
     assert_eq!(e.target.chat.id, "source");
     assert_eq!(
@@ -245,4 +245,39 @@ async fn late_ack_stays_original_and_only_explicit_set_submits() {
             .count(),
         1
     );
+}
+#[tokio::test]
+async fn a_failed_startup_reloads_once_on_the_exact_route() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    {
+        let mut s = d.seen.lock().unwrap();
+        s.source["state"] = json!("failed");
+        s.source["canRetryStartup"] = json!(true);
+    }
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(e.can_retry_startup);
+    assert!(transport::set(&c, &d.options, &e, Action::Retry).await == Outcome::Acknowledged);
+    {
+        let seen = d.seen.lock().unwrap();
+        let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].1, "/api/sessions/source/retry-startup");
+        assert!(posts[0].2.is_null());
+    }
+    // A chat without a retryable failure never posts.
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(!e.can_retry_startup);
+    assert!(matches!(
+        transport::set(&c, &d.options, &e, Action::Retry).await,
+        Outcome::Rejected(_)
+    ));
+    let seen = d.seen.lock().unwrap();
+    assert_eq!(seen.requests.iter().filter(|r| r.0 == "POST").count(), 1);
 }

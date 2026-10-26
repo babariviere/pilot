@@ -84,6 +84,18 @@ impl Daemon {
                                         assert!(s.source["missionId"].is_null()); s.source["missionId"]=json!("mission-exact");
                                         (201,json!({"mission":{"id":"mission-exact","projectId":"project"}}),matches!(s.behavior,Behavior::Slow))
                                     }
+                                    ("POST", "/api/sessions/source/retry-startup") => {
+                                        assert!(payload.is_null());
+                                        s.source["state"]=json!("idle");
+                                        s.source.as_object_mut().unwrap().remove("canRetryStartup");
+                                        match s.behavior {
+                                            Behavior::Lost => return,
+                                            Behavior::ErrorAfter => (500,json!({"error":"synthetic post-commit failure"}),false),
+                                            Behavior::WrongId => (200,json!({"id":"other"}),false),
+                                            Behavior::Slow => (200,s.source.clone(),true),
+                                            Behavior::Accept => (200,s.source.clone(),false),
+                                        }
+                                    }
                                     ("POST", "/api/sessions/source/archive" | "/api/sessions/source/restore") => {
                                         assert!(payload.is_null());
                                         if path.ends_with("/archive") {s.source["archivedAt"]=json!(1234);} else {s.source.as_object_mut().unwrap().remove("archivedAt");}

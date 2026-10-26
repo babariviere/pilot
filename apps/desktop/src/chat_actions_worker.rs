@@ -1,14 +1,14 @@
 //! Bounded off-UI Local HTTP. A dispatched archive/restore is never retried.
 use crate::{
     LocalOptions,
-    chat_actions::{Evidence, Failure, Outcome, Target},
+    chat_actions::{Action, Evidence, Failure, Outcome, Target},
 };
 use serde_json::Value;
 use std::time::Duration;
 
 enum Request {
     Inspect(Target, async_channel::Sender<Result<Evidence, Failure>>),
-    Set(Evidence, async_channel::Sender<Outcome>),
+    Set(Evidence, Action, async_channel::Sender<Outcome>),
 }
 pub(crate) struct Worker {
     commands: async_channel::Sender<Request>,
@@ -40,8 +40,8 @@ impl Worker {
                             Request::Inspect(target, reply) => {
                                 let _ = reply.try_send(inspect(&client, &options, &target).await);
                             }
-                            Request::Set(evidence, reply) => {
-                                let _ = reply.try_send(set(&client, &options, &evidence).await);
+                            Request::Set(evidence, action, reply) => {
+                                let _ = reply.try_send(set(&client, &options, &evidence, action).await);
                             }
                         }
                     }
@@ -63,10 +63,11 @@ impl Worker {
     pub(crate) fn set(
         &self,
         evidence: Evidence,
+        action: Action,
     ) -> Result<async_channel::Receiver<Outcome>, Failure> {
         let (tx, rx) = async_channel::bounded(1);
         self.commands
-            .try_send(Request::Set(evidence, tx))
+            .try_send(Request::Set(evidence, action, tx))
             .map_err(|_| "Chat actions are busy or unavailable. Nothing was submitted.")?;
         Ok(rx)
     }
@@ -133,9 +134,10 @@ pub(crate) async fn set(
     client: &reqwest::Client,
     options: &LocalOptions,
     evidence: &Evidence,
+    action: Action,
 ) -> Outcome {
     let current = match inspect(client, options, &evidence.target).await {
-        Ok(current) if &current == evidence && current.can_archive => current,
+        Ok(current) if &current == evidence => current,
         Ok(_) => {
             return Outcome::Rejected(
                 "Chat eligibility changed. Reopen its menu. Nothing was submitted.",
@@ -143,6 +145,37 @@ pub(crate) async fn set(
         }
         Err(error) => return Outcome::Rejected(error),
     };
+    if action == Action::Retry {
+        // The daemon reloads the worker with the existing outbox. It is never resent.
+        if !current.can_retry_startup {
+            return Outcome::Rejected(
+                "This chat has no retryable startup failure. Reopen its menu.",
+            );
+        }
+        let response = client
+            .post(format!(
+                "{}/api/sessions/{}/retry-startup",
+                options.loopback(),
+                current.target.chat.id
+            ))
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return Outcome::Unknown;
+        };
+        return match response.status() {
+            reqwest::StatusCode::OK => Outcome::Acknowledged,
+            reqwest::StatusCode::CONFLICT => Outcome::Rejected(
+                "This chat cannot retry its startup now. Check Local and try again.",
+            ),
+            _ => Outcome::Unknown,
+        };
+    }
+    if !current.can_archive {
+        return Outcome::Rejected(
+            "Chat eligibility changed. Reopen its menu. Nothing was submitted.",
+        );
+    }
     let route = if current.archive {
         "archive"
     } else {

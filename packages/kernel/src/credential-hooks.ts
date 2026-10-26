@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { credentialClient } from "./credential-client.ts";
 import { ownModelCatalog } from "./model-catalog-owner.ts";
+import { readonlyModelsStore } from "./readonly-models-store.ts";
 import { readonlySettings } from "./readonly-settings.ts";
 import { useSharedModelCatalog } from "./shared-catalog-runtime.ts";
 
@@ -40,20 +41,24 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 			if (client && !owner) await client.pi.list(); // No best-effort SDK fallback when the authority is unavailable.
 			if (!owner && client && options.credentials && options.credentials !== client.pi)
 				throw new Error("Credential broker requires the canonical credential store");
+			const sharedDir = process.env.PILOT_SHARED_CATALOG_DIR;
 			const shared =
 				!owner &&
 				client &&
-				process.env.PILOT_SHARED_CATALOG_DIR &&
+				sharedDir &&
 				!options.modelsStore &&
 				!options.modelsStorePath &&
 				options.catalogBaseUrl === undefined &&
 				options.modelsPath !== null &&
-				resolve(options.modelsPath ?? join(getAgentDir(), "models.json")) ===
-					join(process.env.PILOT_SHARED_CATALOG_DIR, "models.json");
+				resolve(options.modelsPath ?? join(getAgentDir(), "models.json")) === join(sharedDir, "models.json");
+			// The daemon owns the catalog. A worker reads the published one without the SDK's store
+			// lock, which an isolated worker cannot create on a readonly host.
+			const sharedStore =
+				shared && sharedDir ? readonlyModelsStore(join(sharedDir, "models-store.json")) : undefined;
 			const runtime = await create.call(ModelRuntime, {
 				...options,
 				...(client && !owner ? { credentials: client.pi } : {}),
-				...(shared ? { refreshOnCreate: false } : {}),
+				...(sharedStore ? { refreshOnCreate: false, modelsStore: sharedStore } : {}),
 			});
 			if (shared) useSharedModelCatalog(runtime, client);
 			ownModelCatalog(runtime);

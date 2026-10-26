@@ -4,7 +4,7 @@
 mod tests;
 use crate::{
     LocalOptions,
-    chat_actions::{Evidence, Failure, Outcome, Report, Target},
+    chat_actions::{Action, Evidence, Failure, Outcome, Report, Target},
     chat_actions_worker::Worker,
 };
 use gpui_kit::{
@@ -112,15 +112,29 @@ impl Actions {
             r.observed_current = true;
         }
     }
-    pub(crate) fn submit(&mut self, evidence: Evidence, w: &mut Window, cx: &mut Context<Self>) {
-        if self.blocked(&evidence.target.chat.id) || !evidence.can_archive {
+    pub(crate) fn submit(
+        &mut self,
+        evidence: Evidence,
+        action: Action,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.blocked(&evidence.target.chat.id) {
+            return;
+        }
+        let eligible = if action == Action::Retry {
+            evidence.can_retry_startup
+        } else {
+            evidence.can_archive
+        };
+        if !eligible {
             return;
         }
         let result = self
             .worker
             .as_ref()
             .ok_or("Local chat actions are unavailable.")
-            .and_then(|worker| worker.set(evidence.clone()));
+            .and_then(|worker| worker.set(evidence.clone(), action));
         let rx = match result {
             Ok(rx) => rx,
             Err(error) => {

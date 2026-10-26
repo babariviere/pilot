@@ -93,6 +93,8 @@ impl LocalViewer {
                         let archive = evidence.clone();
                         let b = owner.clone();
                         let convert = evidence.clone();
+                        let c = owner.clone();
+                        let retry = evidence.clone();
                         menu.max_w(px(310.))
                             .label(SharedString::from(evidence.target.chat.title.clone()))
                             .when_some(reason, |menu, reason| menu.label(reason))
@@ -112,6 +114,15 @@ impl LocalViewer {
                                         v.chat_row_action(archive.clone(), Action::Archive, w, cx)
                                     });
                                 }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Retry startup")
+                                    .disabled(blocked || !evidence.can_retry_startup)
+                                    .on_click(move |_, w, cx| {
+                                        let _ = c.update(cx, |v, cx| {
+                                            v.chat_row_action(retry.clone(), Action::Retry, w, cx)
+                                        });
+                                    }),
                             )
                             .separator()
                             .item(
@@ -159,7 +170,14 @@ impl LocalViewer {
                 // No capture/select/stop/discard: disable sends while the exact selected
                 // target archives, leaving its editor/draft and transcript mounted.
                 self.chat_actions
-                    .update(cx, |a, cx| a.submit(evidence, w, cx));
+                    .update(cx, |a, cx| a.submit(evidence, Action::Archive, w, cx));
+                self.sync_chat_action_permission(cx);
+            }
+            Action::Retry if evidence.can_retry_startup => {
+                // The daemon reloads the failed worker with its existing outbox. The chat
+                // keeps its history, draft and permissions; nothing is resent.
+                self.chat_actions
+                    .update(cx, |a, cx| a.submit(evidence, Action::Retry, w, cx));
                 self.sync_chat_action_permission(cx);
             }
             Action::Convert if evidence.can_convert => {

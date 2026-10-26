@@ -35,6 +35,8 @@ pub(crate) struct Evidence {
     pub(crate) archive: bool,
     pub(crate) can_archive: bool,
     pub(crate) can_convert: bool,
+    /// The daemon can reload this chat's worker after a failed startup.
+    pub(crate) can_retry_startup: bool,
 }
 impl Evidence {
     pub(crate) fn read(target: &Target, raw: &Value, guarded: bool) -> Result<Self, Failure> {
@@ -44,7 +46,7 @@ impl Evidence {
                 !raw[*key].is_null()
                     && !raw[*key].as_str().is_some_and(crate::local_model::valid_id)
             })
-            || ["control", "working", "sleepPaused", "offlinePaused"]
+            || ["control", "working", "sleepPaused", "offlinePaused", "canRetryStartup"]
                 .iter()
                 .any(|key| !raw[*key].is_null() && !raw[*key].is_boolean())
             || (!raw["runningJobs"].is_null() && !raw["runningJobs"].is_array())
@@ -97,6 +99,7 @@ impl Evidence {
             "preparing",
             "workspaceRecovery",
             "kernelRestartPending",
+            "canRetryStartup",
         ] {
             stamp.insert(key.into(), raw[key].clone());
         }
@@ -123,6 +126,7 @@ impl Evidence {
                 && crate::local_model::interactive_local(raw)
                 && raw["missionId"].is_null()
                 && target.chat.project_id.is_some(),
+            can_retry_startup: raw["canRetryStartup"] == true,
         })
     }
 }
@@ -131,6 +135,8 @@ impl Evidence {
 pub(crate) enum Action {
     Archive,
     Convert,
+    /// Reload a chat whose worker failed to start, keeping its outbox.
+    Retry,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {

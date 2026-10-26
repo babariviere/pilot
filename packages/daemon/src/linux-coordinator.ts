@@ -135,6 +135,9 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 		if (info.isDirectory()) {
 			if (info.mode & 0o022) throw new Error(`Coordinator private state is shared-writable: ${path}`);
 			for await (const child of await opendir(path)) await inspect(join(path, child.name));
+		} else if (info.isSocket()) {
+			// The coordinator's own IPC socket (its todo bridge) lives in its private state. A socket
+			// cannot alias a file's content, so it is not a write escape into the readonly root.
 		} else if (!info.isFile() || info.nlink !== 1)
 			throw new Error(`Coordinator private state contains a hardlink or special file: ${path}`);
 	}
