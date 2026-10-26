@@ -1,8 +1,8 @@
 //! Actual offscreen production reader, synthetic sources only.
 use super::*;
 use gpui_kit::{
-    AnyWindowHandle, Bounds, ClipboardItem, EntityInputHandler, HeadlessAppContext, WindowBounds,
-    WindowOptions, point, size, test::TestWindowExt,
+    AnyWindowHandle, Bounds, ClipboardItem, EntityInputHandler, HeadlessAppContext, ScrollDelta,
+    WindowBounds, WindowOptions, point, size, test::TestWindowExt,
 };
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..8 {
@@ -17,12 +17,35 @@ fn source() -> String {
         "Unicode e\u{301} 👩‍💻 日本 source content.\n".repeat(50)
     )
 }
+fn reveal_footer(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    for _ in 0..32 {
+        let visible = cx
+            .update_window(h, |_, w, _| {
+                let viewport = w.find("viewport").bounds();
+                w.find_all(("message-fold", 1u64)).iter().any(|b| {
+                    b.visible()
+                        && b.bounds().top() >= viewport.top()
+                        && b.bounds().bottom() <= viewport.bottom()
+                })
+            })
+            .unwrap();
+        if visible {
+            return;
+        }
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(-300.))),
+                cx,
+            );
+        })
+        .unwrap();
+        settle(cx, h);
+    }
+    panic!("message footer must be reachable with native wheel input");
+}
 fn row(id: u64, text: String) -> Message {
-    Message::live(id, "assistant".into(), text).anchored(crate::model::ReaderKey::model(
-        id,
-        0,
-        Some(0),
-    ))
+    Message::live(id, "You".into(), text).anchored(crate::model::ReaderKey::model(id, 0, Some(0)))
 }
 pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_FOLD_DIR").map(std::path::PathBuf::from);
@@ -129,6 +152,8 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click(("message-fold", 1u64), cx))
                 .unwrap();
             settle(cx, h);
+            cx.update(|cx| assert!(!t.read(cx).reading_mark(cx).unwrap().following));
+            reveal_footer(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(
                     t.read(cx)
@@ -136,13 +161,12 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                         .read(cx)
                         .rendered_text()
                         .source(),
-                    source()
+                    crate::message_fold::plain(&source())
                 );
-                assert!(!t.read(cx).reading_mark(cx).unwrap().following);
                 assert!(
-                    w.find(("message-fold", 1u64)).bounds().bottom()
-                        <= t.read(cx).history_probe_row(1).read(cx).bounds().top(),
-                    "Show less stays reachable before expanded content"
+                    w.find(("message-fold", 1u64)).bounds().top()
+                        >= t.read(cx).history_probe_row(1).read(cx).bounds().bottom(),
+                    "Show less follows expanded content"
                 );
                 assert!(
                     w.focused(cx).is_some(),
@@ -171,6 +195,7 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 })
             });
             settle(cx, h);
+            reveal_footer(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(
                     t.read(cx)
@@ -195,6 +220,9 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 ("enter", true),
                 ("escape", false),
             ] {
+                if !expanded {
+                    reveal_footer(cx, h);
+                }
                 cx.update_window(h, |_, w, cx| w.press(key, cx)).unwrap();
                 settle(cx, h);
                 cx.update(|cx| {
@@ -310,7 +338,7 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 t.update(cx, |t, cx| {
                     t.replace_readonly(
                         vec![
-                            Message::live(99, "assistant".into(), source() + "stream update more")
+                            Message::live(99, "You".into(), source() + "stream update more")
                                 .anchored(crate::model::ReaderKey::model(1, 0, Some(0))),
                         ],
                         true,
@@ -334,16 +362,8 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 t.update(cx, |t, cx| {
                     t.replace_readonly(
                         vec![
-                            Message::live(
-                                99,
-                                "assistant".into(),
-                                "Replacement source\n".repeat(60),
-                            )
-                            .anchored(crate::model::ReaderKey::model(
-                                1,
-                                0,
-                                Some(0),
-                            )),
+                            Message::live(99, "You".into(), "Replacement source\n".repeat(60))
+                                .anchored(crate::model::ReaderKey::model(1, 0, Some(0))),
                         ],
                         false,
                         cx,
@@ -386,31 +406,42 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                 t.update(cx, |t, cx| {
                     t.replace_readonly(
                         vec![
-                            Message::live(10, "You".into(), source())
+                            Message::live(10, "assistant".into(), source())
                                 .anchored(crate::model::ReaderKey::model(10, 0, Some(0))),
                         ],
                         true,
                         cx,
-                    )
+                    );
+                    t.restore_reading(
+                        crate::navigation::ReadingMark {
+                            message: Some(crate::model::ReaderKey::model(10, 0, Some(0))),
+                            offset: 0.,
+                            following: false,
+                        },
+                        cx,
+                    );
                 })
             });
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 w.click(("copy-source", 10u64), cx);
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source());
-                w.click(("message-fold", 10u64), cx);
+                assert!(
+                    w.find_all(("message-fold", 10u64)).is_empty(),
+                    "assistant has no fold control"
+                );
             })
             .unwrap();
             settle(cx, h);
             cx.update(|cx| {
-                assert!(
+                assert_eq!(
                     t.read(cx)
                         .history_probe_row(10)
                         .read(cx)
                         .rendered_text()
-                        .source()
-                        .contains("HiddenNeedle")
-                )
+                        .source(),
+                    source()
+                );
             });
             assert!(writes.try_recv().is_err(), "disclosure never sends");
             println!("message_fold native {width} dark={dark}: passed");

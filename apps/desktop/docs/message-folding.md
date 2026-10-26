@@ -1,7 +1,9 @@
-# Ordinary long-message disclosure
+# User long-message disclosure
 
-`message_fold*` owns the ordinary user/assistant presentation, not source
-storage, Markdown, tools, work, links, images or artifacts. Swift's
+`message_fold*` owns long user-message presentation, not source
+storage, Markdown, tools, work, links, images or artifacts. Assistant messages
+always remain fully expanded, including streaming and committed replies, and
+never expose a folding control. Swift's
 `CollapsibleMessage`/`MessagePreview` supplied the threshold vocabulary:
 more than1600 graphemes or16 lines, preview up to800 graphemes/8 lines/3200
 UTF-8 bytes. Native segmentation first bounds work to6400 scalars/25,600
@@ -21,13 +23,14 @@ entry/model/block identity. It survives allocation-ID changes, prepend,
 virtualization, same-chat reset/reconnection and source extensions. A different
 source revision resets its own default, not another row's state. Evicted intent
 returns to the default when loaded again. Ambiguous canonical identities never
-adopt a disclosure. Uncommitted live rows lack committed identity, so remain
-expanded; source-matching commit promotion also remains expanded. No live row
-is automatically folded when it grows past the threshold.
+adopt a disclosure. Uncommitted local user rows lack committed identity, so
+remain expanded without an identity-unsafe disclosure. Once committed, a new
+long user message receives the default preview. Already known short user rows
+do not automatically fold when extended past the threshold.
 
 Kit Buttons provide a calm chevron and explicit Show more/Show less action.
-Show more follows the collapsed preview; Show less stays above expanded content
-so a long message can be collapsed without scrolling to its end.
+Both Show more and Show less follow the message body, after the preview or the
+expanded content respectively.
 Enter/Space toggle within the mounted disclosure; Escape collapses it. These
 keys cannot submit the composer. Pointer disclosure is guarded before sibling
 IME blur, and mutation rechecks source/key/history generation. Focus moves to

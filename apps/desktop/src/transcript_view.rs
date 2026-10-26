@@ -808,9 +808,6 @@ impl TranscriptView {
                             }),
                     ),
             )
-            .when(!self.folds.collapsed(row), |d| {
-                d.children(self.fold_controls(row, cx, owner.clone()))
-            })
             .child(match &self.text_states[ix] {
                 Some(state) => crate::typography::rich(
                     TextView::new(state),
@@ -832,9 +829,7 @@ impl TranscriptView {
                     .child(SharedString::from(row.source().to_string()))
                     .into_any_element(),
             })
-            .when(self.folds.collapsed(row), |d| {
-                d.children(self.fold_controls(row, cx, owner))
-            })
+            .children(self.fold_controls(row, cx, owner))
     }
 }
 

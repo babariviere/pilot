@@ -1,6 +1,6 @@
 use super::*;
 fn row(id: u64, source: &str) -> Message {
-    Message::live(id, "assistant".into(), source.into()).anchored(ReaderKey::model(9, 0, Some(0)))
+    Message::live(id, "You".into(), source.into()).anchored(ReaderKey::model(9, 0, Some(0)))
 }
 #[test]
 fn boundaries_and_exact_prefix() {
@@ -72,15 +72,35 @@ fn scopes_do_not_alias_or_forget_on_reconnect() {
 }
 
 #[test]
-fn streaming_commit_never_auto_folds_or_adopts_ambiguous_identity() {
+fn assistants_never_fold_including_streaming_and_commit() {
     let source = "live source\n".repeat(100);
     let live = Message::live(18, "Assistant · streaming".into(), source.clone());
     let mut f = Folds::default();
     f.sync(std::slice::from_ref(&live));
     assert!(!f.long(&live));
-    let committed = row(900, &(source + "committed"));
+    let committed = Message::live(900, "assistant".into(), source + "committed")
+        .anchored(ReaderKey::model(9, 0, Some(0)));
     f.sync(std::slice::from_ref(&committed));
-    assert!(f.long(&committed) && !f.collapsed(&committed));
+    f.toggle(&committed);
+    assert!(!f.long(&committed) && !f.collapsed(&committed));
+    assert!(f.html(&committed).is_none());
+    // Even a previously cached user row cannot fold an assistant at the same key.
+    let user = row(901, committed.source());
+    f.sync(std::slice::from_ref(&user));
+    assert!(f.collapsed(&user));
+    f.sync(std::slice::from_ref(&committed));
+    assert!(!f.long(&committed) && f.html(&committed).is_none());
+}
+
+#[test]
+fn users_require_unambiguous_committed_identity() {
+    let mut f = Folds::default();
+    let committed = row(900, &"long\n".repeat(100));
+    let live = Message::live(18, "You · local only".into(), committed.source().into());
+    f.sync(std::slice::from_ref(&live));
+    assert!(!f.long(&live));
+    f.sync(std::slice::from_ref(&committed));
+    assert!(f.collapsed(&committed));
     let alias = row(901, committed.source());
     f.sync(&[committed.clone(), alias]);
     assert!(!f.long(&committed));

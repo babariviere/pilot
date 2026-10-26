@@ -1,4 +1,4 @@
-//! Bounded ordinary-message presentation. Source and loaded-source Find are untouched.
+//! Bounded user-message presentation. Assistant source and loaded-source Find are untouched.
 use crate::{
     model::{Message, ReaderKey},
     session_todos::Source,
@@ -72,7 +72,7 @@ pub(crate) fn plain(source: &str) -> String {
     )
 }
 fn eligible(row: &Message) -> bool {
-    (row.is_assistant() || row.label().starts_with("You"))
+    row.label().starts_with("You")
         && row.work_data().is_none()
         && row.artifact_data().is_none()
         && row.image_data().is_none()
@@ -91,7 +91,6 @@ struct Entry {
 pub(crate) struct Folds {
     scope: Option<Source>,
     entries: VecDeque<Entry>,
-    uncommitted: Vec<Arc<String>>,
 }
 fn same_scope(a: &Option<Source>, b: &Option<Source>) -> bool {
     match (a, b) {
@@ -103,9 +102,6 @@ fn same_scope(a: &Option<Source>, b: &Option<Source>) -> bool {
 impl Folds {
     pub(crate) fn scope(&mut self, scope: Option<Source>) -> bool {
         let changed = !same_scope(&self.scope, &scope);
-        if changed {
-            self.uncommitted.clear();
-        }
         self.scope = scope;
         changed
     }
@@ -137,14 +133,7 @@ impl Folds {
             let preview = preview(row.source());
             let expanded = prior
                 .filter(|e| row.source().starts_with(e.source.as_str()))
-                .map_or(
-                    !preview.long
-                        || self
-                            .uncommitted
-                            .iter()
-                            .any(|s| !s.is_empty() && row.source().starts_with(s.as_str())),
-                    |e| e.expanded,
-                );
+                .map_or(!preview.long, |e| e.expanded);
             self.entries.push_back(Entry {
                 scope: self.scope.clone(),
                 key: row.reader_key().unwrap(),
@@ -168,19 +157,6 @@ impl Folds {
                 self.entries.pop_front();
             }
         }
-        // Live rows have no canonical committed identity. Never transfer intent
-        // by allocation counter. Keep them expanded, including on source-matching
-        // commit promotion, without exposing an identity-unsafe disclosure.
-        let mut bytes = 0;
-        self.uncommitted = rows
-            .iter()
-            .filter(|r| r.is_assistant() && r.reader_key().is_none())
-            .take(CACHE_ROWS)
-            .filter_map(|r| {
-                bytes += r.source().len();
-                (bytes <= CACHE_BYTES).then(|| r.shared_source())
-            })
-            .collect();
     }
     pub(crate) fn long(&self, row: &Message) -> bool {
         self.index(row)
