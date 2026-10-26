@@ -181,6 +181,12 @@ editing. Per-source drafts survive navigation within the window. Conflicts retai
 text; unknown writes are never settled by later reads or retried automatically.
 This is not restart-durable draft storage. See [brief contracts and limits](docs/mission-brief.md).
 
+The task browser offers **New task…** with title, description and explicit
+**Create task** (⌘Enter). Per-mission text survives navigation and errors within
+the window, not app restart. Pending/unconfirmed creates cannot be resent;
+validated 201 responses provide the actual task ID/number. Creation never starts
+or assigns a chat. See [task creation and recovery](docs/mission-task-creation.md).
+
 ### Make an existing chat a mission
 
 In an eligible Local chat, choose **Make a mission…**. Review the title and optional

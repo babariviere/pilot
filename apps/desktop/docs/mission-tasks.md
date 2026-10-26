@@ -33,7 +33,8 @@ selectable plain text; Markdown images, links and scripts are not executed.
 
 Swift references: `apps/macos/Sources/Pilot/MissionTabs.swift::MissionTasksTab`,
 `MissionTaskRow` and `MissionTaskDescription`. Only browsing/details are adopted.
-Task creation/title/body editing, delete, status, ownership, models, dependencies,
+Explicit creation is documented in [mission-task-creation.md](mission-task-creation.md).
+Task title/body editing, delete, status, ownership, models, dependencies,
 phases and task starts remain separate work. No enabled mutation stubs, new
 endpoint/backend changes, automatic agent starts or live automated actions.
 

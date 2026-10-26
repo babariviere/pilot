@@ -86,6 +86,9 @@ pub(crate) struct Pane {
     subscription: Option<Subscription>,
     trigger: FocusHandle,
     detail_focus: FocusHandle,
+    pub(crate) creation: Option<Entity<crate::mission_task_create_view::Form>>,
+    creations: Vec<(Entity<crate::mission_task_create_view::Form>, Subscription)>,
+    create_error: Option<&'static str>,
 }
 impl Pane {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -100,10 +103,16 @@ impl Pane {
             subscription: None,
             trigger: cx.focus_handle(),
             detail_focus: cx.focus_handle(),
+            creation: None,
+            creations: Vec::new(),
+            create_error: None,
         }
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
-        self.trigger.contains_focused(w, cx)
+        self.creation
+            .as_ref()
+            .is_some_and(|f| f.read(cx).owns_focus(w, cx))
+            || self.trigger.contains_focused(w, cx)
             || self.detail_focus.contains_focused(w, cx)
             || self
                 .list
@@ -114,11 +123,18 @@ impl Pane {
         &mut self,
         key: Option<Key>,
         options: Option<LocalOptions>,
-        _: &mut Window,
+        w: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.marked(w, cx) {
+            return;
+        }
         self.options = options;
         if self.state.target(key) {
+            if let Some(form) = self.creation.take() {
+                form.update(cx, |f, _| f.visible = false);
+            }
+            self.create_error = None;
             self.opened = false;
             self.reader = None;
             self.updates = None;
@@ -127,8 +143,68 @@ impl Pane {
             cx.notify();
         }
     }
+    pub(crate) fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.creation
+            .as_ref()
+            .is_some_and(|f| f.update(cx, |f, cx| f.marked(w, cx)))
+    }
+    fn new_task(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            return;
+        }
+        let (Some(key), Some(options)) = (self.state.key.clone(), self.options.clone()) else {
+            return;
+        };
+        if key.home != crate::mission_browser::Home::local(&options.host()) {
+            return;
+        }
+        let prior = self
+            .creations
+            .iter()
+            .find(|(f, _)| f.read(cx).matches(&key, &options))
+            .map(|(f, _)| f.clone());
+        let form = if let Some(f) = prior {
+            f
+        } else {
+            if self.creations.len() >= 16 {
+                self.create_error = Some(
+                    "Task drafts reached this window's 16-mission limit. Existing text is retained; copy it before closing the app.",
+                );
+                cx.notify();
+                return;
+            }
+            let f = cx.new(|cx| crate::mission_task_create_view::Form::new(key, options, w, cx));
+            let sub = cx.subscribe_in(
+                &f,
+                w,
+                |v, source, _: &crate::mission_task_create_view::Close, w, cx| {
+                    if v.creation.as_ref() != Some(source) {
+                        return;
+                    }
+                    if let Some(form) = v.creation.take() {
+                        form.update(cx, |f, _| f.visible = false);
+                    }
+                    v.trigger.focus(w, cx);
+                    cx.notify();
+                },
+            );
+            self.creations.push((f.clone(), sub));
+            f
+        };
+        if let Some(previous) = self.creation.take() {
+            previous.update(cx, |f, _| f.visible = false);
+        }
+        form.update(cx, |f, cx| {
+            f.visible = true;
+            f.focus(w, cx);
+            cx.notify();
+        });
+        self.creation = Some(form);
+        self.opened = true;
+        cx.notify();
+    }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        if self.state.busy || !self.opened {
+        if self.state.busy || !self.opened || self.marked(w, cx) {
             return;
         }
         let (Some(key), Some(options)) = (self.state.key.clone(), self.options.clone()) else {
@@ -250,6 +326,12 @@ impl Pane {
         cx.notify();
     }
     fn close(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            return;
+        }
+        if let Some(form) = self.creation.take() {
+            form.update(cx, |f, _| f.visible = false);
+        }
         self.trigger.focus(w, cx);
         self.opened = false;
         self.state.generation = self.state.generation.saturating_add(1);
@@ -308,6 +390,19 @@ impl Render for Pane {
                         })),
                     ),
             );
+        if self.state.key.is_some() {
+            root = root.child(
+                ui::action("mission-task-new", "New task…", Action::Quiet)
+                    .self_start()
+                    .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
+            );
+        }
+        if let Some(e) = self.create_error {
+            root = root.child(Notice::new(e).tone(Tone::Error));
+        }
+        if let Some(form) = &self.creation {
+            root = root.child(form.clone());
+        }
         if !self.opened {
             return root;
         }

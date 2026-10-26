@@ -216,6 +216,7 @@ impl Browser {
         self.brief
             .as_ref()
             .is_some_and(|brief| brief.update(cx, |v, cx| v.visible && v.marked(w, cx)))
+            || self.tasks_browser.update(cx, |v, cx| v.marked(w, cx))
     }
     pub(crate) fn open_brief(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.busy || self.error.is_some() || !self.online || self.brief_marked(w, cx) {
