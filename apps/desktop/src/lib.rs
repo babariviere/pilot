@@ -50,6 +50,15 @@ pub use mission_browser_view::mission_activity_probe::run_mission_activity_probe
 #[cfg(feature = "native-probes")]
 pub use mission_update_probe::run_mission_update_probe;
 mod mission_brief;
+mod mission_metadata;
+#[cfg(any(test, feature = "native-probes"))]
+mod mission_metadata_fixture;
+#[cfg(feature = "native-probes")]
+mod mission_metadata_probe;
+mod mission_metadata_transport;
+mod mission_metadata_view;
+#[cfg(feature = "native-probes")]
+pub use mission_metadata_probe::run_mission_metadata_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_brief_fixture;
 #[cfg(feature = "native-probes")]

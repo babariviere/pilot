@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
+#[path = "mission_metadata_browser.rs"]
+mod mission_metadata_browser;
 #[cfg(test)]
 #[path = "mission_browser_view_tests.rs"]
 mod tests;
@@ -74,6 +76,7 @@ pub(crate) struct Browser {
     pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
     brief_events: Option<gpui_kit::Subscription>,
     pub(crate) creation: Option<gpui_kit::Entity<crate::mission_create_view::Form>>,
+    pub(crate) metadata: Vec<gpui_kit::Entity<crate::mission_metadata_view::Form>>,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
@@ -105,6 +108,7 @@ impl Browser {
             brief: None,
             brief_events: None,
             creation: None,
+            metadata: Vec::new(),
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
@@ -190,6 +194,11 @@ impl Browser {
             })
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        if let Some(form) = self.metadata.iter().find(|f| f.read(cx).visible) {
+            let focus = form.read(cx).focus_handle(cx);
+            focus.focus(w, cx);
+            return;
+        }
         if let Some(form) = self.creation.as_ref().filter(|f| f.read(cx).visible) {
             let focus = form.read(cx).focus_handle(cx);
             focus.focus(w, cx);
@@ -234,6 +243,14 @@ impl Browser {
             }
         }
         if self.route != route {
+            let owned = self
+                .metadata
+                .iter()
+                .any(|f| f.read(cx).visible && f.read(cx).owns_focus(w, cx));
+            self.hide_metadata(cx);
+            if owned {
+                self.focus.focus(w, cx);
+            }
             if let Some(form) = &self.creation {
                 form.update(cx, |v, cx| {
                     v.visible = false;
@@ -265,9 +282,11 @@ impl Browser {
         })
     }
     pub(crate) fn brief_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.creation
-            .as_ref()
-            .is_some_and(|f| f.update(cx, |v, cx| v.marked(w, cx)))
+        self.metadata_marked(w, cx)
+            || self
+                .creation
+                .as_ref()
+                .is_some_and(|f| f.update(cx, |v, cx| v.marked(w, cx)))
             || self
                 .brief
                 .as_ref()
@@ -286,6 +305,7 @@ impl Browser {
         let (Some(options), Some(source)) = (self.options.clone(), self.brief_source()) else {
             return;
         };
+        self.hide_metadata(cx);
         if let Some(brief) = &self.brief {
             if !brief.read(cx).matches_options(&options) {
                 self.error = Some(
@@ -561,6 +581,7 @@ impl Browser {
         let Some(options) = self.options.clone() else {
             return;
         };
+        self.hide_metadata(cx);
         if let Some(brief) = &self.brief {
             brief.update(cx, |b, cx| b.hide(cx));
         }
@@ -618,6 +639,18 @@ impl Browser {
 }
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(form) = self.metadata.iter().find(|f| f.read(cx).visible) {
+            return div()
+                .id("missions-page")
+                .test_support()
+                .track_focus(&self.focus)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(ui::page().child(form.clone()))
+                .into_any_element();
+        }
         if let Some(form) = self.creation.as_ref().filter(|f| f.read(cx).visible) {
             return div()
                 .id("missions-page")
@@ -829,6 +862,16 @@ impl Render for Browser {
                     ),
                 ));
             let activity_key = d.key.clone();
+            content = content.child(
+                ui::action("mission-edit-metadata", "Edit mission", Action::Quiet)
+                    .self_start()
+                    .disabled(!self.online || !self.current(generation))
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        if v.generation == generation {
+                            v.open_metadata(w, cx);
+                        }
+                    })),
+            );
             content = content.child(
                 ui::action("mission-open-activity", "Browse activity", Action::Quiet)
                     .self_start()
