@@ -190,10 +190,22 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(view.read(cx).page, Page::Missions);
-                // Root focus precedes Refresh, then the foreign row, then Local A.
-                w.press("tab", cx);
-                w.press("tab", cx);
-                w.press("tab", cx);
+                // Traverse the mounted controls, not a header-dependent Tab ordinal.
+                // Match the full home + mission key: the foreign row shares its raw ID.
+                // Keep this keyboard-only so the genuine reader selection survives.
+                let local_row = format!("mission-row-{}", f::key("mission-A").tag());
+                for _ in 0..80 {
+                    w.press("tab", cx);
+                    if w.find(local_row.clone()).focused() == Some(true) {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    w.find(local_row).focused(),
+                    Some(true),
+                    "keyboard must reach the exact canonical Local mission row"
+                );
+                assert_eq!(view.read(cx).page, Page::Missions);
                 w.press("enter", cx);
             })
             .unwrap();
