@@ -349,3 +349,8 @@ required-features = ["native-probes"]
 name = "session_todos"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "tool_diff_preview"
+harness = false
+required-features = ["native-probes"]

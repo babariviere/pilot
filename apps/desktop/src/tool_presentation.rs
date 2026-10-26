@@ -65,6 +65,9 @@ pub(crate) struct Tool {
     pub(crate) limited: bool,
 }
 impl Tool {
+    pub(crate) fn preview_paths(&self) -> &[String] {
+        &self.paths
+    }
     fn new(id: &str, key: u64) -> Self {
         Self {
             id: id.into(),

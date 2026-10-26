@@ -2335,3 +2335,6 @@ mod refresh_tests {
         cx.run_until_parked();
     }
 }
+#[cfg(feature = "native-probes")]
+#[path = "tool_diff_preview_probe.rs"]
+pub(crate) mod tool_diff_preview_probe;

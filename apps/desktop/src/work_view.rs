@@ -244,6 +244,10 @@ impl WorkUi {
         cx: &mut Context<TranscriptView>,
     ) {
         if reset {
+            for step in self.steps.values() {
+                let preview = step.read(cx).preview.clone();
+                preview.update(cx, |v, cx| v.retire(cx));
+            }
             *self = Self::default();
         }
         let mut step_ids = BTreeSet::new();
@@ -259,7 +263,11 @@ impl WorkUi {
                     view.update(cx, |view, cx| view.set(step.clone(), cx));
                     view.clone()
                 } else {
+                    let owner = cx.weak_entity();
+                    let preview = cx.new(|cx| crate::tool_diff_preview::Preview::new(owner, cx));
+                    preview.update(cx, |v, cx| v.set(step, cx));
                     let view = cx.new(|_| StepView {
+                        preview,
                         step: step.clone(),
                         open: false,
                         arguments_open: false,
@@ -370,6 +378,12 @@ pub(crate) struct WorkView {
 impl EventEmitter<Change> for WorkView {}
 impl WorkView {
     fn choose(&mut self, open: bool, cx: &mut Context<Self>) {
+        if !open {
+            for step in &self.children {
+                let preview = step.read(cx).preview.clone();
+                preview.update(cx, |v, cx| v.retire(cx));
+            }
+        }
         // Stop tail following before the first expanded frame can measure a
         // tall group. An emitted event is delivered after that frame in native
         // pointer dispatch, too late to retain the clicked header's anchor.
@@ -462,6 +476,7 @@ struct Body {
 }
 
 pub(crate) struct StepView {
+    preview: Entity<crate::tool_diff_preview::Preview>,
     step: Step,
     open: bool,
     arguments_open: bool,
@@ -499,6 +514,7 @@ impl StepView {
     }
     fn set(&mut self, step: Step, cx: &mut Context<Self>) {
         if self.step != step {
+            self.preview.update(cx, |v, cx| v.set(&step, cx));
             let layout = self.open;
             self.step = step;
             if layout {
@@ -626,7 +642,11 @@ impl Render for StepView {
             Step::Tool(tool) => (
                 Caption {
                     verb: tool.title.clone(),
-                    subject: tool.subject.clone(),
+                    subject: if tool.diff.is_empty() {
+                        tool.subject.clone()
+                    } else {
+                        String::new()
+                    },
                     meta: if tool.additions + tool.deletions > 0 {
                         format!(
                             "{}+{} −{}",
@@ -679,18 +699,27 @@ impl Render for StepView {
             Step::Note { .. } => None,
         };
         let mut root = div().v_flex().gap_2().min_w_0().w_full().child(
-            disclosure(
-                SharedString::from(format!("step-toggle-{id}")),
-                caption,
-                self.open,
-                icon,
-                cx,
-            )
-            .on_click(cx.listener(|view, _, _, cx| {
-                view.open = !view.open;
-                cx.emit(Change::Disclosure(step_id(&view.step)));
-                cx.notify();
-            })),
+            div()
+                .h_flex()
+                .min_w_0()
+                .items_center()
+                .child(
+                    div().flex_1().min_w_0().child(
+                        disclosure(
+                            SharedString::from(format!("step-toggle-{id}")),
+                            caption,
+                            self.open,
+                            icon,
+                            cx,
+                        )
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.open = !view.open;
+                            cx.emit(Change::Disclosure(step_id(&view.step)));
+                            cx.notify();
+                        })),
+                    ),
+                )
+                .child(self.preview.clone()),
         );
         if self.open {
             let step = self.step.clone();

@@ -333,7 +333,14 @@ Assistant Markdown uses Kit's built-in word fade. User/tool text is escaped
 into inert preformatted content, not interpreted markup. Copy source is explicit.
 Document images (remote/file/data) are disabled for both measurement and paint;
 links have no open handler. Structured/unsupported content has honest placeholders.
-Tool calls use semantic summaries and grouped work. Expand a step to inspect
+Tool calls use semantic summaries and grouped work. Edit/patch file chips explicitly
+open a bounded native preview (pointer or keyboard), without expanding the step.
+Its source is the retained tool-argument replacement/patch, never current files or
+Git. Pending, failed/unknown attempts and completed tools have distinct labels.
+Additions/deletions use theme-aware green/red ink, with neutral headers and retained
+literal `+`/`-` markers. Copy preserves the shown source; partial previews are labeled. Close or Escape
+restores mounted focus. Existing full detail, copy and error controls remain.
+Expand a step to inspect
 bounded inert arguments, output and structured replacement/patch previews, never
 to execute or approve anything. Work follows the turn by default, folds when
 finished and stays open on failure/unknown status; explicit choices persist

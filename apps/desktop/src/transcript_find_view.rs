@@ -96,7 +96,7 @@ impl TranscriptView {
         self.refresh_find(false, cx);
         cx.notify();
     }
-    fn find_marked(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn find_marked(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.find
             .input
             .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())

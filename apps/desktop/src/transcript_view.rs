@@ -370,6 +370,16 @@ impl TranscriptView {
     ) {
         self.history_guard = Some(std::rc::Rc::new(guard));
     }
+    pub(crate) fn tool_preview_ready(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        !self.find_marked(w, cx)
+            && !self
+                .composer
+                .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())
+            && self.history_guard.as_ref().is_none_or(|guard| guard(w, cx))
+    }
+    pub(crate) fn tool_preview_focus(&self, w: &mut Window, cx: &mut Context<Self>) {
+        self.find.focus.focus(w, cx);
+    }
     pub(crate) fn reading_mark(&self, cx: &App) -> Option<crate::navigation::ReadingMark> {
         let s = self.scroller.read(cx);
         let top = s.logical_scroll_top();
