@@ -69,6 +69,84 @@ fn page(
     settle(cx, handle);
     assert!(cx.update(|cx| view.read(cx).text_parsers_ready(cx)));
 }
+// Real mounted bounds, shared by narrow, wide and explicitly sized cap cases.
+fn layout(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle) {
+    cx.update_window(handle, |_, w, _| {
+        let conversation = w.find("conversation").bounds();
+        let viewport = w.find("viewport").bounds();
+        let editor = w.find("conversation-editor").bounds();
+        let expected = conversation
+            .size
+            .width
+            .min(px(crate::ui::CONVERSATION_MAX_WIDTH));
+        assert_eq!(viewport.size.width, expected);
+        assert_eq!(editor.size.width, expected);
+        assert_eq!(viewport.left(), editor.left());
+        assert_eq!(viewport.right(), editor.right());
+        assert!(viewport.left() >= conversation.left() && viewport.right() <= conversation.right());
+        assert!(editor.bottom() <= conversation.bottom());
+    })
+    .unwrap();
+}
+
+fn contextual_scrollbar(
+    cx: &mut HeadlessAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    captures: Option<&std::path::Path>,
+    key: &str,
+    width: f32,
+) {
+    // Real wheel input reveals the thumb. Leave the pointer outside its track.
+    for delta in [60., -1000.] {
+        cx.update_window(handle, |_, w, cx| {
+            w.scroll(
+                "viewport",
+                ScrollDelta::Pixels(point(px(0.), px(delta))),
+                cx,
+            );
+            w.hover("history-menu", cx);
+        })
+        .unwrap();
+        settle(cx, handle);
+    }
+    // Base uses wall time, so executor-only advances are not fade evidence.
+    std::thread::sleep(Duration::from_millis(120));
+    settle(cx, handle);
+    let active = cx.capture_screenshot(handle).unwrap();
+    std::thread::sleep(Duration::from_millis(2100));
+    settle(cx, handle);
+    std::thread::sleep(Duration::from_millis(300));
+    settle(cx, handle);
+    let idle = cx.capture_screenshot(handle).unwrap();
+    let bounds = cx
+        .update_window(handle, |_, w, _| w.find("viewport").bounds())
+        .unwrap();
+    let scale = idle.width() as f32 / width;
+    let mut changed = 0;
+    let mut idle_ink = 0;
+    let expected = cx.update(|cx| if cx.theme().is_dark() { 38 } else { 255 });
+    for y in (f32::from(bounds.top() + px(2.)) * scale) as u32
+        ..(f32::from(bounds.bottom() - px(2.)) * scale) as u32
+    {
+        for x in (f32::from(bounds.right() - px(10.)) * scale) as u32
+            ..(f32::from(bounds.right() - px(4.)) * scale) as u32
+        {
+            let pixel = idle.get_pixel(x, y);
+            changed += usize::from(active.get_pixel(x, y) != pixel);
+            idle_ink += usize::from(pixel.0[..3] != [expected; 3]);
+        }
+    }
+    assert!(changed > 0, "scrolling must paint a contextual thumb");
+    assert_eq!(idle_ink, 0, "the idle scrollbar must fully disappear");
+    if let Some(dir) = captures {
+        active
+            .save(dir.join(format!("{key}-scrolling.png")))
+            .unwrap();
+        idle.save(dir.join(format!("{key}-idle.png"))).unwrap();
+    }
+    println!("contextual scrollbar {key}: {changed} changed pixels; idle strip clean");
+}
+
 pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     let only = std::env::var("PILOT_NEXT_HISTORY_CASE").ok();
     if let Some(case) = &only {
@@ -81,7 +159,9 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 "1100-light-long",
                 "1100-light-fitting",
                 "1100-dark-long",
-                "1100-dark-fitting"
+                "1100-dark-fitting",
+                "1600-light-long",
+                "1600-dark-long"
             ]
             .contains(&case.as_str()),
             "unknown history case"
@@ -92,9 +172,12 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
     }
-    for width in [680., 1100.] {
+    for width in [680., 1100., 1600.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             for fitting in [false, true] {
+                if width == 1600. && fitting {
+                    continue;
+                }
                 let key = format!(
                     "{}-{}-{}",
                     width as u32,
@@ -152,6 +235,29 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                     .unwrap()
                 });
                 settle(cx, handle);
+                cx.update(|cx| assert_eq!(cx.theme().mode, mode));
+                layout(cx, handle);
+                if width == 1600. {
+                    cx.update_window(handle, |_, w, _| {
+                        assert_eq!(w.find("viewport").bounds().size.width, px(960.));
+                    })
+                    .unwrap();
+                    if let Some(dir) = &captures {
+                        cx.capture_screenshot(handle)
+                            .unwrap()
+                            .save(dir.join(format!("1600-{}-layout.png", mode.name())))
+                            .unwrap();
+                    }
+                    assert!(commands.try_recv().is_err());
+                    println!(
+                        "layout cap 1600 {}: 960pt conversation and editor",
+                        mode.name()
+                    );
+                    cx.update_window(handle, |_, w, _| w.remove_window())
+                        .unwrap();
+                    cx.run_until_parked();
+                    continue;
+                }
                 assert!(
                     commands.try_recv().is_err(),
                     "initial layout/remeasure must not fetch history"
@@ -387,13 +493,6 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 // A fresh available cursor exercises actual scrollbar release,
                 // which does not use the list/bounce wheel callback.
                 page(cx, handle, &view, expanded, Some(70), 4);
-                if let Some(dir) = &captures {
-                    cx.update(|cx| assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark));
-                    cx.capture_screenshot(handle)
-                        .unwrap()
-                        .save(dir.join("before-scrollbar.png"))
-                        .unwrap();
-                }
                 cx.update_window(handle, |_, window, cx| {
                     let b = window.find("viewport").bounds();
                     window.drag(
@@ -415,6 +514,20 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                     "actual scrollbar release at top must request history"
                 );
                 assert!(commands.try_recv().is_err());
+                if !fitting {
+                    // Keep fade observation separate from thumb interaction:
+                    // invisible scrolling-mode chrome intentionally ignores clicks.
+                    let previous = cx.update(|cx| cx.theme().scrollbar_mode);
+                    cx.update(|cx| {
+                        gpui_kit::component::Theme::set_scrollbar_mode(
+                            gpui_kit::component::scroll::ScrollbarMode::Always,
+                            cx,
+                        )
+                    });
+                    contextual_scrollbar(cx, handle, captures.as_deref(), &key, width);
+                    assert!(commands.try_recv().is_err());
+                    cx.update(|cx| gpui_kit::component::Theme::set_scrollbar_mode(previous, cx));
+                }
                 println!(
                     "{}",
                     json!({"width":width,"mode":mode.name(),"fitting":fitting,"native_top_scroll":true,"scrollbar_release_top":true,"page_commands":4,"anchor_before":old_y,"anchor_after":new_y,"selection_entity_retained":true,"stream_append_and_update_while_paging":true,"no_layout_fetch_or_retry_storm":true,"latest_restores_tail":true,"faux_read_channel":true})
@@ -438,7 +551,7 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     }
     assert_eq!(
         cases,
-        if only.is_some() { 1 } else { 8 },
+        if only.is_some() { 1 } else { 10 },
         "history selection must run its cases"
     );
 }

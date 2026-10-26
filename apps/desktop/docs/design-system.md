@@ -51,6 +51,15 @@ deliberately. In particular use `Surface::Card.color(cx)` on an existing editor
 root, not another padded wrapper. Preserve76pt tray/34pt editor and the opaque
 white-on-gray/light, card-on-tray/dark distinction.
 
+The conversation and composer share `ui::CONVERSATION_MAX_WIDTH` (960pt outer
+cap), shrinking with the available pane width. Keep their existing 12pt content
+insets aligned; pages and artifact inspectors retain their separate 760pt cap.
+Contextual recovery, delivery/Unknown information and errors sit above the tray,
+not inside or below its editor/actions. Never mount an empty recovery region.
+The transcript opts into Kit's scrolling scrollbar mode, even when global chrome
+requests permanent scrollbars: wheel input reveals it, a visible track supports
+hover/drag, and idle fades it away without changing layout or scroll ownership.
+
 Plan critique: a generic card grid or new accent palette would compete with the
 conversation and fail the approved brief. Keep the existing neutral hierarchy,
 physical hairlines, restrained icon family and shared meaningful Bayer activity.

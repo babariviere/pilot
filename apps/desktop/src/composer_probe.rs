@@ -130,6 +130,7 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
                         w.try_find("composer-recovery").is_none(),
                         "Ordinary drafts have no recovery chrome"
                     );
+                    assert!(w.try_find("composer-recovery-region").is_none());
                     let tray = w.find("composer-tray").bounds();
                     let input = w.find("composer-input").bounds();
                     let send = w.find("local-send").bounds();
@@ -291,6 +292,12 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
                 w.click("local-stop", cx);
                 w.click("local-send", cx);
                 assert_eq!(w.find("local-stop").disabled(), Some(true));
+                assert!(
+                    w.find("composer-recovery-region").bounds().bottom()
+                        < w.find("composer-tray").bounds().top()
+                );
+                assert_eq!(w.find("composer-tray").bounds().size.height, px(76.));
+                assert_eq!(w.find("composer-input").bounds().size.height, px(34.));
             })
             .unwrap();
             frame(cx, h);
@@ -376,6 +383,18 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
                 format!("{}-{}-unknown.png", width as u32, mode.name()),
             );
             cx.update_window(h, |_, w, cx| {
+                let recovery = w.find("composer-recovery-region").bounds();
+                let tray = w.find("composer-tray").bounds();
+                let trigger = w.find("composer-recovery").bounds();
+                assert!(recovery.bottom() < tray.top());
+                assert!(trigger.bottom() <= recovery.bottom());
+                assert!(
+                    recovery.top() >= px(0.)
+                        && recovery.left() >= tray.left()
+                        && recovery.right() <= tray.right()
+                );
+                assert_eq!(tray.size.height, px(76.));
+                assert_eq!(w.find("composer-input").bounds().size.height, px(34.));
                 assert!(w.try_find("discard-draft").is_none());
                 assert!(w.try_find("check-delivery").is_none());
                 assert!(w.try_find("dismiss-stop").is_none());

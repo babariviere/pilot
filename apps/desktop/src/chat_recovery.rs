@@ -11,6 +11,7 @@ impl ChatEditor {
         let editor = cx.entity().downgrade();
         let key = key.to_string();
         div()
+            .self_start()
             .capture_any_mouse_down(cx.listener(|view, _, window, cx| {
                 if view.marked(window, cx) {
                     cx.stop_propagation();

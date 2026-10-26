@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
   "upstream": "https://crates.io/crates/gpui-component/0.8.0",
-  "purpose": "Reader anchor hold, event-derived scroll notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change.",
+  "purpose": "Reader anchor hold, event-derived scroll notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change. Optional per-scroller visibility mode; defaults unchanged.",
   "edits": [
     {
       "path": "src/message_scroller.rs",
@@ -129,6 +129,26 @@
       "path": "src/menu/popup_menu.rs",
       "old": "            if let Some(handle) = self\n                .previous_focus_handle\n                .as_ref()\n                .or(self.action_context.as_ref())",
       "new": "            if let Some(handle) = self\n                .trigger_focus_handle\n                .as_ref()\n                .or(self.previous_focus_handle.as_ref())\n                .or(self.action_context.as_ref())"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    scrollbar: bool,",
+      "new": "    scrollbar: bool,\n    scrollbar_mode: Option<crate::scroll::ScrollbarMode>,"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "            scrollbar: true,",
+      "new": "            scrollbar: true,\n            scrollbar_mode: None,"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "    /// Enable or disable the built-in jump-to-latest button.",
+      "new": "    /// Override visibility for this scroller without changing the global theme.\n    pub fn with_scrollbar_mode(mut self, mode: crate::scroll::ScrollbarMode) -> Self {\n        self.scrollbar_mode = Some(mode);\n        self\n    }\n\n    /// Enable or disable the built-in jump-to-latest button."
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "            .when(self.scrollbar, |this| this.vertical_scrollbar(&list_state))",
+      "new": "            .when(self.scrollbar, |this| {\n                if let Some(mode) = self.scrollbar_mode {\n                    this.child(div().absolute().inset_0().child(\n                        crate::scroll::Scrollbar::new(&list_state)\n                            .id((root_id.clone(), \"scrollbar\"))\n                            .axis(crate::scroll::ScrollbarAxis::Vertical)\n                            .mode(mode)\n                            .viewport_from_layout(),\n                    ))\n                } else {\n                    this.vertical_scrollbar(&list_state)\n                }\n            })"
     }
   ]
 }

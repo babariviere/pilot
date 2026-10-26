@@ -1011,25 +1011,32 @@ impl Render for ChatEditor {
             );
         #[cfg(any(test, feature = "native-probes"))]
         let controls = controls.test_support();
-        if let Some(question) = self.question_panel(cx) {
-            footer = footer.child(question);
-        } else {
-            footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
-        }
-        footer = footer.children(self.question_recovery(cx));
+        // Recovery belongs to the conversation, above the editor, never inside
+        // its tray. Keep every existing notice/Unknown guard and action owner.
+        let mut recovery = Vec::new();
+        recovery.extend(self.question_recovery(cx));
         if self.models.is_some() && self.has_model_notice() {
-            footer = footer.child(self.model_notices(cx));
+            recovery.push(self.model_notices(cx).into_any_element());
         }
         if let Some(error) = self.error.or(self.state.error) {
-            footer = footer.child(div().text_xs().text_color(cx.theme().danger).child(error));
+            recovery.push(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(error)
+                    .into_any_element(),
+            );
         }
         if let Some(intent) = pending {
-            footer = footer.child(crate::ui::text(
-                crate::ui::Text::Caption,
-                format!("Delivery {}. Original intent retained.", intent.state),
-            ));
+            recovery.push(
+                crate::ui::text(
+                    crate::ui::Text::Caption,
+                    format!("Delivery {}. Original intent retained.", intent.state),
+                )
+                .into_any_element(),
+            );
         } else if let Some(last) = &draft.last {
-            footer = footer.child(
+            recovery.push(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
@@ -1042,7 +1049,8 @@ impl Render for ChatEditor {
                         } else {
                             ""
                         }
-                    ))),
+                    )))
+                    .into_any_element(),
             );
         }
         let delivery_detail = self.delivery_detail(&key, draft);
@@ -1053,7 +1061,7 @@ impl Render for ChatEditor {
                 .child(crate::ui::text(crate::ui::Text::Caption, caption.clone()));
             #[cfg(any(test, feature = "native-probes"))]
             let detail = detail.test_support();
-            footer = footer.child(detail);
+            recovery.push(detail.into_any_element());
         }
         if !self.state.notice.is_empty()
             && !delivery_detail.as_ref().is_some_and(|(id, _)| {
@@ -1066,11 +1074,12 @@ impl Render for ChatEditor {
                 .as_ref()
                 .is_none_or(|notice_key| notice_key == &key)
         {
-            footer = footer.child(
+            recovery.push(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(self.state.notice),
+                    .child(self.state.notice)
+                    .into_any_element(),
             );
         }
         if draft.pending.is_some()
@@ -1081,7 +1090,7 @@ impl Render for ChatEditor {
                 .as_ref()
                 .is_some_and(|last| last.state == "rejected")
         {
-            footer = footer.child(self.recovery_menu(&key, window, cx));
+            recovery.push(self.recovery_menu(&key, window, cx).into_any_element());
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
         if let Some(label) = self.activity_label() {
@@ -1095,7 +1104,25 @@ impl Render for ChatEditor {
             let indicator = indicator.test_support();
             shell = shell.child(indicator);
         }
-        shell.child(footer).into_any_element()
+        if let Some(question) = self.question_panel(cx) {
+            footer = footer.child(question);
+        } else {
+            footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
+        }
+        shell
+            .when(!recovery.is_empty(), |shell| {
+                let region = div()
+                    .id("composer-recovery-region")
+                    .v_flex()
+                    .min_w_0()
+                    .gap_2()
+                    .children(recovery);
+                #[cfg(any(test, feature = "native-probes"))]
+                let region = region.test_support();
+                shell.child(region)
+            })
+            .child(footer)
+            .into_any_element()
     }
 }
 

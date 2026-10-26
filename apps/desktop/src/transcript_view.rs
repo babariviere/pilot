@@ -716,6 +716,7 @@ impl Render for TranscriptView {
                                     .unwrap_or_else(|| div().into_any_element())
                             },
                         )
+                        .with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
                         .with_list_style(list_style)
                         .jump_button(false),
                     ),
@@ -782,7 +783,8 @@ impl Render for TranscriptView {
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
                     weak.upgrade().map(|view| view.read(cx).render_row(ix, cx,weak.clone()).into_any_element())
                         .unwrap_or_else(|| div().into_any_element())
-                }).with_list_style(list_style).jump_button(false)))
+                }).with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
+                        .with_list_style(list_style).jump_button(false)))
             .child(div().v_flex().p_4().gap_2().border_t_1().border_color(cx.theme().border)
                 .child(Textarea::new(&self.composer).accessibility_id("composer").aria_label("Local echo composer"))
                 .child(div().h_flex().justify_between().gap_2()

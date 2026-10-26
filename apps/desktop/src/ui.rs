@@ -13,6 +13,10 @@ use gpui_kit::{
     div, px,
 };
 
+/// Shared conversation/editor outer cap; responsive parents may shrink below it.
+/// Pages and artifact inspectors keep their separate reading widths.
+pub(crate) const CONVERSATION_MAX_WIDTH: f32 = 960.;
+
 /// Physical shell metrics only. Never apply to transcript/Markdown/editor runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Text {

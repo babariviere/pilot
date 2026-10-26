@@ -115,6 +115,13 @@ Another bounded accessor reports existing unused tail space. The app retains
 that space while prepending into a short document, without adding a message row;
 genuine bottom scrolling, Latest or reset releases it before normal Tail use.
 
+Four further exact edits add `MessageScroller::with_scrollbar_mode`. Its default
+is `None`, preserving the original scrollbar layer. An explicit mode uses the
+same Base scrollbar, layout viewport and list handle with a stable scroller ID;
+only visibility is overridden. The transcript chooses `Scrolling`, without
+changing global theme/OS preferences, drag geometry, events or anchor handling.
+Native history checks compare active/idle pixels and exercise real wheel/drag.
+
 ## Retained-layout cleanup
 
 The combined Base specification now has28 exact edits across six files. The
