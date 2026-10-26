@@ -7,12 +7,15 @@ mod catalog_probe;
 mod chat_actions;
 mod context_usage;
 mod conversation_links;
+mod session_failure;
 mod workspace_changes;
 mod workspace_changes_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::context_usage_probe::run_context_usage_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::conversation_links_probe::run_conversation_links_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::session_failure_probe::run_session_failure_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::workspace_changes_probe::run_workspace_changes_probe;
 mod chat_rename;

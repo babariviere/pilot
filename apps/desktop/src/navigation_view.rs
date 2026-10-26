@@ -71,6 +71,9 @@ impl LocalViewer {
         }
         self.close_conversation_links(window, cx);
         self.close_workspace_changes(window, cx);
+        if self.session_failure_focus.contains_focused(window, cx) {
+            self.focus_mission_chat_destination(window, cx);
+        }
         let location = self.location(cx);
         if !self.navigation_seeded {
             self.navigation = History::new(location.clone());
@@ -246,6 +249,7 @@ impl LocalViewer {
             }
             Target::Draft(key) => self.open(
                 Chat {
+                    failure: None,
                     context_usage: Default::default(),
                     id: key.clone(),
                     title: "New Local chat draft".into(),

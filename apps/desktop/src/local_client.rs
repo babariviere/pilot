@@ -183,6 +183,7 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) failure_run_serial: u64,
     pub(crate) question: crate::question::Projection,
     pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
@@ -715,6 +716,7 @@ async fn run(
         view.loaded = model.loaded && !model.prefix_pending;
         view.queued = model.queued;
         view.thinking = model.thinking && !fenced;
+        view.failure_run_serial = model.failure_run_serial;
         view.question = if fenced {
             crate::question::Projection::Unavailable
         } else {
@@ -849,3 +851,7 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap().generation, 9999);
     }
 }
+
+#[cfg(test)]
+#[path = "session_failure_reader_tests.rs"]
+mod session_failure_reader_tests;

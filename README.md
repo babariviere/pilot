@@ -285,6 +285,11 @@ subagents without signing in or restarting the worker, clears the failure, and k
 It stays stopped across viewing, sleep and daemon restart. Your next explicit message starts fresh work;
 the previous run is cancelled before it can recover.
 
+Pilot Next shows the selected chat's reported failure reason in a contextual header region,
+with selectable multiline details and **Copy reason**. Missing detail says **No failure reason was reported**.
+Historical and disconnected reports are labeled rather than presented as a new failure. This read-only
+view does not retry or repair anything. See the [public failure-report contract](apps/desktop/docs/session-failure.md).
+
 ## Working with Pilot
 
 ### Home, Inbox and Overview

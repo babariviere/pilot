@@ -312,3 +312,8 @@ required-features = ["native-probes"]
 name = "conversation_links"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "session_failure"
+harness = false
+required-features = ["native-probes"]

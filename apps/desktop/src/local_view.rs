@@ -66,6 +66,11 @@ pub(crate) mod project_add_probe;
 #[path = "scoped_models_probe.rs"]
 pub(crate) mod scoped_models_probe;
 #[cfg(feature = "native-probes")]
+#[path = "session_failure_probe.rs"]
+pub(crate) mod session_failure_probe;
+#[path = "session_failure_view.rs"]
+mod session_failure_view;
+#[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
@@ -323,6 +328,8 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    session_failure_fence: crate::session_failure::Fence,
+    session_failure_focus: gpui_kit::FocusHandle,
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
     workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
@@ -573,6 +580,7 @@ impl LocalViewer {
         view.state.list_loaded = true;
         view.state.chats = Arc::new(vec![
             Chat {
+                failure: None,
                 context_usage: Default::default(),
                 id: "synthetic".into(),
                 title: "Synthetic Local chat".into(),
@@ -589,6 +597,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                failure: None,
                 context_usage: Default::default(),
                 id: "synthetic-two".into(),
                 title: "Transcript review".into(),
@@ -605,6 +614,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                failure: None,
                 context_usage: Default::default(),
                 id: "synthetic-archive".into(),
                 title: "Earlier conversation".into(),
@@ -766,6 +776,7 @@ impl LocalViewer {
         let mut view = Self::synthetic(window, cx);
         let mut chats = view.state.chats.as_ref().clone();
         chats.push(Chat {
+            failure: None,
             context_usage: Default::default(),
             id: "synthetic-failed".into(),
             title: "Review a failed check with a long title that stays on one line".into(),
@@ -1050,6 +1061,7 @@ impl LocalViewer {
                     }
                     view.open(
                         Chat {
+                            failure: None,
                             context_usage: Default::default(),
                             id: target.clone(),
                             title: "Local chat".into(),
@@ -1164,6 +1176,8 @@ impl LocalViewer {
             mission_context,
             conversation_links: None,
             workspace_changes: None,
+            session_failure_fence: Default::default(),
+            session_failure_focus: cx.focus_handle().tab_stop(true),
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -1418,6 +1432,7 @@ impl LocalViewer {
                 cx,
             )
         });
+        self.sync_session_failure(window, cx);
         self.restore_reader(cx);
         self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);
@@ -1735,6 +1750,7 @@ impl LocalViewer {
             let mut all: Vec<_> = drafts
                 .into_iter()
                 .map(|(key, title)| Chat {
+                    failure: None,
                     context_usage: Default::default(),
                     model_configuration: None,
                     id: key,
@@ -1876,6 +1892,7 @@ impl Render for LocalViewer {
                                 .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
+                    .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto()
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
                         .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
@@ -2030,6 +2047,7 @@ mod refresh_tests {
             view.update(cx, |v, cx| {
                 v.open(
                     Chat {
+                        failure: None,
                         context_usage: Default::default(),
                         model_configuration: None,
                         id: "other".into(),

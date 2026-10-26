@@ -100,6 +100,7 @@ mod project_tests {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) failure: Option<crate::session_failure::Failure>,
     pub(crate) context_usage: crate::context_usage::Usage,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
     pub(crate) attention: Option<crate::attention::Attention>,
@@ -144,6 +145,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     }
     let (signal, background_work) = decoration(value);
     Some(Chat {
+        failure: crate::session_failure::read(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),
         attention: crate::attention::project(value, signal),
@@ -243,6 +245,7 @@ fn bounded(text: &str, cap: usize) -> String {
 
 #[derive(Default)]
 pub(crate) struct LiveTranscript {
+    pub(crate) failure_run_serial: u64,
     question_pending: crate::question::Pending,
     question_run_active: bool,
     entries: BTreeMap<u64, Vec<Message>>,
@@ -578,6 +581,9 @@ impl LiveTranscript {
 
     /// Returned changes are applied in sequence on one background owner.
     pub(crate) fn apply(&mut self, event: &Value) {
+        if event["type"] == "run_start" {
+            self.failure_run_serial = self.failure_run_serial.saturating_add(1);
+        }
         match event["type"].as_str() {
             Some("run_start") => self.question_run_active = true,
             Some("run_end" | "run_error" | "error") => self.question_run_active = false,
