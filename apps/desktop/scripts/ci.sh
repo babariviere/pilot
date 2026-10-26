@@ -26,6 +26,20 @@ host() {
 }
 cargo() { bash scripts/cargo.sh "$@"; }
 
+# The updater has its own workspace/lockfile. Always name its real manifest;
+# the desktop workspace alone does not register or execute these tests.
+updater=(--manifest-path updater/Cargo.toml)
+updater_test() {
+  if [[ $# -gt 0 ]]; then
+    cargo test --locked "${updater[@]}" --lib --features native-macos "owned_tests::$1" -- --exact --test-threads=1 | tee target/ci-updater-result.txt
+  else
+    cargo test --locked "${updater[@]}" --lib -- --test-threads=1 | tee target/ci-updater-result.txt
+  fi
+  grep -Eq '^test result: ok[.] [1-9][0-9]* passed;' target/ci-updater-result.txt || {
+    echo 'Updater suite did not report a nonzero passing test count.' >&2; exit 1;
+  }
+}
+
 case "${1:-}" in
   changed)
     # PR merge first parent is its base. Main/unknown diffs fail open to checks.
@@ -73,6 +87,58 @@ PY
     # Auto-discovered path-import integration harness, not part of --lib.
     cargo test --locked -p pilot-desktop --test settings_state -- --test-threads=1
     python3 -m unittest discover -s scripts -p 'test_*.py' -v
+    ;;
+  updater-check)
+    host
+    mkdir -p target
+    echo 'Standalone updater portable checks started (not Linux installer support).'
+    cargo fmt "${updater[@]}" --all -- --check
+    cargo clippy --locked "${updater[@]}" --all-targets -- -D warnings
+    cargo test --locked "${updater[@]}" --lib -- --list > target/ci-updater-portable-tests.txt
+    grep -Fqx 'owned_tests::signature_verifies_exact_bytes_and_key_not_a_nearby_checksum: test' target/ci-updater-portable-tests.txt || {
+      echo 'Missing required standalone updater core test.' >&2; exit 1;
+    }
+    updater_test
+    ;;
+  updater-mac-tests)
+    macos_host
+    mkdir -p target
+    echo 'Standalone updater macOS Security/ACL/stage/swap/helper checks started.'
+    cargo clippy --locked "${updater[@]}" --all-targets --features native-macos -- -D warnings
+    cargo build --locked "${updater[@]}" --features native-macos --bin pilot-desktop-update-helper
+    # Run OS-bound tests independently of Metal availability. Common lifecycle
+    # tests run here too because their fixture/platform paths differ on macOS.
+    updater_native_tests=(
+      staging_keeps_installed_app_unchanged_and_holds_permanent_target_lock
+      ordinary_quit_eof_never_commits_or_replaces_the_bundle
+      explicit_commit_is_durable_but_does_not_replace_a_living_parent
+      native_atomic_swap_retains_old_bundle_and_requires_startup_ack
+      failed_launch_retains_both_bundles_and_refuses_blind_second_swap
+      failed_swap_and_post_stage_tampering_leave_installed_bundle_unchanged
+      os_exit_monitor_observes_only_real_owned_child_exit_and_never_kills_it
+      writable_installation_parent_is_rejected_without_touching_target
+      target_inode_is_rechecked_after_long_signature_and_extraction_work
+      fast_startup_acknowledgement_is_never_overwritten_by_helper
+      helper_status_monitor_reports_abort_and_lost_ack_without_polling
+      lost_commit_ack_does_not_undo_durable_intent
+      helper_expiry_and_death_cannot_leave_false_ready_or_authorized_status
+      stopped_is_terminal_even_for_a_captured_helper_death_event
+      macos_acl_write_grants_are_refused_even_with_safe_posix_mode
+      nested_installed_file_acl_cannot_race_verified_helper_or_bundle_contents
+      newly_created_private_stage_strips_inherited_acl_grants
+      existing_object_without_extended_acl_is_not_a_missing_path
+      retained_transaction_bound_and_unpublished_cleanup_never_erase_ready_state
+      actual_security_framework_validates_whole_temporary_bundle_identity_version_and_tampering
+    )
+    cargo test --locked "${updater[@]}" --lib --features native-macos -- --list > target/ci-updater-macos-tests.txt
+    for test in "${updater_native_tests[@]}"; do
+      grep -Fqx "owned_tests::$test: test" target/ci-updater-macos-tests.txt || {
+        echo "Missing required macOS updater test: $test" >&2; exit 1;
+      }
+    done
+    for test in "${updater_native_tests[@]}"; do
+      updater_test "$test"
+    done
     ;;
   build)
     macos_host
@@ -189,5 +255,5 @@ OBJC
       { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
     fi
     ;;
-  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|build|artifact|mac-tests|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|updater-check|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
 esac

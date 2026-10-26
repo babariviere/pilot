@@ -1,4 +1,4 @@
-"""CI orchestration contracts, fake tools only. Never invokes Rust/native/Swift."""
+"""CI orchestration plus real manifest/source registration contracts. No builds."""
 import hashlib
 import json
 import os
@@ -38,7 +38,7 @@ class CiTests(unittest.TestCase):
                         GITHUB_STEP_SUMMARY=str(self.root / "summary"))
         # Eliminate inherited test controls, never production environment tools.
         for key in ["FAIL_MATCH", "FAKE_OS", "FAKE_ARCH", "FAKE_VERSION", "METAL_CODE", "FAKE_LIPO", "MAC_TEST_LIST",
-                    "DIFF_FILES", "DIFF_FAIL", "GITHUB_EVENT_NAME"]:
+                    "DIFF_FILES", "DIFF_FAIL", "GITHUB_EVENT_NAME", "UPDATER_TEST_LIST", "UPDATER_RESULT"]:
             self.env.pop(key, None)
         self.write("scripts/cargo.sh", '''#!/usr/bin/env bash
 set -eu
@@ -46,6 +46,13 @@ printf '%s\n' "$*" >> "$CALLS"
 if [[ -n "${FAIL_MATCH:-}" && "$*" == *"$FAIL_MATCH"* ]]; then exit 42; fi
 if [[ "$*" == 'test --locked -p pilot-desktop --lib -- --list' ]]; then
   printf '%s\\n' "${MAC_TEST_LIST:-}"
+fi
+if [[ "$*" == 'test --locked --manifest-path updater/Cargo.toml --lib'* ]]; then
+  if [[ "$*" == *'-- --list' ]]; then
+    printf '%s\\n' "${UPDATER_TEST_LIST:-}"
+  else
+    printf '%s\\n' "${UPDATER_RESULT-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;}"
+  fi
 fi
 if [[ "$*" == 'build --locked --release --workspace --bins' ]]; then
   mkdir -p target/dev/release
@@ -103,7 +110,7 @@ chmod +x "$1"
         linux = dict(FAKE_OS="Linux", FAKE_ARCH="x86_64")
         result = self.run_ci("host", **linux)
         self.assertIn("x86_64-unknown-linux-gnu", result.stdout)
-        for phase in ["build", "artifact", "native", "mac-tests"]:
+        for phase in ["build", "artifact", "native", "mac-tests", "updater-mac-tests"]:
             self.run_ci(phase, expected=1, **linux)
         self.assertEqual(self.calls(), [])
 
@@ -141,6 +148,59 @@ chmod +x "$1"
         self.assertIn(["test", "--locked", "-p", "pilot-desktop", "--test", "settings_state",
                        "--", "--test-threads=1"], calls)
         self.assertFalse(any("--release" in call for call in calls))
+
+    def updater_native_names(self):
+        block = SCRIPT.read_text().split("    updater_native_tests=(", 1)[1].split("    )", 1)[0]
+        return re.findall(r'^      (\w+)$', block, flags=re.M)
+
+    def updater_listing(self):
+        names = self.updater_native_names() + ["signature_verifies_exact_bytes_and_key_not_a_nearby_checksum"]
+        return "\n".join(f"owned_tests::{name}: test" for name in names)
+
+    def test_updater_portable_invokes_real_manifest_fmt_strict_clippy_and_nonzero_core_suite(self):
+        result = self.run_ci("updater-check", FAKE_OS="Linux", FAKE_ARCH="x86_64",
+                             UPDATER_TEST_LIST=self.updater_listing())
+        self.assertIn("Standalone updater portable checks started", result.stdout)
+        base = ["--manifest-path", "updater/Cargo.toml"]
+        self.assertEqual(self.calls(), [
+            ["fmt", *base, "--all", "--", "--check"],
+            ["clippy", "--locked", *base, "--all-targets", "--", "-D", "warnings"],
+            ["test", "--locked", *base, "--lib", "--", "--list"],
+            ["test", "--locked", *base, "--lib", "--", "--test-threads=1"],
+        ])
+        for call in self.calls():
+            self.assertNotIn("native-macos", call)
+            self.assertNotIn("--release", call)
+
+    def test_updater_native_builds_real_helper_and_exact_registered_tests_without_metal(self):
+        result = self.run_ci("updater-mac-tests", METAL_CODE="78", UPDATER_TEST_LIST=self.updater_listing())
+        self.assertIn("Standalone updater macOS Security/ACL/stage/swap/helper checks started", result.stdout)
+        base = ["--locked", "--manifest-path", "updater/Cargo.toml"]
+        calls = self.calls()
+        self.assertEqual(calls[0], ["clippy", *base, "--all-targets", "--features", "native-macos",
+                                    "--", "-D", "warnings"])
+        self.assertEqual(calls[1], ["build", *base, "--features", "native-macos",
+                                    "--bin", "pilot-desktop-update-helper"])
+        self.assertEqual(calls[2], ["test", *base, "--lib", "--features", "native-macos", "--", "--list"])
+        self.assertEqual(calls[3:], [
+            ["test", *base, "--lib", "--features", "native-macos", f"owned_tests::{name}",
+             "--", "--exact", "--test-threads=1"] for name in self.updater_native_names()
+        ])
+
+    def test_updater_missing_registration_zero_counts_and_failed_commands_are_failures(self):
+        for phase in ["updater-check", "updater-mac-tests"]:
+            with self.subTest(phase=phase):
+                self.run_ci(phase, expected=1, UPDATER_TEST_LIST="unrelated: test")
+                for result in ["", "test result: ok. 0 passed; 0 failed; 20 filtered out;",
+                               "test result: FAILED. 1 passed; 1 failed;"]:
+                    # Empty env value deliberately produces no result, not a default.
+                    self.run_ci(phase, expected=1, UPDATER_TEST_LIST=self.updater_listing(),
+                                UPDATER_RESULT=result)
+                for failure in ["clippy", "-- --list", "--test-threads=1"]:
+                    self.run_ci(phase, expected=42, UPDATER_TEST_LIST=self.updater_listing(),
+                                FAIL_MATCH=failure)
+        self.run_ci("updater-check", expected=42, FAIL_MATCH="fmt")
+        self.run_ci("updater-mac-tests", expected=42, FAIL_MATCH="build")
 
     def test_mac_specific_tests_are_list_verified_exact_and_not_portable_suite(self):
         selected = SCRIPT.read_text().split("  mac-tests)", 1)[1].split("    )", 1)[0]
@@ -244,7 +304,9 @@ chmod +x "$1"
         self.assertEqual(self.calls(), [])
 
     def test_pr_input_filter_covers_workspace_transitive_inputs_and_wrappers(self):
-        for path in ["apps/desktop/Cargo.lock", "apps/desktop/Cargo.toml", "apps/desktop/patches/base.json",
+        for path in ["apps/desktop/updater/Cargo.toml", "apps/desktop/updater/Cargo.lock",
+                     "apps/desktop/updater/native/platform.m", "apps/desktop/updater/tests/owned.rs",
+                     "apps/desktop/Cargo.lock", "apps/desktop/Cargo.toml", "apps/desktop/patches/base.json",
                      "apps/desktop/rust-toolchain.toml", "apps/desktop/scripts/ci.sh",
                      "apps/desktop/fixtures/reply.md", "apps/desktop/visual-worker/build.rs",
                      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h",
@@ -366,7 +428,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn('echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"', rust)
             self.assertIn('echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"', rust)
         self.assertIn("python3 apps/desktop/scripts/validate-workflows.py", jobs["rust"])
-        for name, phase in [("rust", "check"), ("rust-macos-native", "mac-tests"), ("rust-macos-native", "native")]:
+        for name, phase in [("rust", "check"), ("rust", "updater-check"),
+                            ("rust-macos-native", "updater-mac-tests"),
+                            ("rust-macos-native", "mac-tests"), ("rust-macos-native", "native")]:
             step = jobs[name].split(f"bash apps/desktop/scripts/ci.sh {phase}", 1)[0].rsplit("      - name:", 1)[1]
             self.assertIn("if: steps.changes.outputs.rust == 'true'", step)
 
@@ -397,6 +461,44 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("default: false", WORKFLOW.read_text().split("permissions:", 1)[0])
         for wrapper in ["pr.yaml", "main.yaml"]:
             self.assertNotIn("desktop-release-build:", WORKFLOW.with_name(wrapper).read_text())
+
+    def test_updater_registration_resolves_real_standalone_manifest_and_all_native_source_tests(self):
+        desktop = SCRIPT.parents[1]
+        updater = desktop / "updater"
+        manifest = tomllib.loads((updater / "Cargo.toml").read_text())
+        self.assertEqual(manifest["package"]["name"], "pilot-desktop-updater")
+        self.assertFalse(manifest["package"]["autotests"])
+        self.assertIn("workspace", manifest)
+        self.assertTrue((updater / "Cargo.lock").is_file())
+        helper, = manifest["bin"]
+        self.assertEqual(helper["name"], "pilot-desktop-update-helper")
+        self.assertEqual(helper["required-features"], ["native-macos"])
+        self.assertTrue((updater / helper["path"]).is_file())
+        lib = (updater / "src/lib.rs").read_text()
+        self.assertIn('#[cfg(test)]\n#[path = "../tests/owned.rs"]\nmod owned_tests;', lib)
+        owned = (updater / "tests/owned.rs").read_text()
+        real_tests = set(re.findall(r'#\[test\]\nfn (\w+)\(', owned))
+        native_tests = set(re.findall(r'#\[cfg\([^\n]*target_os = "macos"[^\n]*\)\]\n#\[test\]\nfn (\w+)\(', owned))
+        selected = set(re.findall(r'^      (\w+)$',
+                                 SCRIPT.read_text().split("updater_native_tests=(", 1)[1].split("    )", 1)[0],
+                                 flags=re.M))
+        self.assertGreater(len(native_tests), 0)
+        self.assertTrue(native_tests <= selected, native_tests - selected)
+        self.assertTrue(selected <= real_tests, selected - real_tests)
+        self.assertIn("signature_verifies_exact_bytes_and_key_not_a_nearby_checksum", real_tests)
+        jobs = self.rust_jobs()
+        self.assertIn("ci.sh updater-check", jobs["rust"])
+        self.assertNotIn("ci.sh updater-mac-tests", jobs["rust"])
+        self.assertIn("ci.sh updater-mac-tests", jobs["rust-macos-native"])
+        self.assertNotIn("ci.sh updater-check", jobs["rust-macos-native"])
+        self.assertNotIn("ci.sh updater-", jobs["rust-macos-release"])
+        # Still use the existing bounded mbx wrapper, never raw cargo or a
+        # copied miniature crate that could pass while production is untested.
+        self.assertIn('cargo() { bash scripts/cargo.sh "$@"; }', SCRIPT.read_text())
+        wrapper = SCRIPT.with_name("cargo.sh").read_text()
+        for required in ["CARGO_BUILD_JOBS=2", "MBX_SCHEDULER_CPUS=2", "MBX_SCHEDULER_MEMORY=4GiB",
+                         'CARGO_TARGET_DIR="$PWD/target/dev"']:
+            self.assertIn(required, wrapper)
 
     def test_mac_only_filter_inventory_uses_real_source_definitions(self):
         selected = SCRIPT.read_text().split("  mac-tests)", 1)[1].split("    )", 1)[0]

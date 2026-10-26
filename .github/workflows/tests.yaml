@@ -376,6 +376,10 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap
+      - name: Standalone updater portable formatting, strict Clippy and core tests
+        if: steps.changes.outputs.rust == 'true'
+        timeout-minutes: 10
+        run: bash apps/desktop/scripts/ci.sh updater-check
       - name: Linux debug build, formatting, Clippy and portable production tests
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 35
@@ -417,6 +421,10 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap
+      - name: Standalone updater macOS Security, ACL, stage, swap and helper tests
+        if: steps.changes.outputs.rust == 'true'
+        timeout-minutes: 10
+        run: bash apps/desktop/scripts/ci.sh updater-mac-tests
       - name: macOS-only helper runtime and confinement tests
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 25
