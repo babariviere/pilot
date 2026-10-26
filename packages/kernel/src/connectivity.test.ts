@@ -226,6 +226,20 @@ test("transport failure requests a fresh central check; online failures remain e
 	assert.equal(await recovery, true);
 });
 
+test("an isolated worker that cannot write the hint reports the provider error instead of the write", {
+	timeout: 10_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-offline-readonly-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const path = join(root, "connectivity.json");
+	await writeFile(path, JSON.stringify({ version: 1, online: true, checkedAt: Date.now() }));
+	// A coordinator runs with the daemon's directory read-only: the hint cannot be written.
+	const gate = new OfflineGate(path, async () => {
+		throw Object.assign(new Error("EROFS: read-only file system"), { code: "EROFS" });
+	});
+	assert.equal(await gate.recover("fetch failed"), false);
+});
+
 test("manual stop aborts a missing or malformed admission file without dispatch or later resurrection", {
 	timeout: 10_000,
 }, async (t) => {

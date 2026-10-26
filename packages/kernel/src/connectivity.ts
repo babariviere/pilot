@@ -226,7 +226,13 @@ export class OfflineGate {
 		if (!this.path || !isTransportFailure(error)) return false;
 		signal?.throwIfAborted();
 		const since = Date.now();
-		await this.requestCheck(origin);
+		try {
+			await this.requestCheck(origin);
+		} catch {
+			// An isolated worker cannot write the hint into the daemon's directory. The daemon still
+			// decides reachability on its own, so report the provider error instead of the write.
+			return false;
+		}
 		const state = await this.observe((state) => state.checkedAt > since, signal);
 		signal?.throwIfAborted();
 		if (state.online) return false;
