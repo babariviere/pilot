@@ -117,6 +117,11 @@ pub(crate) enum WriteCommand {
         key: String,
         revision: u64,
     },
+    /// The user discarded a draft. Any unresolved delivery is abandoned, never retried.
+    Discard {
+        key: String,
+        revision: u64,
+    },
     RetireEmpty {
         key: String,
         revision: u64,
@@ -546,6 +551,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         Some(WriteCommand::ClearRecovery { key, revision }) => store
                             .clear_recovery(&key, revision)
                             .map(|_| "Recovered text removed locally."),
+                        Some(WriteCommand::Discard { key, revision }) => store
+                            .discard_draft(&key, revision)
+                            .map(|_| "Draft discarded. Nothing was sent."),
                         Some(WriteCommand::RetireEmpty { key, revision }) => {
                             store.retire_empty(&key, revision).map(|_| "")
                         }

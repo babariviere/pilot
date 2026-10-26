@@ -96,6 +96,8 @@ Private receipt-adoption failures keep known Local acknowledgment separate from 
 uncertainty. If diagnostic persistence is unconfirmed, the UI says so; memory-only
 details are not promised across restart. Opening the app never checks or resends an
 operation automatically. Existing **Check** and **Retry same intent** stay explicit.
+A new-chat slot or an unresolved delivery can be **Discard draft**ed: the text is copied
+to the clipboard, the row is removed and the pending intent is abandoned, never retried.
 See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifecycle.
 
 ## Use real Local chats

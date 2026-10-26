@@ -166,6 +166,50 @@ fn setup_width(
 }
 
 #[gpui_kit::test]
+fn discarding_a_draft_copies_its_text_queues_the_discard_and_clears_the_row(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.cache.insert(
+                "new:slot".into(),
+                Draft {
+                    revision: 3,
+                    text: "undelivered message".into(),
+                    cwd: "/synthetic".into(),
+                    pending: Some("intent-a".into()),
+                    ..Default::default()
+                },
+            );
+            editor.select("new:slot".into(), true, false, window, cx);
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            window.find_all("discard-draft").len(),
+            1,
+            "an undelivered new-chat draft can be discarded"
+        );
+        window.click("discard-draft", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Discard { key, revision } if key == "new:slot" && revision == 3
+    ));
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, _| {
+            assert!(!editor.cache.contains_key("new:slot"));
+            assert!(editor.selected.is_none());
+            assert!(editor.error.is_none());
+        });
+        window.render_frame(cx);
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn creation_adoption_requires_current_empty_revision_after_live_capture(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     cx.update_window(handle, |_, window, cx| {

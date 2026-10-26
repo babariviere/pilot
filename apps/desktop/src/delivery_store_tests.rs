@@ -663,6 +663,79 @@ fn recovery_removal_and_empty_retirement_are_revision_fenced() {
     assert!(!store.book.drafts.contains_key("chat:a"));
 }
 #[test]
+fn discarding_a_draft_removes_it_abandons_its_intent_and_keeps_the_record() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "new:slot", draft(1, "undelivered message"));
+    let intent = store
+        .prepare("new:slot", &draft(1, "undelivered message"), false, false)
+        .unwrap();
+    assert!(store.book.drafts["new:slot"].pending.is_some());
+    store.discard_draft("new:slot", 1).unwrap();
+    assert!(!store.book.drafts.contains_key("new:slot"));
+    assert!(!store.book.pending.contains_key(&intent.id));
+    assert_eq!(store.book.abandoned, vec![intent.id.clone()]);
+    // A later deliberate message is a new operation, never the abandoned one.
+    let next = store
+        .prepare(
+            "new:slot",
+            &draft(2, "a new deliberate message"),
+            false,
+            false,
+        )
+        .unwrap();
+    assert_ne!(next.id, intent.id);
+    assert_eq!(store.book.abandoned, vec![intent.id.clone()]);
+    store.discard_draft("new:slot", 2).unwrap();
+    assert_eq!(store.book.abandoned.len(), 2);
+    let value = serde_json::to_value(&store.book).unwrap();
+    drop(store);
+    fs::write(
+        temp.0.join("state-v1.json"),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(store.book.abandoned.len(), 2);
+    assert!(!store.book.drafts.contains_key("new:slot"));
+}
+
+#[test]
+fn discarding_is_revision_fenced_and_never_silently_drops_a_newer_draft() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "chat:a", draft(1, "kept text"));
+    assert!(store.discard_draft("chat:a", 2).is_err());
+    assert!(store.discard_draft("chat:absent", 1).is_err());
+    assert_eq!(store.book.drafts["chat:a"].text, "kept text");
+    assert!(store.book.abandoned.is_empty());
+    store.discard_draft("chat:a", 1).unwrap();
+    assert!(!store.book.drafts.contains_key("chat:a"));
+    assert!(store.book.abandoned.is_empty());
+}
+
+#[test]
+fn abandoned_operations_are_bounded_and_corrupt_records_fail_closed() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    for index in 0..=ABANDONED_CAP {
+        let revision = index as u64 + 1;
+        save(&mut store, "new:slot", draft(revision, "text"));
+        store
+            .prepare("new:slot", &draft(revision, "text"), false, false)
+            .unwrap();
+        store.discard_draft("new:slot", revision).unwrap();
+    }
+    assert_eq!(store.book.abandoned.len(), ABANDONED_CAP);
+    let mut value = serde_json::to_value(&store.book).unwrap();
+    drop(store);
+    value["abandoned"] = serde_json::json!["not a token"];
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(temp.0.join("state-v1.json"), &bytes).unwrap();
+    assert!(Store::open(temp.0.clone(), host()).is_err());
+}
+
+#[test]
 fn rejection_retains_original_when_the_composer_has_newer_text() {
     let temp = Temp::new();
     let mut store = Store::open(temp.0.clone(), host()).unwrap();

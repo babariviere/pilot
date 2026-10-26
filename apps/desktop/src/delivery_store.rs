@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 pub(crate) const DRAFT_CAP: usize = 128;
 pub(crate) const TEXT_CAP: usize = 32 * 1024;
+/// Abandoned operation ids are a durable record, not a working set.
+pub(crate) const ABANDONED_CAP: usize = 64;
 pub(crate) const STATE_CAP: usize = 16 * 1024 * 1024;
 pub(crate) const RECOVER_CAP: usize = 4 * 1024 * 1024;
 pub(crate) type Failure = &'static str;
@@ -131,6 +133,9 @@ pub(crate) struct Book {
     pub(crate) project_registrations: BTreeMap<String, crate::project_registration::Attempt>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) model_changes: BTreeMap<String, crate::chat_models::Attempt>,
+    /// Operation ids the user explicitly abandoned. They are never retried or executed again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) abandoned: Vec<String>,
 }
 
 impl Delivery {
@@ -218,6 +223,7 @@ impl Book {
             missions: BTreeMap::new(),
             project_registrations: BTreeMap::new(),
             model_changes: BTreeMap::new(),
+            abandoned: Vec::new(),
         }
     }
     fn validate(&self, host: &Host) -> Result<(), Failure> {
@@ -239,6 +245,7 @@ impl Book {
             || self.missions.len() > 32
             || self.project_registrations.len() > 32
             || self.model_changes.len() > 32
+            || self.abandoned.len() > ABANDONED_CAP
         {
             return Err(
                 "Private state identity/version/limits differ. Writes are disabled; original state is preserved.",
@@ -252,6 +259,11 @@ impl Book {
         }
         for (id, attempt) in &self.project_registrations {
             attempt.validate(id)?;
+        }
+        for (index, id) in self.abandoned.iter().enumerate() {
+            if !token(id) || self.abandoned[..index].contains(id) {
+                return Err("Stored abandoned operation record is corrupt");
+            }
         }
         for (key, draft) in &self.drafts {
             validate_draft(key, draft)?;
@@ -839,6 +851,35 @@ impl Store {
             {
                 book.drafts.remove(key);
             }
+            Ok(())
+        })
+    }
+    /// Discards a draft the user no longer wants. The caller copies its text out first.
+    /// An unresolved operation is abandoned, never retried, and its id is retained so the
+    /// same delivery is never prepared or executed again.
+    pub(crate) fn discard_draft(&mut self, key: &str, revision: u64) -> Result<(), Failure> {
+        self.change(|book| {
+            let Some(draft) = book.drafts.get(key) else {
+                return Err("Unknown draft");
+            };
+            if draft.revision != revision {
+                return Err("Draft changed. Review it before discarding.");
+            }
+            if let Some(id) = draft.pending.clone() {
+                let Some(intent) = book.pending.remove(&id) else {
+                    return Err("Pending delivery ownership is corrupt");
+                };
+                if intent.key != key {
+                    return Err("Pending delivery ownership is corrupt");
+                }
+                if !book.abandoned.contains(&id) {
+                    if book.abandoned.len() >= ABANDONED_CAP {
+                        book.abandoned.remove(0);
+                    }
+                    book.abandoned.push(id);
+                }
+            }
+            book.drafts.remove(key);
             Ok(())
         })
     }

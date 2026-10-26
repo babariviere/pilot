@@ -399,6 +399,42 @@ impl ChatEditor {
         cx.notify();
     }
 
+    /// Removes the selected draft. Its text is copied out first, and the store abandons any
+    /// unresolved delivery, so the same operation is never sent again.
+    fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected.clone() else {
+            return;
+        };
+        let Some(draft) = self.cache.get(&key).cloned() else {
+            return;
+        };
+        let mut copied = draft.text.clone();
+        if copied.trim().is_empty() {
+            copied = draft.recovered.join("\n\n");
+        }
+        if !copied.is_empty() {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(copied));
+        }
+        let queued = self.client.as_ref().is_some_and(|client| {
+            client.command(WriteCommand::Discard {
+                key: key.clone(),
+                revision: draft.revision,
+            })
+        });
+        if !queued {
+            self.error = Some(
+                "The draft could not be discarded now. It stays retained; copy its text before retrying.",
+            );
+            cx.notify();
+            return;
+        }
+        self.cache.remove(&key);
+        self.error = None;
+        self.browse_empty(window, cx);
+        cx.emit(EditorEvent::DraftsChanged);
+        cx.notify();
+    }
+
     pub(crate) fn accept(
         &mut self,
         state: WriteState,
@@ -676,13 +712,17 @@ impl ChatEditor {
 impl Render for ChatEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(key) = self.selected.clone() else {
-            return div()
+            let mut empty = div()
                 .px_3()
                 .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .text_color(cx.theme().danger)
-                .children(self.state.error)
-                .into_any_element();
+                .text_color(cx.theme().muted_foreground);
+            if let Some(error) = self.state.error {
+                empty = empty.text_color(cx.theme().danger).child(error);
+            }
+            if !self.state.notice.is_empty() {
+                empty = empty.child(div().child(self.state.notice));
+            }
+            return empty.into_any_element();
         };
         let blank = Draft::default();
         let draft = self.draft().unwrap_or(&blank);
@@ -709,6 +749,9 @@ impl Render for ChatEditor {
             .pending
             .as_ref()
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
+        // A settled empty chat draft disappears on its own. A new-chat slot and an
+        // unresolved delivery never retire by themselves, so they can be discarded.
+        let discardable = is_new || draft.pending.is_some() || draft.created.is_some();
         let spec = crate::dither::Spec::composer(
             self.busy || self.thinking || self.background_work,
             self.background_work && !self.thinking,
@@ -1033,6 +1076,21 @@ impl Render for ChatEditor {
                                 }
                             })),
                     ),
+            );
+        }
+        if discardable {
+            footer = footer.child(
+                div().h_flex().w_full().child(
+                    Button::new("discard-draft")
+                        .small()
+                        .ghost()
+                        .label("Discard draft")
+                        .icon(AppIcon::Close.asset())
+                        .accessibility_label("Discard draft and copy its text to the clipboard")
+                        .on_click(
+                            cx.listener(|view, _, window, cx| view.discard_draft(window, cx)),
+                        ),
+                ),
             );
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));

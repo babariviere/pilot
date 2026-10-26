@@ -30,6 +30,19 @@ No body, provider text, full envelope, prompt, path or credentials enter the dia
 type or logs. The volatile worker projection contains only the existing bounded delivery
 summary, owner key and typed observation; it does not duplicate operation payloads.
 
+## Discarding a draft
+
+A new-chat slot and an unresolved delivery never retire on their own, so the composer
+offers an explicit `Discard draft` for them. The action copies the draft text to the
+clipboard, removes the row and abandons any pending intent in one durable private
+write. The abandoned operation id is recorded in a bounded list, so the same delivery
+is never prepared or retried again. The discard is revision-fenced: a draft that
+changed since it was shown is kept and reported.
+
+A discard stops this app from asking. It is not a cancel: the daemon owns no cancel
+API, so an operation it already reserved may still complete and create its chat. The
+private state keeps the id of every abandoned operation for that reason.
+
 ## Bounds and persistence
 
 Each diagnostic's canonical serialization is below256 bytes by construction (fixed
@@ -38,6 +51,7 @@ and32 pending intents bound persisted notes to160, below40KiB logical diagnostic
 The existing16MiB Book cap is unchanged. The worker's volatile exact-operation map has
 at most160 entries, with metadata strings bounded by existing token/key validation.
 It is pruned only when that exact pending/latest retained summary no longer exists.
+The abandoned-operation record holds at most64 ids, each an existing bounded token.
 
 Existing settlement runs first. Its required private write does not acquire a new
 diagnostic-size requirement. A fresh observation is installed afterward, best-effort,
@@ -74,12 +88,16 @@ The conversation remains primary. The caption replaces duplicate transient deliv
 notices/ordinary autosave success, not private-write or unsaved-input errors. Existing
 Check/Retry/Stop/recovery actions remain explicit, reachable native controls; diagnostics
 do not auto-invoke them, authorize a send, clear Unknown or change permission/IME guards.
-No new entity, animation, input, timer or render-time I/O is introduced.
+The discard is one more explicit control: it never runs on its own, never sends, and
+leaves a settled chat draft alone. No new entity, animation, input, timer or render-time
+I/O is introduced.
 
 Pure/store and faux courier cases live beside their owners. They cover loss before/after
 admission, typed HTTP boundaries/mismatches, lookup-only zero-execution, acknowledgment
 and private-adoption failures, diagnostic capacity/write failures, exact original tuple,
-autosave/other-owner/restart and legacy/corrupt state. A native
+autosave/other-owner/restart and legacy/corrupt state. The discard is covered beside its
+owner: revision fencing, the bounded abandoned record, corrupt state and the composer's
+copy, command and row removal. A native
 [production-composer fixture](../src/delivery_probe.rs) uses isolated private metadata
 and a command recorder, never Local options or a real delivery worker. It checks four
 680/1100 light/dark containers, actual pixels, containment, pointer Check recording,

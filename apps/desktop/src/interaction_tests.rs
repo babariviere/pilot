@@ -790,6 +790,44 @@ fn submit(client: &Interaction, key: &str, revision: u64, text: &str, request: u
 }
 
 #[tokio::test]
+async fn discarding_a_draft_abandons_its_delivery_and_removes_the_row() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let intent_id = {
+        let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        let captured = draft(1, "undelivered message");
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), captured.clone())]))
+            .unwrap();
+        let intent = store.prepare("chat:a", &captured, false, false).unwrap();
+        assert!(store.book.pending.contains_key(&intent.id));
+        intent.id
+    };
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert!(client.command(WriteCommand::Discard {
+        key: "chat:a".into(),
+        revision: 1
+    }));
+    let state = until(&updates, |s| {
+        s.book
+            .as_ref()
+            .is_some_and(|book| !book.drafts.contains_key("chat:a"))
+    })
+    .await;
+    let book = state.book.unwrap();
+    assert!(book.pending.is_empty());
+    assert_eq!(book.abandoned, vec![intent_id.clone()]);
+    assert!(state.notice.contains("discarded"));
+    // The abandoned delivery is never offered for a retry again.
+    assert!(client.command(WriteCommand::Check {
+        id: intent_id.clone(),
+        retry: true
+    }));
+    let state = until(&updates, |s| s.notice.contains("settled")).await;
+    assert!(state.error.is_none());
+}
+
+#[tokio::test]
 async fn same_folder_projects_use_exact_supported_identity_and_canonical_readback() {
     let daemon = Daemon::start(Behavior::Accept).await;
     let temp = Temp::new();

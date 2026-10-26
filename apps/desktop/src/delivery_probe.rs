@@ -137,6 +137,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     "check-delivery",
                     "retry-delivery",
                     "dismiss-stop",
+                    "discard-draft",
                 ] {
                     let b = w.find(id).bounds();
                     assert!(
