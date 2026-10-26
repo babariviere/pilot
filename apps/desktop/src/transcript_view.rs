@@ -124,6 +124,14 @@ impl TranscriptView {
                 },
             );
         let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let fonts_subscription =
+            cx.observe_global::<crate::typography::CommittedFonts>(|view, cx| {
+                let count = view.transcript.messages().len();
+                view.scroller.update(cx, |state, cx| {
+                    state.remeasure_items(0..count, cx);
+                });
+                cx.notify();
+            });
         let history_scroll = cx.subscribe(&scroller, |view, state, _: &MessageScrolled, cx| {
             if state.read(cx).is_following_tail() && view.history_slack > px(0.) {
                 view.history_slack = px(0.);
@@ -138,7 +146,12 @@ impl TranscriptView {
             text_states: Vec::new(),
             scroller,
             composer,
-            _subscriptions: vec![subscription, scroll_subscription, history_scroll],
+            _subscriptions: vec![
+                subscription,
+                scroll_subscription,
+                history_scroll,
+                fonts_subscription,
+            ],
             stream_task: None,
             readonly,
             history_scope: 0,
@@ -640,12 +653,21 @@ impl TranscriptView {
                     ),
             )
             .child(match &self.text_states[ix] {
-                Some(state) => TextView::new(state)
-                    .selectable(true)
-                    .scrollable(false)
-                    .stream_fade(true)
-                    .on_link_click(|_, _, _, _| {})
-                    .into_any_element(),
+                Some(state) => crate::typography::rich(
+                    TextView::new(state),
+                    crate::typography::current(cx),
+                    if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
+                        crate::typography::Content::PlainChat
+                    } else {
+                        crate::typography::Content::Chat
+                    },
+                    cx,
+                )
+                .selectable(true)
+                .scrollable(false)
+                .stream_fade(true)
+                .on_link_click(|_, _, _, _| {})
+                .into_any_element(),
                 None => div()
                     .w_full()
                     .child(SharedString::from(row.source().to_string()))

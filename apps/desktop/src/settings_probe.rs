@@ -103,6 +103,7 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                 } else {
                     AppearancePreference::Light
                 },
+                ..Default::default()
             };
             let next = if mode == ThemeMode::Dark {
                 AppearancePreference::Light
@@ -493,7 +494,7 @@ fn state_scenes(
         &screenshot_name(width, mode, "loading-disabled"),
     );
     owner.update(cx, |owner, cx| {
-        owner.state = loaded(Preferences { appearance });
+        owner.state = loaded(Preferences { appearance, ..Default::default() });
         owner.state.set_appearance(AppearancePreference::System);
         owner.state.begin_save();
         cx.notify();

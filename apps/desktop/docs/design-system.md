@@ -25,6 +25,10 @@ This is the existing calm native workbench, not a new visual direction. Reconcil
 Use the system family through Kit. Shell typography is the existing26/22/15/
 13/12/11/10pt scale (`Text` routes to `appearance::TextRole`, not a second scale).
 Inputs/editors/Markdown keep their existing native metrics and selection rules.
+Conversation content uses `typography::Content::{Chat,PlainChat,Code}` over the existing
+TextView renderer. Optional user-chosen font sizes are physical point values, not app zoom;
+unset values leave the existing renderer metrics untouched. Chrome/composer typography is
+not a font-preference target. See [font preferences](font-preferences.md).
 Space and Radius re-export the existing source. Glyphs use the approved static
 `app_icon.rs` mapping, one-rem chrome or0.875rem inline; don't invent emoji,
 SF-symbol strings or raw SVG paths in feature views. Test actual rem-derived

@@ -24,7 +24,7 @@ excluded from the current implementation scope. Separate work does not block cor
 | Swift category / actual capability | Next status | Storage and authority owner |
 | --- | --- | --- |
 | Appearance: System / Light / Dark, automatic system switching | Supported in the native Local Settings window, explicit Save/Revert/retry. Successful load/save acknowledgment applies the committed theme; System resumes OS following. Managed close/quit protects unsaved or unconfirmed changes. | Swift `AppSettings.appearance` uses `UserDefaults.standard` key `appearance` and `NSApp.appearance`. Next owns its separate preferences file described below, not Swift defaults. |
-| Appearance: chat font family/11–22pt; code/tool mono family/9–20pt; live preview; Restore Defaults resets fonts only | Missing. Do not label the new appearance choice as font parity or duplicate Swift's font reset. | Swift `AppSettings` font keys in UserDefaults; font inventory comes from NSFontManager. A later Next implementation needs its own typed preferences and real renderer adoption. |
+| Appearance: chat font family/11–22pt; code/tool mono family/9–20pt; live preview; Restore Defaults resets fonts only | Supported with staged previews and explicit Save/Revert. Conversation prose/user text, code blocks and expanded tool text adopt acknowledged values. Inline code uses the code family and its existing proportional chat size. Restore font defaults preserves theme and unrelated settings. | Next-owned typed `fonts` values in the existing preferences file, not Swift UserDefaults. Bounded installed choices, half-point sizes and unavailable-font fallback. See [font preferences](font-preferences.md). |
 | Notifications: optional PR-ready notification; Needs you attention remains visible regardless | Missing preference/OS notification integration, not a fake checkbox. Existing Next attention UI is not notification parity. | Swift `notifyWhenPRReady` default false in UserDefaults; OS notification delivery/application lifecycle is separate. |
 | Connections: global pi MCP status, invalid config count, check again, browser sign-in/cancel/re-sign-in | Missing; sensitive operations outside this foundation. No credential import or invented endpoint. | `ConnectionSettings.swift`, `HostMcpActions.swift`: daemon-managed Local MCP observations/actions, pi MCP config/sign-in storage. Not Next-owned preferences. |
 | Scoped models: Local global enabledModels selection, baseline/hash conflict review and saved intent | Missing; sensitive pi settings mutation remains separate. | `ScopedModelsSettings/Section/State/Store/Transport.swift`: app-owned `scoped-models.json` intent plus daemon `api/model-scope` updates to pi global settings. Project overrides, credentials/default models/running chats are distinct and untouched. |
@@ -59,7 +59,8 @@ resolved or opened by these tests or constructors. No Swift defaults import/migr
 Files within that root:
 
 - `preferences-v1.json`, private 0600, maximum 1024 bytes, strict JSON:
-  `{"version":1,"preferences":{"appearance":"system"}}`.
+  `{"version":1,"preferences":{"appearance":"system"}}` remains a valid legacy snapshot.
+  New saves also include typed `fonts`; omitted fonts preserve existing renderer metrics.
 - `settings-owner.lock`, private zero-length 0600, per-save nonblocking advisory lock.
   Never unlink this inode. All writers must use this API, not raw file replacement.
 - `.preferences-v1.pending`, one exclusive-create 0600 staging file. Normal completion and
@@ -82,8 +83,9 @@ storage only. No directory scan or unbounded retry queue is created.
 
 ## Pure state and nonblocking handoff
 
-`Preferences { appearance: AppearancePreference::{System,Light,Dark} }` is the entire supported
-schema. No theme changes occur while constructing, loading, editing or saving it.
+`Preferences` holds `appearance: AppearancePreference::{System,Light,Dark}` and `fonts`.
+The pure state/store apply no theme effects. The UI applies only successfully loaded or
+acknowledged snapshots; staging fonts updates only the Settings preview.
 
 1. Own one `SettingsState` on the UI side, one `SettingsStore` on a background worker. Both have
    side-effect-free construction. `begin_load()` marks loading; send `store.load()` off-thread,

@@ -30,6 +30,58 @@ pub enum AppearancePreference {
 #[serde(deny_unknown_fields)]
 pub struct Preferences {
     pub appearance: AppearancePreference,
+    #[serde(default)]
+    pub fonts: FontPreferences,
+}
+
+/// A bounded UTF-8 installed font name. Empty keeps the existing app default.
+/// Value snapshots remain Copy, including in-flight persistence requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FontFamily([u8; 96]);
+impl Default for FontFamily {
+    fn default() -> Self {
+        Self([0; 96])
+    }
+}
+impl FontFamily {
+    pub fn new(name: &str) -> Option<Self> {
+        if name.len() > 96 || name.chars().any(char::is_control) {
+            return None;
+        }
+        let mut bytes = [0; 96];
+        bytes[..name.len()].copy_from_slice(name.as_bytes());
+        Some(Self(bytes))
+    }
+    pub fn name(&self) -> &str {
+        std::str::from_utf8(&self.0[..self.0.iter().position(|b| *b == 0).unwrap_or(96)])
+            .expect("validated UTF-8")
+    }
+}
+impl Serialize for FontFamily {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+impl<'de> Deserialize<'de> for FontFamily {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::new(&value).ok_or_else(|| serde::de::Error::custom("invalid font name"))
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FontPreferences {
+    pub chat_family: FontFamily,
+    pub code_family: FontFamily,
+    /// Half points. None preserves the renderer's original inherited metrics.
+    pub chat_size: Option<u8>,
+    pub code_size: Option<u8>,
+}
+impl FontPreferences {
+    pub fn valid(self) -> bool {
+        self.chat_size.is_none_or(|s| (22..=44).contains(&s))
+            && self.code_size.is_none_or(|s| (18..=40).contains(&s))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -165,6 +217,13 @@ impl SettingsState {
         self.current.appearance = appearance;
         true
     }
+    pub fn set_fonts(&mut self, fonts: FontPreferences) -> bool {
+        if !self.loaded || !fonts.valid() || self.current.fonts == fonts {
+            return false;
+        }
+        self.current.fonts = fonts;
+        true
+    }
     pub fn revert(&mut self) -> bool {
         // An unconfirmed write must be reconciled, not hidden by Revert.
         if !self.loaded || self.saving() || self.unconfirmed.is_some() {
@@ -225,6 +284,9 @@ fn decode(bytes: &[u8]) -> Result<Preferences, SettingsError> {
         serde_json::from_slice(bytes).map_err(|_| SettingsError::InvalidData)?;
     if document.version != 1 {
         return Err(SettingsError::UnsupportedVersion);
+    }
+    if !document.preferences.fonts.valid() {
+        return Err(SettingsError::InvalidData);
     }
     Ok(document.preferences)
 }
@@ -287,6 +349,9 @@ impl SettingsStore {
         })
     }
     pub fn save(&mut self, preferences: Preferences) -> Result<(), SettingsError> {
+        if !preferences.fonts.valid() {
+            return Err(SettingsError::InvalidData);
+        }
         let baseline = self
             .baseline
             .as_ref()

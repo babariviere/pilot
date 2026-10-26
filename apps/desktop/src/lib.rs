@@ -92,6 +92,11 @@ mod scoped_models_fixture;
 mod scoped_models_view;
 mod scoped_models_worker;
 mod settings_state;
+mod settings_fonts;
+#[cfg(feature = "native-probes")]
+mod fonts_probe;
+#[cfg(feature = "native-probes")]
+pub use fonts_probe::run_fonts_probe;
 mod settings_view;
 mod settings_worker;
 #[cfg(feature = "native-probes")]
@@ -112,6 +117,7 @@ pub use local_view::settings_probe::run_settings_probe;
 mod reader_identity_tests;
 mod tool_presentation;
 mod transcript_view;
+mod typography;
 /// App-owned presentation contracts over Kit. See docs/design-system.md.
 pub mod ui;
 mod work_view;

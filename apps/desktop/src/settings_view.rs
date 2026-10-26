@@ -7,6 +7,7 @@ use crate::{
     settings_worker::{Command, SettingsWorker, Update},
     ui::{self, Action, FieldLayout, FieldRow, Notice, ResourceLabel, Surface, Text, Tone},
 };
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
@@ -51,6 +52,7 @@ impl SettingsPreferences {
         self.source.is_some() && self.state.loaded()
     }
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
+        crate::typography::prepare(cx);
         if !self.state.begin_load() {
             return;
         }
@@ -118,6 +120,7 @@ impl SettingsPreferences {
         if let Some(preferences) = committed {
             self.close_notice = false;
             crate::appearance::commit_appearance(preferences.appearance, cx);
+            crate::typography::commit(preferences.fonts, cx);
         }
         cx.notify();
     }
@@ -137,11 +140,20 @@ impl SettingsPreferences {
             .worker
             .as_ref()
             .ok_or(SettingsError::Io)
-            .and_then(|worker| worker.command(Command::Save(self.generation, request)));
+            .and_then(|worker| worker.command(Command::Save(self.generation, Box::new(request))));
         if let Err(error) = result {
             self.state.finish_save(request, Err(error));
         }
         cx.notify();
+    }
+    pub(super) fn fonts(
+        &mut self,
+        fonts: crate::settings_state::FontPreferences,
+        cx: &mut Context<Self>,
+    ) {
+        if self.writable() && !self.state.unconfirmed() && self.state.set_fonts(fonts) {
+            cx.notify();
+        }
     }
     fn revert(&mut self, cx: &mut Context<Self>) {
         if self.state.revert() {
@@ -283,6 +295,7 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::typography::prepare(cx);
         let category = preferences.read(cx).category;
         let categories = cx.new(|cx| {
             ListState::new(
@@ -391,20 +404,99 @@ impl SettingsView {
                         preferences.update(cx, |owner, cx| owner.select(appearance, cx))
                     })
             }));
-        div().v_flex().gap(gpui_kit::px(ui::Space::SECTION))
-            .child(ui::header("settings-page-title", "Appearance", Text::Title)
-                .child(ui::text(Text::Caption, "Theme for this app. Changes apply only after Save.").text_color(cx.theme().muted_foreground)))
-            .child(FieldRow::new("settings-theme-field", label, controls)
-                .description("System follows macOS, including its automatic switching.")
-                .layout(if wide { FieldLayout::Inline } else { FieldLayout::Stacked }))
-            .child(div().v_flex().gap_3()
-                .child(ui::heading("settings-preview-heading", "Preview", Text::Headline))
-                .child(ui::surface(Surface::Tray, cx).p_3().rounded_lg().child(
-                    ui::surface(Surface::Card, cx).p_4().rounded_lg().v_flex().gap_3()
-                        .child(ui::text(Text::Caption, "Sample conversation").text_color(cx.theme().muted_foreground))
-                        .child(ui::text(Text::Body, "The change is ready to review. Existing behavior is preserved."))
-                        .child(ui::text(Text::Caption, "cargo test --locked").font_family(cx.theme().mono_font_family.clone()).text_color(cx.theme().muted_foreground)))))
-            .child(Notice::new("Font customization is not available yet.").tone(Tone::Quiet))
+        let fonts = owner.state.current().fonts;
+        div()
+            .v_flex()
+            .gap(gpui_kit::px(ui::Space::SECTION))
+            .child(
+                ui::header("settings-page-title", "Appearance", Text::Title).child(
+                    ui::text(
+                        Text::Caption,
+                        "Theme for this app. Changes apply only after Save.",
+                    )
+                    .text_color(cx.theme().muted_foreground),
+                ),
+            )
+            .child(
+                FieldRow::new("settings-theme-field", label, controls)
+                    .description("System follows macOS, including its automatic switching.")
+                    .layout(if wide {
+                        FieldLayout::Inline
+                    } else {
+                        FieldLayout::Stacked
+                    }),
+            )
+            .child(
+                div()
+                    .v_flex()
+                    .gap_3()
+                    .child(ui::heading(
+                        "settings-preview-heading",
+                        "Preview",
+                        Text::Headline,
+                    ))
+                    .child(
+                        ui::surface(Surface::Tray, cx).p_3().rounded_lg().child(
+                            ui::surface(Surface::Card, cx)
+                                .p_4()
+                                .rounded_lg()
+                                .v_flex()
+                                .gap_3()
+                                .child(
+                                    ui::text(Text::Caption, "Sample conversation")
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .child(
+                                    div()
+                                        .id("settings-chat-preview")
+                                        .test_support()
+                                        .font_family(crate::typography::family(
+                                            fonts.chat_family,
+                                            false,
+                                            cx,
+                                        ))
+                                        .when_some(fonts.chat_size, |d, size| {
+                                            d.text_size(gpui_kit::px(size as f32 / 2.))
+                                        })
+                                        .child("The change is ready to review. Café · 資料 · 👩‍💻"),
+                                )
+                                .child(
+                                    div()
+                                        .id("settings-code-preview")
+                                        .test_support()
+                                        .font_family(crate::typography::family(
+                                            fonts.code_family,
+                                            true,
+                                            cx,
+                                        ))
+                                        .text_size(gpui_kit::px(
+                                            fonts
+                                                .code_size
+                                                .map(|s| s as f32 / 2.)
+                                                .unwrap_or(f32::from(cx.theme().mono_font_size)),
+                                        ))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("cargo test --locked"),
+                                ),
+                        ),
+                    ),
+            )
+            .child(self.font_controls(false, fonts, disabled, wide, cx))
+            .child(self.font_controls(true, fonts, disabled, wide, cx))
+            .child(
+                ui::action(
+                    "settings-font-defaults",
+                    "Restore font defaults",
+                    Action::Quiet,
+                )
+                .disabled(disabled || fonts == Default::default())
+                .on_click({
+                    let preferences = self.preferences.clone();
+                    move |_, _, cx| {
+                        preferences.update(cx, |o, cx| o.fonts(Default::default(), cx));
+                    }
+                }),
+            )
     }
     fn status(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
         let owner = self.preferences.read(cx);
@@ -422,7 +514,7 @@ impl SettingsView {
         } else if state.loaded() && state.committed().is_none() {
             "Using System by default. No preference file has been written."
         } else if state.persisted() {
-            "Appearance saved"
+            "Preferences saved"
         } else {
             "Preferences unavailable"
         };
@@ -663,6 +755,7 @@ mod tests {
                     Ok(LoadedPreferences {
                         preferences: Preferences {
                             appearance: AppearancePreference::Dark,
+                            ..Default::default()
                         },
                         persisted: true,
                     }),

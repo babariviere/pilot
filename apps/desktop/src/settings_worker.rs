@@ -13,7 +13,7 @@ use std::{
 #[derive(Debug)]
 pub(crate) enum Command {
     Load(u64),
-    Save(u64, SaveRequest),
+    Save(u64, Box<SaveRequest>),
 }
 #[derive(Debug)]
 pub(crate) enum Update {
@@ -65,7 +65,7 @@ fn run(root: PathBuf, commands: Receiver<Command>, updates: Sender<Update>) {
         let update = match command {
             Command::Load(generation) => Update::Loaded(generation, backend.load()),
             Command::Save(generation, request) => {
-                Update::Saved(generation, request, backend.save(request.preferences()))
+                Update::Saved(generation, *request, backend.save(request.preferences()))
             }
         };
         if updates.send_blocking(update).is_err() {
@@ -196,7 +196,7 @@ mod tests {
         state.finish_load(Ok(loaded));
         state.set_appearance(AppearancePreference::Dark);
         let request = state.begin_save().unwrap();
-        worker.command(Command::Save(7, request)).unwrap();
+        worker.command(Command::Save(7, Box::new(request))).unwrap();
         let Update::Saved(7, receipt, result) = updates.recv_blocking().unwrap() else {
             panic!("save")
         };
@@ -223,6 +223,7 @@ mod tests {
         backend
             .save(Preferences {
                 appearance: AppearancePreference::Light,
+                ..Default::default()
             })
             .unwrap();
         assert_eq!(fs::metadata(&parent).unwrap().mode() & 0o777, 0o700);
@@ -250,7 +251,8 @@ mod tests {
         external.save(Preferences::default()).unwrap();
         assert_eq!(
             backend.save(Preferences {
-                appearance: AppearancePreference::Dark
+                appearance: AppearancePreference::Dark,
+                ..Default::default()
             }),
             Err(SettingsError::Conflict)
         );

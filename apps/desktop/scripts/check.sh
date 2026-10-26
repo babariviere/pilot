@@ -51,6 +51,8 @@ bash scripts/cargo.sh test --locked --features native-probes --test catalog
 # Actual Settings window/Appearance preferences, private fixtures and guarded entry only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test settings -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test settings
+bash scripts/cargo.sh clippy --locked --features native-probes --test fonts -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test fonts
 # Existing-chat conversion with an owned faux HTTP daemon and private writer.
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission

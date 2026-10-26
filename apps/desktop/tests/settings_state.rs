@@ -50,7 +50,100 @@ impl Drop for PrivateDirectory {
     }
 }
 fn preferences(appearance: settings_state::AppearancePreference) -> Preferences {
-    Preferences { appearance }
+    Preferences {
+        appearance,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn font_bounds_legacy_load_roundtrip_and_font_only_defaults() {
+    use settings_state::{FontFamily, FontPreferences};
+    assert!(FontFamily::new(&"x".repeat(97)).is_none());
+    assert!(FontFamily::new("bad\nfont").is_none());
+    assert!(FontFamily::new("字形 👩‍💻").is_some());
+    let temp = PrivateDirectory::new();
+    temp.seed(br#"{"version":1,"preferences":{"appearance":"dark"}}"#);
+    let mut store = temp.store();
+    let original = store.load().unwrap().preferences;
+    assert_eq!(original, preferences(Dark));
+    let mut state = loaded_state(original, true);
+    let fonts = FontPreferences {
+        chat_family: FontFamily::new("Georgia").unwrap(),
+        code_family: FontFamily::new("Menlo").unwrap(),
+        chat_size: Some(44),
+        code_size: Some(18),
+    };
+    assert!(state.set_fonts(fonts));
+    assert!(!state.set_fonts(FontPreferences {
+        chat_size: Some(45),
+        ..fonts
+    }));
+    assert!(!state.set_fonts(FontPreferences {
+        code_size: Some(17),
+        ..fonts
+    }));
+    let request = state.begin_save().unwrap();
+    assert!(state.set_fonts(FontPreferences::default()));
+    state.finish_save(request, store.save(request.preferences()));
+    assert_eq!(
+        state.current(),
+        original,
+        "font-only defaults preserve appearance"
+    );
+    assert_eq!(temp.store().load().unwrap().preferences.fonts, fonts);
+    assert!(
+        state.dirty(),
+        "late ACK cannot overwrite newer font defaults"
+    );
+    let defaults = state.begin_save().unwrap();
+    state.finish_save(defaults, store.save(defaults.preferences()));
+    assert_eq!(temp.store().load().unwrap().preferences, original);
+}
+
+#[test]
+fn invalid_font_snapshot_is_not_overwritten() {
+    let temp = PrivateDirectory::new();
+    let bytes = br#"{"version":1,"preferences":{"appearance":"light","fonts":{"chat_family":"Georgia","code_family":"Menlo","chat_size":255,"code_size":26}}}"#;
+    temp.seed(bytes);
+    let mut store = temp.store();
+    assert_eq!(store.load(), Err(SettingsError::InvalidData));
+    assert!(store.save(preferences(Dark)).is_err());
+    assert_eq!(fs::read(temp.root().join(PREFERENCES_FILE)).unwrap(), bytes);
+}
+
+#[test]
+fn uncertain_font_save_retries_exact_payload_before_newer_defaults() {
+    use settings_state::FontPreferences;
+    let temp = PrivateDirectory::new();
+    let mut store = temp.store();
+    store.load().unwrap();
+    store.save(preferences(Dark)).unwrap();
+    let mut state = loaded_state(preferences(Dark), true);
+    let fonts = FontPreferences {
+        chat_size: Some(31),
+        code_size: Some(29),
+        ..Default::default()
+    };
+    state.set_fonts(fonts);
+    let first = state.begin_save().unwrap();
+    store.fail_at = Some(TestFault::AfterRename);
+    assert_eq!(
+        store.save(first.preferences()),
+        Err(SettingsError::DurabilityUnknown)
+    );
+    state.finish_save(first, Err(SettingsError::DurabilityUnknown));
+    state.set_fonts(Default::default());
+    let retry = state.begin_save().unwrap();
+    assert_eq!(retry.preferences().fonts, fonts);
+    store.fail_at = None;
+    state.finish_save(retry, store.save(retry.preferences()));
+    assert_eq!(state.current(), preferences(Dark));
+    assert_eq!(state.committed().unwrap().fonts, fonts);
+    assert!(state.dirty());
+    let latest = state.begin_save().unwrap();
+    state.finish_save(latest, store.save(latest.preferences()));
+    assert_eq!(temp.store().load().unwrap().preferences, preferences(Dark));
 }
 fn loaded_state(value: Preferences, persisted: bool) -> SettingsState {
     let mut state = SettingsState::default();

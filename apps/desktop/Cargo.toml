@@ -8,6 +8,12 @@ publish = false
 native-probes = ["gpui-kit/test-support"]
 
 [[test]]
+name = "fonts"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "chat_actions"
 path = "tests/chat_actions.rs"
 harness = false

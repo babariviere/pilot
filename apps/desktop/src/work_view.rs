@@ -590,6 +590,7 @@ impl StepView {
             .child(
                 div()
                     .id(SharedString::from(format!("body-{id}-{label}")))
+                    .test_support()
                     .max_h(px(260.))
                     .overflow_y_scroll()
                     .min_w_0()
@@ -601,10 +602,19 @@ impl StepView {
                             .border_color(cx.theme().border)
                     })
                     .child(
-                        TextView::new(&state)
-                            .selectable(true)
-                            .scrollable(false)
-                            .on_link_click(|_, _, _, _| {}),
+                        crate::typography::rich(
+                            TextView::new(&state),
+                            crate::typography::current(cx),
+                            if plain {
+                                crate::typography::Content::Code
+                            } else {
+                                crate::typography::Content::Chat
+                            },
+                            cx,
+                        )
+                        .selectable(true)
+                        .scrollable(false)
+                        .on_link_click(|_, _, _, _| {}),
                     ),
             )
     }
