@@ -85,6 +85,9 @@ pub(crate) mod shell_probe;
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
+#[path = "transcript_find_probe.rs"]
+pub(crate) mod transcript_find_probe;
+#[cfg(feature = "native-probes")]
 #[path = "workbench_probe.rs"]
 pub(crate) mod workbench_probe;
 #[path = "workbench_view.rs"]
@@ -94,8 +97,6 @@ mod workbench_view;
 pub(crate) mod workspace_changes_probe;
 #[path = "workspace_changes_view.rs"]
 mod workspace_changes_view;
-#[cfg(feature = "native-probes")]
-pub use workspace_changes_view::session_file_view_probe::run_session_file_view_probe;
 use crate::{
     LocalOptions, TranscriptView,
     app_icon::AppIcon,
@@ -129,6 +130,8 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+#[cfg(feature = "native-probes")]
+pub use workspace_changes_view::session_file_view_probe::run_session_file_view_probe;
 
 gpui_kit::actions!(
     desktop,
@@ -983,7 +986,9 @@ impl LocalViewer {
         });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let context_entry = context_usage_view::entry(cx);
-        editor.update(cx, |editor, _| editor.set_context_entry(context_entry.into()));
+        editor.update(cx, |editor, _| {
+            editor.set_context_entry(context_entry.into())
+        });
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
         let missions = cx.new(crate::mission_browser_view::Browser::new);
@@ -1893,7 +1898,17 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
-            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open&&!view.add_project_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
+            .on_action(cx.listener(|view,_:&FocusChats,window,cx|{
+                use gpui_kit::component::WindowExt;
+                if window.has_active_dialog(cx) || window.has_active_sheet(cx) || !view.project_choices_ready(window,cx) { return; }
+                // Preserve the existing sidebar Find shortcut outside the active
+                // conversation and its ordinary composer.
+                if view.page==Page::Chat && view.selected.is_some() && view.state.loaded && !view.artifacts_open
+                    && (view.editor.update(cx,|e,cx|e.conversation_find_ready(window,cx)) || view.transcript.read(cx).find_focused(window,cx)) {
+                    view.transcript.update(cx,|t,cx|t.open_find(window,cx));
+                } else { view.chats.update(cx,|list,cx|list.focus(window,cx)); }
+                cx.stop_propagation();
+            }))
             .child(self.sidebar(window,cx))
             .child(
                 if matches!(self.page,Page::Missions|Page::Mission(_)) {

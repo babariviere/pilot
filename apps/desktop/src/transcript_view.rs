@@ -1,11 +1,15 @@
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
+#[path = "transcript_find.rs"]
+mod transcript_find;
+#[path = "transcript_find_view.rs"]
+mod transcript_find_view;
 use std::{collections::HashMap, time::Duration};
 
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, EntityInputHandler, InteractiveElement,
     IntoElement, KeyBinding, ParentElement, Render, SharedString, StyleRefinement, Styled,
-    Subscription, Task, Window,
+    Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -35,6 +39,7 @@ pub(crate) struct HistoryControls {
 type HistoryGuard = std::rc::Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub struct TranscriptView {
     transcript: Transcript,
+    find: transcript_find_view::Find,
     images: conversation_images_view::Preview,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
     // for real histories rather than retaining one parser per historical row.
@@ -150,7 +155,9 @@ impl TranscriptView {
                 cx.emit(HistoryTop(view.history_scope));
             }
         });
+        let find = transcript_find_view::Find::new(window, cx);
         let mut view = Self {
+            find,
             transcript,
             images: Default::default(),
             text_states: Vec::new(),
@@ -242,11 +249,19 @@ impl TranscriptView {
             self.clear_image(cx);
         }
         if reset {
+            self.invalidate_find();
             self.history_slack = px(0.);
         }
         if !reset && self.transcript.messages() == rows.as_slice() {
             return;
         }
+        // A bounded reader publication may prepend and append at once, making
+        // the positional splice replace its middle. Find retains a canonical
+        // reading anchor, never a stale row index or an implicit Latest request.
+        let find_anchor = (!reset && self.find_is_open())
+            .then(|| self.reading_mark(cx))
+            .flatten()
+            .filter(|m| !m.following);
         let old = self.transcript.messages();
         let old_ids: Vec<_> = old.iter().map(Message::id).collect();
         let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
@@ -330,6 +345,10 @@ impl TranscriptView {
                 );
             }
         });
+        if let Some(mark) = find_anchor {
+            self.restore_reading(mark, cx);
+        }
+        self.refresh_find(false, cx);
         cx.notify();
     }
 
@@ -650,6 +669,7 @@ impl TranscriptView {
         }
         let source = row.shared_source();
         let user = row.label().starts_with("You");
+        let found = self.find_context(row);
         div()
             .id(("message", row.id()))
             .v_flex()
@@ -665,9 +685,22 @@ impl TranscriptView {
                     .gap_2()
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(row.display_label().to_owned())),
+                            .child(if let Some(text) = found {
+                                div()
+                                    .id(("find-target", row.id()))
+                                    .test_support()
+                                    .child(text)
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .child(SharedString::from(row.display_label().to_owned()))
+                                    .into_any_element()
+                            }),
                     )
                     .child(
                         Button::new(("copy-source", row.id()))
@@ -706,11 +739,12 @@ impl TranscriptView {
 }
 
 impl Render for TranscriptView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         #[cfg(feature = "native-probes")]
         {
             self.render_count += 1;
         }
+        self.finish_find_reset(window, cx);
         let busy = self.transcript.is_streaming();
         let full = self.transcript.is_full();
         let weak = cx.weak_entity();
@@ -747,11 +781,13 @@ impl Render for TranscriptView {
         let list_style = StyleRefinement::default().py_0().pb(self.history_slack);
         if self.readonly {
             return div()
+                .track_focus(&self.find.focus)
                 .relative()
                 .v_flex()
                 .size_full()
                 .min_h_0()
                 .min_w_0()
+                .children(self.render_find(cx))
                 .child(
                     viewport.child(
                         MessageScroller::new(
@@ -811,7 +847,7 @@ impl Render for TranscriptView {
                 )
                 .into_any_element();
         }
-        div().v_flex().size_full().min_w_0().bg(cx.theme().background).text_color(cx.theme().foreground)
+        div().track_focus(&self.find.focus).v_flex().size_full().min_w_0().bg(cx.theme().background).text_color(cx.theme().foreground)
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
                 if this.readonly { return; }
                 this.composer.update(cx, |state, cx| state.focus(window, cx));
@@ -830,6 +866,7 @@ impl Render for TranscriptView {
                     .child(Button::new("latest").small().label("Latest")
                         .on_click(cx.listener(|this, _, _, cx| this.scroller.update(cx, |state, cx| state.scroll_to_end(cx)))))
                     .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
+            .children(self.render_find(cx))
             .child(viewport.child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
                     weak.upgrade().map(|view| view.read(cx).render_row(ix, cx,weak.clone()).into_any_element())

@@ -712,6 +712,17 @@ impl ChatEditor {
         cx.notify();
         false
     }
+    /// Find must not steal keys from question fields or model/project editors.
+    pub(crate) fn conversation_find_ready(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        use gpui_kit::Focusable;
+        self.questions.current.is_none()
+            && self.text.read(cx).focus_handle(cx).is_focused(window)
+            && !self.marked(window, cx)
+    }
     pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ready() && self.selected.is_some() {
             if self.questions.current.is_some() {

@@ -287,3 +287,6 @@ mod conversation_images;
 
 #[cfg(feature = "native-probes")]
 pub use transcript_view::conversation_images_view::probe::run_conversation_images_probe;
+
+#[cfg(feature = "native-probes")]
+pub use local_view::transcript_find_probe::run_transcript_find_probe;
