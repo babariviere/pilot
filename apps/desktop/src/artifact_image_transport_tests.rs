@@ -89,10 +89,10 @@ fn body(source: &str, html: &str) -> String {
 }
 
 #[tokio::test]
-async fn verified_image_envelope_crosses_old_cap_but_unknown_pins_do_not() {
+async fn image_envelopes_cross_old_cap_including_unknown_pins() {
     let source = format!("data:image/png;base64,{}", "A".repeat(3 * 1024 * 1024));
     let value = body(&source, &source);
-    assert!(value.len() > HTTP_CAP);
+    assert!(value.len() > HELLO_CAP);
     let server = Server::start(value.clone(), 200, None, 0).await;
     let revision = artifact(&server.options, &reference()).await.unwrap();
     assert_eq!(*revision.source, source);
@@ -101,13 +101,10 @@ async fn verified_image_envelope_crosses_old_cap_but_unknown_pins_do_not() {
     let server = Server::start(value, 200, None, 0).await;
     let mut pin = reference();
     pin.kind = "unknown".into();
-    assert!(
-        artifact(&server.options, &pin)
-            .await
-            .unwrap_err()
-            .contains("4 MiB")
-    );
-    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    let revision = artifact(&server.options, &pin).await.unwrap();
+    assert_eq!(revision.reference.kind, "image");
+    assert_eq!(*revision.source, source);
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
 }
 #[tokio::test]
 async fn image_read_is_exactly_scoped_and_identity_gated_before_and_after() {

@@ -30,7 +30,8 @@ fallback, remote image fetch, new endpoint or host capability.
 
 ## Bounds and ownership
 
-The existing Local wire caps remain 4 MiB per HTTP read and 8 MiB per WS frame.
+Local HTTP reads use [route-specific budgets](local-read-budgets.md); the
+8 MiB WebSocket frame budget is unchanged.
 Inline bytes share the existing 1 MiB per-message source budget with displayed
 text, and the existing retained-history source quota (8 MiB minus existing live
 and tool reservations). An additional 64 KiB is conservatively reserved while

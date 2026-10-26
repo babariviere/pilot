@@ -13,7 +13,10 @@ use tokio_tungstenite::{
     tungstenite::{Message as Frame, protocol::WebSocketConfig},
 };
 
-const HTTP_CAP: usize = 4 * 1024 * 1024;
+const HELLO_CAP: usize = 4 * 1024 * 1024;
+// History's 4 MiB server budget is a soft stop, checked after including an
+// entry. A page can contain inline base64 images or a large tool result.
+const HISTORY_CAP: usize = 64 * 1024 * 1024;
 const FRAME_CAP: usize = 8 * 1024 * 1024;
 type Failure = &'static str;
 #[path = "model_scope_access.rs"]
@@ -185,6 +188,20 @@ enum ReadRoute {
     },
 }
 impl ReadRoute {
+    fn budget(&self) -> (usize, &'static str) {
+        match self {
+            Self::Hello => (HELLO_CAP, "Local hello response is too large."),
+            Self::History { .. } => (
+                HISTORY_CAP,
+                "Local history page exceeds the 64 MiB read budget.",
+            ),
+            // Pins may not carry a kind. Their revision can still be an image.
+            Self::Artifact { .. } => (
+                crate::artifact_image::HTTP_CAP,
+                "Stored artifact response exceeds the 44 MiB read budget.",
+            ),
+        }
+    }
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
@@ -313,14 +330,8 @@ async fn get(
     options: &LocalOptions,
     route: ReadRoute,
 ) -> Result<Value, Failure> {
-    let body = get_bytes(
-        client,
-        options,
-        route,
-        HTTP_CAP,
-        "Local HTTP response exceeds the 4 MiB viewer limit.",
-    )
-    .await?;
+    let (cap, message) = route.budget();
+    let body = get_bytes(client, options, route, cap, message).await?;
     serde_json::from_slice(&body).map_err(|_| "Invalid Local JSON response")
 }
 
@@ -364,6 +375,18 @@ async fn get_bytes(
 
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     hello(client, options).await.map(|_| ())
+}
+
+async fn history(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    id: String,
+    before: u64,
+) -> Result<Value, Failure> {
+    gate(client, options).await?;
+    let value = get(client, options, ReadRoute::History { id, before }).await?;
+    gate(client, options).await?;
+    Ok(value)
 }
 pub(crate) async fn hello(
     client: &reqwest::Client,
@@ -664,10 +687,7 @@ async fn run(
                     let (options, client, inbox) = (options.clone(),client.clone(),inbox.clone());
                     view.page_busy = true;
                     page_task = Some(tokio::spawn(async move {
-                        let result = match gate(&client,&options).await {
-                            Ok(()) => get(&client,&options,ReadRoute::History { id,before }).await,
-                            Err(e) => Err(e),
-                        };
+                        let result = history(&client,&options,id,before).await;
                         let _ = inbox.send(Incoming::Page { generation,before,result }).await;
                     }));
                 }
@@ -854,6 +874,10 @@ mod network_tests;
 #[cfg(test)]
 #[path = "artifact_image_transport_tests.rs"]
 mod artifact_image_transport_tests;
+
+#[cfg(test)]
+#[path = "local_read_transport_tests.rs"]
+mod read_transport_tests;
 
 #[cfg(test)]
 mod tests {
