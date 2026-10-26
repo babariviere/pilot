@@ -79,6 +79,11 @@ pub(crate) mod style_probe;
 pub(crate) mod workbench_probe;
 #[path = "workbench_view.rs"]
 mod workbench_view;
+#[cfg(feature = "native-probes")]
+#[path = "workspace_changes_probe.rs"]
+pub(crate) mod workspace_changes_probe;
+#[path = "workspace_changes_view.rs"]
+mod workspace_changes_view;
 use crate::{
     LocalOptions, TranscriptView,
     app_icon::AppIcon,
@@ -319,6 +324,7 @@ impl ListDelegate for ChatList {
 
 pub struct LocalViewer {
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
+    workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
@@ -409,6 +415,12 @@ impl LocalViewer {
                 conversation_links_view::Close,
                 Some("ConversationLinks"),
             ),
+            KeyBinding::new(
+                "escape",
+                workspace_changes_view::Close,
+                Some("WorkspaceChanges"),
+            ),
+            KeyBinding::new("secondary-alt-d", workspace_changes_view::Toggle, None),
             KeyBinding::new("secondary-alt-l", conversation_links_view::Toggle, None),
             KeyBinding::new("secondary-k", ToggleJump, None),
             KeyBinding::new("secondary-f", FocusChats, None),
@@ -1151,6 +1163,7 @@ impl LocalViewer {
             missions,
             mission_context,
             conversation_links: None,
+            workspace_changes: None,
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -1830,6 +1843,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
+            .on_action(cx.listener(|v,_:&workspace_changes_view::Toggle,w,cx|{v.toggle_workspace_changes(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&conversation_links_view::Toggle,w,cx|{v.toggle_conversation_links(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
@@ -1854,6 +1868,7 @@ impl Render for LocalViewer {
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
                             .child(self.context_usage_action(cx))
                             .child(self.conversation_links_action(cx))
+                            .child(self.workspace_changes_action(cx))
                             .child(self.mission_context_action(cx))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
@@ -1876,7 +1891,8 @@ impl Render for LocalViewer {
                         .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
                         .into_any_element();
                 let conversation = self.mission_companion(conversation, window, cx);
-                self.conversation_links_companion(conversation, window, cx)
+                let conversation = self.conversation_links_companion(conversation, window, cx);
+                self.workspace_changes_companion(conversation, window, cx)
                 }
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))

@@ -58,6 +58,7 @@ impl LocalViewer {
         }
         if self.restoring_navigation {
             self.close_conversation_links(window, cx);
+            self.close_workspace_changes(window, cx);
             return true;
         }
         let query = self.chats.read(cx).query_input();
@@ -69,6 +70,7 @@ impl LocalViewer {
             return false;
         }
         self.close_conversation_links(window, cx);
+        self.close_workspace_changes(window, cx);
         let location = self.location(cx);
         if !self.navigation_seeded {
             self.navigation = History::new(location.clone());
