@@ -83,7 +83,8 @@ async function fixture(t: TestContext) {
 			queueMicrotask(() =>
 				onPacket({
 					type: "ready",
-					model: spec.model ?? first,
+					model: spec.recoveryModel?.model ?? spec.model ?? first,
+					...(spec.recoveryModel?.thinking ? { thinking: spec.recoveryModel.thinking } : {}),
 					working: false,
 					usage: worker.usage,
 					...(workers.length > 1 ? { attempts: rebuiltAttempts } : {}),
@@ -311,4 +312,235 @@ test("worker startup publishes the effective thinking level instead of stale cre
 		usage: {},
 	});
 	assert.equal(f.sessions.get(f.id)?.thinking, "off");
+});
+
+function failed(f: Awaited<ReturnType<typeof fixture>>, startup = true) {
+	const meta = f.sessions["metas"].get(f.id)!;
+	Object.assign(meta, { outcome: "failed", outcomeAt: 300, outcomeReason: "Original failure", working: false });
+	if (startup) meta.failure = "Session startup: Original failure";
+	return meta;
+}
+
+test("passive failed model persists across restart without worker, work, attempt or failure changes", async (t) => {
+	const f = await fixture(t);
+	const meta = failed(f);
+	meta.pending = [{ type: "input", requestId: "original", content: "Keep", mode: "followUp" }];
+	const before = structuredClone(meta);
+	let changed = 0;
+	f.sessions.onChange(() => {
+		changed++;
+	});
+	const source = f.sessions.get(f.id)!.failedModelSource!;
+	assert.equal(source.source, "startup");
+	const updated = await f.sessions.saveFailedModel(f.id, source, { model: second }, f.models);
+	assert.deepEqual(updated.nextAttemptModel, { model: second });
+	assert.equal(updated.state, "failed");
+	assert.deepEqual(meta, {
+		...before,
+		nextAttemptModel: { model: second },
+		failedModelRevision: meta.failedModelRevision,
+		updatedAt: meta.updatedAt,
+	});
+	assert.ok(meta.updatedAt > before.updatedAt);
+	assert.ok(meta.failedModelRevision);
+	assert.equal(f.workers.length, 0);
+	assert.equal(changed, 0, "general change listeners must not reconcile mission notices");
+	assert.equal(f.sessions["starting"].size, 0);
+	assert.equal(f.sessions["changingModels"].size, 0);
+	await assert.rejects(f.sessions.changeModel(f.id, second, f.models), Conflict);
+	await assert.rejects(f.sessions.saveFailedModel(f.id, source, { model: second }, f.models), Conflict);
+	const loaded = new SessionManager(f.home, f.projects, undefined, {
+		worker: () => {
+			throw new Error("must not reopen");
+		},
+	});
+	await loaded.load();
+	assert.deepEqual(loaded.get(f.id)?.nextAttemptModel, { model: second });
+	assert.equal(loaded.get(f.id)?.outcomeReason, "Original failure");
+	assert.equal(loaded.get(f.id)?.failedModelSource?.source, "startup");
+	await loaded.shutdown();
+});
+
+test("passive failed settled outcome uses source/version and never configures its idle worker", async (t) => {
+	const f = await fixture(t);
+	const meta = failed(f, false);
+	const worker = new FakeWorker(() => {});
+	f.sessions["workers"].set(f.id, worker);
+	const source = f.sessions.get(f.id)!.failedModelSource!;
+	assert.equal(source.source, "outcome");
+	await f.sessions.saveFailedModel(f.id, source, { model: second, thinking: "high" }, f.models);
+	assert.equal(worker.commands.length, 0);
+	assert.equal(worker.closed, false);
+	assert.equal(meta.model, first);
+	assert.equal(meta.outcomeAt, 300);
+	assert.equal(meta.outcomeReason, "Original failure");
+});
+
+test("passive failed model rechecks evidence, authority and config after catalog awaits", async (t) => {
+	for (const patch of [
+		{ outcomeAt: 301 },
+		{ outcome: "done" },
+		{ failure: "Session startup: replacement" },
+		{ model: second },
+		{ thinking: "high" },
+		{ working: true },
+		{ archivedAt: 123 },
+		{ continuedTo: "next" },
+		{ continuationPending: true },
+		{ delegationFenced: true },
+		{ projectId: "replacement" },
+		{ nextAttemptModel: { model: second } },
+	]) {
+		const f = await fixture(t);
+		const meta = failed(f);
+		const source = f.sessions.get(f.id)!.failedModelSource!;
+		const lookup = deferred();
+		f.list.mock.mockImplementation(async () => {
+			await lookup.promise;
+			return { models: [{ id: second, provider: "other", name: "Second" }] };
+		});
+		const save = f.sessions.saveFailedModel(f.id, source, { model: second }, f.models);
+		await assert.rejects(f.sessions.saveFailedModel(f.id, source, { model: second }, f.models), Conflict);
+		await assert.rejects(f.sessions.retryStartup(f.id), Conflict);
+		await assert.rejects(f.sessions.archive(f.id), Conflict);
+		await assert.rejects(f.sessions.send(f.id, "racing"), Conflict);
+		Object.assign(meta, patch);
+		lookup.resolve();
+		await assert.rejects(save, Conflict);
+		assert.equal(f.workers.length, 0);
+	}
+});
+
+test("passive failed model rejects unavailable levels and persistence errors without work", async (t) => {
+	const f = await fixture(t);
+	failed(f);
+	const source = f.sessions.get(f.id)!.failedModelSource!;
+	for (const choice of [{ model: "missing/model" }, { model: second, thinking: "unknown" }])
+		await assert.rejects(f.sessions.saveFailedModel(f.id, source, choice, f.models));
+	const save = t.mock.method(f.sessions, "save" as never, async () => {
+		throw new Error("fsync failed");
+	});
+	await assert.rejects(f.sessions.saveFailedModel(f.id, source, { model: second }, f.models), /fsync failed/);
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.sessions.get(f.id)?.state, "failed");
+	save.mock.restore();
+});
+
+test("saved failed preference activates only on a later explicit startup retry", async (t) => {
+	const f = await fixture(t);
+	const meta = failed(f);
+	const source = f.sessions.get(f.id)!.failedModelSource!;
+	await f.sessions.saveFailedModel(f.id, source, { model: second, thinking: "high" }, f.models);
+	assert.equal(f.workers.length, 0);
+	await f.sessions.retryStartup(f.id);
+	assert.equal(f.workers.length, 1);
+	assert.equal(meta.model, second);
+	assert.equal(meta.thinking, "high");
+	assert.equal(meta.nextAttemptModel, undefined);
+	assert.equal(meta.recoveryModel, undefined);
+});
+
+test("saved settled-failure preference waits for explicit user input, not inspection or automatic input", async (t) => {
+	const f = await fixture(t);
+	const meta = failed(f, false);
+	const worker = new FakeWorker(() => {});
+	f.sessions["workers"].set(f.id, worker);
+	const source = f.sessions.get(f.id)!.failedModelSource!;
+	await f.sessions.saveFailedModel(f.id, source, { model: second, thinking: "high" }, f.models);
+	assert.equal(f.sessions.get(f.id)?.model, first);
+	assert.equal(worker.closed, false);
+	assert.equal(worker.commands.length, 0);
+	await assert.rejects(f.sessions.send(f.id, "Automatic notice", "followUp", "mission-notice:automatic"), Conflict);
+	await f.sessions["start"](f.id);
+	assert.equal(worker.commands.length, 0);
+	assert.equal(meta.pending, undefined);
+	await assert.rejects(f.sessions.send(f.id, "Previously scheduled message", "followUp", "schedule:prior"), Conflict);
+	await assert.rejects(f.sessions.send(f.id, "Agent default sender"), Conflict);
+	await f.sessions.send(f.id, "Explicit recovery message", "followUp", undefined, undefined, true);
+	assert.equal(worker.closed, true);
+	assert.equal(f.workers.length, 1);
+	assert.equal(meta.model, second);
+	assert.equal(meta.thinking, "high");
+	assert.equal(meta.nextAttemptModel, undefined);
+	assert.equal(meta.recoveryModel, undefined);
+	assert.equal(f.workers[0]!.commands[0]?.type, "input");
+});
+
+test("passive failed model HTTP has exact home/source/operation ACK and preserves legacy refusal", async (t) => {
+	const f = await fixture(t);
+	failed(f);
+	const hello = {
+		daemonId: "test-daemon",
+		lineageId: "test-lineage",
+		daemonVersion: "test",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin",
+		arch: "arm64",
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: false,
+			coordinatorIsolation: true,
+			independentExecution: true,
+		},
+	};
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		f.models,
+		new TerminalManager(),
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		hello,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(() => new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve()))));
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const request = (route: string, body: unknown, origin?: string) =>
+		fetch(`${base}/api/sessions/${f.id}/${route}`, {
+			method: "POST",
+			headers: { "content-type": "application/json", ...(origin ? { origin } : {}) },
+			body: JSON.stringify(body),
+		});
+	assert.equal(
+		((await (await fetch(`${base}/api/hello`)).json()) as typeof hello).capabilities["passiveFailedModel" as never],
+		true,
+	);
+	const body = {
+		operationId: "explicit-one",
+		daemonId: hello.daemonId,
+		lineageId: hello.lineageId,
+		source: f.sessions.get(f.id)!.failedModelSource!,
+		model: second,
+	};
+	assert.equal((await request("model", { model: second })).status, 409);
+	assert.equal((await request("failed-model", { ...body, lineageId: "foreign" })).status, 409);
+	assert.equal((await request("failed-model", body, "https://example.com")).status, 403);
+	for (const bad of [
+		null,
+		{},
+		{ ...body, thinking: null },
+		{ ...body, operationId: "" },
+		{ ...body, source: { token: "bad", source: "startup" } },
+		{ ...body, model: "missing/model" },
+	])
+		assert.equal((await request("failed-model", bad)).status, 400);
+	const response = await request("failed-model", body);
+	assert.equal(response.status, 200);
+	const ack = (await response.json()) as Record<string, unknown>;
+	for (const key of ["operationId", "daemonId", "lineageId", "source", "model"] as const)
+		assert.deepEqual(ack[key], body[key]);
+	assert.equal(ack.sessionId, f.id);
+	assert.deepEqual((ack.session as SessionSummary).nextAttemptModel, { model: second });
+	assert.equal((ack.session as SessionSummary).outcomeAt, 300);
+	assert.equal(f.workers.length, 0);
+	assert.equal((await request("failed-model", body)).status, 409, "not an idempotency key or blind replay");
 });

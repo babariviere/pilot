@@ -53,7 +53,9 @@ import type {
 	DiagnosticsHandoff,
 	DiagnosticsHandoffRequest,
 	DiagnosticTargetReference,
+	FailedModelSource,
 	MergePullRequestRequest,
+	NextAttemptModel,
 	OperationHost,
 	PullRequestBindingResult,
 	PullRequestMergePreview,
@@ -381,6 +383,10 @@ interface SessionMeta extends OutcomeMeta {
 	/** Keep jj/Git path bindings unchanged while ownership moves to a fresh chat. */
 	workspaceOriginId?: string;
 	continuationModel?: WorkerSpec["continuationModel"];
+	nextAttemptModel?: NextAttemptModel;
+	failedModelRevision?: string;
+	/** Activated only by a subsequent explicit user input/startup retry. */
+	recoveryModel?: NextAttemptModel;
 	/** Work closed by the system sleep policy, never a user Stop. */
 	sleepPaused?: boolean;
 	/** Durable desired input hold, including while its kernel is parked or sleeping. */
@@ -4002,6 +4008,127 @@ export class SessionManager {
 		if (meta.continuationPending) throw new Conflict("Chat ownership transfer is not complete");
 	}
 
+	/** No I/O, worker reopening, or failure mutation. Token binds private evidence and competing preferences. */
+	private failedModelSource(meta: SessionMeta, admittedInput = false): FailedModelSource | undefined {
+		const id = meta.id;
+		if (meta.outcome !== "failed" || !Number.isSafeInteger(meta.outcomeAt)) return;
+		if (
+			this.closing ||
+			meta.archivedAt !== undefined ||
+			meta.continuedTo ||
+			meta.continuationPending ||
+			meta.control ||
+			meta.role ||
+			meta.coordinatorView ||
+			this.isMissionCoordinator(id) ||
+			meta.delegationFenced ||
+			this.sharing?.membership(id) ||
+			this.isRetainedHistory(meta) ||
+			meta.workspaceRecovery ||
+			meta.preparing ||
+			meta.initializing ||
+			meta.kernelRestartPending ||
+			meta.working ||
+			meta.recoveryModel ||
+			this.backgroundWorking(meta) ||
+			this.starting.has(id) ||
+			(!admittedInput && this.sending.has(id)) ||
+			this.parking.has(id) ||
+			this.archiveTransitions.has(id) ||
+			this.roleTransitions.has(id) ||
+			this.workspaceRefreshes.has(id) ||
+			this.workspaceMaintenance.has(id) ||
+			this.rebasingWorkspaces.has(id) ||
+			this.hasWorkspaceProcess(id)
+		)
+			return;
+		const worker = this.workers.get(id);
+		if (worker && (worker.busy !== false || !["idle", "failed"].includes(worker.state) || worker.runningJobs?.length))
+			return;
+		const source = meta.failure ? "startup" : "outcome";
+		return {
+			source,
+			token: createHash("sha256")
+				.update(
+					JSON.stringify([
+						id,
+						meta.cwd,
+						meta.projectId ?? null,
+						source,
+						meta.failure ?? null,
+						meta.outcomeAt,
+						meta.outcomeReason ?? null,
+						meta.lastCompletionAt ?? null,
+						meta.model ?? null,
+						meta.thinking ?? null,
+						meta.nextAttemptModel ?? null,
+						meta.failedModelRevision ?? null,
+						meta.pending ?? null,
+						meta.executionPermission ?? null,
+					]),
+				)
+				.digest("hex"),
+		};
+	}
+
+	/** Opt-in passive save. Legacy changeModel remains worker-backed and refuses startup failures. */
+	async saveFailedModel(
+		id: string,
+		source: FailedModelSource,
+		choice: NextAttemptModel,
+		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
+	): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		let locked = false;
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		try {
+			const meta = this.require(id);
+			const check = () => {
+				this.assertNotContinued(meta);
+				const current = this.failedModelSource(meta);
+				if (
+					this.require(id) !== meta ||
+					!current ||
+					current.token !== source.token ||
+					current.source !== source.source
+				)
+					throw new Conflict("Failed chat or model configuration changed");
+			};
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
+			check();
+			this.changingModels.set(id, settled);
+			locked = true;
+			const option = (await catalog.list(meta.cwd)).models.find((m) => m.id === choice.model);
+			if (!option) throw new Error("Model is not available in this session's scope");
+			if (choice.thinking !== undefined && !option.thinkingLevels?.includes(choice.thinking))
+				throw new Error("Thinking level is not supported by this model");
+			check(); // all asynchronous catalog work precedes the synchronous guarded mutation
+			meta.nextAttemptModel = {
+				model: choice.model,
+				...(choice.thinking !== undefined ? { thinking: choice.thinking } : {}),
+			};
+			meta.failedModelRevision = randomUUID();
+			meta.updatedAt = Math.max(Date.now(), meta.updatedAt + 1);
+			// fsync file and parent directories. An error after rename remains an uncertain save, never a retry instruction.
+			await this.save(meta, undefined, undefined, true);
+			// General change listeners include mission-notice admission. The exact HTTP ACK is the
+			// projection for this passive operation; later ordinary reads observe the saved preference.
+			return this.summary(meta);
+		} finally {
+			if (locked) this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
+	/** Only a later explicit recovery may activate the preference. No automatic notice can call this. */
+	private activateNextModel(meta: SessionMeta): void {
+		if (meta.nextAttemptModel) meta.recoveryModel = { ...meta.nextAttemptModel };
+	}
+
 	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
 	async changeModel(
 		id: string,
@@ -4023,6 +4150,8 @@ export class SessionManager {
 			if (meta.archivedAt !== undefined)
 				throw new Conflict("Restore the archived session before changing its model or thinking level");
 			if (meta.failure) throw new Conflict("Session is not idle");
+			if (meta.nextAttemptModel)
+				throw new Conflict("Change the saved next-attempt preference or recover explicitly");
 			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
 				throw new Conflict("Session is changing configuration");
 			this.assertModelIdle(meta);
@@ -5133,6 +5262,7 @@ export class SessionManager {
 		mode: DeliveryMode = "followUp",
 		requestId: string = randomUUID(),
 		trace?: TraceCarrier,
+		explicitModelRecovery = false,
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
@@ -5140,7 +5270,7 @@ export class SessionManager {
 			const meta = this.metas.get(id);
 			const databases = meta ? declineDatabaseRequest(meta.databases) : undefined;
 			if (meta && databases) meta.databases = databases;
-			await this.sendAdmitted(id, message, mode, requestId, false, false, trace);
+			await this.sendAdmitted(id, message, mode, requestId, false, false, trace, false, explicitModelRecovery);
 		} finally {
 			end();
 		}
@@ -5184,10 +5314,21 @@ export class SessionManager {
 		mode: DeliveryMode,
 		operationId: string,
 		resumeHeld = false,
+		explicitModelRecovery = false,
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
-			await this.sendAdmitted(id, message, mode, operationId, false, true, undefined, resumeHeld);
+			await this.sendAdmitted(
+				id,
+				message,
+				mode,
+				operationId,
+				false,
+				true,
+				undefined,
+				resumeHeld,
+				explicitModelRecovery,
+			);
 		} finally {
 			end();
 		}
@@ -5202,6 +5343,7 @@ export class SessionManager {
 		durable = false,
 		trace?: TraceCarrier,
 		resumeHeld = false,
+		explicitModelRecovery = false,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertHistoryWritable(meta);
@@ -5230,6 +5372,26 @@ export class SessionManager {
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
+			if (meta.nextAttemptModel && (!explicitModelRecovery || report || inputOrigin(requestId)))
+				throw new Conflict("Saved next-attempt model requires explicit user recovery");
+			if (meta.nextAttemptModel && explicitModelRecovery && !report && !inputOrigin(requestId)) {
+				if (!this.failedModelSource(meta, true))
+					throw new Conflict("Failed chat is no longer available for explicit model recovery");
+				this.activateNextModel(meta);
+				const worker = this.workers.get(id);
+				if (worker) {
+					this.workers.delete(id);
+					this.lastUse.delete(id);
+					this.parked.add(worker);
+					const closing = worker.close();
+					this.parking.set(id, closing);
+					try {
+						await closing;
+					} finally {
+						if (this.parking.get(id) === closing) this.parking.delete(id);
+					}
+				}
+			}
 			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
 				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
 			delete meta.cancelled;
@@ -5338,6 +5500,7 @@ export class SessionManager {
 				});
 				delete meta.recoveryStopped;
 			}
+			this.activateNextModel(meta);
 			delete meta.failure;
 			delete meta.inputError;
 			this.kernelErrors.delete(id);
@@ -6521,6 +6684,7 @@ export class SessionManager {
 		if (meta.preparing && meta.cancelled) observedListener([emptySnapshot]);
 		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
 		else if (
+			(!meta.nextAttemptModel || meta.recoveryModel) &&
 			!this.sleepPause &&
 			!this.isRetainedHistory(meta) &&
 			!meta.failure &&
@@ -6927,6 +7091,7 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (meta.nextAttemptModel && !meta.recoveryModel) return Promise.resolve(new Map());
 		if (meta.control || this.passiveNoticeOnly(meta)) return Promise.resolve(new Map());
 		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
 			return Promise.resolve(new Map());
@@ -7203,6 +7368,8 @@ export class SessionManager {
 		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
 		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
+		if (meta.nextAttemptModel && !meta.recoveryModel)
+			throw new Conflict("Saved next-attempt model requires explicit user recovery");
 		if (meta.recoveryStopped) throw new Conflict("Recovery is stopped. Send a new message to continue.");
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
 		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
@@ -7302,6 +7469,7 @@ export class SessionManager {
 					...(meta.pending?.[0]?.type === "abort" ? { stopOnOpen: true } : {}),
 					...(meta.inputsPaused ? { pauseInputsOnOpen: meta.inputControlRevision } : {}),
 					...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
+					...(meta.recoveryModel ? { recoveryModel: meta.recoveryModel } : {}),
 					agentDir: this.agentDir,
 					...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 					pilot: {
@@ -8048,6 +8216,10 @@ export class SessionManager {
 			if (packet.type === "ready") {
 				if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openTodoCount;
 				if (meta.continuationModel?.model === packet.model) delete meta.continuationModel;
+				if (meta.recoveryModel?.model === packet.model) {
+					delete meta.recoveryModel;
+					delete meta.nextAttemptModel;
+				}
 				if (this.workers.get(meta.id) === worker) delete meta.kernelRestartPending;
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
@@ -8103,6 +8275,7 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const failedModelSource = this.failedModelSource(meta);
 		const retainedHistory = this.isRetainedHistory(meta);
 		const membership = this.missionSummary(meta.id);
 		const coordinator = membership.missionCoordinator === true;
@@ -8262,6 +8435,8 @@ export class SessionManager {
 				: {}),
 			...(meta.archivedAt === undefined && this.scheduledMessages.has(meta.id) ? { scheduledMessage: true } : {}),
 			...(meta.model ? { model: meta.model } : {}),
+			...(failedModelSource ? { failedModelSource } : {}),
+			...(meta.nextAttemptModel ? { nextAttemptModel: meta.nextAttemptModel } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
 			...(subscriptionPause ? { subscriptionPause } : {}),

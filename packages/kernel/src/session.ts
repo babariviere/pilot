@@ -837,6 +837,13 @@ export class KernelSession {
 					})
 					.catch((error: unknown) => console.warn("pilot: could not admit extension input", error));
 			};
+			// A passive preference never reaches this point until the daemon admits separate explicit recovery.
+			// The ordinary atomic idle/inbox guard and cross-provider context safety still apply.
+			if (spec.recoveryModel) {
+				const switched = await session.changeModel(spec.recoveryModel.model, spec.recoveryModel.thinking);
+				if (switched?.switched)
+					throw new Error("Model recovery rebuilt context; retry explicit recovery to open the new attempt");
+			}
 			await resumeContinuation?.();
 			if (spec.stopOnOpen) {
 				// The outbox's ordinary abort still owns queued-message withdrawal and holds.

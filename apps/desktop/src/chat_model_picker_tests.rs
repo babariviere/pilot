@@ -47,6 +47,57 @@ fn source(e: &ChatEditor) -> (Scope, String) {
     let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
     (p.scope.clone(), p.epoch.clone())
 }
+
+#[gpui_kit::test]
+fn failed_picker_captures_exact_preference_source_without_touching_message(
+    cx: &mut TestAppContext,
+) {
+    let (server, h, e, commands) = setup(cx);
+    server.seen.lock().unwrap().mode = Mode::FailedPassive;
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text.update(cx, |t, cx| {
+                t.set_value("Keep failed draft 日本語 👩‍💻", w, cx);
+                t.focus(w, cx);
+            });
+            let before = e.text.read(cx).value();
+            let selection = e.text.read(cx).selected_range();
+            let summary = server.seen.lock().unwrap().session();
+            let expected = SessionModel::read(&summary).failed_source.unwrap();
+            e.model_context(
+                "source",
+                "/synthetic/project",
+                SessionModel::read(&summary),
+                w,
+                cx,
+            );
+            assert!(e.can_choose_model());
+            assert!(e.has_model_notice());
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+            let WriteCommand::Model {
+                action: chat_models::Action::Submit(attempt),
+                ..
+            } = commands.try_recv().unwrap()
+            else {
+                panic!("one explicit preference");
+            };
+            assert_eq!(attempt.target.failed_source, Some(expected));
+            assert_eq!(
+                attempt.choice,
+                ModelChoice {
+                    model: "p/b".into(),
+                    thinking: None
+                }
+            );
+            assert_eq!(attempt.target.model.as_deref(), Some("p/a"));
+            assert_eq!(e.text.read(cx).value(), before);
+            assert_eq!(e.text.read(cx).selected_range(), selection);
+            assert!(commands.is_empty());
+        });
+    })
+    .unwrap();
+}
 #[gpui_kit::test]
 fn parked_and_failure_transitions_rebuild_readonly_catalog_without_touching_draft(
     cx: &mut TestAppContext,
@@ -190,6 +241,7 @@ fn checked_model_is_noop_new_model_omits_old_thinking_and_old_widget_cannot_chan
                     session: "source".into(),
                     request,
                     outcome: chat_models::Outcome::Acknowledged(SessionModel {
+                        failed_source: None,
                         model: Some("p/b".into()),
                         thinking: Some("low".into()),
                         updated_at: 2,

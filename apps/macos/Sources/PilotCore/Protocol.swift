@@ -60,6 +60,15 @@ public enum WorkspaceStorage: String, Codable, Sendable {
 }
 
 /// Mirrors packages/protocol. Keep both sides in sync.
+public struct NextAttemptModel: Codable, Equatable, Hashable, Sendable {
+    public let model: String
+    public let thinking: String?
+}
+public struct FailedModelSource: Codable, Equatable, Hashable, Sendable {
+    public let token: String
+    public let source: String
+}
+
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
     public var control: Bool? = nil
@@ -133,6 +142,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let model: String?
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
     public let thinking: String?
+    public var nextAttemptModel: NextAttemptModel? = nil
+    public var failedModelSource: FailedModelSource? = nil
     public let usage: SessionUsage?
     /// Named background subagents in spawn order. Omitted when the session has none.
     public let subagents: [SessionSubagent]?
@@ -999,4 +1010,24 @@ public struct SessionChanges: Codable, Equatable, Sendable {
         self.diff = diff
         self.truncated = truncated
     }
+}
+
+/// Passive configuration only, never a retry command.
+public struct FailedModelRequest: Codable, Sendable {
+    public let operationId: String
+    public let daemonId: String
+    public let lineageId: String
+    public let source: FailedModelSource
+    public let model: String
+    public let thinking: String?
+}
+public struct FailedModelResponse: Codable, Sendable {
+    public let operationId: String
+    public let daemonId: String
+    public let lineageId: String
+    public let source: FailedModelSource
+    public let model: String
+    public let thinking: String?
+    public let sessionId: String
+    public let session: SessionSummary
 }

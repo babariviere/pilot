@@ -17,12 +17,14 @@ sheet is not part of this desktop fix.
 
 `summary.error` alone is not an admission restriction: it can contain retained
 kernel diagnostics even after the chat returns to idle or parked. Actual
-failure (`state == failed` or an explicit failure field) still blocks changes.
+failure still blocks the legacy worker-backed switch. A supported, exact failed
+source can instead use the separately guarded [passive next-attempt save](failed-chat-model.md).
 
 The desktop keeps its failure, pause, jobs, ownership, delivery,
 catalog and IME protections. Failed chats are **not** fixed by enabling a
 selector: the daemon rejects `meta.failure` before opening a worker. Supporting
-that recovery would require separately approved backend behavior. Subscription
+that recovery uses the separately authorized passive preference contract, never
+a legacy POST fallback or automatic retry. Subscription
 pause does not imply permission to continue or create another chat.
 
 Summary-derived eligibility is a hint, never an admission receipt. The existing

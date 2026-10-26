@@ -163,6 +163,8 @@ export interface KernelSpec {
 	pauseInputsOnOpen?: number;
 	/** Explicit same-provider continuation after the previous worker's tool drain and close. */
 	continuationModel?: { model: string; thinking?: string; requestId: string };
+	/** Activated only by explicit user recovery, configured before resume. */
+	recoveryModel?: { model: string; thinking?: string };
 	agentDir?: string;
 	/** Directory whose pi project trust applies (the project's own checkout, not its clone). */
 	trustDirectory?: string;

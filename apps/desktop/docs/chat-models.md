@@ -29,7 +29,9 @@ error. Scope refresh never changes the native message, permission, draft source 
 Audited Swift ChatModelPicker/ChatThinkingPicker, Composer/HomeView, protocol ModelList/
 SpawnRequest/ChangeModelRequest, daemon model route/catalog and Sessions.changeModel.
 The actual model response is SessionSummary, despite an older protocol comment naming
-ChangeModelResponse. No new endpoint, backend change, permission or capability is added.
+ChangeModelResponse. Healthy changes retain that original contract. The separately
+approved [failed-chat next-attempt preference](failed-chat-model.md) adds only an
+opt-in passive endpoint/capability, without changing healthy legacy callers.
 
 - Read only `GET /api/models?cwd=<exact canonical directory>`, plus pinned Local hello
   and selected-chat GET. No cwd-less, unscoped or remote fallback. Project overrides and
@@ -39,7 +41,7 @@ ChangeModelResponse. No new endpoint, backend change, permission or capability i
   and scoped-catalog preflight precede durable private admission. The daemon's atomic
   idle/no-queued-work guard remains authoritative. The existing endpoint has no CAS;
   preflight is not misrepresented as an atomic model-version condition.
-- Continued, archived, diagnostic, Control, failed, paused, running/queued, private-write
+- Continued, archived, diagnostic, Control, unsupported failed, paused, running/queued, private-write
   fenced, pending-delivery and marked-input contexts do not admit a selection. Subscription
   continuation is unavailable here: no continue-model, replacement chat or message/start.
 - A successful, matching SessionSummary acknowledges the model change. Lost, malformed

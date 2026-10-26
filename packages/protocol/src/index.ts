@@ -273,7 +273,31 @@ export interface UpdatePreparation {
 	ready: boolean;
 }
 
+/** Passive preference only. Applying it requires a separate explicit user recovery. */
+export interface NextAttemptModel {
+	model: string;
+	thinking?: string;
+}
+export interface FailedModelSource {
+	token: string;
+	source: "startup" | "outcome";
+}
+export interface FailedModelRequest extends NextAttemptModel {
+	operationId: string;
+	daemonId: string;
+	lineageId: string;
+	source: FailedModelSource;
+}
+export interface FailedModelResponse extends FailedModelRequest {
+	sessionId: string;
+	session: SessionSummary;
+}
+
 export interface SessionSummary {
+	/** Captured failure/configuration precondition. Absent means passive configuration is unavailable. */
+	failedModelSource?: FailedModelSource;
+	/** Saved for a future explicit recovery, not the current worker or a retry receipt. */
+	nextAttemptModel?: NextAttemptModel;
 	/** The one project-less, pinned orchestration chat. */
 	control?: boolean;
 	/** On-demand read-only specialist. Target history still requires a separate explicit grant. */

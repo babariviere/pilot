@@ -114,22 +114,52 @@ impl Catalog {
             })
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FailedSource {
+    pub(crate) token: String,
+    pub(crate) source: String,
+}
+impl FailedSource {
+    fn valid(&self) -> bool {
+        self.token.len() == 64
+            && self
+                .token
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            && matches!(self.source.as_str(), "startup" | "outcome")
+    }
+    fn read(v: &Value) -> Option<Self> {
+        serde_json::from_value::<Self>(v.clone())
+            .ok()
+            .filter(Self::valid)
+    }
+}
+fn failure_source(v: &Value) -> Option<FailedSource> {
+    (v["state"] == "failed" || v["outcome"] == "failed")
+        .then(|| FailedSource::read(&v["failedModelSource"]))
+        .flatten()
+}
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct SessionModel {
     pub(crate) model: Option<String>,
     pub(crate) thinking: Option<String>,
     pub(crate) updated_at: u64,
+    pub(crate) failed_source: Option<FailedSource>,
     pub(crate) allowed: bool,
     pub(crate) blocked: Option<&'static str>,
 }
 impl SessionModel {
     pub(crate) fn read(v: &Value) -> Self {
+        let next = &v["nextAttemptModel"];
+        let choice = if next.is_object() { next } else { v };
         Self {
-            model: v["model"]
+            failed_source: failure_source(v),
+            model: choice["model"]
                 .as_str()
                 .filter(|s| model_id(s))
                 .map(str::to_owned),
-            thinking: v["thinking"]
+            thinking: choice["thinking"]
                 .as_str()
                 .filter(|s| level(s))
                 .map(str::to_owned),
@@ -144,9 +174,11 @@ impl SessionModel {
     fn restriction(v: &Value) -> Option<&'static str> {
         if !crate::local_model::interactive_local(v) || v["continuationPending"] == true {
             Some("Model changes are unavailable for this read-only chat or ownership transfer.")
-        } else if v["state"] == "failed" || !v["failure"].is_null() {
+        } else if (v["state"] == "failed" || v["outcome"] == "failed" || !v["failure"].is_null())
+            && failure_source(v).is_none()
+        {
             Some(
-                "This chat reports a failure. Model changes require a healthy idle chat; changing the model does not recover it.",
+                "This failure does not support a safe next-attempt model save. It has not been retried.",
             )
         } else if !v["subscriptionPause"].is_null() {
             Some(
@@ -165,6 +197,8 @@ impl SessionModel {
             Some(
                 "Wait for this chat's work and queued messages to finish before changing its model or thinking.",
             )
+        } else if failure_source(v).is_some() {
+            None
         } else if !matches!(v["state"].as_str(), Some("idle" | "parked")) {
             Some(
                 "The chat's idle state is not known. Refresh before changing its model or thinking.",
@@ -181,10 +215,13 @@ pub(crate) struct Target {
     pub(crate) cwd: String,
     pub(crate) model: Option<String>,
     pub(crate) thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failed_source: Option<FailedSource>,
 }
 impl Target {
     pub(crate) fn validate(&self) -> Result<(), Failure> {
-        if !token(&self.session)
+        if self.failed_source.as_ref().is_some_and(|s| !s.valid())
+            || !token(&self.session)
             || !cwd(&self.cwd)
             || self.model.as_deref().is_some_and(|m| !model_id(m))
             || self.thinking.as_deref().is_some_and(|m| !level(m))
@@ -339,8 +376,12 @@ pub(crate) async fn execute(
             let pre=async{
                 attempt.validate(&attempt.target.session)?;
                 let current=session(client,options,&attempt.target).await?;
-                if !current.allowed||current.model!=attempt.target.model||current.thinking!=attempt.target.thinking{return Err("Chat model/state changed or is not idle. Refresh; nothing was switched.");}
+                if !current.allowed||current.model!=attempt.target.model||current.thinking!=attempt.target.thinking||current.failed_source!=attempt.target.failed_source{return Err("Chat model/state changed or is not idle. Refresh; nothing was switched.");}
                 let c=catalog(client,options,&attempt.target.cwd).await?;if !c.admits(&attempt.choice){return Err("This model/thinking choice is no longer in this chat's scope. Refresh models.");}
+                if attempt.target.failed_source.is_some() {
+                    let h = crate::local_client::hello(client, options).await?;
+                    if h["capabilities"]["passiveFailedModel"] != true { return Err("This daemon cannot save a failed chat's next model safely. No legacy fallback was sent."); }
+                }
                 store.prepare_model_change(attempt.clone())?;Ok(())
             }.await;
             if let Err(e) = pre {
@@ -348,7 +389,19 @@ pub(crate) async fn execute(
             }
             prepared(store);
             // Exactly one supported POST, no continuation, retry or extra action.
-            let bytes = match serde_json::to_vec(&attempt.choice) {
+            let failed = attempt.target.failed_source.as_ref();
+            let payload = if let Some(source) = failed {
+                let host = options.host();
+                let mut v = serde_json::to_value(&attempt.choice).expect("serializable choice");
+                v["operationId"] = serde_json::json!(attempt.id);
+                v["daemonId"] = serde_json::json!(host.daemon_id);
+                v["lineageId"] = serde_json::json!(host.lineage_id);
+                v["source"] = serde_json::to_value(source).expect("serializable source");
+                v
+            } else {
+                serde_json::to_value(&attempt.choice).expect("serializable choice")
+            };
+            let bytes = match serde_json::to_vec(&payload) {
                 Ok(b) => b,
                 Err(_) => {
                     return Outcome::Unknown(
@@ -358,9 +411,14 @@ pub(crate) async fn execute(
             };
             let response = client
                 .post(format!(
-                    "{}/api/sessions/{}/model",
+                    "{}/api/sessions/{}/{}",
                     options.loopback(),
-                    attempt.target.session
+                    attempt.target.session,
+                    if failed.is_some() {
+                        "failed-model"
+                    } else {
+                        "model"
+                    }
                 ))
                 .header("Content-Type", "application/json")
                 .body(bytes)
@@ -375,6 +433,31 @@ pub(crate) async fn execute(
             let value = match value {
                 Ok(v) => v,
                 Err(e) => return Outcome::Unknown(e),
+            };
+            let value = if let Some(source) = failed {
+                let host = options.host();
+                if value["operationId"] != attempt.id
+                    || value["sessionId"] != attempt.target.session
+                    || value["daemonId"] != host.daemon_id
+                    || value["lineageId"] != host.lineage_id
+                    || FailedSource::read(&value["source"]).as_ref() != Some(source)
+                    || value["model"] != attempt.choice.model
+                    || value.get("thinking") != payload.get("thinking")
+                    || value["session"]["nextAttemptModel"]
+                        != serde_json::to_value(&attempt.choice).unwrap()
+                    || failure_source(&value["session"])
+                        .as_ref()
+                        .is_none_or(|s| s.source != source.source)
+                    || value["session"]["outcome"] != "failed"
+                    || value["session"]["outcomeAt"].as_u64().is_none()
+                {
+                    return Outcome::Unknown(
+                        "Next-attempt model acknowledgment was incomplete. No retry was sent.",
+                    );
+                }
+                value["session"].clone()
+            } else {
+                value
             };
             let actual = SessionModel::read(&value);
             if value["id"] != attempt.target.session

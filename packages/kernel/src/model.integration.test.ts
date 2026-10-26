@@ -27,11 +27,11 @@ import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { PerformanceRecord } from "./performance.ts";
-import { KernelSession } from "./session.ts";
-import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { queueGuardToken } from "./queue.ts";
+import { KernelSession } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
 import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -377,11 +377,16 @@ async function fixture(
 		});
 	const working: boolean[] = [];
 	const completed = deferred<SessionCompletion>();
-	const open = async (model = first, continuationModel?: { model: string; thinking?: string; requestId?: string }) => {
+	const open = async (
+		model = first,
+		continuationModel?: { model: string; thinking?: string; requestId?: string },
+		recoveryModel?: { model: string; thinking?: string },
+	) => {
 		const session = await KernelSession.open(
 			{
 				...spec,
 				model,
+				...(recoveryModel ? { recoveryModel } : {}),
 				...(continuationModel
 					? { continuationModel: { requestId: `fixture:${randomUUID()}`, ...continuationModel } }
 					: {}),
@@ -1215,6 +1220,25 @@ test("current activity and later settlements advance while an earlier settlement
 	releaseHandler.resolve();
 	await laterSettled.promise;
 	assert.equal(settlements, 2, "the coalesced busy/idle interval still produces a later settlement");
+});
+
+test("explicit recovery preference overrides durable pinned config before resume without running work", async (t) => {
+	const f = await fixture(t);
+	const original = await f.open();
+	await original.close();
+	const recovered = await f.open(first, undefined, { model: third, thinking: "low" });
+	assert.equal(recovered.model, third);
+	assert.equal(recovered.thinkingLevel, "low");
+	assert.deepEqual((await recovered.conversation.agent(context)).model, {
+		provider: "pilot-model-b",
+		modelId: "three",
+	});
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+	await recovered.close();
+	const reopened = await f.open();
+	assert.equal(reopened.model, third);
+	assert.equal(reopened.thinkingLevel, "low");
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
 });
 
 test("model selection updates native and durable choices, context usage and thinking, and survives reopen", {

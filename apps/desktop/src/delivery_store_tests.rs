@@ -519,6 +519,7 @@ fn model_attempt(source: &str) -> crate::chat_models::Attempt {
     crate::chat_models::Attempt {
         id: format!("model-{source}"),
         target: crate::chat_models::Target {
+            failed_source: None,
             session: source.into(),
             cwd: "/tmp".into(),
             model: Some("p/a".into()),

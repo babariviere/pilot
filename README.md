@@ -36,6 +36,9 @@ unchanged; outstanding accounting memory and release verification is documented 
   Save changes pi’s global model list on this Mac, with conflict detection and exact readback.
   Project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns
   and unavailable models are preserved.
+- **Save a failed chat's next model in Pilot Next.** Supported Local failed chats can save model/thinking
+  preferences without retrying work or clearing the failure. Applying the choice requires a separate explicit
+  recovery. Older daemons fail closed. See [the passive contract](apps/desktop/docs/failed-chat-model.md).
 - **Work locally.** Chats, projects and setup run on this Mac. Remote devboxes are retired.
   Existing cached remote history and unsent drafts are retained without reconnecting or moving work.
   See [retained remote data](docs/devboxes.md).

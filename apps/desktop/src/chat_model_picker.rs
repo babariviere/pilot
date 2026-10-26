@@ -67,7 +67,7 @@ pub(super) struct Picker {
     loading: bool,
     models: Entity<SelectState<SearchableVec<Item>>>,
     thinking: Entity<SelectState<SearchableVec<Item>>>,
-    synced: Option<(Option<ModelChoice>, bool, bool)>,
+    synced: Option<(Option<ModelChoice>, bool, bool, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 pub(super) struct Models {
@@ -163,7 +163,7 @@ impl ChatEditor {
                     .picker
                     .as_ref()
                     .and_then(|p| p.synced.as_ref())
-                    .is_some_and(|(_, _, old_editable)| *old_editable == editable)
+                    .is_some_and(|(_, _, old_editable, _)| *old_editable == editable)
             {
                 return;
             }
@@ -206,6 +206,7 @@ impl ChatEditor {
             cwd: path.clone(),
             model: s.model.clone(),
             thinking: s.thinking.clone(),
+            failed_source: s.failed_source.clone(),
         })
     }
     fn model_choice(&self) -> Option<ModelChoice> {
@@ -468,6 +469,9 @@ impl ChatEditor {
             return;
         }
         let editable = self.can_choose_model();
+        let failed = self
+            .model_target()
+            .is_some_and(|t| t.failed_source.is_some());
         let choice = self.model_choice();
         let is_new = self
             .selected
@@ -479,7 +483,7 @@ impl ChatEditor {
         let Some(c) = &p.catalog else {
             return;
         };
-        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable)) {
+        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable, failed)) {
             return;
         }
         let mut items: Vec<_> = c
@@ -531,7 +535,7 @@ impl ChatEditor {
             .as_ref()
             .and_then(|s| c.models.iter().find(|m| m.id == s.model));
         let mut levels = Vec::new();
-        if is_new && option.is_some_and(|m| m.thinking_levels.len() >= 2) {
+        if (is_new || failed) && option.is_some_and(|m| m.thinking_levels.len() >= 2) {
             levels.push(Item {
                 id: String::new(),
                 title: "Scoped default".into(),
@@ -573,7 +577,7 @@ impl ChatEditor {
             s.set_items(SearchableVec::new(levels), w, cx);
             s.set_selected_value(&selected, w, cx);
         });
-        p.synced = Some((choice, is_new, editable));
+        p.synced = Some((choice, is_new, editable, failed));
     }
     fn model_uncertain(&self) -> Option<&chat_models::Attempt> {
         let id = self.selected.as_deref()?.strip_prefix("chat:")?;
@@ -942,7 +946,9 @@ impl ChatEditor {
             }))
     }
     pub(super) fn has_model_notice(&self) -> bool {
-        self.model_restriction().is_some()
+        self.model_target()
+            .is_some_and(|t| t.failed_source.is_some())
+            || self.model_restriction().is_some()
             || self.models.as_ref().is_some_and(|m| {
                 m.error.is_some() || m.picker.as_ref().is_some_and(|p| p.error.is_some())
             })
@@ -971,6 +977,12 @@ impl ChatEditor {
             .and_then(|p| p.error));
         let uncertain = self.model_uncertain();
         div().v_flex().gap_1().min_w_0()
+            .children(self.model_target().filter(|t|t.failed_source.is_some()).map(|_| {
+                let view=ui::text(ui::Text::Caption,"Next attempt only. Model and thinking choices are saved without retrying work.").id("chat-model-next-attempt");
+                #[cfg(any(test, feature="native-probes"))]
+                let view=view.test_support();
+                view
+            }))
             .children(self.model_restriction().filter(|_|error.is_none() && uncertain.is_none()).map(|reason|{
                 let view = ui::text(ui::Text::Caption,reason).id("chat-model-restriction");
                 #[cfg(any(test, feature = "native-probes"))]

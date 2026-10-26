@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -17,6 +17,11 @@ pub(crate) enum Mode {
     Accept,
     Parked,
     Failed,
+    FailedPassive,
+    FailedLost,
+    FailedBadAck,
+    FailedOld,
+    FailedDelayed,
     Lost,
     Denied,
     Busy,
@@ -35,6 +40,7 @@ pub(crate) struct Seen {
     pub(crate) model: String,
     pub(crate) thinking: String,
     pub(crate) clock: u64,
+    pub(crate) next: Option<Value>,
     pub(crate) requests: Vec<(String, String, Value)>,
 }
 pub(crate) struct Server {
@@ -42,6 +48,7 @@ pub(crate) struct Server {
     pub(crate) home: PathBuf,
     pub(crate) seen: Arc<Mutex<Seen>>,
     stop: Arc<AtomicBool>,
+    delay: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 pub(crate) fn catalog() -> Value {
@@ -53,10 +60,33 @@ pub(crate) fn catalog() -> Value {
 }
 impl Seen {
     pub(crate) fn session(&self) -> Value {
-        json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if matches!(self.mode,Mode::Paused){json!({"forced":false})}else{Value::Null}})
+        let mut v = json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if matches!(self.mode,Mode::Paused){json!({"forced":false})}else{Value::Null}});
+        if matches!(
+            self.mode,
+            Mode::FailedPassive
+                | Mode::FailedLost
+                | Mode::FailedBadAck
+                | Mode::FailedOld
+                | Mode::FailedDelayed
+        ) {
+            v["state"] = json!("failed");
+            v["outcome"] = json!("failed");
+            v["outcomeAt"] = json!(100);
+            v["outcomeReason"] = json!("Original failure 日本語");
+            v["failedModelSource"] =
+                json!({"token":format!("{:064x}",self.clock),"source":"startup"});
+            if let Some(next) = &self.next {
+                v["nextAttemptModel"] = next.clone();
+            }
+        }
+        v
     }
 }
 impl Server {
+    pub(crate) fn release_ack(&self) {
+        *self.delay.0.lock().unwrap() = true;
+        self.delay.1.notify_all();
+    }
     pub(crate) fn start(mode: Mode) -> Self {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
@@ -72,11 +102,14 @@ impl Server {
             model: "p/a".into(),
             thinking: "high".into(),
             clock: 1,
+            next: None,
             requests: vec![],
         }));
         let record = seen.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let halt = stop.clone();
+        let delay = Arc::new((Mutex::new(false), Condvar::new()));
+        let pending_ack = delay.clone();
         let thread = std::thread::spawn(move || {
             while let Ok((mut stream, _)) = listener.accept() {
                 if halt.load(Ordering::SeqCst) {
@@ -128,7 +161,7 @@ impl Server {
                         .push((method.clone(), path.clone(), payload.clone()));
                     if path == "/api/hello" {
                         assert_eq!(method, "GET");
-                        (200,json!({"daemonId":if matches!(s.mode,Mode::Foreign){"foreign"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}).to_string(),false)
+                        (200,json!({"daemonId":if matches!(s.mode,Mode::Foreign){"foreign"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"passiveFailedModel":!matches!(s.mode, Mode::FailedOld)}}).to_string(),false)
                     } else if path.starts_with("/api/models?") {
                         assert_eq!(method, "GET");
                         let url = reqwest::Url::parse(&format!("http://127.0.0.1{path}")).unwrap();
@@ -162,6 +195,33 @@ impl Server {
                         }
                     } else if method == "GET" && path == "/api/sessions/source" {
                         (200, s.session().to_string(), false)
+                    } else if method == "POST" && path == "/api/sessions/source/failed-model" {
+                        assert!(matches!(
+                            s.mode,
+                            Mode::FailedPassive
+                                | Mode::FailedLost
+                                | Mode::FailedBadAck
+                                | Mode::FailedDelayed
+                        ));
+                        assert_eq!(payload["daemonId"], "test-daemon");
+                        assert_eq!(payload["lineageId"], "test-lineage");
+                        assert_eq!(payload["source"], s.session()["failedModelSource"]);
+                        let mut choice = json!({"model":payload["model"]});
+                        if let Some(level) = payload.get("thinking") {
+                            choice["thinking"] = level.clone();
+                        }
+                        s.next = Some(choice);
+                        s.clock += 1;
+                        if matches!(s.mode, Mode::FailedLost) {
+                            continue;
+                        }
+                        let mut ack = payload.clone();
+                        ack["sessionId"] = json!("source");
+                        ack["session"] = s.session();
+                        if matches!(s.mode, Mode::FailedBadAck) {
+                            ack["operationId"] = json!("foreign-operation");
+                        }
+                        (200, ack.to_string(), false)
                     } else if method == "POST" && path == "/api/sessions/source/model" {
                         assert!(payload["model"].is_string());
                         assert!(
@@ -197,6 +257,20 @@ impl Server {
                         panic!("unallowlisted model fixture route {method} {path}")
                     }
                 };
+                if path.ends_with("/failed-model")
+                    && matches!(record.lock().unwrap().mode, Mode::FailedDelayed)
+                {
+                    let (lock, signal) = &*pending_ack;
+                    let (released, timeout) = signal
+                        .wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(2), |ready| {
+                            !*ready
+                        })
+                        .unwrap();
+                    assert!(
+                        *released && !timeout.timed_out(),
+                        "owned delayed ACK must be explicitly released"
+                    );
+                }
                 if chunked {
                     let _ = write!(
                         stream,
@@ -217,6 +291,7 @@ impl Server {
             home,
             seen,
             stop,
+            delay,
             thread: Some(thread),
         }
     }
@@ -232,6 +307,7 @@ impl Server {
 }
 impl Drop for Server {
     fn drop(&mut self) {
+        self.release_ack();
         self.stop.store(true, Ordering::SeqCst);
         let addr = self
             .options

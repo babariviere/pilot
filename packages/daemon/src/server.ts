@@ -17,6 +17,7 @@ import type {
 	DiagnosticsHandoffRequest,
 	DurableOperation,
 	EditQueuedMessageRequest,
+	FailedModelRequest,
 	Inbox,
 	JoinMissionRequest,
 	McpCheckRequest,
@@ -542,7 +543,7 @@ export function createDaemonServer(
 				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp")
 			)
 				throw new OperationRejected("Invalid message");
-			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId);
+			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, false, true);
 			return { sessionId: op.targetId };
 		}
 		throw new OperationRejected("Unsupported operation kind");
@@ -713,6 +714,7 @@ export function createDaemonServer(
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
 					passiveTaskModel: missions ? true : undefined,
+					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 				},
 			});
@@ -1553,6 +1555,37 @@ export function createDaemonServer(
 				return json(res, 200, await sessions.rename(id, body.title));
 			}
 			if (parts[3] === "reclaim-workspace") return json(res, 200, await sessions.reclaimWorkspace(id));
+			if (parts[3] === "failed-model") {
+				const body = await readJson<FailedModelRequest>(req);
+				if (
+					!body ||
+					typeof body.operationId !== "string" ||
+					!/^[a-zA-Z0-9_-]{1,128}$/.test(body.operationId) ||
+					typeof body.model !== "string" ||
+					body.model.length > 1024 ||
+					!body.model.includes("/") ||
+					!body.source ||
+					!["startup", "outcome"].includes(body.source.source) ||
+					typeof body.source.token !== "string" ||
+					!/^[a-f0-9]{64}$/.test(body.source.token) ||
+					(body.thinking !== undefined &&
+						(typeof body.thinking !== "string" || !body.thinking || body.thinking.length > 64))
+				)
+					throw new HttpError(400, "Invalid failed model preference");
+				if (!hello?.lineageId || body.daemonId !== hello.daemonId || body.lineageId !== hello.lineageId)
+					throw new HttpError(409, "Failed chat home changed");
+				const choice = { model: body.model, ...(body.thinking !== undefined ? { thinking: body.thinking } : {}) };
+				const session = await sessions.saveFailedModel(id, body.source, choice, models);
+				return json(res, 200, {
+					...choice,
+					source: body.source,
+					operationId: body.operationId,
+					daemonId: hello.daemonId,
+					lineageId: hello.lineageId,
+					sessionId: id,
+					session,
+				});
+			}
 			if (parts[3] === "model" || parts[3] === "continue-model") {
 				const body = await readJson<ChangeModelRequest>(req);
 				if (!body || typeof body.model !== "string" || !body.model.trim())
@@ -1582,7 +1615,7 @@ export function createDaemonServer(
 						(typeof body.requestId !== "string" || !/^[\w-]{1,128}$/.test(body.requestId))
 					)
 						throw new HttpError(400, "requestId must be 1-128 letters, digits, dashes or underscores");
-					await sessions.send(id, body.message, body.mode, body.requestId, span.carrier() ?? parent);
+					await sessions.send(id, body.message, body.mode, body.requestId, span.carrier() ?? parent, true);
 					span.end();
 					return json(res, 202, { ok: true });
 				} catch (error) {

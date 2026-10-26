@@ -13,6 +13,7 @@ fn attempt() -> Attempt {
     Attempt {
         id: "choice-one".into(),
         target: Target {
+            failed_source: None,
             session: "source".into(),
             cwd: "/synthetic/project".into(),
             model: Some("p/a".into()),
@@ -22,6 +23,88 @@ fn attempt() -> Attempt {
             model: "p/b".into(),
             thinking: None,
         },
+    }
+}
+
+#[tokio::test]
+async fn failed_preference_is_passive_exact_ack_and_no_legacy_fallback_or_get_settlement() {
+    for mode in [
+        Mode::FailedPassive,
+        Mode::FailedLost,
+        Mode::FailedBadAck,
+        Mode::FailedOld,
+    ] {
+        let s = Server::start(mode);
+        let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+        let c = client();
+        let mut a = attempt();
+        a.target.failed_source =
+            FailedSource::read(&s.seen.lock().unwrap().session()["failedModelSource"]);
+        let result = execute(
+            &c,
+            &s.options,
+            &mut store,
+            Action::Submit(a.clone()),
+            |_| {},
+        )
+        .await;
+        match mode {
+            Mode::FailedPassive => {
+                let Outcome::Acknowledged(next) = result else {
+                    panic!("exact passive ACK");
+                };
+                assert_eq!(next.model.as_deref(), Some("p/b"));
+                assert_eq!(
+                    next.thinking, None,
+                    "default is a future scope choice, not the old effective level"
+                );
+                assert!(next.failed_source.is_some());
+                assert!(store.book.model_changes.is_empty());
+            }
+            Mode::FailedOld => {
+                assert!(matches!(result, Outcome::Refused(_)));
+                assert_eq!(s.posts(), 0);
+            }
+            _ => {
+                assert!(matches!(result, Outcome::Unknown(_)));
+                assert_eq!(store.book.model_changes.get("source"), Some(&a));
+                assert!(matches!(
+                    execute(
+                        &c,
+                        &s.options,
+                        &mut store,
+                        Action::Inspect(a.target.clone()),
+                        |_| {}
+                    )
+                    .await,
+                    Outcome::Observed(_)
+                ));
+                assert_eq!(
+                    store.book.model_changes.get("source"),
+                    Some(&a),
+                    "GET equality never settles uncertainty"
+                );
+                drop(store);
+                store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+                assert_eq!(store.book.model_changes.get("source"), Some(&a));
+            }
+        }
+        let seen = s.seen.lock().unwrap();
+        assert_eq!(seen.model, "p/a", "does not change the current worker");
+        assert_eq!(seen.thinking, "high");
+        assert_eq!(seen.session()["outcomeAt"], 100);
+        assert!(
+            seen.requests
+                .iter()
+                .filter(|(m, _, _)| m == "POST")
+                .all(|(_, p, b)| p.ends_with("/failed-model") && b["operationId"] == "choice-one")
+        );
+        if !matches!(mode, Mode::FailedOld) {
+            assert_eq!(
+                seen.requests.iter().filter(|(m, _, _)| m == "POST").count(),
+                1
+            );
+        }
     }
 }
 #[tokio::test]
