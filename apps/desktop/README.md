@@ -20,6 +20,18 @@ Local daemon capability; an older daemon is refused without a mutation. The defa
 network-free synthetic transcript and memory-only local-echo composer, without
 disk state. No read-status writes, service installation, updater or default switch.
 
+### Chat actions
+
+Right-click a Local chat row, including an unselected row, for **Archive**,
+**Restore** or the existing confirmed **Make a mission…** flow. The row's
+**Chat actions** ellipsis button also works with Tab and Return. Opening or
+dismissing a menu never selects/opens the chat or performs a mutation. Working
+chats are never stopped implicitly; history and drafts stay retained. Pending,
+failed-before-submit and unconfirmed actions name their original target. Lost
+archive/restore acknowledgments are never automatically retried or settled by
+later list visibility. See [chat-actions.md](docs/chat-actions.md) for the exact
+contract, existing cleanup side effects, bounds and synthetic checks.
+
 ### Add a Local project
 
 Use **Add project…** beside project browsing or in the new-chat project chooser.

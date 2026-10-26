@@ -168,6 +168,7 @@ impl LocalViewer {
                     .child(self.chat_filter(cx)))
                 .when(archived,|this|this.child(div().id("archives-active").test_support().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
             .child(div().id("chat-list-pane").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+            .child(self.chat_actions.clone())
             .child(crate::ui::action("open-settings", "Settings…", crate::ui::Action::Quiet)
                 .w_full().justify_start().accessibility_label("Settings (Command-comma)")
                 .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx))))

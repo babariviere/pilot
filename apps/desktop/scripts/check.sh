@@ -71,3 +71,6 @@ bash scripts/cargo.sh clippy --locked --features native-probes --test delivery_d
 bash scripts/cargo.sh test --locked --features native-probes --test delivery_diagnostics
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission_inspector -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission_inspector
+# Exact row menus, synthetic Local archive/restore and confirmed conversion only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test chat_actions -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test chat_actions

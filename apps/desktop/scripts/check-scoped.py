@@ -23,11 +23,11 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_LIMIT = 16 * 1024 * 1024
 # Positive, source-audited helper-free contracts. Unknown scopes keep the helper.
-PURE_MODULES = {"bundled_runtime", "chat_models", "delivery_store", "interaction",
+PURE_MODULES = {"chat_actions", "bundled_runtime", "chat_models", "delivery_store", "interaction",
                 "local_client", "local_model", "mission_conversion", "mission_transport",
                 "project_registration", "reader_identity_tests", "scoped_models",
                 "scoped_models_worker", "settings_state", "settings_worker"}
-PURE_NATIVE = {"controls", "project_creation"}
+PURE_NATIVE = {"chat_actions", "controls", "project_creation"}
 
 
 def parser():

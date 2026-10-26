@@ -1,4 +1,6 @@
 use super::*;
+#[path = "chat_actions_pending_tests.rs"]
+mod chat_actions_pending_tests;
 use crate::mission_conversion::Reply;
 use gpui_kit::{
     Bounds, TestAppContext, WindowBounds, WindowOptions, size,

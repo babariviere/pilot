@@ -38,7 +38,7 @@ to disable previously enabled optimizations or change any profile/flags.
   integration target. Unit bodies are compiled/executed but this is **not** a
   claim that Clippy linted every `cfg(test)` body. Broad existing CI retains that
   responsibility.
-- Only source-audited pure modules and the `controls`/`project_creation` native
+- Only source-audited pure modules and the `controls`/`project_creation`/`chat_actions` native
   targets omit visual-helper preparation/builds. Visual/unknown library scopes
   and other native targets retain the helper conservatively. Use `--worker` when
   adding a worker consumer to a formerly pure module, and update the explicit

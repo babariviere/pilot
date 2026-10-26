@@ -1,4 +1,9 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
+#[path = "chat_actions_navigation.rs"]
+mod chat_actions_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "chat_actions_probe.rs"]
+pub(crate) mod chat_actions_probe;
 #[cfg(feature = "native-probes")]
 #[path = "chat_model_probe.rs"]
 pub(crate) mod chat_model_probe;
@@ -75,6 +80,7 @@ use crate::{
     local_model::Chat,
     model::Message,
 };
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu};
 use gpui_kit::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
     Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
@@ -114,6 +120,7 @@ pub enum PreviewState {
     Unavailable,
 }
 struct ChatList {
+    action_owner: gpui_kit::WeakEntity<LocalViewer>,
     all: Arc<Vec<Chat>>,
     filtered: Vec<usize>,
     query: String,
@@ -167,12 +174,27 @@ impl ListDelegate for ChatList {
             .clone();
         corner.update(cx, |view, cx| view.configure(spec, cx));
         let has_corner = corner.read(cx).has_corner(cx);
+        let owner = self.action_owner.clone();
+        let menu_owner = owner.clone();
+        let button_owner = owner.clone();
+        let menu_chat = chat.clone();
+        let button_chat = chat.clone();
         Some(
             ListItem::new(SharedString::from(chat.id.clone()))
                 .hover_fill(!has_corner)
                 .confirmed(self.opened.as_ref() == Some(&chat.id))
                 .child(
                     div()
+                        .id(SharedString::from(format!("chat-row-{}", chat.id)))
+                        .test_support()
+                        .capture_any_mouse_down(move |_, w, cx| {
+                            if !owner
+                                .update(cx, |v, cx| v.chat_row_guard(w, cx))
+                                .unwrap_or(false)
+                            {
+                                cx.stop_propagation();
+                            }
+                        })
                         .v_flex()
                         .relative()
                         .overflow_hidden()
@@ -190,9 +212,37 @@ impl ListDelegate for ChatList {
                         .child(crate::dither_view::layer(corner))
                         .child(
                             div()
-                                .truncate()
-                                .text_size(px(appearance::TextRole::BODY))
-                                .child(SharedString::from(chat.title.clone())),
+                                .h_flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(px(appearance::TextRole::BODY))
+                                        .child(SharedString::from(chat.title.clone())),
+                                )
+                                .child(
+                                    crate::ui::icon_action(
+                                        SharedString::from(format!("chat-menu-{}", chat.id)),
+                                        "Chat actions",
+                                        AppIcon::More,
+                                        crate::ui::Action::Quiet,
+                                    )
+                                    .disabled(chat.local_draft)
+                                    .dropdown_menu(
+                                        move |menu, w, cx| {
+                                            LocalViewer::chat_actions_menu(
+                                                button_owner.clone(),
+                                                button_chat.clone(),
+                                                menu,
+                                                w,
+                                                cx,
+                                            )
+                                        },
+                                    ),
+                                ),
                         )
                         .child(
                             div()
@@ -203,7 +253,16 @@ impl ListDelegate for ChatList {
                                     chat.signal_label(),
                                     if chat.archived { " · Archived" } else { "" }
                                 ))),
-                        ),
+                        )
+                        .context_menu(move |menu, w, cx| {
+                            LocalViewer::chat_actions_menu(
+                                menu_owner.clone(),
+                                menu_chat.clone(),
+                                menu,
+                                w,
+                                cx,
+                            )
+                        }),
                 ),
         )
     }
@@ -246,6 +305,7 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
@@ -366,6 +426,8 @@ impl LocalViewer {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
+        view.chat_actions
+            .update(cx, |a, cx| a.connect(options.clone(), cx));
         let root = Store::default_path()
             .map(|root| root.join("settings"))
             .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
@@ -746,9 +808,11 @@ impl LocalViewer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let action_owner = cx.weak_entity();
         let chats = cx.new(|cx| {
             ListState::new(
                 ChatList {
+                    action_owner,
                     all: Arc::new(Vec::new()),
                     filtered: Vec::new(),
                     query: String::new(),
@@ -1022,8 +1086,18 @@ impl LocalViewer {
         );
         let (navigation, scope_states, reader_marks) = Self::navigation_state();
         let settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(None));
+        let chat_actions = cx.new(crate::chat_actions_view::Actions::new);
+        let chat_action_events = cx.subscribe_in(
+            &chat_actions,
+            window,
+            |v, _, _: &crate::chat_actions_view::Changed, _, cx| {
+                v.sync_chat_action_permission(cx);
+                cx.notify();
+            },
+        );
         settings.update(cx, |owner, cx| owner.load(cx));
         Self {
+            chat_actions,
             settings,
             settings_window: None,
             settings_pane: None,
@@ -1069,6 +1143,7 @@ impl LocalViewer {
                 ..Default::default()
             },
             _subscriptions: vec![
+                chat_action_events,
                 subscription,
                 mission_events,
                 missions_events,
@@ -1287,6 +1362,7 @@ impl LocalViewer {
             pane.context(self.selected.clone(), self.state.artifacts.clone(), cx);
             pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
         });
+        self.sync_chat_action_permission(cx);
         cx.notify();
     }
 

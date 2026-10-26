@@ -7,6 +7,12 @@ publish = false
 [features]
 native-probes = ["gpui-kit/test-support"]
 
+[[test]]
+name = "chat_actions"
+path = "tests/chat_actions.rs"
+harness = false
+required-features = ["native-probes"]
+
 [workspace]
 members = ["visual-worker"]
 default-members = ["."]

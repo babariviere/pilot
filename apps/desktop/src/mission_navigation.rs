@@ -88,6 +88,7 @@ impl LocalViewer {
     pub(super) fn can_make_mission(&self, cx: &App) -> bool {
         self.page == Page::Chat
             && !self.mission_open
+            && !self.mission.read(cx).pending()
             && !self.add_project_open
             && self
                 .selected

@@ -102,6 +102,9 @@ impl MissionForm {
             .as_ref()
             .is_some_and(|book| book.missions.contains_key(source))
     }
+    pub(crate) fn pending(&self) -> bool {
+        self.pending
+    }
     pub(crate) fn receipt_access(&self, source: &str, project: &str) -> bool {
         self.book
             .as_ref()
@@ -266,8 +269,7 @@ impl MissionForm {
         self.book = state.book.clone();
         self.receipts = state.mission_receipts.clone();
         self.state_error = state.error;
-        if self.open
-            && let Some(reply) = &state.mission
+        if let Some(reply) = &state.mission
             && self.target.as_ref() == Some(&reply.target)
             && self.request == reply.request
             && (self.applied_request != reply.request
@@ -277,7 +279,9 @@ impl MissionForm {
             self.applied_result = Some(reply.result.clone());
             self.pending = matches!(reply.result, Ok(Inspection::Pending));
             self.ready = matches!(reply.result, Ok(Inspection::Ready { .. }));
-            if let Ok(Inspection::Ready { title }) = &reply.result {
+            if self.open
+                && let Ok(Inspection::Ready { title }) = &reply.result
+            {
                 if trim_text(self.title.read(cx).value().as_ref()).is_empty()
                     && !self.marked(window, cx)
                 {
