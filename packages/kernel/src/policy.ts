@@ -274,7 +274,9 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 		lines.push(
 			context.executionPermission.level === "investigate"
 				? "- This chat has investigate permission: Ask/read-only, with no implementation or publication."
-				: "- Build permission includes implementation, verification, task-branch pushes and opening/updating pull requests within the accepted scope. No separate publishing approval is required, including in resumed chats. Merges still require user confirmation in the app; never merge through tools.",
+				: requirePullRequest
+					? "- Build permission includes implementation, verification, task-branch pushes and opening/updating pull requests within the accepted scope. No separate publishing approval is required, including in resumed chats. Merges still require user confirmation in the app; never merge through tools."
+					: "- Build permission includes implementation, verification, commits and pushes to the default branch within the accepted scope. No separate publishing approval is required, including in resumed chats. Never merge pull requests through tools.",
 		);
 
 	if (coordinator)
@@ -337,7 +339,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 			);
 		} else {
 			lines.push(
-				"- This project does not require a pull request. You may commit and push completed, verified work directly to the remote's default branch. Do not open a PR unless the user asks for one; a separate task branch is not required.",
+				"- This project does not require a pull request. When the work is complete and verified, commit it and push it directly to the remote's default branch without waiting to be asked: this project setting is the user's request to commit and push. Do not open a PR unless the user asks for one; a separate task branch is not required.",
 				"- Identify the remote's current default branch before making changes; do not assume it is named main. Fetch and reconcile concurrent upstream changes before pushing. Never force-push or overwrite others' commits. Stop and report if branch protection or a conflict prevents safe delivery.",
 			);
 			if (workspace?.jj) {

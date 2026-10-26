@@ -107,7 +107,10 @@ test("read-only prompts suppress delivery while ordinary and inherited Build inc
 			);
 			const prompt = await extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
 			if (level === "investigate") {
-				assert.doesNotMatch(prompt!, /gh pr create|jj git push|may commit and push|Open one pull request per task/);
+				assert.doesNotMatch(
+					prompt!,
+					/gh pr create|jj git push|commit it and push it|default branch within|Open one pull request per task/,
+				);
 			} else {
 				assert.match(prompt!, /Open one pull request per task/);
 				assert.match(prompt!, requirePullRequest ? /gh pr create/ : /Do not open a PR unless the user asks/);
@@ -117,7 +120,13 @@ test("read-only prompts suppress delivery while ordinary and inherited Build inc
 					prompt!,
 					/Never force-push or perform destructive repository actions without explicit authorization/,
 				);
-				if (level) assert.match(prompt!, /No separate publishing approval is required, including in resumed chats/);
+				if (level) {
+					assert.match(prompt!, /No separate publishing approval is required, including in resumed chats/);
+					assert.match(
+						prompt!,
+						requirePullRequest ? /task-branch pushes/ : /commits and pushes to the default branch/,
+					);
+				}
 			}
 		}
 	}
@@ -831,6 +840,10 @@ test("opting out of PR delivery permits safe default-branch pushes for Git and j
 
 test("explicit project delivery policy also applies without a private workspace", () => {
 	assert.match(pilotPrompt({ requirePullRequest: false }), /does not require a pull request/);
+	assert.match(
+		pilotPrompt({ requirePullRequest: false }),
+		/commit it and push it directly .* without waiting to be asked/,
+	);
 	assert.match(pilotPrompt({ requirePullRequest: true }), /gh pr create/);
 	assert.match(pilotPrompt({ requirePullRequest: true }), /Never push the default branch/);
 	assert.doesNotMatch(pilotPrompt({}), /gh pr create/);
