@@ -7,13 +7,14 @@ const WRAPPER_LINE = 100_000;
 const CHECK_TIMEOUT_MS = 10_000;
 const MAX_ERRORS = 10;
 
-/** Node's watch mode posts module-watch notices to a worker's parent port. They are not check results. */
+/**
+ * Node's watch mode posts module-watch notices to a worker's parent port. They are not check results.
+ * Node posts several notice kinds, `watch:import` and `watch:require` among them, so the whole family is
+ * ignored.
+ */
 function isWatchNotice(message: unknown): boolean {
-	return (
-		typeof message === "object" &&
-		message !== null &&
-		Array.isArray((message as { "watch:import"?: unknown })["watch:import"])
-	);
+	if (typeof message !== "object" || message === null) return false;
+	return Object.keys(message).some((key) => key.startsWith("watch:"));
 }
 
 const PRELUDE = [
