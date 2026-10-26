@@ -339,6 +339,12 @@ captured-row queue guards. Missing/changed messages never become new sends, and
 uncertain writes cannot be retried automatically. Structured/image-bearing messages
 remain intact and cannot be edited as text. See [queued messages](apps/desktop/docs/queued-messages.md).
 
+Pilot Next's **Changes** inspector can open a row's current workspace file in a
+bounded, read-only native detail. Refresh is explicit; capped previews offer
+**Copy shown portion**, not whole-file copy. Binary/unsupported files and server
+refusals remain explicit, with no filesystem fallback. See the
+[file viewer contract](apps/desktop/docs/session-file-view.md).
+
 ### Stopping and system messages
 
 Stop ends the current run and returns your undelivered queued messages to the composer. System messages

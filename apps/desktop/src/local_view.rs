@@ -91,6 +91,8 @@ mod workbench_view;
 pub(crate) mod workspace_changes_probe;
 #[path = "workspace_changes_view.rs"]
 mod workspace_changes_view;
+#[cfg(feature = "native-probes")]
+pub use workspace_changes_view::session_file_view_probe::run_session_file_view_probe;
 use crate::{
     LocalOptions, TranscriptView,
     app_icon::AppIcon,

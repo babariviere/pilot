@@ -1,5 +1,10 @@
 //! On-open/explicit-refresh only. Each pane owns one cancellable bounded Local reader.
 use super::*;
+#[path = "session_file_view_native.rs"]
+mod session_file_view_native;
+#[cfg(feature = "native-probes")]
+#[path = "session_file_view_probe.rs"]
+pub(crate) mod session_file_view_probe;
 use crate::{
     ui::{self, Action, Text, Tone},
     workspace_changes::{self as model, State},
@@ -8,9 +13,11 @@ use crate::{
 use gpui_kit::{AnyElement, FocusHandle, StatefulInteractiveElement};
 gpui_kit::actions!(workspace_changes, [Close, Toggle]);
 pub(super) struct Pane {
+    file: Option<Entity<session_file_view_native::FilePane>>,
     owner: gpui_kit::WeakEntity<LocalViewer>,
     _watch: Subscription,
     chat: String,
+    cwd: String,
     generation: u64,
     available: bool,
     focus: FocusHandle,
@@ -25,11 +32,19 @@ pub(super) struct Pane {
 impl Pane {
     fn current(&self, v: &LocalViewer) -> bool {
         v.page == Page::Chat
+            && crate::session_file_view_reader::same_source(
+                self.options.as_ref(),
+                v.usage_options.as_ref(),
+            )
             && !v.artifacts_open
             && v.selected.as_ref() == Some(&self.chat)
             && v.generation == self.generation
             && v.state.generation == self.generation
             && v.state.loaded
+            && v.state
+                .chats
+                .iter()
+                .any(|c| c.id == self.chat && c.cwd == self.cwd)
     }
     fn ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.owner
@@ -99,6 +114,16 @@ impl Pane {
 }
 impl Render for Pane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(file) = &self.file {
+            return div()
+                .track_focus(&self.focus)
+                .key_context("WorkspaceChanges")
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .child(file.clone())
+                .into_any_element();
+        }
         let current = self
             .owner
             .upgrade()
@@ -213,6 +238,25 @@ impl Render for Pane {
                     ));
                 }
                 if self.expanded == Some(ix) {
+                    row = row.child(
+                        ui::action(("workspace-open-file", ix), "Open file", Action::Quiet)
+                            .self_start()
+                            .disabled(
+                                !current
+                                    || self.state.busy
+                                    || self.state.error.is_some()
+                                    || self.cwd.is_empty()
+                                    || f.status == "deleted"
+                                    || !crate::session_file_view::valid_path(&f.path),
+                            )
+                            .on_click(cx.listener(move |p, _, w, cx| p.open_file(ix, w, cx))),
+                    );
+                    if f.status == "deleted" {
+                        row = row.child(ui::text(
+                            Text::Caption,
+                            "Deleted in this Changes snapshot. No current file to open.",
+                        ));
+                    }
                     row=row.child(ui::text(Text::Caption,model::display(&f.path))).child(
                         div().id(("workspace-change-diff",ix)).test_support().min_w_0().w_full()
                             .font_family(cx.theme().mono_font_family.clone()).text_sm()
@@ -290,6 +334,7 @@ impl Render for Pane {
                     .min_w_0()
                     .child(content),
             )
+            .into_any_element()
     }
 }
 impl LocalViewer {
@@ -333,7 +378,16 @@ impl LocalViewer {
             self.mission_context_toggle(w, cx);
         }
         let viewer = cx.entity();
+        let cwd = self
+            .state
+            .chats
+            .iter()
+            .find(|c| c.id == chat)
+            .map(|c| c.cwd.clone())
+            .unwrap_or_default();
         let pane = cx.new(|cx| Pane {
+            file: None,
+            cwd,
             owner: viewer.downgrade(),
             _watch: cx.observe(&viewer, |p: &mut Pane, v, cx| {
                 let available = p.current(v.read(cx));
