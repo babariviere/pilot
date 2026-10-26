@@ -99,18 +99,18 @@ mod mission_tasks_probe;
 mod mission_tasks_reader;
 mod mission_tasks_view;
 mod task_status;
-mod task_status_transport;
-mod task_status_view;
 #[cfg(any(test, feature = "native-probes"))]
 mod task_status_fixture;
 #[cfg(feature = "native-probes")]
 mod task_status_probe;
-#[cfg(feature = "native-probes")]
-pub use task_status_probe::run_task_status_probe;
+mod task_status_transport;
+mod task_status_view;
 #[cfg(feature = "native-probes")]
 pub use mission_task_create_probe::run_mission_task_create_probe;
 #[cfg(feature = "native-probes")]
 pub use mission_tasks_probe::run_mission_tasks_probe;
+#[cfg(feature = "native-probes")]
+pub use task_status_probe::run_task_status_probe;
 mod mission_transport;
 mod mission_view;
 mod model;
@@ -122,15 +122,15 @@ mod project_registration_fixture;
 mod question;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::question_probe::run_question_probe;
+#[cfg(feature = "native-probes")]
+mod fonts_probe;
 mod scoped_models;
 #[cfg(any(test, feature = "native-probes"))]
 mod scoped_models_fixture;
 mod scoped_models_view;
 mod scoped_models_worker;
-mod settings_state;
 mod settings_fonts;
-#[cfg(feature = "native-probes")]
-mod fonts_probe;
+mod settings_state;
 #[cfg(feature = "native-probes")]
 pub use fonts_probe::run_fonts_probe;
 mod settings_view;
@@ -217,3 +217,13 @@ mod visual_session;
 mod visual_slider;
 mod visual_wire;
 pub use appearance::{ChromeAssets, follow_appearance, init_appearance};
+
+mod task_edit;
+#[cfg(any(test, feature = "native-probes"))]
+mod task_edit_fixture;
+#[cfg(feature = "native-probes")]
+mod task_edit_probe;
+mod task_edit_transport;
+mod task_edit_view;
+#[cfg(feature = "native-probes")]
+pub use task_edit_probe::run_task_edit_probe;

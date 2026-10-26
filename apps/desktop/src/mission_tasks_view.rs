@@ -18,6 +18,8 @@ use gpui_kit::{
     div, px,
 };
 use std::sync::Arc;
+#[path = "task_edit_pane.rs"]
+mod task_edit_pane;
 
 pub(crate) struct Rows {
     owner: WeakEntity<Pane>,
@@ -91,6 +93,8 @@ pub(crate) struct Pane {
     create_error: Option<&'static str>,
     pub(crate) status_form: Option<Entity<crate::task_status_view::Form>>,
     statuses: Vec<(Entity<crate::task_status_view::Form>, Subscription)>,
+    pub(crate) edit_form: Option<Entity<crate::task_edit_view::Form>>,
+    edits: Vec<(Entity<crate::task_edit_view::Form>, Subscription)>,
 }
 impl Pane {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -110,12 +114,18 @@ impl Pane {
             create_error: None,
             status_form: None,
             statuses: Vec::new(),
+            edit_form: None,
+            edits: Vec::new(),
         }
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
-        self.status_form
+        self.edit_form
             .as_ref()
             .is_some_and(|f| f.read(cx).owns_focus(w, cx))
+            || self
+                .status_form
+                .as_ref()
+                .is_some_and(|f| f.read(cx).owns_focus(w, cx))
             || self
                 .creation
                 .as_ref()
@@ -153,9 +163,13 @@ impl Pane {
         }
     }
     pub(crate) fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.creation
+        self.edit_form
             .as_ref()
             .is_some_and(|f| f.update(cx, |f, cx| f.marked(w, cx)))
+            || self
+                .creation
+                .as_ref()
+                .is_some_and(|f| f.update(cx, |f, cx| f.marked(w, cx)))
     }
     fn new_task(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.marked(w, cx) {
@@ -214,6 +228,7 @@ impl Pane {
         cx.notify();
     }
     fn hide_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.hide_edit(w, cx);
         if let Some(f) = self.status_form.take() {
             if f.read(cx).owns_focus(w, cx) {
                 self.trigger.focus(w, cx);
@@ -599,6 +614,7 @@ impl Render for Pane {
                         .child(
                             div()
                                 .h_flex()
+                                .flex_wrap()
                                 .gap_2()
                                 .child(
                                     ui::action(
@@ -615,6 +631,14 @@ impl Render for Pane {
                                         Action::Quiet,
                                     )
                                     .on_click(cx.listener(|v, _, w, cx| v.change_status(w, cx))),
+                                )
+                                .child(
+                                    ui::action(
+                                        "mission-task-edit",
+                                        "Edit title and body…",
+                                        Action::Quiet,
+                                    )
+                                    .on_click(cx.listener(|v, _, w, cx| v.edit_task(w, cx))),
                                 )
                                 .child(
                                     ui::action("mission-tasks-copy", "Copy task", Action::Quiet)
@@ -660,6 +684,9 @@ impl Render for Pane {
                         ),
                 );
             }
+        }
+        if let Some(form) = &self.edit_form {
+            root = root.child(form.clone());
         }
         if let Some(form) = &self.status_form {
             root = root.child(form.clone());

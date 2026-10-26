@@ -272,3 +272,9 @@ name = "mission_metadata"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "task_edit"
+harness = false
+test = false
+required-features = ["native-probes"]
