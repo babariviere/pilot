@@ -47,12 +47,16 @@ function taskMessage(
 	extra?: string,
 	artifacts: MissionArtifactLink[] = [],
 	links: Pick<MissionResource, "url" | "kind" | "title" | "externalId">[] = [],
+	continuing = false,
 ): string {
 	const task = tasks[0]!;
 	const line = (value: string) => value.replace(/\s+/g, " ").trim();
 	const message = [
 		...(tasks.length === 1
-			? [`Work on mission task #${task.number}: ${task.title}`, ...(task.body ? ["", task.body] : [])]
+			? [
+					`${continuing ? "Continue" : "Work on"} mission task #${task.number}: ${task.title}`,
+					...(task.body ? ["", task.body] : []),
+				]
 			: [
 					"Work on these mission tasks in order:",
 					...tasks.flatMap((item) => ["", `#${item.number}: ${item.title}`, ...(item.body ? [item.body] : [])]),
@@ -78,7 +82,9 @@ function taskMessage(
 			: []),
 		"",
 		tasks.length === 1
-			? "This task is already claimed for this chat. Start by reading the mission with the mission tool."
+			? continuing
+				? "This task is already claimed for this chat. Continue where you stopped, and read the mission with the mission tool."
+				: "This task is already claimed for this chat. Start by reading the mission with the mission tool."
 			: "All these tasks are already claimed for this chat. Start by reading the mission with the mission tool.",
 	].join("\n");
 	if (message.length > 4000)
@@ -687,6 +693,25 @@ export class MissionService {
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
 		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
+		// A released task keeps its chat. Continuing there preserves the work it already did and avoids
+		// a second chat with the same title and the same opening message.
+		const holders = tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
+		if (holders.length === 1) {
+			const holder = holders[0]!;
+			this.store.claimTask(missionId, tasks[0]!.id, holder.id);
+			this.store.recordTaskStart(
+				missionId,
+				tasks[0]!.id,
+				holder.model ?? selection.model,
+				holder.thinking ?? selection.thinking,
+			);
+			await this.sessions.send(
+				holder.id,
+				taskMessage(tasks, request.message, taskArtifacts, promptLinks, true),
+				"followUp",
+			);
+			return holder;
+		}
 		const session = await this.sessions.spawn(
 			{
 				projectId: mission.projectId,

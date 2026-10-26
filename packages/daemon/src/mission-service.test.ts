@@ -270,6 +270,35 @@ test("user phase-gating override survives final spawn admission; changed gates a
 	assert.equal(f.store.task(id, b.id).sessionId, undefined);
 });
 
+test("a released task continues in the chat that held it instead of opening a duplicate", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Resumed" });
+	const task = f.store.addTask(id, {
+		title: "Take a book off the shelf",
+		body: "The server has DELETE /api/v1/library/books.",
+	});
+	const first = await f.service.startTask(id, task.id);
+	assert.equal(f.store.task(id, task.id).sessionId, first.id);
+	const chats = f.workers.size;
+	// The chat's turn failed, so the coordinator released the claim and started the task again.
+	f.store.releaseTask(id, task.id);
+	const again = await f.service.startTask(id, task.id);
+	assert.equal(again.id, first.id, "a released task continues in the chat that held it");
+	assert.equal(f.store.task(id, task.id).sessionId, first.id);
+	assert.equal(f.workers.size, chats, "a restarted task opens no second chat");
+	const inputs = await until(() => {
+		const worker = f.workers.get(first.id);
+		const found = [...(worker?.requests ?? []), ...(worker?.sent ?? [])]
+			.filter((command) => command.type === "input")
+			.map((command) => (command.type === "input" ? command.content : ""));
+		return found.length ? found : undefined;
+	});
+	assert.ok(
+		inputs.some((content) => content.startsWith("Continue mission task #")),
+		"the continued task asks the chat to continue instead of starting over",
+	);
+});
+
 test("session summaries resolve current membership without attention or task-detail reads", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

@@ -366,6 +366,8 @@ interface SessionMeta extends OutcomeMeta {
 	executionEvidence?: import("@pilot/kernel").ExecutionEvidence;
 	/** Durable execution-ownership fence. Never cleared by reconnect, restart or a fresh input. */
 	delegationFenced?: boolean;
+	/** Mission tasks this chat was started for. Kept after a claim is released, so a restarted task can resume here. */
+	taskIds?: string[];
 	/** Stable create reservation. Never reuse this session ID for another operation. */
 	createOperationId?: string;
 	createMissionId?: string;
@@ -3650,6 +3652,24 @@ export class SessionManager {
 		return this.modelCatalog.selectTaskModel(cwd, model, thinking);
 	}
 
+	/**
+	 * Member chats that were started for these mission tasks. A released task keeps its chat, so a
+	 * restarted task can continue there instead of opening a duplicate. A chat whose worker could not
+	 * start is not offered: its own failure would repeat.
+	 */
+	taskHolders(missionId: string, taskIds: readonly string[]): SessionSummary[] {
+		const wanted = new Set(taskIds);
+		const holders: SessionSummary[] = [];
+		for (const meta of this.metas.values()) {
+			if (meta.archivedAt !== undefined) continue;
+			if (this.missions?.membership(meta.id)?.missionId !== missionId) continue;
+			if (meta.failure !== undefined || meta.recoveryStopped) continue;
+			if (!meta.taskIds?.some((id) => wanted.has(id))) continue;
+			holders.push(this.summary(meta));
+		}
+		return holders;
+	}
+
 	/** Quota-paused work resumes in place only when the provider can interpret its existing context. */
 	async continueModel(
 		id: string,
@@ -4844,6 +4864,7 @@ export class SessionManager {
 			lastUserMessageAt: now,
 			...(model ? { model } : {}),
 			...(request.thinking ? { thinking: request.thinking } : {}),
+			...(taskId ? { taskIds: Array.isArray(taskId) ? [...taskId] : [taskId] } : {}),
 		};
 		try {
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
