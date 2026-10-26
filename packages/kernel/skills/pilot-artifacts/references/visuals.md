@@ -79,9 +79,12 @@ two slow frames in a row stop the canvas with the error. Keep frames to a few th
 
 ## Mermaid
 
-`ui.mermaid(source)` draws a Mermaid diagram natively at its natural size, shrunk to fit the column and 480 pt;
-readers expand it to zoom. Use it for flowcharts, sequence, class, state and ER diagrams, alone or beside other
-nodes. The source must start with a diagram type (`flowchart`, `sequenceDiagram`...), at most 20 KiB.
+`ui.mermaid(source)` accepts a bounded native flowchart subset, at most20KiB UTF-8:
+`flowchart`/`graph` plus `TD`, `TB`, `BT`, `LR` or `RL`; ASCII letter-led IDs;
+plain Unicode labels in `[]`, `()` or `{}`; `-->`/`---` and optional `|edge label|`.
+Chains and newline/semicolon statements are supported. Limits:48nodes,96edges,
+24ranks; node labels48graphemes (16 in diamonds), edge labels24. Use explicit
+Source/Expand controls to inspect the natural-size diagram.
 
 ```js
 function visual({ ui }) {
@@ -96,7 +99,11 @@ function visual({ ui }) {
 }
 ```
 
-Pilot draws the diagram with Mermaid in a web view instead when its native renderer can't read it faithfully.
+Check/publication rejects malformed syntax as **Invalid Mermaid**, unvalidated
+grammar as **Unsupported Mermaid**, and over-limit input separately. No browser
+fallback. Sequence/class/state/ER, cycles/self/parallel links, subgraphs, styles,
+click actions, directives, HTML/Markdown labels and escapes are unsupported.
+Previously stored sources remain inspectable; this does not certify their syntax.
 
 ## Shader
 

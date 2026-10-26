@@ -335,10 +335,10 @@ const nodes = {
 			source: Type.String({
 				maxLength: 20 * 1024,
 				description:
-					"Mermaid source starting with a diagram type (flowchart, sequenceDiagram...). Drawn natively, or by Mermaid in a web view when the native renderer cannot read it faithfully.",
+					"Bounded native flowchart/graph source. Check/publication rejects invalid syntax, unsupported grammar and limits; no browser fallback.",
 			}),
 		},
-		{ ...strict, description: "A Mermaid diagram at its natural size, shrunk to fit the column and 480 pt." },
+		{ ...strict, description: "A bounded native Mermaid flowchart with exact source inspection and expansion." },
 	),
 };
 

@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn native_and_publication_share_typed_syntax_admission_corpus() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../packages/protocol/fixtures/mermaid/syntax.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        let kind = match prepare(case["source"].as_str().unwrap()) {
+            Ok(_) => "supported",
+            Err(Bad::Invalid(_)) => "invalid",
+            Err(Bad::Unsupported(_)) => "unsupported",
+            Err(Bad::Limit(_)) => "limit",
+        };
+        assert_eq!(kind, case["kind"].as_str().unwrap(), "{}", case["name"]);
+    }
+}
+
+#[test]
 fn common_flowchart_corpus_preserves_every_label_edge_shape_and_direction() {
     for direction in ["TD", "TB", "LR", "BT", "RL"] {
         let source = format!(

@@ -1,0 +1,192 @@
+[
+	{
+		"name": "chain",
+		"source": "graph TD\nA --> B --> C",
+		"kind": "supported"
+	},
+	{
+		"name": "branches",
+		"source": "flowchart LR\nA[Request] --> B{Cached?}\nB -->|yes| C[Reply]\nB -->|no| D[Render] --> C",
+		"kind": "supported"
+	},
+	{
+		"name": "unicode",
+		"source": "graph BT\nA[\"Café 👩🏽‍💻 中文\"] -->|Sí| B(Done)",
+		"kind": "supported"
+	},
+	{
+		"name": "bare then explicit",
+		"source": "graph RL; A --> B; A[Later]; A --- C",
+		"kind": "supported"
+	},
+	{
+		"name": "comment is inert",
+		"source": "%% unclosed \" quote [ is ordinary comment\nflowchart TB\nA --> B\n%% no closing ] needed",
+		"kind": "supported"
+	},
+	{
+		"name": "missing destination",
+		"source": "graph TD\nA -->",
+		"kind": "invalid"
+	},
+	{
+		"name": "unclosed node",
+		"source": "graph TD\nA[Start --> B",
+		"kind": "invalid"
+	},
+	{
+		"name": "unclosed quote",
+		"source": "graph TD\nA[\"Start] --> B",
+		"kind": "invalid"
+	},
+	{
+		"name": "unclosed edge label",
+		"source": "graph TD\nA -->|yes B",
+		"kind": "invalid"
+	},
+	{
+		"name": "missing edge",
+		"source": "graph TD\nA B",
+		"kind": "invalid"
+	},
+	{
+		"name": "junk after edge",
+		"source": "graph TD\nA --> B garbage",
+		"kind": "invalid"
+	},
+	{
+		"name": "missing direction",
+		"source": "flowchart\nA --> B",
+		"kind": "invalid"
+	},
+	{
+		"name": "bad direction",
+		"source": "flowchart XX\nA --> B",
+		"kind": "invalid"
+	},
+	{
+		"name": "empty graph",
+		"source": "graph TD",
+		"kind": "invalid"
+	},
+	{
+		"name": "control",
+		"source": "graph TD\nA[bad\u0000text]",
+		"kind": "invalid"
+	},
+	{
+		"name": "empty source",
+		"source": "",
+		"kind": "invalid"
+	},
+	{
+		"name": "sequence",
+		"source": "sequenceDiagram\nA->>B: Hello",
+		"kind": "unsupported"
+	},
+	{
+		"name": "metadata",
+		"source": "---\ntitle: Turn\n---\ngraph TD\nA --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "subgraph",
+		"source": "graph TD\nsubgraph group\nA --> B\nend",
+		"kind": "unsupported"
+	},
+	{
+		"name": "style",
+		"source": "graph TD\nA --> B\nstyle A fill:red",
+		"kind": "unsupported"
+	},
+	{
+		"name": "directive",
+		"source": "%%{init: {}}%%\ngraph TD\nA --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "click",
+		"source": "graph TD\nA --> B\nclick A href https://example.com",
+		"kind": "unsupported"
+	},
+	{
+		"name": "html",
+		"source": "graph TD\nA[<b>HTML</b>] --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "markdown",
+		"source": "graph TD\nA[`bold`] --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "escapes",
+		"source": "graph TD\nA[one\\ntwo] --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "numeric ids",
+		"source": "graph TD\n1 --> 2",
+		"kind": "unsupported"
+	},
+	{
+		"name": "nonascii ids",
+		"source": "graph TD\n日本 --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "dashed",
+		"source": "graph TD\nA -.-> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "long link",
+		"source": "graph TD\nA ----> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "labelled link",
+		"source": "graph TD\nA -- hello --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "class assignment",
+		"source": "graph TD\nA --> B:::hot",
+		"kind": "unsupported"
+	},
+	{
+		"name": "parallel links",
+		"source": "graph TD\nA --> B; A --> B",
+		"kind": "unsupported"
+	},
+	{
+		"name": "self link",
+		"source": "graph TD\nA --> A",
+		"kind": "unsupported"
+	},
+	{
+		"name": "cycle",
+		"source": "graph TD\nA --> B --> A",
+		"kind": "unsupported"
+	},
+	{
+		"name": "conflicting declaration",
+		"source": "graph TD\nA[One]; A[Two]",
+		"kind": "unsupported"
+	},
+	{
+		"name": "long label",
+		"source": "graph TD\nA[abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz]",
+		"kind": "limit"
+	},
+	{
+		"name": "sequence quote is not flowchart syntax",
+		"source": "sequenceDiagram\nA->>B: say \"hello",
+		"kind": "unsupported"
+	},
+	{
+		"name": "escaped quote is unsupported not an invalid unclosed quote",
+		"source": "graph TD\nA[\"one\\\"two\"] --> B",
+		"kind": "unsupported"
+	}
+]

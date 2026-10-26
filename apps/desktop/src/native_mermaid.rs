@@ -19,7 +19,31 @@ impl Prepared {
     }
 }
 
-pub(crate) type Bad = &'static str;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Bad {
+    Invalid(&'static str),
+    Unsupported(&'static str),
+    Limit(&'static str),
+}
+impl Bad {
+    pub(crate) fn heading(self) -> &'static str {
+        match self {
+            Self::Invalid(_) => "Invalid Mermaid",
+            Self::Unsupported(_) => "Unsupported Mermaid",
+            Self::Limit(_) => "Mermaid limit exceeded",
+        }
+    }
+    pub(crate) fn detail(self) -> &'static str {
+        match self {
+            Self::Invalid(s) | Self::Unsupported(s) | Self::Limit(s) => s,
+        }
+    }
+}
+impl std::fmt::Display for Bad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.heading(), self.detail())
+    }
+}
 pub(crate) const MAX_SOURCE: usize = 20 * 1024;
 const MAX_NODES: usize = 48;
 const MAX_EDGES: usize = 96;
@@ -76,19 +100,68 @@ pub(crate) const NODE_H: f32 = 88.;
 /// O(source bytes), bounded slices before any graph allocation; no regex/backtracking.
 fn statements(source: &str) -> Result<Vec<&str>, Bad> {
     if source.len() > MAX_SOURCE {
-        return Err("Diagram exceeds the 20 KiB source limit.");
+        return Err(Bad::Limit("Diagram exceeds the 20 KiB source limit."));
     }
     if source
         .chars()
         .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
     {
-        return Err("Control characters are not supported.");
+        return Err(Bad::Invalid("Control characters are not supported."));
+    }
+    // Another diagram's quote/bracket rules are not this flowchart grammar.
+    // Refuse it as unsupported before lexing its body, not falsely as invalid.
+    if let Some(header) = source
+        .lines()
+        .map(str::trim)
+        .find(|s| !s.is_empty() && !s.starts_with("%%"))
+    {
+        let kind = header
+            .split(|c: char| c.is_whitespace() || c == ';')
+            .next()
+            .unwrap_or("");
+        if !["graph", "flowchart"].contains(&kind) {
+            return Err(Bad::Unsupported(
+                "Only the native flowchart/graph subset can be validated.",
+            ));
+        }
     }
     let mut result = Vec::new();
     let mut start = 0;
     let mut close = None;
     let mut quoted = false;
+    let mut comment = false;
+    let mut comments = 0;
     for (i, c) in source.char_indices() {
+        if comment {
+            if c == '\n' {
+                comment = false;
+                start = i + 1;
+            }
+            continue;
+        }
+        if !quoted
+            && close.is_none()
+            && c == '%'
+            && source[start..i].trim().is_empty()
+            && source[i..].starts_with("%%")
+        {
+            if source[i + 2..].trim_start().starts_with('{') {
+                return Err(Bad::Unsupported(
+                    "Directives are outside the native subset.",
+                ));
+            }
+            comments += 1;
+            if comments + result.len() > MAX_STATEMENTS {
+                return Err(Bad::Limit("Too many diagram statements."));
+            }
+            comment = true;
+            continue;
+        }
+        if c == '\\' && (quoted || close.is_some()) {
+            return Err(Bad::Unsupported(
+                "Escaped labels are outside the native subset.",
+            ));
+        }
         if c == '"' {
             quoted = !quoted;
         }
@@ -108,8 +181,8 @@ fn statements(source: &str) -> Result<Vec<&str>, Bad> {
                 if matches!(c, '\n' | ';') {
                     let s = source[start..i].trim();
                     if !s.is_empty() {
-                        if result.len() >= MAX_STATEMENTS {
-                            return Err("Too many diagram statements.");
+                        if comments + result.len() >= MAX_STATEMENTS {
+                            return Err(Bad::Limit("Too many diagram statements."));
                         }
                         result.push(s);
                     }
@@ -118,13 +191,16 @@ fn statements(source: &str) -> Result<Vec<&str>, Bad> {
             }
         }
     }
+    if comment {
+        start = source.len();
+    }
     if close.is_some() || quoted {
-        return Err("Unclosed diagram label.");
+        return Err(Bad::Invalid("Unclosed diagram label."));
     }
     let s = source[start..].trim();
     if !s.is_empty() {
-        if result.len() >= MAX_STATEMENTS {
-            return Err("Too many diagram statements.");
+        if comments + result.len() >= MAX_STATEMENTS {
+            return Err(Bad::Limit("Too many diagram statements."));
         }
         result.push(s);
     }
@@ -137,9 +213,10 @@ fn label(raw: &str, max: usize) -> Result<String, Bad> {
     } else {
         raw
     };
+    if text.len() > 512 || text.graphemes(true).take(max + 1).count() > max {
+        return Err(Bad::Limit("Label exceeds native length limits."));
+    }
     if text.is_empty()
-        || text.len() > 512
-        || text.graphemes(true).take(max + 1).count() > max
         || text.chars().any(|c| {
             c.is_control()
                 || matches!(
@@ -149,7 +226,9 @@ fn label(raw: &str, max: usize) -> Result<String, Bad> {
                 || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
         })
     {
-        return Err("Label exceeds limits or uses unsupported markup/escapes.");
+        return Err(Bad::Unsupported(
+            "Label exceeds limits or uses unsupported markup/escapes.",
+        ));
     }
     Ok(text.into())
 }
@@ -178,8 +257,24 @@ impl<'a> Cursor<'a> {
             .bytes()
             .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
             .count();
-        if n == 0 || n > 64 || !self.0.as_bytes()[0].is_ascii_alphabetic() {
-            return Err("Expected an ASCII node ID (letter, then letters/digits/underscore).");
+        if self.0.is_empty() {
+            return Err(Bad::Invalid("Expected a node after the edge."));
+        }
+        if n > 64 {
+            return Err(Bad::Limit("Node ID exceeds 64 bytes."));
+        }
+        if n == 0 {
+            if self.0.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                return Err(Bad::Unsupported(
+                    "Only ASCII node IDs are supported natively.",
+                ));
+            }
+            return Err(Bad::Invalid("Expected a node ID."));
+        }
+        if !self.0.as_bytes()[0].is_ascii_alphabetic() {
+            return Err(Bad::Unsupported(
+                "Node IDs must start with an ASCII letter in the native subset.",
+            ));
         }
         let id = &self.0[..n];
         self.0 = &self.0[n..];
@@ -195,7 +290,9 @@ impl<'a> Cursor<'a> {
         ]
         .contains(&id)
         {
-            return Err("Subgraphs, styling and actions are not supported natively.");
+            return Err(Bad::Unsupported(
+                "Subgraphs, styling and actions are not supported natively.",
+            ));
         }
         self.space();
         let syntax = [
@@ -207,7 +304,7 @@ impl<'a> Cursor<'a> {
         .find(|(open, _, _)| self.0.starts_with(*open));
         let (text, shape, explicit) = if let Some((_, close, shape)) = syntax {
             self.0 = &self.0[1..];
-            let end = self.0.find(close).ok_or("Unclosed node.")?;
+            let end = self.0.find(close).ok_or(Bad::Invalid("Unclosed node."))?;
             let text = label(
                 &self.0[..end],
                 if shape == Shape::Diamond { 16 } else { 48 },
@@ -221,7 +318,9 @@ impl<'a> Cursor<'a> {
             if explicit {
                 let old = &mut graph.nodes[ix];
                 if old.explicit && (old.label != text || old.shape != shape) {
-                    return Err("Conflicting node declarations are not supported.");
+                    return Err(Bad::Unsupported(
+                        "Conflicting node declarations are not supported.",
+                    ));
                 }
                 old.label = text;
                 old.shape = shape;
@@ -230,7 +329,7 @@ impl<'a> Cursor<'a> {
             return Ok(ix);
         }
         if graph.nodes.len() == MAX_NODES {
-            return Err("Diagram exceeds 48 nodes.");
+            return Err(Bad::Limit("Diagram exceeds 48 nodes."));
         }
         let ix = graph.nodes.len();
         graph.nodes.push(Node {
@@ -248,13 +347,22 @@ pub(crate) fn parse(source: &str) -> Result<Graph, Bad> {
     let mut statements = statements
         .into_iter()
         .filter(|s| !s.starts_with("%%") || s.starts_with("%%{"));
-    let header = statements.next().ok_or("Empty Mermaid source.")?;
+    let header = statements
+        .next()
+        .ok_or(Bad::Invalid("Empty Mermaid source."))?;
     let parts: Vec<_> = header.split_whitespace().take(4).collect();
+    if !["flowchart", "graph"].contains(&parts[0]) {
+        return Err(Bad::Unsupported(
+            "Only the native flowchart/graph subset can be validated.",
+        ));
+    }
     if parts.len() != 2
         || !["flowchart", "graph"].contains(&parts[0])
         || !["TD", "TB", "BT", "LR", "RL"].contains(&parts[1])
     {
-        return Err("Native subset supports flowchart/graph TD, TB, BT, LR and RL only.");
+        return Err(Bad::Invalid(
+            "Expected flowchart/graph followed by TD, TB, BT, LR or RL.",
+        ));
     }
     let mut graph = Graph {
         nodes: Vec::new(),
@@ -268,15 +376,31 @@ pub(crate) fn parse(source: &str) -> Result<Graph, Bad> {
         let mut from = cursor.endpoint(&mut graph, &mut ids)?;
         cursor.space();
         while !cursor.0.is_empty() {
+            if ["----", "--->", "==", "-.", "<", "~", "&", ":::", "@"]
+                .iter()
+                .any(|token| cursor.0.starts_with(token))
+                || (cursor.0.starts_with("--")
+                    && !cursor.0.starts_with("-->")
+                    && !cursor.0.starts_with("---"))
+            {
+                return Err(Bad::Unsupported(
+                    "This edge/style syntax is outside the native subset.",
+                ));
+            }
             let arrow = if cursor.take("-->") {
                 true
             } else if cursor.take("---") {
                 false
             } else {
-                return Err("Unsupported statement or edge syntax. No partial diagram is shown.");
+                return Err(Bad::Invalid(
+                    "Expected --> or --- between nodes. No partial diagram is shown.",
+                ));
             };
             let text = if cursor.take("|") {
-                let end = cursor.0.find('|').ok_or("Unclosed edge label.")?;
+                let end = cursor
+                    .0
+                    .find('|')
+                    .ok_or(Bad::Invalid("Unclosed edge label."))?;
                 let text = label(&cursor.0[..end], 24)?;
                 cursor.0 = &cursor.0[end + 1..];
                 text
@@ -285,10 +409,12 @@ pub(crate) fn parse(source: &str) -> Result<Graph, Bad> {
             };
             let to = cursor.endpoint(&mut graph, &mut ids)?;
             if graph.edges.len() == MAX_EDGES {
-                return Err("Diagram exceeds 96 edges.");
+                return Err(Bad::Limit("Diagram exceeds 96 edges."));
             }
             if from == to || graph.edges.iter().any(|e| e.from == from && e.to == to) {
-                return Err("Self links and parallel edges are not supported natively.");
+                return Err(Bad::Unsupported(
+                    "Self links and parallel edges are not supported natively.",
+                ));
             }
             graph.edges.push(Edge {
                 from,
@@ -301,7 +427,7 @@ pub(crate) fn parse(source: &str) -> Result<Graph, Bad> {
         }
     }
     if graph.nodes.is_empty() {
-        return Err("Diagram has no nodes.");
+        return Err(Bad::Invalid("Diagram has no nodes."));
     }
     Ok(graph)
 }
@@ -330,11 +456,13 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
         }
     }
     if visited != n {
-        return Err("Cycles are not supported by this native layout. Exact source is retained.");
+        return Err(Bad::Unsupported(
+            "Cycles are not supported by this native layout. Exact source is retained.",
+        ));
     }
     let depth = rank.iter().copied().max().unwrap() + 1;
     if depth > 24 {
-        return Err("Diagram exceeds 24 layout ranks.");
+        return Err(Bad::Limit("Diagram exceeds 24 layout ranks."));
     }
     let slots = n + graph
         .edges
@@ -342,7 +470,7 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
         .map(|e| rank[e.to] - rank[e.from] - 1)
         .sum::<usize>();
     if slots > 128 {
-        return Err("Diagram exceeds 128 layout slots.");
+        return Err(Bad::Limit("Diagram exceeds 128 layout slots."));
     }
     let mut layers = vec![Vec::new(); depth];
     for (i, r) in rank.iter().enumerate() {
@@ -385,7 +513,7 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
     let full_primary = primary[depth - 1] + primary_size + 24.;
     let full_breadth = max_breadth as f32 * breadth_step + 176.;
     if full_primary > 8192. || full_breadth > 8192. || full_primary * full_breadth > 16_777_216. {
-        return Err("Diagram exceeds native coordinate/area limits.");
+        return Err(Bad::Limit("Diagram exceeds native coordinate/area limits."));
     }
     let mut positions = vec![[0.; 2]; slots];
     for (r, layer) in layers.iter().enumerate() {

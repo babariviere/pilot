@@ -273,6 +273,7 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.find(key("source-viewport")).visible());
+                assert_eq!(w.find(key("error")).label(), Some("Unsupported Mermaid"));
                 w.click(key("copy"), cx);
             })
             .unwrap();
@@ -288,6 +289,44 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
                 cx.capture_screenshot(h)
                     .unwrap()
                     .save(dir.join(format!("{}-{}-unsupported.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, _, cx| {
+                let r = pane.read(cx).reference.clone().unwrap();
+                pane.update(cx, |p, cx| {
+                    p.preview(
+                        r,
+                        "Invalid legacy Mermaid".into(),
+                        scene("graph TD\nA -->"),
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+            frame(cx, h);
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find(key("error")).label(), Some("Invalid Mermaid"));
+                assert!(w.find(key("source-viewport")).visible());
+                assert!(
+                    w.try_find(key("drawing")).is_none(),
+                    "invalid syntax must not paint a partial graph"
+                );
+                w.click(key("copy"), cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, _, cx| {
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "graph TD\nA -->"
+                )
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}-invalid.png", width as u32, mode.name())))
                     .unwrap();
             }
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();

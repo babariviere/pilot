@@ -1,6 +1,13 @@
 # Native Mermaid subset
 
 Pilot Next renders a **bounded flowchart subset**, not the Mermaid language.
+New artifact check/publication rejects malformed syntax as **Invalid Mermaid**
+and unvalidated grammar as **Unsupported Mermaid**. Over-limit input is a
+separate error. Stored unsupported/invalid revisions are not deleted: the reader
+shows the explicit error and exact source for inspection/copy, not a successful
+source fallback. Both validators consume the shared syntax admission corpus in
+`packages/protocol/fixtures/mermaid/syntax.json`; no full Mermaid validity is
+claimed for unsupported grammar.
 `ui.mermaid(source)` keeps its existing API-1 schema. `Scene::parse` prepares a
 native plan on the existing artifact reader thread. The view only paints paths,
 native selectable labels and Kit controls. No Mermaid JavaScript, HTML, SVG

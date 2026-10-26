@@ -157,8 +157,8 @@ interface UI {
 		draw: (g: Pen, frame: Frame) => void;
 	}): VisualNode;
 	/**
-	 * A Mermaid diagram at its natural size, shrunk to fit the column and 480 pt. source starts with a diagram type
-	 * (flowchart, sequenceDiagram, classDiagram...), at most 20 KiB.
+	 * A bounded native flowchart/graph subset, at most20KiB UTF-8. Check/publication rejects invalid,
+	 * unsupported and over-limit source distinctly. No browser fallback; see visuals.md for syntax and limits.
 	 */
 	mermaid(source: string, props?: { key?: Key }): VisualNode;
 	/**

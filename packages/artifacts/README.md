@@ -14,6 +14,18 @@ session. Publication results contain pinned references; the transcript also rece
 `pilot.artifact` publication entry, including when a tool is invoked through codemode. A sidebar entry
 always opens the latest revision.
 
+### Native Mermaid admission
+
+New `ui.mermaid` visuals must pass the bounded native flowchart validator in the
+existing isolated check worker, including diagrams revealed by checked controls.
+Malformed syntax fails as **Invalid Mermaid**; grammar outside that subset fails
+as **Unsupported Mermaid**, never as a falsely validated source-only publication.
+Limits fail separately. Create/update writes no revision on these failures;
+existing saved source/history remains readable. No Mermaid JS/browser parser is
+used. The native and publication validators share
+[`syntax.json`](../protocol/fixtures/mermaid/syntax.json); supported syntax and
+limits are documented in [the native renderer contract](../../apps/desktop/docs/native-mermaid.md).
+
 ### Images
 
 Publish a plain PNG, JPEG, GIF or WebP image directly, without authoring HTML:

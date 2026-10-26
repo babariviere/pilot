@@ -64,6 +64,7 @@ pub fn run_native_mermaid_root_probe(cx: &mut HeadlessAppContext) {
         "graph TD\nA[Arrives late] --> B[Done]",
         "graph LR\nX[Changed] --> Y[Later]",
         "sequenceDiagram\nA->>B: unsupported",
+        "graph TD\nA -->",
     ] {
         let scene = crate::visual_scene::Scene::parse(
             serde_json::json!({"api":1,"root":{"type":"mermaid","source":source}}),
@@ -105,7 +106,7 @@ pub fn run_native_mermaid_root_probe(cx: &mut HeadlessAppContext) {
     cx.update_window(h, |_, _, cx| {
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
-            "sequenceDiagram\nA->>B: unsupported"
+            "graph TD\nA -->"
         );
         assert_eq!(input.read(cx).value(), exact);
     })

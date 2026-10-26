@@ -3,6 +3,8 @@
  * control once, re-rendering and validating after each event, and run every canvas draw of the views it sees.
  * Synchronous once the VM exists, so the kernel runs it in a worker thread (check-worker.ts).
  */
+
+import { MermaidError, validateMermaid } from "./mermaid.ts";
 import type { VisualNode, VisualTree } from "./schema.ts";
 import { VISUAL_LIMITS } from "./schema.ts";
 import { type VisualDrawInput, VisualFailure, VisualSession, type VisualSessionOptions } from "./session.ts";
@@ -98,8 +100,20 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 		};
 		collect(first);
 		const diagrams = new Set<string>();
-		const collectDiagrams = (tree: VisualTree) => {
-			for (const node of mermaidOf(tree.root)) diagrams.add(node.source);
+		const collectDiagrams = (tree: VisualTree, steps: Step[] = []) => {
+			for (const node of mermaidOf(tree.root)) {
+				if (!diagrams.has(node.source)) {
+					try {
+						validateMermaid(node.source);
+					} catch (error) {
+						if (!(error instanceof MermaidError)) throw error;
+						throw new VisualFailure(
+							`${error.message} (Mermaid node ${JSON.stringify(node.key ?? "unkeyed")}${steps.length ? `, after ${steps.map(describeStep).join(", ")}` : ""})`,
+						);
+					}
+				}
+				diagrams.add(node.source);
+			}
 		};
 		collectDiagrams(first);
 		let draws = 0;
@@ -169,7 +183,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 					if (!replay) {
 						interactions++;
 						collect(tree);
-						collectDiagrams(tree);
+						collectDiagrams(tree, steps);
 						drawAll(tree, steps);
 						// Controls a step reveals are exercised later, after replaying the steps that revealed them.
 						discover(tree, [...steps]);

@@ -283,15 +283,13 @@ impl Render for View {
                 .into_any_element(),
         };
         if let Err(reason) = self.prepared.diagram {
-            root = root.child(
-                ui::text(
-                    ui::Text::Caption,
-                    SharedString::from(format!(
-                        "{reason} Native subset only, no browser fallback."
-                    )),
-                )
-                .text_color(cx.theme().muted_foreground),
-            );
+            let tone = if matches!(reason, model::Bad::Unsupported(_)) {
+                ui::Tone::Warning
+            } else {
+                ui::Tone::Error
+            };
+            root=root.child(div().id(self.key("error")).test_support().aria_label(reason.heading())
+                .child(ui::Notice::new(reason.heading()).tone(tone).detail(SharedString::from(format!("{} Exact source is retained for inspection/copy, not a rendered fallback. No browser fallback.",reason.detail())))));
         }
         root.child(body)
     }
