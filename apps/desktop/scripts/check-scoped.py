@@ -5,6 +5,8 @@ Examples: --unit bundled_runtime::tests; --unit chat_models --test project_creat
 See ../docs/scoped-checks.md. Never launches the application or a real daemon.
 """
 import argparse
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -81,6 +83,36 @@ def plan(args, root=ROOT):
     return flags, tests, native, bool(worker)
 
 
+def darwin_exited_group(pid, status):
+    """Positive singleton census, never infer cleanup from EPERM/absent PIDs.
+
+    Only the caller's still-unreaped terminal child can justify this fallback.
+    libproc includes zombies and returns PID counts (not byte counts). Two
+    slots ensure any extra member or a full/truncated buffer is rejected.
+    """
+    evidence = {"confirmed": False}
+    if (sys.platform != "darwin" or status is None or status.si_pid != pid
+            or status.si_code not in {os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED}):
+        return evidence
+    try:
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        query = library.proc_listpgrppids
+        query.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+        query.restype = ctypes.c_int
+        members = (ctypes.c_int * 2)()
+        ctypes.set_errno(0)
+        count = query(pid, members, ctypes.sizeof(members))
+        error = ctypes.get_errno()
+        evidence.update(count=count, errno=error, members=list(members))
+        if error == 0 and count == 1 and members[0] == pid and members[1] == 0:
+            # No census can restore ownership lost to an unexpected waiter.
+            current = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            evidence["confirmed"] = current is not None and (current.si_pid, current.si_code, current.si_status) == (pid, status.si_code, status.si_status)
+    except (OSError, AttributeError) as error:
+        evidence.update(errno=getattr(error, "errno", None), query_error=type(error).__name__)
+    return evidence
+
+
 def run(command, root, timeout, records):
     """Bound capture/deadline; only this temporary check's own group is canceled."""
     if signal.getsignal(signal.SIGCHLD) != signal.SIG_DFL:
@@ -120,27 +152,41 @@ def run(command, root, timeout, records):
         successful = status.si_code == os.CLD_EXITED and status.si_status == 0
     finally:
         cleanup_error = None
+        cleanup = {"state": "not-needed", "leader_pid": process.pid}
         if not successful:
             try:
                 # WNOWAIT never consumes the leader. No poll/wait/send_signal
                 # may release it before failure cleanup, including exit7.
-                os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
-            except OSError:
+                retained = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+                cleanup["retained_status"] = None if retained is None else dict(pid=retained.si_pid, code=retained.si_code, status=retained.si_status)
+            except OSError as error:
+                cleanup.update(state="identity-unconfirmed", identity_errno=error.errno)
                 cleanup_error = "Owned check identity was lost; group cleanup is unconfirmed"
             else:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass  # Reserved leader exited without a surviving group.
-                except OSError:
-                    cleanup_error = "Owned check group cleanup is unconfirmed"
+                    cleanup["state"] = "group-signaled"
+                except ProcessLookupError as error:
+                    cleanup.update(state="no-group-target", signal_errno=error.errno)
+                except OSError as error:
+                    cleanup.update(state="group-unconfirmed", signal_errno=error.errno)
+                    if error.errno == errno.EPERM:
+                        # Darwin killpg rejects zombie-only groups. Require an
+                        # affirmative, complete census containing ONLY the same
+                        # retained terminal child, not ESRCH from getpgid/ps.
+                        cleanup["group_census"] = darwin_exited_group(process.pid, retained)
+                        if cleanup["group_census"]["confirmed"]:
+                            cleanup["state"] = "retained-exited-leader-only"
+                    if cleanup["state"] == "group-unconfirmed":
+                        cleanup_error = f"Owned check group cleanup is unconfirmed (killpg errno={error.errno})"
         try:
             code = process.wait(timeout=2)
         except subprocess.TimeoutExpired:
+            cleanup["reap"] = "unconfirmed"
             cleanup_error = "Owned check leader reap is unconfirmed"
         process.stdout.close()
         duration = time.monotonic() - started
-        records.append(dict(command=command, seconds=duration, exit_code=process.returncode,
+        records.append(dict(command=command, seconds=duration, exit_code=process.returncode, cleanup=cleanup,
                             compile_link_and_cargo_seconds_observed=compile_end,
                             execute_and_cargo_seconds_observed=None if compile_end is None else max(0, duration - compile_end)))
         if cleanup_error:

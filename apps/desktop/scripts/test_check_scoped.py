@@ -12,6 +12,7 @@ import signal
 import socket
 import subprocess
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -181,6 +182,76 @@ test=false
         kill.assert_not_called()
         self.assertEqual(records[0]["exit_code"], 0)
 
+    @unittest.skipUnless(scoped.sys.platform == "darwin", "Darwin zombie-group regression")
+    def test_darwin_exited_singleton_preserves_real_nonzero_with_positive_census(self):
+        records, errors = [], []
+        kill_group = scoped.os.killpg
+        def observe(group, number):
+            status = os.waitid(os.P_PID, group, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+            self.assertEqual((status.si_pid, status.si_code, status.si_status), (group, os.CLD_EXITED, 101))
+            try:
+                kill_group(group, number)
+            except OSError as error:
+                errors.append(error.errno)
+                raise
+        with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())), patch.object(scoped.os, "killpg", side_effect=observe), self.assertRaisesRegex(RuntimeError, r"failed \(101\)"):
+            scoped.run([scoped.sys.executable, "-I", "-S", "-c", "import os;os._exit(101)"], self.root, 2, records)
+        self.assertEqual(errors, [errno.EPERM], "reproduce actual native errno, not a mocked permission error")
+        self.assertEqual(records[0]["exit_code"], 101)
+        cleanup = records[0]["cleanup"]
+        self.assertEqual(cleanup["state"], "retained-exited-leader-only")
+        self.assertEqual(cleanup["signal_errno"], errno.EPERM)
+        self.assertEqual(cleanup["group_census"], dict(confirmed=True, count=1, errno=0, members=[cleanup["leader_pid"], 0]))
+
+    def test_census_requires_positive_complete_singleton_and_retained_terminal_identity(self):
+        status = SimpleNamespace(si_pid=12345, si_code=os.CLD_EXITED, si_status=101)
+        for count, members, error, confirmed in [
+            (1, [12345, 0], 0, True),
+            (0, [0, 0], 0, False),
+            (-1, [0, 0], errno.EPERM, False),
+            (1, [12345, 0], errno.EPERM, False),
+            (1, [12346, 0], 0, False),
+            (2, [12345, 12346], 0, False),
+            (3, [12345, 12346], 0, False),
+            (1, [12345, 12346], 0, False),
+        ]:
+            with self.subTest(count=count, members=members, error=error):
+                library = SimpleNamespace()
+                def query(pid, buffer, size):
+                    self.assertEqual((pid, size), (12345, 8))
+                    buffer[0], buffer[1] = members
+                    scoped.ctypes.set_errno(error)
+                    return count
+                library.proc_listpgrppids = query
+                with patch.object(scoped.sys, "platform", "darwin"), patch.object(scoped.ctypes, "CDLL", return_value=library), patch.object(scoped.os, "waitid", return_value=status):
+                    self.assertEqual(scoped.darwin_exited_group(12345, status)["confirmed"], confirmed)
+        for terminal in [None, SimpleNamespace(si_pid=12346, si_code=os.CLD_EXITED, si_status=101),
+                         SimpleNamespace(si_pid=12345, si_code=os.CLD_STOPPED, si_status=signal.SIGSTOP)]:
+            with patch.object(scoped.sys, "platform", "darwin"), patch.object(scoped.ctypes, "CDLL") as load:
+                self.assertFalse(scoped.darwin_exited_group(12345, terminal)["confirmed"])
+                load.assert_not_called()
+        with patch.object(scoped.sys, "platform", "linux"), patch.object(scoped.ctypes, "CDLL") as load:
+            self.assertFalse(scoped.darwin_exited_group(12345, status)["confirmed"])
+            load.assert_not_called()
+        with patch.object(scoped.sys, "platform", "darwin"), patch.object(scoped.ctypes, "CDLL", side_effect=OSError(errno.EPERM, "denied")):
+            self.assertFalse(scoped.darwin_exited_group(12345, status)["confirmed"])
+        def singleton(pid, buffer, size):
+            buffer[0] = pid
+            return 1
+        library = SimpleNamespace(proc_listpgrppids=singleton)
+        for changed in [None, SimpleNamespace(si_pid=12345, si_code=os.CLD_EXITED, si_status=102), ChildProcessError(errno.ECHILD, "lost")]:
+            with patch.object(scoped.sys, "platform", "darwin"), patch.object(scoped.ctypes, "CDLL", return_value=library), patch.object(scoped.os, "waitid", **({"side_effect":changed} if isinstance(changed, BaseException) else {"return_value":changed})):
+                self.assertFalse(scoped.darwin_exited_group(12345, status)["confirmed"])
+
+    def test_signal_refusal_without_proof_stays_unconfirmed_and_records_errno(self):
+        for number in [errno.EPERM, errno.EACCES]:
+            records = []
+            with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())), patch.object(scoped.os, "killpg", side_effect=OSError(number, "synthetic refusal")), patch.object(scoped, "darwin_exited_group", return_value={"confirmed":False}) as census, self.assertRaisesRegex(RuntimeError, "cleanup is unconfirmed"):
+                scoped.run([scoped.sys.executable, "-c", "raise SystemExit(101)"], self.root, 2, records)
+            self.assertEqual(records[0]["exit_code"], 101)
+            self.assertEqual(records[0]["cleanup"]["signal_errno"], number)
+            self.assertEqual(census.call_count, int(number == errno.EPERM))
+
     def test_system_and_path_bash_keep_actual_wrapper_bounds_and_failure(self):
         scripts = self.root / "scripts"
         scripts.mkdir()
@@ -229,7 +300,7 @@ test=false
                 parent.kill()
                 parent.communicate()
 
-    def exited_leader_fixture(self, inherited_stdout):
+    def exited_leader_fixture(self, inherited_stdout, denied=False):
         # A private connection is both the liveness oracle and cleanup handle.
         # Even a broken runner cannot leave the fixture's finite child behind:
         # closing this connection releases it, without signaling any PID/file ID.
@@ -274,17 +345,27 @@ test=false
                 self.assertIsNotNone(status, "exited child remains reserved until signal")
                 self.assertEqual((status.si_code, status.si_status), (os.CLD_EXITED, 7))
                 signaled.append(group)
+                if denied:
+                    raise PermissionError(errno.EPERM, "synthetic group signal denial with a real live descendant")
                 kill_group(group, number)
             try:
                 with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())), patch.object(scoped.os, "killpg", side_effect=checked_signal), self.assertRaises(RuntimeError) as outcome:
                     scoped.run([scoped.sys.executable, "-c", leader], self.root, 1, records)
-                self.assertIn("deadline" if inherited_stdout else "failed (7)", str(outcome.exception))
+                self.assertIn("cleanup is unconfirmed" if denied else ("deadline" if inherited_stdout else "failed (7)"), str(outcome.exception))
                 self.assertTrue(ready.wait(3), "finite child established private lifetime handle")
                 self.assertFalse(errors)
                 self.assertEqual(records[0]["exit_code"], 7)
                 self.assertEqual(len(signaled), 1)
-                connections[0].settimeout(0.5)
-                self.assertEqual(connections[0].recv(1), b"", "owned descendant must exit despite leader already exiting")
+                if denied:
+                    connections[0].settimeout(0.05)
+                    with self.assertRaises(socket.timeout):
+                        connections[0].recv(1)
+                    self.assertEqual(records[0]["cleanup"]["signal_errno"], errno.EPERM)
+                    self.assertFalse(records[0]["cleanup"]["group_census"]["confirmed"])
+                    self.assertEqual(records[0]["cleanup"]["group_census"]["count"], 2)
+                else:
+                    connections[0].settimeout(0.5)
+                    self.assertEqual(connections[0].recv(1), b"", "owned descendant must exit despite leader already exiting")
             finally:
                 # On regression this EOF, not PID signaling, releases the child.
                 listener.close()
@@ -307,6 +388,10 @@ test=false
 
     def test_exited_nonzero_leader_with_redirected_child_does_not_leave_owned_descendant(self):
         self.exited_leader_fixture(False)
+
+    @unittest.skipUnless(scoped.sys.platform == "darwin", "Darwin positive census negative control")
+    def test_darwin_denied_group_with_live_descendant_is_never_singleton_success(self):
+        self.exited_leader_fixture(False, denied=True)
 
 
 if __name__ == "__main__":

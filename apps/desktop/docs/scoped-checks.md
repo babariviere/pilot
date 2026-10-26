@@ -207,3 +207,45 @@ refused, and lost ownership never triggers a group signal or successful result.
 Fixture cleanup releases its child through owned socket EOF, even against the
 broken implementation; its finite fallback prevents an unbounded test orphan.
 No Rust/native/full suite or additional benchmark was run for this repair.
+
+### Darwin exited-singleton cleanup
+
+On macOS, `killpg(SIGKILL)` can return `EPERM` for a group whose only member
+is its exited, still-unreaped leader. A fresh synthetic exit101 reproduced
+this while `waitid(WNOWAIT)` retained the actual child; even `getpgid` and
+`getsid` returned `ESRCH`. Neither permission errors nor PID/`ps` absence
+prove cleanup. The earlier generic error also discarded the actual signal
+errno, making historical failures impossible to classify from that report alone.
+
+The narrow fallback runs only after Darwin `EPERM` and a terminal, retained
+actual child. The system `libproc.proc_listpgrppids` census must positively
+return exactly that one leader and no other member. It returns **PID counts**,
+not bytes. A two-PID buffer rejects any extra member or full/truncated result;
+empty results, query errors and unexpected values do not establish cleanup.
+Another non-consuming wait must confirm the same terminal child/status before
+the leader is reaped. The kernel enumeration includes live and zombie members;
+this is affirmative singleton evidence, not a rule that `EPERM` means gone.
+Even multiple zombies remain conservatively unconfirmed. No stale PID/group
+from a report is accepted as signaling authority.
+
+Per-command reports now retain the actual leader PID, retained status, signal
+errno, census result when applicable and cleanup/reap disposition. A confirmed
+exited singleton still fails with its original nonzero command status, never a
+passing test. Live descendants, failed queries, lost ownership, deadline/output
+failures and nonzero exits retain their existing guards. This does not supervise
+escaped groups or authorize any app/daemon cleanup.
+
+21 Python-faux regressions passed, including the real native exit101/EPERM
+condition, positive singleton census, injected denial with an actual live
+descendant (rejected and released through its private lifetime socket), incomplete
+or denied census and changed/lost retained identity. Existing inherited-pipe and
+redirected-descendant cleanup, cancellation, deadline/cap, nonzero/zero-result,
+admission and copied-wrapper resource guards also passed. No Cargo/native UI,
+app/service action or performance experiment was needed for this helper-only fix.
+
+The historical gallery compile failure that motivated this investigation had
+already reaped its leader without recording its group identity or signal errno.
+Fresh reproductions and the new helper do **not** retroactively prove that job's
+cleanup or release its source freeze. Preserve that failed receipt and report
+its original cleanup as unconfirmed unless separate authoritative evidence is
+available.
