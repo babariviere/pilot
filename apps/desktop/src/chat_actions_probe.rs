@@ -1,6 +1,8 @@
 //! Actual production rows/Kit menus, synthetic HTTP/private drafts, offscreen only.
 #[path = "chat_actions_selected_probe.rs"]
 mod selected;
+#[path = "chat_actions_capacity_probe.rs"]
+mod capacity;
 use super::*;
 use crate::chat_actions_fixture::{self as f, Behavior, Daemon, Seen};
 use gpui_kit::{
@@ -132,6 +134,7 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf
     }
 }
 pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
+    capacity::run(cx);
     let case = std::env::var("PILOT_NEXT_CHAT_ACTIONS_CASE").ok();
     assert!(
         case.as_deref()

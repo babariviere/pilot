@@ -62,7 +62,7 @@ every lost/malformed/mismatched/non-200 response after POST dispatch stays
 or WebSocket summary describes current state, never settles that missing ACK.
 
 An actual matching 200 is shown as **Confirmed** for the original target. The
-bounded per-window report keeps request identity, known ACK and unknown outcome
+per-window report keeps request identity, known ACK and unknown outcome
 independent of current selection. Late/duplicate completions cannot overwrite a
 terminal result. New actions are serialized; unknown targets are blocked from
 automatic or repeated mutation. Reports are in memory, not promised across
@@ -88,9 +88,10 @@ There are no retries, idle polling, environment/disk reads in render or per-row
 timers. Requests/responses use bounded channels; HTTP has 2-second connect and
 5-second request deadlines, redirects/proxies/retries disabled, 256 KiB response
 admission and 64 KiB retained action-metadata admission. Pending text and job
-content are not retained in evidence, only counts. At most 16 target reports
-are retained per window; capacity refuses new targets instead of dropping
-unknown evidence. Worker exit closes its command lane, and teardown never joins
+content are not retained in evidence, only counts. Reports retain the latest
+operation per target without a distinct-chat lifetime admission limit. Completed
+actions never exhaust capacity; pending and Unknown evidence and exact ACK editor
+fences are not evicted to admit other targets. Worker exit closes its command lane, and teardown never joins
 HTTP on the UI thread.
 
 ## Scoped verification
@@ -107,6 +108,12 @@ Policy/faux tests cover exact IDs/metadata/home, working/retained/delegated/link
 eligibility, immutable completions, GET-only opening, exact empty-body POST
 method/path, identity refusal before POST, post-commit error/lost/mismatched ACK,
 readback without settlement or replay and delayed completion.
+
+The capacity regression executes 40 distinct acknowledged/rejected pairs and
+same-chat repeats, checks single-pending admission, then retains an Unknown
+through 20 further acknowledged targets. It also checks exact ACK inspection,
+editor fences and updater restart safety. Unit coverage rejects old completions
+and inspections against a newer operation.
 
 The native target mounts the actual production LocalViewer rows, real Kit
 menus, existing MissionForm and private writer against owned synthetic HTTP.

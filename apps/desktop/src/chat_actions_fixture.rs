@@ -76,7 +76,7 @@ impl Daemon {
                                 let mut s = record.lock().unwrap(); s.requests.push((method.clone(),path.clone(),payload.clone()));
                                 match (method.as_str(), path.as_str()) {
                                     ("GET", "/api/hello") => (200,s.hello.clone(),false),
-                                    ("GET", "/api/sessions/source") => (200,s.source.clone(),false),
+                                    ("GET", path) if path == format!("/api/sessions/{}", s.source["id"].as_str().unwrap()) => (200,s.source.clone(),false),
                                     ("GET", "/api/projects/project") => (200,json!({"id":"project","name":"Exact project","path":"/synthetic/project"}),false),
                                     ("POST", "/api/missions") => {
                                         assert_eq!(payload["fromSessionId"],"source"); assert_eq!(payload["projectId"],"project");
@@ -96,7 +96,7 @@ impl Daemon {
                                             Behavior::Accept => (200,s.source.clone(),false),
                                         }
                                     }
-                                    ("POST", "/api/sessions/source/archive" | "/api/sessions/source/restore") => {
+                                    ("POST", path) if ["archive", "restore"].iter().any(|verb| path == format!("/api/sessions/{}/{verb}", s.source["id"].as_str().unwrap())) => {
                                         assert!(payload.is_null());
                                         if path.ends_with("/archive") {s.source["archivedAt"]=json!(1234);} else {s.source.as_object_mut().unwrap().remove("archivedAt");}
                                         match s.behavior {

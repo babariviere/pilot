@@ -1,4 +1,4 @@
-//! Quiet per-window status and bounded non-replayable operation ownership.
+//! Quiet per-window status and non-replayable operation ownership.
 #[cfg(test)]
 #[path = "chat_actions_inspection_tests.rs"]
 mod tests;
@@ -80,8 +80,6 @@ impl Actions {
             Some("Earlier action unconfirmed. Do not repeat it.")
         } else if self.reports.values().any(|r| r.outcome.is_none()) {
             Some("A chat action is still pending.")
-        } else if !self.reports.contains_key(id) && self.reports.len() >= 16 {
-            Some("This window has reached its chat-action report limit.")
         } else {
             None
         }
