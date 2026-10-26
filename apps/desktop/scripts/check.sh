@@ -76,3 +76,6 @@ bash scripts/cargo.sh clippy --locked --features native-probes --test chat_actio
 bash scripts/cargo.sh test --locked --features native-probes --test chat_actions
 bash scripts/cargo.sh clippy --locked --features native-probes --test questions -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test questions
+
+bash scripts/cargo.sh clippy --locked --features native-probes --test mission_tasks -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test mission_tasks

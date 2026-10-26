@@ -10,9 +10,9 @@ use crate::{
     ui::{self, Action, Notice, ResourceLabel, Space, Text, Tone},
 };
 use gpui_kit::{
-    App, ClipboardItem, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt,
-    Window,
+    App, AppContext, ClipboardItem, Context, EventEmitter, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
+    TestSupportExt, Window,
     base::SelectableText,
     component::{Disableable, StyledExt},
     div,
@@ -65,11 +65,13 @@ pub(crate) struct Browser {
     focus: FocusHandle,
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
+    pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            tasks_browser: cx.new(crate::mission_tasks_view::Pane::new),
             generation: 0,
             route: None,
             options: None,
@@ -212,6 +214,28 @@ impl Browser {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let tasks_key = match &self.route {
+            Some(Route::Detail(key))
+                if self.local_home().as_ref().is_some_and(|h| {
+                    self.catalog.as_ref().is_some_and(|c| {
+                        c.rows
+                            .iter()
+                            .any(|r| &r.key == key && r.local_definition(h))
+                    })
+                }) =>
+            {
+                Some(key.clone())
+            }
+            _ => None,
+        };
+        if self.tasks_browser.read(cx).state.key != tasks_key
+            && self.tasks_browser.read(cx).owns_focus(w, cx)
+        {
+            self.focus.focus(w, cx);
+        }
+        self.tasks_browser.update(cx, |tasks, cx| {
+            tasks.sync(tasks_key, self.options.clone(), w, cx)
+        });
         self.generation = self.generation.saturating_add(1);
         self.error = None;
         self.busy = false;
@@ -629,52 +653,7 @@ impl Render for Browser {
                     }
                 }
             }
-            content = content
-                .child(ui::heading(
-                    "mission-tasks-heading",
-                    "Tasks",
-                    Text::Headline,
-                ))
-                .child(ui::text(
-                    Text::Caption,
-                    SharedString::from(format!(
-                        "{} of {} tasks shown{}",
-                        d.tasks.len(),
-                        d.task_count,
-                        d.counts
-                            .map(|(a, b)| format!(" · {a}/{b} done (canonical count)"))
-                            .unwrap_or_default()
-                    )),
-                ));
-            if d.tasks.is_empty() {
-                content = content.child(Notice::new(
-                    "No tasks in this snapshot. Task creation and management remain in Swift.",
-                ));
-            }
-            for t in &d.tasks {
-                content = content.child(
-                    div()
-                        .id(SharedString::from(format!("mission-task-{}", t.id)))
-                        .test_support()
-                        .v_flex()
-                        .gap(px(Space::META))
-                        .child(ui::text(
-                            Text::Label,
-                            SharedString::from(format!("#{} {}", t.number, t.title)),
-                        ))
-                        .child(ui::text(
-                            Text::Caption,
-                            SharedString::from(format!(
-                                "{}{}",
-                                t.status,
-                                t.owner
-                                    .as_ref()
-                                    .map(|id| format!(" · assigned chat {id}"))
-                                    .unwrap_or_default()
-                            )),
-                        )),
-                );
-            }
+            content = content.child(self.tasks_browser.clone());
             content = content.child(ui::heading(
                 "mission-brief-heading",
                 "Brief",

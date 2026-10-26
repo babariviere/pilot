@@ -37,6 +37,13 @@ mod mission_fixture;
 mod mission_inspector;
 mod mission_inspector_view;
 mod mission_reader;
+mod mission_tasks;
+#[cfg(feature = "native-probes")]
+mod mission_tasks_probe;
+mod mission_tasks_reader;
+mod mission_tasks_view;
+#[cfg(feature = "native-probes")]
+pub use mission_tasks_probe::run_mission_tasks_probe;
 mod mission_transport;
 mod mission_view;
 mod model;
