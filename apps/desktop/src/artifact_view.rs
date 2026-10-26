@@ -4,6 +4,8 @@ pub(crate) mod gallery;
 #[cfg(feature = "native-probes")]
 #[path = "artifact_image_probe.rs"]
 pub(crate) mod image_probe;
+#[path = "inline_visual.rs"]
+pub(crate) mod inline_visual;
 #[cfg(feature = "native-probes")]
 #[path = "native_mermaid_probe.rs"]
 pub(crate) mod mermaid_probe;
@@ -43,6 +45,7 @@ use std::{
     time::Instant,
 };
 pub(crate) struct ArtifactPane {
+    inline: bool,
     gallery: gallery::State,
     focus: Option<gpui_kit::FocusHandle>,
     options: Option<LocalOptions>,
@@ -78,6 +81,7 @@ struct SliderBinding {
 impl ArtifactPane {
     pub(crate) fn new() -> Self {
         Self {
+            inline: false,
             gallery: gallery::State::default(),
             focus: None,
             options: None,
@@ -402,7 +406,8 @@ impl ArtifactPane {
         cx.notify();
     }
     fn valid_slider(&self, intent: &SliderIntent) -> bool {
-        intent.generation == self.generation
+        !self.source
+            && intent.generation == self.generation
             && self.snapshot.live
             && self.snapshot.error.is_none()
             && self.sliders.get(&intent.id).is_some_and(|binding| {
@@ -439,7 +444,14 @@ impl ArtifactPane {
         self.sliders.clear();
         self.slider_synced = None;
         self.snapshot.live = false;
-        if self.snapshot.error.is_none() && !self.snapshot.complete {
+        if self.snapshot.error.is_none()
+            && !self.snapshot.complete
+            && self
+                .snapshot
+                .revision
+                .as_ref()
+                .is_none_or(|r| r.visual_supported || r.reference.kind == "image")
+        {
             self.snapshot.error = Some(crate::visual_runtime::Fault {
                 kind: "unavailable",
                 message: "The isolated reader ended. Retry or reopen for a fresh preview.".into(),
@@ -646,6 +658,7 @@ impl ArtifactPane {
         cx: &mut Context<Self>,
     ) {
         if generation != self.generation
+            || self.source
             || self.busy
             || !self.snapshot.live
             || version != self.snapshot.version
@@ -684,6 +697,7 @@ impl ArtifactPane {
         cx: &mut Context<Self>,
     ) {
         if generation != self.generation
+            || self.source
             || self.busy
             || !self.snapshot.live
             || version != self.snapshot.version
@@ -830,6 +844,7 @@ impl ArtifactPane {
         let id = value["id"].as_str().unwrap_or(path).to_owned();
         let version = self.snapshot.version;
         let generation = self.generation;
+        let inline = self.inline;
         let enabled = self.snapshot.live && !self.busy;
         match kind {
             "column" | "row" | "grid" => {
@@ -957,7 +972,7 @@ impl ArtifactPane {
                 ))
                 .disabled(!enabled || value["disabled"] == true)
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    view.event(generation, version, id.clone(), Value::Null, cx)
+                    view.surface_event(generation, version, id.clone(), Value::Null, inline, cx)
                 }))
                 .into_any_element(),
             "toggle" => Checkbox::new(SharedString::from(path.to_owned()))
@@ -967,7 +982,7 @@ impl ArtifactPane {
                 .checked(value["value"] == true)
                 .disabled(!enabled)
                 .on_change(cx.listener(move |view, v, _, cx| {
-                    view.event(generation, version, id.clone(), json!(*v), cx)
+                    view.surface_event(generation, version, id.clone(), json!(*v), inline, cx)
                 }))
                 .into_any_element(),
             "tabs" => {
@@ -989,7 +1004,14 @@ impl ArtifactPane {
                             ))
                             .disabled(!enabled || value["value"] == val)
                             .on_click(cx.listener(move |view, _, _, cx| {
-                                view.event(generation, version, id.clone(), val.clone(), cx)
+                                view.surface_event(
+                                    generation,
+                                    version,
+                                    id.clone(),
+                                    val.clone(),
+                                    inline,
+                                    cx,
+                                )
                             })),
                     );
                 }
@@ -1061,11 +1083,12 @@ impl ArtifactPane {
                                 .label("−")
                                 .disabled(!enabled || n <= min)
                                 .on_click(cx.listener(move |v, _, _, cx| {
-                                    v.event(
+                                    v.surface_event(
                                         generation,
                                         version,
                                         minus.clone(),
                                         json!((n - step).clamp(min, max)),
+                                        inline,
                                         cx,
                                     )
                                 })),
@@ -1077,11 +1100,12 @@ impl ArtifactPane {
                                 .label("+")
                                 .disabled(!enabled || n >= max)
                                 .on_click(cx.listener(move |v, _, _, cx| {
-                                    v.event(
+                                    v.surface_event(
                                         generation,
                                         version,
                                         id.clone(),
                                         json!((n + step).clamp(min, max)),
+                                        inline,
                                         cx,
                                     )
                                 })),
@@ -1194,7 +1218,9 @@ impl ArtifactPane {
                         let weak = weak.clone();
                         window.defer(cx, move |_, cx| {
                             let _ = weak.update(cx, |view, cx| {
-                                view.draw(generation, version, id, width, height, cx)
+                                if view.inline == inline {
+                                    view.draw(generation, version, id, width, height, cx)
+                                }
                             });
                         });
                     },
@@ -1255,6 +1281,9 @@ impl ArtifactPane {
 }
 impl Render for ArtifactPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.inline {
+            return self.render_inline(window, cx);
+        }
         self.sync_sliders(window, cx);
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let mut view = div()
@@ -1278,7 +1307,11 @@ impl Render for ArtifactPane {
             .gap_2()
             .p_3();
         let Some(reference) = self.reference.clone() else {
-            return view.p_0().gap_0().child(self.render_gallery(window, cx));
+            return view
+                .p_0()
+                .gap_0()
+                .child(self.render_gallery(window, cx))
+                .into_any_element();
         };
         let scope = format!(
             "{}:{}:{}",
@@ -1555,7 +1588,7 @@ impl Render for ArtifactPane {
             }
             view = view.child(content);
         }
-        view
+        view.into_any_element()
     }
 }
 #[cfg(test)]

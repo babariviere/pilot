@@ -116,3 +116,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test message_fold
 # Focused new-chat setup, retained native input and unchanged creation guards.
 bash scripts/cargo.sh clippy --locked --features native-probes --test new_chat_view -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test new_chat_view
+
+# Exact-revision inline native reader and lifecycle.
+bash scripts/cargo.sh clippy --locked --features native-probes --test inline_visual -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test inline_visual

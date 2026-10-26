@@ -1,5 +1,7 @@
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
+#[path = "inline_visual_transcript.rs"]
+pub(crate) mod inline_visual;
 #[path = "message_fold_view.rs"]
 pub(crate) mod message_fold_view;
 #[path = "transcript_find.rs"]
@@ -46,6 +48,7 @@ pub struct TranscriptView {
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
     images: conversation_images_view::Preview,
+    inline_visuals: inline_visual::State,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
     // for real histories rather than retaining one parser per historical row.
     text_states: Vec<Option<Entity<TextViewState>>>,
@@ -131,7 +134,10 @@ impl TranscriptView {
             state.set_submit_on_enter(true, cx);
             state
         });
-        let image_release = cx.on_release(|view, cx| view.clear_image(cx));
+        let image_release = cx.on_release(|view, cx| {
+            view.clear_image(cx);
+            view.clear_inline(cx);
+        });
         let subscription =
             cx.subscribe_in(
                 &composer,
@@ -142,9 +148,13 @@ impl TranscriptView {
                     _ => {}
                 },
             );
-        let scroll_subscription = cx.observe(&scroller, |_, _, cx| cx.notify());
+        let scroll_subscription = cx.observe(&scroller, |view, _, cx| {
+            view.inline_visuals.revision += 1;
+            cx.notify();
+        });
         let fonts_subscription =
             cx.observe_global::<crate::typography::CommittedFonts>(|view, cx| {
+                view.inline_visuals.revision += 1;
                 let count = view.transcript.messages().len();
                 view.scroller.update(cx, |state, cx| {
                     state.remeasure_items(0..count, cx);
@@ -168,6 +178,7 @@ impl TranscriptView {
             fold_retired: Vec::new(),
             transcript,
             images: Default::default(),
+            inline_visuals: Default::default(),
             text_states: Vec::new(),
             scroller,
             composer,
@@ -255,6 +266,7 @@ impl TranscriptView {
         reset: bool,
         cx: &mut Context<Self>,
     ) {
+        self.inline_visuals.revision += 1;
         assert!(self.readonly);
         if reset
             || self
@@ -722,28 +734,7 @@ impl TranscriptView {
                 .child(self.render_image(row, cx, owner));
         }
         if let Some(reference) = row.artifact_data() {
-            let reference = (**reference).clone();
-            return div()
-                .id(("message", row.id()))
-                .w_full()
-                .min_w_0()
-                .p_3()
-                .border_1()
-                .rounded(px(crate::appearance::Radius::CARD))
-                .bg(crate::appearance::card(cx))
-                .border_color(cx.theme().border)
-                .child(
-                    Button::new(("open-artifact", row.id()))
-                        .ghost()
-                        .label(SharedString::from(format!(
-                            "Open {} · r{}",
-                            reference.title, reference.revision
-                        )))
-                        .on_click(move |_, _, cx| {
-                            let _ =
-                                owner.update(cx, |_, cx| cx.emit(ArtifactOpen(reference.clone())));
-                        }),
-                );
+            return self.inline_row(row.id(), reference, cx, owner);
         }
         if let Some(view) = self.work_ui.groups.get(&row.id()) {
             return div()
@@ -853,6 +844,7 @@ impl Render for TranscriptView {
         let weak = cx.weak_entity();
         let scope = self.history_scope;
         let viewport = div()
+            .relative()
             .id("viewport")
             .flex_1()
             .min_h_0()
@@ -892,7 +884,7 @@ impl Render for TranscriptView {
                 .min_w_0()
                 .children(self.render_find(cx))
                 .child(
-                    viewport.child(
+                    viewport.child(self.inline_survey(cx)).child(
                         MessageScroller::new(
                             "transcript",
                             self.scroller.clone(),
@@ -970,7 +962,7 @@ impl Render for TranscriptView {
                         .on_click(cx.listener(|this, _, _, cx| this.scroller.update(cx, |state, cx| state.scroll_to_end(cx)))))
                     .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
             .children(self.render_find(cx))
-            .child(viewport.child(
+            .child(viewport.child(self.inline_survey(cx)).child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
                     weak.upgrade().map(|view| view.read(cx).render_row(ix, cx,weak.clone()).into_any_element())
                         .unwrap_or_else(|| div().into_any_element())

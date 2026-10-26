@@ -243,6 +243,8 @@ mod artifact_image;
 mod artifact_image_view;
 mod artifact_model;
 mod artifact_view;
+#[cfg(feature = "native-probes")]
+pub use transcript_view::inline_visual::probe::run_inline_visual_probe;
 mod artifact_worker;
 mod attention;
 mod dither;

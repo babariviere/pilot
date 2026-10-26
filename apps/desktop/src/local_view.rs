@@ -445,6 +445,37 @@ pub struct LocalViewer {
 }
 
 impl LocalViewer {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_enable(&mut self, options: LocalOptions, cx: &mut Context<Self>) {
+        self.usage_options = Some(options);
+        cx.notify();
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_transcript(&self) -> Entity<TranscriptView> {
+        self.transcript.clone()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_visual_fixture(
+        options: LocalOptions,
+        rows: Vec<Message>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (client, _) = LocalClient::synthetic_commands();
+        let mut view = Self::build(Some(client), None, window, cx);
+        view.usage_options = None;
+        view.selected = Some("owner".into());
+        view.title = "Native visual study".into();
+        view.page = Page::Chat;
+        view.state.loaded = true;
+        view.artifacts.update(cx, |p, cx| {
+            p.options(options);
+            p.context(Some("owner".into()), Arc::new(Vec::new()), cx);
+        });
+        view.transcript
+            .update(cx, |t, cx| t.replace_readonly(rows, true, cx));
+        view
+    }
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new(
@@ -1175,10 +1206,23 @@ impl LocalViewer {
                     return;
                 }
                 view.artifacts_open = true;
+                if let Some(pane) = view
+                    .transcript
+                    .update(cx, |t, cx| t.inline_expand(&event.0, cx))
+                    && view.artifacts != pane
+                {
+                    view.artifacts.update(cx, |p, cx| p.hide_gallery(cx));
+                    view.artifacts = pane;
+                }
                 view.artifacts.update(cx, |pane, cx| {
+                    pane.inline_mode(false, cx);
                     pane.context(view.selected.clone(), view.state.artifacts.clone(), cx);
                     pane.artifact_metadata(view.state.artifact_metadata.clone(), cx);
-                    pane.open(event.0.clone(), window, cx);
+                    if !pane.inline_matches(&event.0) {
+                        pane.open(event.0.clone(), window, cx);
+                    } else {
+                        pane.focus_reader(window, cx);
+                    }
                 });
                 cx.notify();
             },
@@ -1902,6 +1946,18 @@ impl LocalViewer {
 
 impl Render for LocalViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.transcript.update(cx, |t, cx| {
+            t.inline_context(
+                self.usage_options.clone(),
+                self.selected.clone(),
+                self.page == Page::Chat
+                    && !self.artifacts_open
+                    && !self.mission_open
+                    && !self.add_project_open,
+                &self.artifacts,
+                cx,
+            )
+        });
         #[cfg(feature = "native-probes")]
         {
             self.render_count += 1;

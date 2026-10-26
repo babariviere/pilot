@@ -230,6 +230,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "inline_visual"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "delivery_diagnostics"
 harness = false
 test = false

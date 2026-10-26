@@ -59,6 +59,9 @@ struct Geometry {
     rem: f32,
 }
 impl ArtifactPane {
+    pub(super) fn reader_drains(&self) -> Vec<async_channel::Receiver<()>> {
+        self.gallery.drains.clone()
+    }
     pub(super) fn reader_drain(&mut self, finished: async_channel::Receiver<()>) {
         self.gallery.drains.retain(|r| !r.is_closed());
         if !finished.is_closed() {
@@ -186,6 +189,7 @@ impl ArtifactPane {
         self.gallery.errors.clear();
     }
     pub(crate) fn show_gallery(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.inline = false;
         self.close();
         self.flush_image(window, cx);
         self.gallery_lifetime(cx);

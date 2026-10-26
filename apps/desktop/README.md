@@ -375,9 +375,14 @@ Use Artifacts in a Local chat's header to browse its responsive native thumbnail
 gallery, then explicitly open a pinned revision. Stored images decode lazily
 for visible tiles; generated sources never run to populate the gallery. See
 [gallery ownership, limits and keyboard paths](docs/artifact-gallery.md).
-Canonical artifact publication entries also have inline pinned
-Open cards; body links/JSON and legacy tool-only output are not parsed into reads.
-Cards cannot switch owners or silently open the latest revision. Previous revisions, source/provenance and Copy source remain
+Canonical artifact publication entries have exact pinned native visual previews
+inside the conversation, with Source and Expand. At most two painted previews
+run at once; offscreen readers close, and expansion transfers the same reader
+to the pane. Content stays actual size in a bounded scrollable viewport.
+Other kinds retain explicit Open cards; body links/JSON and legacy tool-only
+output are not parsed into reads. Neither surface can switch owners or silently
+open the latest revision. See [inline ownership and bounds](docs/inline-visuals.md).
+Previous revisions, source/provenance and Copy source remain
 available even for unsupported kinds. Reader state is in memory for eight
 revisions, separate from Swift and canonical data; it resets on restart.
 
@@ -388,7 +393,7 @@ Category labels show all through12, sparse endpoints above; labels/legends/units
 are visibly elided after80 Unicode scalars; stored source/data remain intact.
 Static canvas supports trusted native path/text painting, limited transforms,
 viewport margins and approximated curves; animation/pointer scheduling and
-non-uniform strokes/transformed text remain unsupported. Mermaid, SwiftUI
+non-uniform strokes/transformed text remain unsupported. SwiftUI
 previews, image nodes inside visuals and stacked/out-of-domain charts show honest placeholders.
 Stored raster image artifacts separately support native PNG/JPEG and labelled
 first-frame GIF previews, fit/actual-size viewing and explicit source copy.
@@ -396,15 +401,17 @@ WebP previews remain unsupported with their stored source/provenance retained.
 See [stored image boundaries and checks](docs/stored-images.md) and the
 [pinned allocation audit](docs/image-allocation-audit.md); pixel/buffer limits
 are separate from encoded bytes, and no total-memory ceiling is claimed.
-HTML/React/browser libraries and shaders remain deferred and stored data is not
-deleted. Links are inert. No prepared HTML or external assets are consumed.
+HTML/React/browser rendering is not part of Next's product path. Legacy sources
+remain inert data; nothing is deleted. Shaders remain unsupported. Links are
+inert. No prepared HTML, browser fallback or external assets are consumed.
 
 Only validated macOS confinement enables source/handlers, in a separate helper,
 never the desktop process/thread. Linux source execution is explicitly disabled
 pending native validation; source still works. Failure discards/reaps the entire
 helper and keeps the last validated scene/state; Retry is fresh and explicit.
-`scripts/run.sh --local` prepares/builds the pinned helper but starts no VM until
-user Open. `scripts/check.sh` uses only native synthetic/faux-server tests.
+`scripts/run.sh --local` prepares/builds the pinned helper. A VM starts only for
+an admitted painted native preview or explicit Open, never history hydration.
+`scripts/check.sh` uses only native synthetic/faux-server tests.
 See [exact boundaries, checks and remaining work](evidence/native-visuals.md).
 The [bounded chart follow-on](evidence/chart-parity.md) adds signed stacked bars,
 explicit bar-domain clipping, positioned x-ticks/numeric scatter domain labels
