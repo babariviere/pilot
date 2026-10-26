@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.65.0](https://github.com/babariviere/pilot/compare/v1.64.0...v1.65.0) (2026-10-26)
+
+
+### Features
+
+* **daemon:** wait for CI before PR follow-ups and acknowledge fixed reviews ([227dd55](https://github.com/babariviere/pilot/commit/227dd5527a1df8cadaa41856f1fbe4acdf775e0e))
+* **desktop:** add read-only Local mission browsing ([1e251e4](https://github.com/babariviere/pilot/commit/1e251e4b6a6aec3ae96eee144eb392ea01b8801d))
+* **desktop:** add scoped model and thinking selectors ([3a732d5](https://github.com/babariviere/pilot/commit/3a732d565dccae43aa597dc9b0eb829d7ceae5d7))
+* **desktop:** browse artifacts in a native thumbnail gallery ([1fa6d22](https://github.com/babariviere/pilot/commit/1fa6d22848a4c736534edc808bcff3ceb6e1e368))
+* **desktop:** bundle a guarded Local runtime ([295ad85](https://github.com/babariviere/pilot/commit/295ad854f3db1f7e9564bb71ffa00fc26e8d810c))
+* **desktop:** discard a stuck draft and abandon its delivery ([cd18065](https://github.com/babariviere/pilot/commit/cd1806580b750560e1bf50010181772cb17bfb0c))
+* **desktop:** edit Local global scoped models ([e81833c](https://github.com/babariviere/pilot/commit/e81833c39015eaa57009938162ebdb176f28ab7b))
+* **desktop:** keep mission context beside the active chat ([4e22664](https://github.com/babariviere/pilot/commit/4e22664d6955e7eab99122decfe1b552049deeee))
+* **desktop:** preview stored raster artifacts natively ([a2bf4c1](https://github.com/babariviere/pilot/commit/a2bf4c16a9af5288123bba55e20f556ffab216c0))
+* **desktop:** register existing Local folders as projects ([6661328](https://github.com/babariviere/pilot/commit/666132839f0cb7eafc0b1513bcf4e98edd001ecb))
+
+
+### Bug Fixes
+
+* **daemon:** ignore watch-mode notices that consumed session reads ([1b50dba](https://github.com/babariviere/pilot/commit/1b50dba776543f1727d7e1fbf9ec0b0bb960ec16))
+* **daemon:** ignore watch-mode notices that wedged mutations ([b6bed1e](https://github.com/babariviere/pilot/commit/b6bed1e1327602c6e6ea6905a436c071ac18d109))
+* **deps:** update dependency motion to v14.6.0 ([1527476](https://github.com/babariviere/pilot/commit/1527476bd5cf0c101524e3a3429283cfbe2357d6))
+* **deps:** update opentelemetry-js monorepo to v3 ([2a042c6](https://github.com/babariviere/pilot/commit/2a042c6beb1741a7b814f19ee28c994d2ee79863))
+* **desktop:** confirm exited Darwin check groups ([fd163db](https://github.com/babariviere/pilot/commit/fd163db76725af8c17b334705e2aecb2a3c6d93c))
+* **desktop:** retain acknowledged project IDs at capacity ([1febb15](https://github.com/babariviere/pilot/commit/1febb1532048438a593c5d8b55719d3ae1b99f90))
+* **desktop:** retain exact-operation delivery diagnostics ([4a5e66f](https://github.com/babariviere/pilot/commit/4a5e66f59eb85c520c4471c5f32ebd206d3f94b2))
+* **kernel:** make direct default-branch delivery the default when PRs are not required ([c79e8c9](https://github.com/babariviere/pilot/commit/c79e8c9bbc2778721efe564d427972c8343b07dc))
+
+
+### Performance Improvements
+
+* **desktop:** batch explicitly scoped test targets ([c87cbe8](https://github.com/babariviere/pilot/commit/c87cbe809dab40dd291f267b753549a203e8d8b4))
+
 ## [1.64.0](https://github.com/babariviere/pilot/compare/v1.63.0...v1.64.0) (2026-10-24)
 
 
