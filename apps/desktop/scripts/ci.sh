@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Source-only CI. Never signs, bundles, publishes, installs or launches the app.
+# Source/fixture CI. Never signs, publishes, installs or launches against user data.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root="$PWD"
@@ -87,6 +87,17 @@ PY
     # Auto-discovered path-import integration harness, not part of --lib.
     cargo test --locked -p pilot-desktop --test settings_state -- --test-threads=1
     python3 -m unittest discover -s scripts -p 'test_*.py' -v
+    ;;
+  linux-gui-check)
+    [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || {
+      echo 'Linux GUI fixture checks require native Linux x86_64.' >&2; exit 1;
+    }
+    # Uses the debug binaries already built by check. No duplicate Cargo build.
+    mkdir -p target
+    python3 scripts/linux_gui_package_native.py --binaries target/dev/debug \
+      --source "${GITHUB_SHA:?Exact tested source required}" \
+      --output target/ci-linux-gui-fixture.json
+    cat target/ci-linux-gui-fixture.json
     ;;
   updater-check)
     host
@@ -255,5 +266,5 @@ OBJC
       { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
     fi
     ;;
-  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|updater-check|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
 esac

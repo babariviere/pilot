@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Linux-native relocated GUI fixture probe, NOT full runtime qualification."""
+import argparse
+import os
+from pathlib import Path
+import resource
+import re
+import shutil
+import subprocess
+import tempfile
+import time
+
+import linux_gui_package as package
+
+
+def bounded_log():
+    resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024**2, 8 * 1024**2))
+
+
+def stop(child):
+    if child.poll() is None:
+        child.terminate()  # Only this probe's exact synthetic child, never a daemon.
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def probe(binaries, output, expected):
+    package.native_host()
+    package.source(expected)
+    if output.exists():
+        raise ValueError("Probe receipt must be fresh")
+    # CI checkout SHA is the tested merge, never infer it from PR head.
+    tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if expected != tested or os.environ.get("GITHUB_SHA", tested) != tested:
+        raise ValueError("Native probe source mismatch")
+    with tempfile.TemporaryDirectory(prefix="linux-gui-fixture-") as directory:
+        root = Path(directory)
+        stage = root / "staged"
+        stage.mkdir()
+        entries = []
+        for name in package.BINARIES:
+            shutil.copyfile(binaries / name, stage / name)
+            (stage / name).chmod(0o755)
+            entries.append(dict(name=name, sha256=package.digest(stage / name), bytes=(stage / name).stat().st_size))
+        relocated = root / "relocated GUI with spaces"
+        stage.rename(relocated)
+        dependencies = package.elf_closure(relocated)
+        if {item["path"] for item in dependencies} != set(package.BINARIES):
+            raise ValueError("Both GUI/helper must be native ELF executables")
+        for name in ("home", "config", "data", "cache", "run"):
+            (root / name).mkdir(mode=0o700)
+        env = dict(PATH="/usr/bin:/bin", HOME=str(root / "home"),
+                   XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
+                   XDG_CACHE_HOME=str(root / "cache"), XDG_RUNTIME_DIR=str(root / "run"),
+                   LIBGL_ALWAYS_SOFTWARE="1", GALLIUM_DRIVER="llvmpipe")
+        executable = str(relocated / "pilot-desktop")
+        result = subprocess.run([executable, "--help"], env=env, capture_output=True, timeout=10)
+        if result.returncode != 0 or b"Pilot Next" not in result.stdout:
+            raise ValueError("Relocated help failed")
+        # An X11-looking environment must not bypass the actual Wayland socket fence.
+        result = subprocess.run([executable, "--fixture", "fence"], env=dict(env, DISPLAY=":99"),
+                                capture_output=True, timeout=10)
+        if result.returncode == 0 or b"Native Wayland required" not in result.stderr:
+            raise ValueError("Missing compositor did not fail closed")
+        with (root / "weston.log").open("wb") as log:
+            compositor = subprocess.Popen(["weston", "--backend=headless-backend.so", "--use-pixman",
+                                           "--socket=fixture-wayland", "--idle-time=0"],
+                                          env=env, stdout=log, stderr=log, preexec_fn=bounded_log)
+            try:
+                deadline = time.monotonic() + 10
+                while not (root / "run/fixture-wayland").exists():
+                    if compositor.poll() is not None or time.monotonic() >= deadline:
+                        raise ValueError("Owned headless Weston failed: " + (root / "weston.log").read_text())
+                    time.sleep(0.05)
+                path = root / "wayland.log"
+                with path.open("wb") as trace:
+                    app = subprocess.Popen([executable, "--fixture", "fence"],
+                                           env=dict(env, WAYLAND_DISPLAY="fixture-wayland", WAYLAND_DEBUG="1"),
+                                           stdout=trace, stderr=trace, preexec_fn=bounded_log)
+                    try:
+                        # Bounded lifetime, not evidence inferred from a surviving process.
+                        try:
+                            app.wait(timeout=12)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        if app.poll() is not None:
+                            raise ValueError("Fixture exited before observation: " + path.read_text()[-4000:])
+                        trace_text = path.read_text(errors="replace")
+                        if "get_toplevel(" not in trace_text or not re.search(r"wl_surface[^\n]*\.attach\(", trace_text):
+                            raise ValueError("No actual Wayland toplevel and attached rendered buffer")
+                    finally:
+                        stop(app)
+            finally:
+                stop(compositor)
+        package.write_json(output, dict(schema=1, kind="linux-native-gui-fixture-only", source=tested,
+                           source_tree=subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
+                           target=package.TARGET, binaries=entries, dependencies=dependencies,
+                           relocation=True, no_wayland_refused=True, wayland_toplevel_and_buffer=True,
+                           full_runtime_qualified=False, bundled_launch=False, native_confinement=False,
+                           installer=False, updater=False,
+                           limits="Headless Weston/software rendering only. No visible GPU, IME, frame pacing or daemon execution proof."))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--binaries", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--source", required=True)
+    args = parser.parse_args()
+    probe(args.binaries.resolve(), args.output.absolute(), args.source)

@@ -118,6 +118,23 @@ chmod +x "$1"
         self.run_ci("build")
         self.assertEqual(self.calls(), [["build", "--locked", "--release", "--workspace", "--bins"]])
 
+    def test_linux_gui_fixture_phase_is_linux_only_no_duplicate_build(self):
+        self.run_ci("linux-gui-check", expected=1)
+        self.assertEqual(self.calls(), [])
+        self.write("bin/python3", '''#!/bin/sh
+echo "$*" >> "$CALLS"
+printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
+''')
+        self.run_ci("linux-gui-check", FAKE_OS="Linux", FAKE_ARCH="x86_64")
+        self.assertEqual(self.calls(), [["scripts/linux_gui_package_native.py", "--binaries", "target/dev/debug",
+                                       "--source", self.env["GITHUB_SHA"], "--output", "target/ci-linux-gui-fixture.json"]])
+
+    def test_linux_gui_ci_has_owned_compositor_and_no_release_enablement(self):
+        workflow = WORKFLOW.read_text().split("  rust:", 1)[1].split("  rust-macos-native:", 1)[0]
+        self.assertIn("weston libgl1-mesa-dri mesa-vulkan-drivers", workflow)
+        self.assertIn("ci.sh linux-gui-check", workflow)
+        self.assertLess(workflow.index("ci.sh check"), workflow.index("ci.sh linux-gui-check"))
+
     def test_checks_fail_fast_and_do_not_hide_clippy_failure(self):
         self.run_ci("check", expected=42, FAIL_MATCH="clippy")
         calls = self.calls()
