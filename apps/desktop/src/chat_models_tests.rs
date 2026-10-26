@@ -88,6 +88,7 @@ async fn thinking_override_is_exact_and_supported_while_fixed_or_unknown_levels_
 async fn server_preflight_idle_pause_stale_scope_and_identity_failures_do_not_post() {
     for mode in [
         Mode::Busy,
+        Mode::Failed,
         Mode::Paused,
         Mode::Stale,
         Mode::ScopeChanged,
@@ -107,6 +108,30 @@ async fn server_preflight_idle_pause_stale_scope_and_identity_failures_do_not_po
         assert_eq!(s.posts(), 0);
         assert!(store.book.model_changes.is_empty());
     }
+}
+#[tokio::test]
+async fn parked_idle_change_uses_only_explicit_model_post_without_start_or_send() {
+    let s = Server::start(Mode::Parked);
+    let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+    let result = execute(
+        &client(),
+        &s.options,
+        &mut store,
+        Action::Submit(attempt()),
+        |_| {},
+    )
+    .await;
+    assert!(matches!(result, Outcome::Acknowledged(_)));
+    assert_eq!(s.posts(), 1);
+    assert!(store.book.model_changes.is_empty());
+    assert!(
+        s.seen
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(method, path, _)| method == "GET" || path == "/api/sessions/source/model")
+    );
 }
 #[tokio::test]
 async fn lost_denied_or_queue_race_is_retained_durably_without_any_automatic_replay() {

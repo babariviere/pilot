@@ -15,6 +15,8 @@ use std::{
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum Mode {
     Accept,
+    Parked,
+    Failed,
     Lost,
     Denied,
     Busy,
@@ -51,7 +53,7 @@ pub(crate) fn catalog() -> Value {
 }
 impl Seen {
     pub(crate) fn session(&self) -> Value {
-        json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":if matches!(self.mode,Mode::Busy){"working"}else{"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"subscriptionPause":if matches!(self.mode,Mode::Paused){json!({"forced":false})}else{Value::Null}})
+        json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if matches!(self.mode,Mode::Paused){json!({"forced":false})}else{Value::Null}})
     }
 }
 impl Server {

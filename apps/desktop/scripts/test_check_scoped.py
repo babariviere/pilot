@@ -91,6 +91,8 @@ test=false
         self.assertFalse(worker)
         self.assertEqual(flags.count("--features"), 1)
         self.assertIn("--lib", flags)
+        self.assertFalse(scoped.plan(self.args("--unit", "chat_model", "--test", "project_creation"), self.root)[3])
+        self.assertFalse(scoped.plan(self.args("--unit", "model_picker", "--native-probes"), self.root)[3])
 
     def test_required_and_unknown_helpers_are_not_silently_omitted(self):
         for values in [("--unit", "visual_runtime::tests"), ("--unit", "future_module::tests"), ("--test", "visuals"), ("--unit", "bundled_runtime::tests", "--worker")]:

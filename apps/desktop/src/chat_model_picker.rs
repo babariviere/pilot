@@ -67,7 +67,7 @@ pub(super) struct Picker {
     loading: bool,
     models: Entity<SelectState<SearchableVec<Item>>>,
     thinking: Entity<SelectState<SearchableVec<Item>>>,
-    synced: Option<(Option<ModelChoice>, bool)>,
+    synced: Option<(Option<ModelChoice>, bool, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 pub(super) struct Models {
@@ -97,6 +97,18 @@ impl ChatEditor {
             self.model_uncertain().is_some(),
             self.models.as_ref().is_none_or(|m| m.reader.is_none()),
         )
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn model_probe_restriction(&self) -> Option<&'static str> {
+        self.model_restriction()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn model_probe_pending(&mut self, pending: bool) {
+        if pending {
+            self.pending.insert("chat:source".into(), 1);
+        } else {
+            self.pending.remove("chat:source");
+        }
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn disconnect_model_fixture(&self) {
@@ -134,6 +146,7 @@ impl ChatEditor {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let editable = self.can_choose_model();
         if let Some(models) = &mut self.models {
             if let Some((old_id, old_path, old)) = &models.current
                 && old_id == id
@@ -145,7 +158,13 @@ impl ChatEditor {
                 current.updated_at = old.updated_at;
             }
             let next = Some((id.into(), path.into(), current));
-            if models.current == next {
+            if models.current == next
+                && models
+                    .picker
+                    .as_ref()
+                    .and_then(|p| p.synced.as_ref())
+                    .is_some_and(|(_, _, old_editable)| *old_editable == editable)
+            {
                 return;
             }
             models.current = next;
@@ -448,6 +467,7 @@ impl ChatEditor {
         if self.model_query_busy(w, cx) {
             return;
         }
+        let editable = self.can_choose_model();
         let choice = self.model_choice();
         let is_new = self
             .selected
@@ -459,7 +479,7 @@ impl ChatEditor {
         let Some(c) = &p.catalog else {
             return;
         };
-        if p.synced.as_ref() == Some(&(choice.clone(), is_new)) {
+        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable)) {
             return;
         }
         let mut items: Vec<_> = c
@@ -469,7 +489,7 @@ impl ChatEditor {
                 id: m.id.clone(),
                 title: m.name.clone().into(),
                 detail: m.id.clone().into(),
-                disabled: false,
+                disabled: !editable,
                 search: if m.search_key.is_empty() {
                     format!("{} {}", m.name, m.id).to_lowercase().into()
                 } else {
@@ -491,7 +511,7 @@ impl ChatEditor {
                     id: String::new(),
                     title: "Project/pi default".into(),
                     detail: "Resolved by Local when you create the chat".into(),
-                    disabled: false,
+                    disabled: !editable,
                     search: "project pi default".into(),
                 },
             );
@@ -516,7 +536,7 @@ impl ChatEditor {
                 id: String::new(),
                 title: "Scoped default".into(),
                 detail: "No thinking override".into(),
-                disabled: false,
+                disabled: !editable,
                 search: "scoped default".into(),
             });
         }
@@ -529,7 +549,7 @@ impl ChatEditor {
                     l.clone().into()
                 },
                 detail: String::new().into(),
-                disabled: false,
+                disabled: !editable,
                 search: l.to_lowercase().into(),
             }));
         }
@@ -553,7 +573,7 @@ impl ChatEditor {
             s.set_items(SearchableVec::new(levels), w, cx);
             s.set_selected_value(&selected, w, cx);
         });
-        p.synced = Some((choice, is_new));
+        p.synced = Some((choice, is_new, editable));
     }
     fn model_uncertain(&self) -> Option<&chat_models::Attempt> {
         let id = self.selected.as_deref()?.strip_prefix("chat:")?;
@@ -563,33 +583,74 @@ impl ChatEditor {
         self.models.as_ref().is_some_and(|m| m.busy) || self.model_uncertain().is_some()
     }
     fn can_choose_model(&self) -> bool {
-        self.ready()
-            && self.writable
-            && !self.waiting()
-            && self.error.is_none()
-            && self.draft().is_some_and(Draft::editable)
-            && !self.models_block_send()
-            && self
-                .models
-                .as_ref()
-                .and_then(|m| m.picker.as_ref())
-                .is_some_and(|p| {
-                    !p.loading && p.error.is_none() && p.deferred.is_none() && p.catalog.is_some()
-                })
-            && if self
-                .selected
-                .as_ref()
-                .is_some_and(|s| s.starts_with("new:"))
-            {
-                true
-            } else {
-                !self.busy
-                    && self
-                        .models
-                        .as_ref()
-                        .and_then(|m| m.current.as_ref())
-                        .is_some_and(|(_, _, s)| s.allowed)
+        self.model_restriction().is_none()
+    }
+    fn model_restriction(&self) -> Option<&'static str> {
+        if !self.ready() {
+            return Some(
+                "Connect to Local and load this chat before changing its model or thinking.",
+            );
+        }
+        if !self.writable {
+            return Some(
+                "This chat is read-only. Its model and scoped catalog can be inspected, not changed.",
+            );
+        }
+        if self.waiting() {
+            return Some("Wait for the pending chat action before changing its model or thinking.");
+        }
+        if self.error.is_some() || !self.draft().is_some_and(Draft::editable) {
+            return Some(
+                "Resolve the retained chat delivery before changing its model or thinking.",
+            );
+        }
+        if self.model_uncertain().is_some() {
+            return Some(
+                "The previous model switch is unconfirmed. Inspect it below; no automatic retry.",
+            );
+        }
+        if self.models.as_ref().is_some_and(|m| m.busy) {
+            return Some(
+                "Waiting for the explicit model action. No other model change can be submitted yet.",
+            );
+        }
+        let Some(p) = self.models.as_ref().and_then(|m| m.picker.as_ref()) else {
+            return Some("Load this chat's scoped model catalog before choosing a model.");
+        };
+        if p.loading {
+            return Some("Loading scoped models. The current choice is retained.");
+        }
+        if p.error.is_some() || p.catalog.is_none() {
+            return Some(
+                "Scoped models could not be verified. Refresh models; the current choice is retained.",
+            );
+        }
+        if p.deferred.is_some() {
+            return Some(
+                "Finish or dismiss the model search to apply the refreshed scoped catalog.",
+            );
+        }
+        if !self
+            .selected
+            .as_ref()
+            .is_some_and(|s| s.starts_with("new:"))
+        {
+            let Some((_, _, current)) = self.models.as_ref().and_then(|m| m.current.as_ref())
+            else {
+                return Some("Load the current chat model before choosing another model.");
+            };
+            if !current.allowed {
+                return current
+                    .blocked
+                    .or(Some("Model changes require a healthy idle chat."));
             }
+            if self.busy {
+                return Some(
+                    "Wait for this chat's work and queued messages to finish before changing its model or thinking.",
+                );
+            }
+        }
+        None
     }
     fn choose_model(
         &mut self,
@@ -618,8 +679,14 @@ impl ChatEditor {
             }
             return;
         }
-        if !self.can_choose_model()
-            || self.marked(w, cx)
+        if !self.can_choose_model() {
+            if let Some(p) = self.models.as_mut().and_then(|m| m.picker.as_mut()) {
+                p.synced = None;
+            }
+            self.sync_model_inputs(w, cx);
+            return;
+        }
+        if self.marked(w, cx)
             || self.model_scope().as_ref() != Some(source)
             || self
                 .models
@@ -798,7 +865,6 @@ impl ChatEditor {
         self.refresh_models(w, cx);
     }
     pub(super) fn model_controls(&self, cx: &Context<Self>) -> impl IntoElement {
-        let editable = self.can_choose_model();
         let p = self.models.as_ref().and_then(|m| m.picker.as_ref());
         let levels = p
             .and_then(|p| p.catalog.as_ref())
@@ -851,7 +917,7 @@ impl ChatEditor {
                         .w_full()
                         .appearance(false)
                         .focus_ring(false)
-                        .disabled(!editable)
+                        .disabled(p.catalog.is_none())
                         .menu_width(px(320.))
                         .menu_max_h(px(260.))
                         .placeholder(model_label.clone())
@@ -867,7 +933,7 @@ impl ChatEditor {
                         .w_full()
                         .appearance(false)
                         .focus_ring(false)
-                        .disabled(!editable || levels < 2)
+                        .disabled(p.catalog.is_none() || levels < 2)
                         .menu_width(px(180.))
                         .menu_max_h(px(230.))
                         .placeholder(thinking_label.clone())
@@ -876,9 +942,11 @@ impl ChatEditor {
             }))
     }
     pub(super) fn has_model_notice(&self) -> bool {
-        self.models.as_ref().is_some_and(|m| {
-            m.error.is_some() || m.picker.as_ref().is_some_and(|p| p.error.is_some())
-        }) || self.model_catalog_empty()
+        self.model_restriction().is_some()
+            || self.models.as_ref().is_some_and(|m| {
+                m.error.is_some() || m.picker.as_ref().is_some_and(|p| p.error.is_some())
+            })
+            || self.model_catalog_empty()
             || self.model_uncertain().is_some()
             || self
                 .selected
@@ -902,7 +970,14 @@ impl ChatEditor {
             .and_then(|m| m.picker.as_ref())
             .and_then(|p| p.error));
         let uncertain = self.model_uncertain();
-        div().v_flex().gap_1().min_w_0().children(error.map(|e|Notice::new(e).tone(Tone::Error)))
+        div().v_flex().gap_1().min_w_0()
+            .children(self.model_restriction().filter(|_|error.is_none() && uncertain.is_none()).map(|reason|{
+                let view = ui::text(ui::Text::Caption,reason).id("chat-model-restriction");
+                #[cfg(any(test, feature = "native-probes"))]
+                let view = view.test_support();
+                view
+            }))
+            .children(error.map(|e|Notice::new(e).tone(Tone::Error)))
             .children(self.model_catalog_empty().then(||Notice::new("No models reported for this directory. Refresh models or check Scoped models in Settings; current choices are retained.").tone(Tone::Warning)))
             .children(self.draft().filter(|_|self.selected.as_ref().is_some_and(|k|k.starts_with("new:"))).and_then(|d|self.new_model_problem(d)).map(|e|Notice::new(e).tone(Tone::Warning)))
             .when(error.is_some(),|v|v.child(ui::action("refresh-chat-models","Refresh models",Action::Quiet).disabled(self.models.as_ref().is_some_and(|m|m.busy)).on_click(cx.listener(|v,_,w,cx|v.refresh_models(w,cx)))))

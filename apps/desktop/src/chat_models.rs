@@ -120,6 +120,7 @@ pub(crate) struct SessionModel {
     pub(crate) thinking: Option<String>,
     pub(crate) updated_at: u64,
     pub(crate) allowed: bool,
+    pub(crate) blocked: Option<&'static str>,
 }
 impl SessionModel {
     pub(crate) fn read(v: &Value) -> Self {
@@ -133,17 +134,43 @@ impl SessionModel {
                 .filter(|s| level(s))
                 .map(str::to_owned),
             updated_at: v["updatedAt"].as_u64().unwrap_or(0),
-            allowed: crate::local_model::interactive_local(v)
-                && v["state"] == "idle"
-                && v["working"] != true
-                && v["error"].is_null()
-                && v["failure"].is_null()
-                && v["subscriptionPause"].is_null()
-                && v["sleepPaused"] != true
-                && v["offlinePaused"] != true
-                && v["runningJobs"]
-                    .as_array()
-                    .is_none_or(|jobs| jobs.is_empty()),
+            allowed: Self::restriction(v).is_none(),
+            blocked: Self::restriction(v),
+        }
+    }
+    // Summary state is kernelState, not an admission capability. With no worker
+    // (or a stopped recovery) it is parked. changeModel explicitly reopens it.
+    // Worker/inbox/configuration races remain authoritative at POST admission.
+    fn restriction(v: &Value) -> Option<&'static str> {
+        if !crate::local_model::interactive_local(v) || v["continuationPending"] == true {
+            Some("Model changes are unavailable for this read-only chat or ownership transfer.")
+        } else if v["state"] == "failed" || !v["failure"].is_null() {
+            Some(
+                "This chat reports a failure. Model changes require a healthy idle chat; changing the model does not recover it.",
+            )
+        } else if !v["subscriptionPause"].is_null() {
+            Some(
+                "This chat is paused at a subscription limit. A model change here will not continue it or create another chat.",
+            )
+        } else if v["sleepPaused"] == true || v["offlinePaused"] == true {
+            Some(
+                "Model changes are unavailable while this chat is paused for sleep or connectivity.",
+            )
+        } else if v["working"] == true
+            || matches!(v["state"].as_str(), Some("working" | "starting"))
+            || v["runningJobs"]
+                .as_array()
+                .is_some_and(|jobs| !jobs.is_empty())
+        {
+            Some(
+                "Wait for this chat's work and queued messages to finish before changing its model or thinking.",
+            )
+        } else if !matches!(v["state"].as_str(), Some("idle" | "parked")) {
+            Some(
+                "The chat's idle state is not known. Refresh before changing its model or thinking.",
+            )
+        } else {
+            None
         }
     }
 }
@@ -427,20 +454,45 @@ mod tests {
     fn retained_failed_paused_and_nonidle_sessions_cannot_change() {
         let v = json!({"id":"a","cwd":"/faux","state":"idle","working":false,"model":"p/a","thinking":"high"});
         assert!(SessionModel::read(&v).allowed);
+        let mut parked = v.clone();
+        parked["state"] = json!("parked");
+        assert!(SessionModel::read(&parked).allowed);
+        assert!(SessionModel::read(&parked).blocked.is_none());
+        // summary.error also carries old kernel/input diagnostics. Actual
+        // meta.failure projects as failed; a healthy idle state isn't a failure
+        // merely because that diagnostic is still displayed.
+        for state in ["idle", "parked"] {
+            let mut recovered = v.clone();
+            recovered["state"] = json!(state);
+            recovered["error"] = json!("Retained diagnostic");
+            assert!(SessionModel::read(&recovered).allowed);
+        }
         for (key, value) in [
             ("state", json!("working")),
             ("state", json!("failed")),
+            ("state", json!("starting")),
+            ("state", json!("unknown")),
+            ("state", Value::Null),
             ("working", json!(true)),
             ("control", json!(true)),
             ("role", json!("diagnostics")),
             ("archivedAt", json!(1)),
             ("continuedTo", json!("next")),
+            ("continuationPending", json!(true)),
+            ("failure", json!({"message":"failed"})),
+            ("sleepPaused", json!(true)),
+            ("offlinePaused", json!(true)),
+            ("runningJobs", json!([{"id":"job"}])),
             ("subscriptionPause", json!({"force":false})),
-            ("error", json!("failure")),
         ] {
             let mut blocked = v.clone();
             blocked[key] = value;
             assert!(!SessionModel::read(&blocked).allowed, "{key}");
+            assert!(SessionModel::read(&blocked).blocked.is_some(), "{key}");
+            if key != "state" {
+                blocked["state"] = json!("parked");
+                assert!(!SessionModel::read(&blocked).allowed, "parked {key}");
+            }
         }
     }
 }

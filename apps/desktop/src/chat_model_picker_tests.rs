@@ -1,5 +1,6 @@
 use super::*;
 use crate::chat_models_fixture::{Mode, Server};
+use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, TestAppContext};
 fn setup(
     cx: &mut TestAppContext,
@@ -45,6 +46,84 @@ fn setup(
 fn source(e: &ChatEditor) -> (Scope, String) {
     let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
     (p.scope.clone(), p.epoch.clone())
+}
+#[gpui_kit::test]
+fn parked_and_failure_transitions_rebuild_readonly_catalog_without_touching_draft(
+    cx: &mut TestAppContext,
+) {
+    let (server, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text.update(cx, |t, cx| {
+                t.set_value("Keep main draft 日本語 👩‍💻", w, cx);
+                t.focus(w, cx);
+            });
+            e.changed(cx);
+        });
+        w.press("secondary-a", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            let selection = e.text.read(cx).selected_range();
+            let draft = e.draft().unwrap().clone();
+            let mut summary = server.seen.lock().unwrap().session();
+            for (state, can_change, reason) in [
+                ("parked", true, ""),
+                ("failed", false, "failure"),
+                ("parked", true, ""),
+                ("idle", true, ""),
+                ("working", false, "work and queued"),
+                ("unknown", false, "not known"),
+            ] {
+                summary["state"] = serde_json::json!(state);
+                e.model_context(
+                    "source",
+                    "/synthetic/project",
+                    SessionModel::read(&summary),
+                    w,
+                    cx,
+                );
+                assert_eq!(e.can_choose_model(), can_change, "{state}");
+                if !can_change {
+                    assert!(e.model_restriction().unwrap().contains(reason));
+                    assert!(e.has_model_notice());
+                    let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
+                    assert!(!p.synced.as_ref().unwrap().2);
+                    let (scope, epoch) = source(e);
+                    e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+                }
+                assert_eq!(e.text.read(cx).selected_range(), selection);
+                assert_eq!(
+                    e.text.read(cx).value().as_ref(),
+                    "Keep main draft 日本語 👩‍💻"
+                );
+                assert!(e.draft().unwrap() == &draft);
+                assert_eq!(e.model_choice().unwrap().model, "p/a");
+                assert!(commands.is_empty());
+            }
+            summary["state"] = serde_json::json!("parked");
+            e.model_context(
+                "source",
+                "/synthetic/project",
+                SessionModel::read(&summary),
+                w,
+                cx,
+            );
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+            assert!(matches!(
+                commands.try_recv().unwrap(),
+                WriteCommand::Model {
+                    action: chat_models::Action::Submit(_),
+                    ..
+                }
+            ));
+            assert!(commands.is_empty());
+        })
+    })
+    .unwrap();
 }
 #[gpui_kit::test]
 fn empty_scoped_catalog_is_visible_without_substitution_or_actions(cx: &mut TestAppContext) {
@@ -115,6 +194,7 @@ fn checked_model_is_noop_new_model_omits_old_thinking_and_old_widget_cannot_chan
                         thinking: Some("low".into()),
                         updated_at: 2,
                         allowed: true,
+                        blocked: None,
                     }),
                 });
                 e.accept_model_action(w, cx);

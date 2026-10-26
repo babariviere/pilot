@@ -196,6 +196,107 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             let anchor = cx.update(|cx| transcript.read(cx).history_probe_anchor(cx));
             assert_eq!(server.posts(), 0);
+            // Mounted inspection is safe in blocked states. No model, start,
+            // continuation or send request is made; the main input is untouched.
+            for (state, writable, working, extra, reason) in [
+                ("failed", true, false, None, "failure"),
+                ("working", true, true, None, "work and queued"),
+                ("idle", false, false, None, "read-only"),
+                (
+                    "working",
+                    true,
+                    false,
+                    Some("subscriptionPause"),
+                    "subscription limit",
+                ),
+                ("idle", true, false, Some("pending"), "pending chat action"),
+            ] {
+                cx.update_window(h, |_, w, cx| {
+                    let mut raw = server.seen.lock().unwrap().session();
+                    raw["state"] = serde_json::json!(state);
+                    raw["working"] = serde_json::json!(working);
+                    if extra == Some("subscriptionPause") {
+                        raw["subscriptionPause"] = serde_json::json!({"forced": false});
+                    }
+                    editor.update(cx, |e, cx| {
+                        e.permission(writable, working, cx);
+                        if extra == Some("pending") {
+                            e.model_probe_pending(true);
+                        }
+                        e.model_context(
+                            "source",
+                            "/synthetic/project",
+                            crate::chat_models::SessionModel::read(&raw),
+                            w,
+                            cx,
+                        );
+                        assert!(e.model_probe_restriction().unwrap().contains(reason));
+                    });
+                })
+                .unwrap();
+                settle(cx, h);
+                if state == "failed"
+                    && let Some(d) = &dir
+                {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(d.join(format!(
+                            "{}-{}-model-failure.png",
+                            width as u32,
+                            mode.name()
+                        )))
+                        .unwrap();
+                }
+                cx.update_window(h, |_, w, cx| {
+                    assert!(w.find("chat-model-restriction").bounds().size.height > px(0.));
+                    w.click("chat-model", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    w.click("model-option-p/b", cx);
+                    w.press("escape", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                assert_eq!(server.posts(), 0);
+                cx.update(|cx| {
+                    assert_eq!(
+                        editor
+                            .read(cx)
+                            .model_probe_state()
+                            .2
+                            .as_ref()
+                            .unwrap()
+                            .model,
+                        "p/a"
+                    );
+                    assert_eq!(text.read(cx).selected_range(), selection);
+                    assert_eq!(
+                        text.read(cx).value().as_ref(),
+                        "Retained model draft 日本語 👩‍💻"
+                    );
+                });
+            }
+            // A failed chat becoming healthy/parked must not keep a stale UI lock.
+            server.seen.lock().unwrap().mode = Mode::Parked;
+            cx.update_window(h, |_, w, cx| {
+                let raw = server.seen.lock().unwrap().session();
+                editor.update(cx, |e, cx| {
+                    e.model_probe_pending(false);
+                    e.permission(true, false, cx);
+                    e.model_context(
+                        "source",
+                        "/synthetic/project",
+                        crate::chat_models::SessionModel::read(&raw),
+                        w,
+                        cx,
+                    );
+                    assert!(e.model_probe_restriction().is_none());
+                });
+            })
+            .unwrap();
+            settle(cx, h);
             select_model(cx, h, "p/b", mode == ThemeMode::Light);
             until(cx, h, &editor, |e| {
                 !e.model_probe_state().1
