@@ -414,6 +414,7 @@ impl Staged {
         Ok(())
     }
 
+    #[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
     pub(crate) fn mark_committed(&self) -> Result<(), Error> {
         let _guard = journal_guard(&self.root)?;
         let mut journal = read_journal(&self.root)?;
@@ -597,6 +598,7 @@ pub(crate) fn acl_policy(path: &Path, policy: i32) -> Result<(), Error> {
 
 /// Only a freshly created, still-unpublished failed preparation may be discarded.
 /// Durable ready/pending/committed transactions are always retained for explicit recovery.
+#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
 pub(crate) fn discard_incomplete(root: &Path, target: &Path) -> Result<(), Error> {
     validate_root(root, target)?;
     if root

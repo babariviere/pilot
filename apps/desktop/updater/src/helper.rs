@@ -1,16 +1,16 @@
 //! Explicit two-phase helper handshake. Parent EOF/ordinary quit without COMMIT aborts.
 use crate::{Error, installer::Staged, manifest::Trust};
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+use std::{fs::File, path::PathBuf, time::Instant};
 use std::{
-    fs::File,
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::{net::UnixStream, process::CommandExt},
     },
-    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver, SyncSender},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 /// Not constructible by an application. Created only by the native process-exit monitor.
@@ -188,6 +188,7 @@ fn duplicate_high(fd: libc::c_int) -> Result<OwnedFd, Error> {
 }
 
 /// Pure protocol seam used by native helper and synthetic exit/ordinary-quit tests.
+#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
 pub(crate) fn await_commit(
     control: &mut (impl Read + Write),
     staged: &Staged,
@@ -207,11 +208,11 @@ pub(crate) fn await_commit(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", any(test, feature = "native-macos")))]
 pub(crate) struct ParentWatch {
     queue: OwnedFd,
 }
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", any(test, feature = "native-macos")))]
 impl ParentWatch {
     pub(crate) fn new(pid: libc::pid_t) -> Result<Self, Error> {
         // SAFETY: kqueue returns a new owned descriptor; NOTE_EXIT attaches to the
@@ -420,6 +421,7 @@ pub fn run_native(
     staged.apply_after_exit(&trust, &MacPlatform, exit)
 }
 
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub(crate) fn run_command(command: &mut Command, timeout: Duration) -> Result<(), Error> {
     let mut child = command
         .env_clear()
