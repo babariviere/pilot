@@ -25,9 +25,9 @@ OUTPUT_LIMIT = 16 * 1024 * 1024
 # Positive, source-audited helper-free contracts. Unknown scopes keep the helper.
 PURE_MODULES = {"chat_rename", "chat_actions", "bundled_runtime", "chat_models", "delivery_store", "interaction",
                 "local_client", "local_model", "mission_conversion", "mission_transport",
-                "mission_task_create", "mission_tasks", "mission_activity", "mission_tasks_reader", "project_registration", "reader_identity_tests", "scoped_models",
+                "mission_task_create", "mission_create", "mission_create_transport", "mission_tasks", "mission_activity", "mission_tasks_reader", "project_registration", "reader_identity_tests", "scoped_models",
                 "scoped_models_worker", "settings_state", "settings_worker"}
-PURE_NATIVE = {"chat_rename", "chat_actions", "controls", "project_creation", "mission_tasks", "mission_activity", "mission_task_create"}
+PURE_NATIVE = {"chat_rename", "chat_actions", "controls", "project_creation", "mission_tasks", "mission_activity", "mission_task_create", "mission_create"}
 
 
 def parser():

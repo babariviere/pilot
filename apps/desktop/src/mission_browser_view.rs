@@ -73,6 +73,7 @@ pub(crate) struct Browser {
     activity_open: bool,
     pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
     brief_events: Option<gpui_kit::Subscription>,
+    pub(crate) creation: Option<gpui_kit::Entity<crate::mission_create_view::Form>>,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
@@ -103,10 +104,49 @@ impl Browser {
             activity_open: false,
             brief: None,
             brief_events: None,
+            creation: None,
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
         self.options = Some(options);
+    }
+    fn open_creation(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.route != Some(Route::Catalog) || self.brief_marked(w, cx) {
+            return;
+        }
+        let Some(options) = self.options.clone() else {
+            return;
+        };
+        if self.creation.is_none() {
+            if !self.online || !self.loaded {
+                return;
+            }
+            let projects = self.projects.as_ref().clone();
+            let form = cx.new(|cx| crate::mission_create_view::Form::new(projects, options, w, cx));
+            cx.subscribe_in(
+                &form,
+                w,
+                |v, _, _: &crate::mission_create_view::Close, w, cx| {
+                    // Restore a mounted destination before hiding the input subtree.
+                    v.focus.focus(w, cx);
+                    if let Some(form) = &v.creation {
+                        form.update(cx, |f, cx| {
+                            f.visible = false;
+                            cx.notify();
+                        });
+                    }
+                    cx.notify();
+                },
+            )
+            .detach();
+            self.creation = Some(form);
+        }
+        self.creation.as_ref().unwrap().update(cx, |f, cx| {
+            f.visible = true;
+            f.focus(w, cx);
+            cx.notify();
+        });
+        cx.notify();
     }
     pub(crate) fn local_home(&self) -> Option<Home> {
         self.options.as_ref().map(|o| Home::local(&o.host()))
@@ -150,6 +190,11 @@ impl Browser {
             })
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        if let Some(form) = self.creation.as_ref().filter(|f| f.read(cx).visible) {
+            let focus = form.read(cx).focus_handle(cx);
+            focus.focus(w, cx);
+            return;
+        }
         if self.activity_open
             && let Some(activity) = &self.activity_browser
         {
@@ -189,6 +234,13 @@ impl Browser {
             }
         }
         if self.route != route {
+            if let Some(form) = &self.creation {
+                form.update(cx, |v, cx| {
+                    v.visible = false;
+                    cx.notify();
+                });
+                self.focus.focus(w, cx);
+            }
             self.route = route;
             self.read(w, cx);
         } else if changed {
@@ -213,9 +265,13 @@ impl Browser {
         })
     }
     pub(crate) fn brief_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.brief
+        self.creation
             .as_ref()
-            .is_some_and(|brief| brief.update(cx, |v, cx| v.visible && v.marked(w, cx)))
+            .is_some_and(|f| f.update(cx, |v, cx| v.marked(w, cx)))
+            || self
+                .brief
+                .as_ref()
+                .is_some_and(|brief| brief.update(cx, |v, cx| v.visible && v.marked(w, cx)))
             || self.tasks_browser.update(cx, |v, cx| v.marked(w, cx))
     }
     pub(crate) fn open_brief(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -557,6 +613,18 @@ impl Browser {
 }
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(form) = self.creation.as_ref().filter(|f| f.read(cx).visible) {
+            return div()
+                .id("missions-page")
+                .test_support()
+                .track_focus(&self.focus)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(ui::page().child(form.clone()))
+                .into_any_element();
+        }
         if self.activity_open
             && let Some(activity) = &self.activity_browser
         {
@@ -626,7 +694,17 @@ impl Render for Browser {
                                     v.read(w, cx);
                                 }
                             })),
-                    ),
+                    )
+                    .when(is_list, |d| {
+                        d.child(
+                            ui::action("missions-new", "New mission…", Action::Secondary)
+                                .disabled(
+                                    self.options.is_none()
+                                        || (!self.online && self.creation.is_none()),
+                                )
+                                .on_click(cx.listener(|v, _, w, cx| v.open_creation(w, cx))),
+                        )
+                    }),
             )
             .child(
                 ui::text(Text::Caption, self.snapshot_note())

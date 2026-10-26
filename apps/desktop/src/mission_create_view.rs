@@ -1,0 +1,385 @@
+//! Retained standalone mission form. One captured Local project per submission.
+use crate::{
+    LocalOptions,
+    local_model::Project,
+    mission_browser::Home,
+    mission_create::{self as model, Outcome, State},
+    mission_create_transport as wire,
+    ui::{self, Action, Notice, Text, Tone},
+};
+use gpui_kit::{
+    App, AppContext, ClipboardItem, Context, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, TestSupportExt, Window,
+    component::{
+        Disableable, FocusableExt, Sizable, StyledExt,
+        input::{InputEvent, Textarea, TextareaState},
+        select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    },
+    div,
+    prelude::FluentBuilder,
+};
+use std::{cell::Cell, rc::Rc};
+gpui_kit::actions!(mission_create, [SubmitMission, CloseMission]);
+#[derive(Clone)]
+struct Choice {
+    id: String,
+    name: SharedString,
+}
+impl SelectItem for Choice {
+    type Value = String;
+    fn value(&self) -> &String {
+        &self.id
+    }
+    fn title(&self) -> SharedString {
+        self.name.clone()
+    }
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div()
+            .id(SharedString::from(format!("mission-project-{}", self.id)))
+            .test_support()
+            .min_w_0()
+            .truncate()
+            .child(self.name.clone())
+    }
+}
+struct Keys;
+impl gpui_kit::Global for Keys {}
+pub(crate) struct Close;
+pub(crate) struct Form {
+    pub(crate) project: Option<String>,
+    picker: Entity<SelectState<SearchableVec<Choice>>>,
+    home: Home,
+    options: LocalOptions,
+    pub(crate) visible: bool,
+    pub(crate) state: State,
+    pub(crate) title: Entity<TextareaState>,
+    pub(crate) body: Entity<TextareaState>,
+    draft: [String; 2],
+    error: Option<&'static str>,
+    focus: FocusHandle,
+    bounds: [Rc<Cell<Option<gpui_kit::Bounds<gpui_kit::Pixels>>>>; 2],
+    _inputs: Vec<Subscription>,
+    completion: Option<Task<()>>,
+}
+impl EventEmitter<Close> for Form {}
+impl Form {
+    pub(crate) fn new(
+        projects: Vec<Project>,
+        options: LocalOptions,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        if !cx.has_global::<Keys>() {
+            cx.bind_keys([
+                gpui_kit::KeyBinding::new("secondary-enter", SubmitMission, Some("MissionCreate")),
+                gpui_kit::KeyBinding::new("escape", CloseMission, Some("MissionCreate")),
+            ]);
+            cx.set_global(Keys);
+        }
+        let title = cx.new(|cx| {
+            let mut t = TextareaState::new(w, cx)
+                .placeholder("Mission title")
+                .auto_grow(1, 2);
+            t.set_submit_on_enter(false, cx);
+            t
+        });
+        let body = cx.new(|cx| {
+            let mut t = TextareaState::new(w, cx)
+                .placeholder("Goal")
+                .auto_grow(3, 6);
+            t.set_submit_on_enter(false, cx);
+            t
+        });
+        let picker = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    projects
+                        .iter()
+                        .map(|p| Choice {
+                            id: p.id.clone(),
+                            name: format!("{} · {}", p.name, p.id).into(),
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                None,
+                w,
+                cx,
+            )
+        });
+        let mut subscriptions = vec![cx.subscribe_in(
+            &picker,
+            w,
+            |v, _, event: &SelectEvent<SearchableVec<Choice>>, w, cx| {
+                if let SelectEvent::Confirm(Some(id)) = event
+                    && v.visible
+                    && !v.state.blocked()
+                    && !v.marked(w, cx)
+                {
+                    v.project = Some(id.clone());
+                    cx.notify();
+                }
+            },
+        )];
+        for (ix, input) in [title.clone(), body.clone()].into_iter().enumerate() {
+            subscriptions.push(cx.subscribe_in(&input,w,move |v,_,event,w,cx| {
+                if matches!(event,InputEvent::Change) {
+                    let input = if ix==0 {v.title.clone()} else {v.body.clone()};
+                    let value=input.read(cx).value();
+                    let cap=if ix==0 {model::TITLE_UNITS} else {model::BODY_UNITS};
+                    if value.encode_utf16().count()>cap {
+                        let previous=v.draft[ix].clone();
+                        input.update(cx,|i,cx| i.set_value(previous,w,cx));
+                        v.error=Some("Edit exceeds the field limit and was rejected in full. Previous text is retained; undo history was reset.");
+                    } else {v.draft[ix]=value.to_string();}
+                    cx.notify();
+                }
+            }));
+        }
+        Self {
+            project: None,
+            picker,
+            home: Home::local(&options.host()),
+            options,
+            visible: true,
+            state: State::default(),
+            title,
+            body,
+            draft: Default::default(),
+            error: None,
+            focus: cx.focus_handle(),
+            bounds: Default::default(),
+            _inputs: subscriptions,
+            completion: None,
+        }
+    }
+    pub(crate) fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.visible
+            && [self.title.clone(), self.body.clone()]
+                .iter()
+                .any(|i| i.update(cx, |i, cx| i.marked_text_range(w, cx).is_some()))
+    }
+    pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        self.title.read(cx).focus_handle(cx).focus(w, cx);
+    }
+    pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.title.read(cx).focus_handle(cx)
+    }
+    fn close(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.visible
+            && !self.marked(w, cx)
+            && self.picker.update(cx, |p, cx| p.prepare_navigation(w, cx))
+        {
+            cx.emit(Close);
+        }
+    }
+    fn submit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible || self.marked(w, cx) {
+            return;
+        }
+        // Read native values at intent time, not queued Change delivery.
+        let title = self.title.read(cx).value().to_string();
+        let body = self.body.read(cx).value().to_string();
+        let submission = match self.state.begin(
+            &self.home,
+            self.project.as_deref().unwrap_or(""),
+            &title,
+            &body,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                self.error = Some(e);
+                cx.notify();
+                return;
+            }
+        };
+        self.error = None;
+        match wire::start(self.options.clone(), submission.clone()) {
+            Err(e) => {
+                self.state.finish(&submission, Outcome::NotSent(e));
+            }
+            Ok(output) => {
+                self.completion=Some(cx.spawn(async move |view,cx| {
+                    let reply=output.recv().await;
+                    let _=view.update(cx,|v,cx| {
+                        let (s,outcome)=match reply {Ok(r)=>(r.submission,r.outcome),Err(_)=>(submission,Outcome::Unknown("Mission worker stopped without a receipt. It may have committed. Do not resubmit."))};
+                        v.state.finish(&s,outcome);cx.notify();
+                    });
+                }));
+            }
+        }
+        cx.notify();
+    }
+}
+impl Render for Form {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.weak_entity();
+        let fence = gpui_kit::canvas(
+            |_, _, _| (),
+            move |_, (), w, _| {
+                w.on_mouse_event(move |event: &gpui_kit::MouseDownEvent, phase, w, cx| {
+                    if phase == gpui_kit::DispatchPhase::Capture
+                        && weak
+                            .update(cx, |v, cx| {
+                                // During composition only the marked editor may take input.
+                                let marked =
+                                    [v.title.clone(), v.body.clone()].iter().position(|i| {
+                                        i.update(cx, |i, cx| i.marked_text_range(w, cx).is_some())
+                                    });
+                                v.visible
+                                    && marked.is_some_and(|ix| {
+                                        v.bounds[ix]
+                                            .get()
+                                            .is_none_or(|b| !b.contains(&event.position))
+                                    })
+                            })
+                            .unwrap_or(false)
+                    {
+                        cx.stop_propagation();
+                    }
+                });
+            },
+        )
+        .absolute()
+        .inset_0()
+        .size_full();
+        let blocked = self.state.blocked();
+        let mut form=div().id("mission-create").test_support().relative().w_full().min_w_0().v_flex().gap_2().track_focus(&self.focus).key_context("MissionCreate")
+            // Kit resolves textarea Enter before raw key-down dispatch. Capture
+            // that real action, not a competing outer key binding/subscription.
+            .capture_action(cx.listener(|v,event:&gpui_kit::base::input::Enter,w,cx| {
+                if event.secondary && !event.shift {cx.stop_propagation();v.submit(w,cx);}
+            }))
+            .capture_action(cx.listener(|v,_:&gpui_kit::base::input::Escape,w,cx| {
+                cx.stop_propagation();v.close(w,cx);
+            }))
+            .on_action(cx.listener(|v,_:&SubmitMission,w,cx|v.submit(w,cx)))
+            .on_action(cx.listener(|v,_:&CloseMission,w,cx|v.close(w,cx)))
+            .child(ui::heading("mission-create-heading","New mission",Text::Headline))
+            .child(ui::text(Text::Caption,"Draft retained through navigation, not app restart. This mission starts without an agent. No chats, brief or tasks are created."));
+        form = form.child(ui::text(Text::Label, "Project"));
+        form = form.child(
+            div().h_7().w_full().min_w_0().child(
+                Select::new(&self.picker)
+                    .id("mission-create-project")
+                    .small()
+                    .w_full()
+                    .focus_ring(false)
+                    .menu_max_h(gpui_kit::px(260.))
+                    .disabled(blocked)
+                    .accessibility_label("Mission project"),
+            ),
+        );
+        for (ix, (label, input, id)) in [
+            ("Title", self.title.clone(), "mission-create-title"),
+            ("Goal", self.body.clone(), "mission-create-body"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.bounds[ix].set(None);
+            let bounds = self.bounds[ix].clone();
+            form = form.child(ui::text(Text::Label, label)).child(
+                div()
+                    .id(id)
+                    .test_support()
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .child(Textarea::new(&input).aria_label(label).disabled(blocked))
+                    .child(
+                        gpui_kit::canvas(|_, _, _| (), move |b, (), _, _| bounds.set(Some(b)))
+                            .absolute()
+                            .inset_0()
+                            .size_full(),
+                    ),
+            );
+        }
+        if let Some((_, outcome)) = &self.state.attempt {
+            let (text, tone) = match outcome {
+                Outcome::Pending => (
+                    "Creating mission… Navigating away does not cancel this submission."
+                        .to_string(),
+                    Tone::Normal,
+                ),
+                Outcome::NotSent(e) => (e.to_string(), Tone::Error),
+                Outcome::Unknown(e) => (format!("Creation unconfirmed. {e}"), Tone::Error),
+                Outcome::Created(t) => (
+                    format!(
+                        "Created mission {t} without an agent. Close and refresh Missions to browse it."
+                    ),
+                    Tone::Normal,
+                ),
+            };
+            form = form.child(
+                div()
+                    .id("mission-create-result")
+                    .test_support()
+                    .child(Notice::new(SharedString::from(text)).tone(tone)),
+            );
+        }
+        if let Some(e) = self.error {
+            form = form.child(Notice::new(e).tone(Tone::Error));
+        }
+        form.child(
+            div()
+                .h_flex()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    ui::action("mission-create-submit", "Create mission", Action::Primary)
+                        .disabled(blocked || self.project.is_none())
+                        .tooltip("Create an empty mission in the selected Local project (⌘Enter).")
+                        .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
+                )
+                .child(
+                    ui::action("mission-create-close", "Close", Action::Quiet)
+                        .on_click(cx.listener(|v, _, w, cx| v.close(w, cx))),
+                )
+                .when(
+                    matches!(self.state.attempt.as_ref(), Some((_, Outcome::Created(_)))),
+                    |d| {
+                        d.child(
+                            ui::action(
+                                "mission-create-another",
+                                "Another mission",
+                                Action::Secondary,
+                            )
+                            .on_click(cx.listener(|v, _, w, cx| {
+                                if v.marked(w, cx)
+                                    || !matches!(
+                                        v.state.attempt.as_ref(),
+                                        Some((_, Outcome::Created(_)))
+                                    )
+                                {
+                                    return;
+                                }
+                                v.state = State::default();
+                                v.draft = Default::default();
+                                v.error = None;
+                                for input in [&v.title, &v.body] {
+                                    input.update(cx, |i, cx| i.set_value("", w, cx));
+                                }
+                                v.focus(w, cx);
+                                cx.notify();
+                            })),
+                        )
+                    },
+                )
+                .when(self.state.attempt.is_some(), |d| {
+                    d.child(
+                        ui::action("mission-create-copy", "Copy text", Action::Quiet).on_click(
+                            cx.listener(|v, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                                    "{}\n\n{}",
+                                    v.title.read(cx).value(),
+                                    v.body.read(cx).value()
+                                )));
+                            }),
+                        ),
+                    )
+                }),
+        )
+        .child(fence)
+    }
+}

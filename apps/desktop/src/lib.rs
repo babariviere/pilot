@@ -54,6 +54,15 @@ mod mission_browser;
 mod mission_browser_fixture;
 mod mission_browser_view;
 mod mission_conversion;
+mod mission_create;
+#[cfg(any(test, feature = "native-probes"))]
+mod mission_create_fixture;
+#[cfg(feature = "native-probes")]
+mod mission_create_probe;
+mod mission_create_transport;
+mod mission_create_view;
+#[cfg(feature = "native-probes")]
+pub use mission_create_probe::run_mission_create_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_fixture;
 mod mission_inspector;
