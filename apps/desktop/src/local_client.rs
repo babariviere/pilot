@@ -187,6 +187,7 @@ pub(crate) struct Presentation {
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
     pub(crate) artifacts: Arc<Vec<crate::artifact_model::Reference>>,
+    pub(crate) artifact_metadata: crate::artifact_gallery::Metadata,
     pub(crate) chats: Arc<Vec<Chat>>,
     pub(crate) rows: Vec<Message>,
     pub(crate) generation: u64,
@@ -603,7 +604,7 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());
+                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
@@ -611,6 +612,7 @@ async fn run(
                     if let Some(task) = page_task.take() { task.abort(); }
                     selected = Some(id.clone());
                     view.artifacts=Arc::new(Vec::new());
+                    view.artifact_metadata=Default::default();
                     model = LiveTranscript::default();
                     model.presentation_dirty = true;
                     view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
@@ -652,11 +654,12 @@ async fn run(
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
-                    view.page_busy=false; view.status=text.into(); view.chat_status=text.into();
+                    view.page_busy=false; view.status=text.into(); view.chat_status=text.into();view.artifact_metadata.mark_stale();
                 },
                 Ok((_, Incoming::Status {generation, chat, text})) => {
                     if !chat || generation == view.generation { model.thinking=false; }
-                    if chat { if generation != view.generation { continue; } view.chat_status = text.into(); }
+                    if chat { if generation != view.generation { continue; }
+                        if text!="Connected · Local"{view.artifact_metadata.mark_stale();} view.chat_status = text.into(); }
                     else { view.status = text.into(); }
                 }
                 Ok((_, Incoming::Page { generation,before,result })) => {
@@ -668,7 +671,7 @@ async fn run(
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
                     if is_chat {
                         if generation != view.generation { continue; }
-                        if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){view.artifacts=crate::artifact_model::summaries(&value["artifacts"],selected.as_deref().unwrap_or(""));}
+                        if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
                             for event in events { model.apply(event); }

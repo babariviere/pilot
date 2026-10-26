@@ -967,9 +967,13 @@ impl LocalViewer {
                     cx.notify();
                     return;
                 }
+                if !view.prepare_navigation(window, cx) {
+                    return;
+                }
                 view.artifacts_open = true;
                 view.artifacts.update(cx, |pane, cx| {
                     pane.context(view.selected.clone(), view.state.artifacts.clone(), cx);
+                    pane.artifact_metadata(view.state.artifact_metadata.clone(), cx);
                     pane.open(event.0.clone(), window, cx);
                 });
                 cx.notify();
@@ -1160,8 +1164,10 @@ impl LocalViewer {
         });
         self.artifacts_open = false;
         self.state.artifacts = Arc::new(Vec::new());
+        self.state.artifact_metadata = Default::default();
         self.artifacts.update(cx, |pane, cx| {
-            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
+            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx);
+            pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
         });
         self.title = chat.title;
         self.state.cursor = None;
@@ -1255,7 +1261,8 @@ impl LocalViewer {
         self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);
         self.artifacts.update(cx, |pane, cx| {
-            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx)
+            pane.context(self.selected.clone(), self.state.artifacts.clone(), cx);
+            pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
         });
         cx.notify();
     }
@@ -1267,8 +1274,10 @@ impl LocalViewer {
             .update(cx, |editor, cx| editor.activity(false, cx));
         self.artifacts_open = false;
         self.state.artifacts = Arc::new(Vec::new());
+        self.state.artifact_metadata = Default::default();
         self.artifacts.update(cx, |pane, cx| {
-            pane.context(None, self.state.artifacts.clone(), cx)
+            pane.context(None, self.state.artifacts.clone(), cx);
+            pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
         });
         self.refreshing = false;
         self.generation += 1;
@@ -1406,7 +1415,7 @@ impl LocalViewer {
     fn leave_artifacts(&mut self, cx: &mut Context<Self>) {
         if self.artifacts_open {
             self.artifacts_open = false;
-            self.artifacts.update(cx, |p, _| p.close());
+            self.artifacts.update(cx, |p, cx| p.hide_gallery(cx));
         }
     }
     fn show_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1692,7 +1701,7 @@ impl Render for LocalViewer {
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
-                                .on_click(cx.listener(|view,_,_,cx|{view.artifacts_open = !view.artifacts_open;if !view.artifacts_open{view.artifacts.update(cx,|p,_|p.close());}cx.notify();}))))
+                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(760.)).mx_auto()

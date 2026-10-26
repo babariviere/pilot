@@ -228,9 +228,11 @@ See [tool presentation evidence](evidence/tool-presentation.md). This is not ful
 
 ### Native visual reader, work in progress
 
-Use Artifacts in a Local chat's header to browse its bounded metadata gallery,
-then explicitly open a pinned revision. No preview auto-runs from a message or
-metadata update. Canonical artifact publication entries also have inline pinned
+Use Artifacts in a Local chat's header to browse its responsive native thumbnail
+gallery, then explicitly open a pinned revision. Stored images decode lazily
+for visible tiles; generated sources never run to populate the gallery. See
+[gallery ownership, limits and keyboard paths](docs/artifact-gallery.md).
+Canonical artifact publication entries also have inline pinned
 Open cards; body links/JSON and legacy tool-only output are not parsed into reads.
 Cards cannot switch owners or silently open the latest revision. Previous revisions, source/provenance and Copy source remain
 available even for unsupported kinds. Reader state is in memory for eight

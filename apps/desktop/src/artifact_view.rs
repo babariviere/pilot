@@ -1,4 +1,6 @@
 //! Native read-only artifact detail. User controls change isolated reader state only.
+#[path = "artifact_gallery_view.rs"]
+pub(crate) mod gallery;
 #[cfg(feature = "native-probes")]
 #[path = "artifact_image_probe.rs"]
 pub(crate) mod image_probe;
@@ -38,6 +40,7 @@ use std::{
     time::Instant,
 };
 pub(crate) struct ArtifactPane {
+    gallery: gallery::State,
     focus: Option<gpui_kit::FocusHandle>,
     options: Option<LocalOptions>,
     owner: Option<String>,
@@ -72,6 +75,7 @@ struct SliderBinding {
 impl ArtifactPane {
     pub(crate) fn new() -> Self {
         Self {
+            gallery: gallery::State::default(),
             focus: None,
             options: None,
             owner: None,
@@ -213,15 +217,18 @@ impl ArtifactPane {
     ) {
         if self.owner != owner {
             self.close();
+            self.reset_gallery(cx);
             self.owner = owner;
             cx.notify();
         }
         if !Arc::ptr_eq(&items, &self.items) {
             self.items = items;
+            self.reconcile_gallery(cx);
             cx.notify();
         }
     }
     pub(crate) fn close(&mut self) {
+        self.suspend_gallery();
         if let Some(raster) = self.snapshot.raster.take() {
             debug_assert!(
                 self.retired_image.is_none(),
@@ -234,7 +241,10 @@ impl ArtifactPane {
         self.sliders.clear();
         self.slider_flow.clear();
         self.slider_synced = None;
-        self.worker = None;
+        if let Some(worker) = self.worker.take() {
+            self.reader_drain(worker.finished());
+            drop(worker);
+        }
         self.updates = None;
         self.reference = None;
         self.snapshot = Snapshot::default();
@@ -297,7 +307,17 @@ impl ArtifactPane {
             reference
         };
         self.reference = Some(reference.clone());
+        self.gallery_target(&reference);
         self.busy = true;
+        let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
+        window.focus(&focus, cx);
+        self.begin_after_drain(window, cx);
+        cx.notify();
+    }
+    fn start_detail_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(reference) = self.reference.clone() else {
+            return;
+        };
         let Some(options) = self.options.clone() else {
             self.busy = false;
             cx.notify();
@@ -1231,7 +1251,6 @@ impl Render for ArtifactPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_sliders(window, cx);
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
-        let generation = self.generation;
         let mut view = div()
             .id("artifact-detail")
             .test_support()
@@ -1253,29 +1272,7 @@ impl Render for ArtifactPane {
             .gap_2()
             .p_3();
         let Some(reference) = self.reference.clone() else {
-            return view
-                .overflow_y_scroll()
-                .child(
-                    div()
-                        .text_sm()
-                        .child("Artifacts · Local current chat · first64 only"),
-                )
-                .children(self.items.iter().enumerate().map(|(i, r)| {
-                    let r = r.clone();
-                    let label = format!("{} · {} · r{}", r.title, r.kind, r.revision);
-                    Button::new(("artifact-card", i))
-                        .ghost()
-                        .icon(AppIcon::Artifacts.asset())
-                        .label(SharedString::from(label))
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            if generation == view.generation && view.reference.is_none() {
-                                view.open(r.clone(), window, cx);
-                            }
-                        }))
-                }))
-                .when(self.items.is_empty(), |d| {
-                    d.child("No artifact metadata available for this chat.")
-                });
+            return view.p_0().gap_0().child(self.render_gallery(window, cx));
         };
         let scope = format!(
             "{}:{}:{}",
@@ -1299,9 +1296,7 @@ impl Render for ArtifactPane {
                             if v.generation != generation {
                                 return;
                             }
-                            v.close();
-                            v.flush_image(window, cx);
-                            cx.notify();
+                            v.show_gallery(window, cx);
                         })),
                 )
                 .child(

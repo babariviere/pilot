@@ -48,6 +48,8 @@ pub(crate) enum Command {
 pub(crate) struct Worker {
     commands: async_channel::Sender<Command>,
     _lifetime: async_channel::Sender<()>,
+    finished: async_channel::Receiver<()>,
+    output: async_channel::Receiver<Snapshot>,
 }
 fn now() -> f64 {
     SystemTime::now()
@@ -59,10 +61,14 @@ impl Worker {
     pub(crate) fn synthetic() -> (Self, async_channel::Receiver<Command>) {
         let (commands, events) = async_channel::bounded(2);
         let (lifetime, _) = async_channel::bounded(1);
+        let (_, finished) = async_channel::bounded(1);
+        let (_, output) = async_channel::bounded(1);
         (
             Self {
                 commands,
                 _lifetime: lifetime,
+                finished,
+                output,
             },
             events,
         )
@@ -72,33 +78,62 @@ impl Worker {
         reference: Reference,
         state: Option<String>,
     ) -> Result<(Self, async_channel::Receiver<Snapshot>), &'static str> {
+        Self::start_with_runtime(options, reference, state, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+        })
+    }
+    fn start_with_runtime(
+        options: LocalOptions,
+        reference: Reference,
+        state: Option<String>,
+        make_runtime: impl FnOnce() -> Result<tokio::runtime::Runtime, std::io::Error> + Send + 'static,
+    ) -> Result<(Self, async_channel::Receiver<Snapshot>), &'static str> {
         let (commands, events) = async_channel::bounded(2);
         let (lifetime, cancelled) = async_channel::bounded(1);
         let (updates, output) = async_channel::bounded(1);
         let replace = output.clone();
+        let (finished_signal, finished) = async_channel::bounded(1);
+        let command_lane = events.clone();
         std::thread::Builder::new()
             .name("artifact-reader".into())
             .spawn(move || {
-                if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
+                let _finished_signal = finished_signal;
+                if let Ok(runtime) = make_runtime() {
                     runtime.block_on(run(
                         options, reference, state, events, updates, replace, cancelled,
                     ));
                 }
+                command_lane.close();
             })
             .map_err(|_| "Cannot start the isolated artifact reader")?;
         Ok((
             Self {
                 commands,
                 _lifetime: lifetime,
+                finished,
+                output: output.clone(),
             },
             output,
         ))
     }
     pub(crate) fn command(&self, command: Command) -> bool {
         self.commands.try_send(command).is_ok()
+    }
+    /// Closes after runtime/read/decode cleanup, including cancelled codecs.
+    /// Dropping a UI receiver never implies that its old permit is free.
+    pub(crate) fn finished(&self) -> async_channel::Receiver<()> {
+        self.finished.clone()
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // A completed static reader can still have an unconsumed source/raster
+        // snapshot. Retire it before its already-closed completion is awaited.
+        self.commands.close();
+        self.output.close();
+        while self.output.try_recv().is_ok() {}
     }
 }
 
@@ -284,7 +319,99 @@ async fn retry(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[test]
+    fn artifact_gallery_completion_receiver_does_not_retain_lifetime_or_queued_raster() {
+        let (commands, _events) = async_channel::bounded(1);
+        let (lifetime, cancelled) = async_channel::bounded(1);
+        let (done, finished) = async_channel::bounded(1);
+        let (updates, output) = async_channel::bounded(1);
+        let image = Arc::new(gpui_kit::RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(4, 4),
+        )]));
+        let weak = Arc::downgrade(&image);
+        let source = Arc::new("synthetic queued source".to_string());
+        let source_weak = Arc::downgrade(&source);
+        assert!(
+            updates
+                .try_send(Snapshot {
+                    revision: Some(Arc::new(Revision {
+                        reference: Reference {
+                            id: "queued".into(),
+                            session: "owner".into(),
+                            revision: 1,
+                            title: "Synthetic".into(),
+                            kind: "image".into()
+                        },
+                        source,
+                        data: Value::Null,
+                        visual_supported: false,
+                        created_at: 1.,
+                        updated_at: 1.,
+                    })),
+                    raster: Some(Arc::new(crate::artifact_image::Raster {
+                        image,
+                        width: 4,
+                        height: 4,
+                        mime: "image/png",
+                        encoded_bytes: 1,
+                        source_hash: "synthetic".into(),
+                        first_frame: false,
+                    })),
+                    ..Default::default()
+                })
+                .is_ok()
+        );
+        let worker = Worker {
+            commands,
+            _lifetime: lifetime,
+            finished,
+            output: output.clone(),
+        };
+        let waiter = worker.finished();
+        drop(worker);
+        assert!(
+            cancelled.is_closed(),
+            "completion receiver must not own a cancellation sender"
+        );
+        assert!(
+            weak.upgrade().is_none(),
+            "queued full raster must retire before awaiting completion"
+        );
+        assert!(
+            source_weak.upgrade().is_none(),
+            "queued source must retire before awaiting completion"
+        );
+        assert!(output.is_closed() && output.try_recv().is_err());
+        assert!(!waiter.is_closed());
+        drop(done);
+        assert!(waiter.is_closed());
+    }
+    #[tokio::test]
+    async fn artifact_gallery_detail_init_failure_completes_with_closed_commands() {
+        let reference = Reference {
+            id: "art".into(),
+            session: "owner".into(),
+            revision: 1,
+            title: "Synthetic".into(),
+            kind: "image".into(),
+        };
+        let (worker, output) =
+            Worker::start_with_runtime(LocalOptions::synthetic(1), reference, None, || {
+                Err(std::io::Error::other("synthetic runtime failure"))
+            })
+            .unwrap();
+        let done = worker.finished();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), done.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(!worker.command(Command::Retry));
+        assert!(output.recv().await.is_err());
+    }
     async fn server(changed_after: bool) -> (LocalOptions, Reference, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());

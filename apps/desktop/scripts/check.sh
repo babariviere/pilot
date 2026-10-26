@@ -65,3 +65,5 @@ bash scripts/cargo.sh test --locked --features native-probes --test scoped_model
 # Stored raster reader/pane against owned faux HTTP; no real Local data or actions.
 bash scripts/cargo.sh clippy --locked --features native-probes --test artifact_images -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test artifact_images
+bash scripts/cargo.sh clippy --locked --features native-probes --test artifact_gallery -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test artifact_gallery
