@@ -333,13 +333,19 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("discard-draft").is_none());
+                w.click("composer-recovery", cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("answer-question").disabled(), Some(true));
                 assert_eq!(
                     w.find("discard-draft").disabled(),
                     Some(true),
                     "Ordinary Discard cannot abandon the separate question purpose"
                 );
-                let tray = w.find("composer-tray").bounds();
+                let tray = gpui_kit::Bounds::new(Default::default(), w.viewport_size());
                 for id in ["check-delivery", "retry-delivery"] {
                     let control = w.find(id);
                     assert!(control.visible());

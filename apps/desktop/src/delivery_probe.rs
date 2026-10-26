@@ -134,10 +134,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     "composer-input",
                     "composer-controls",
                     "delivery-diagnostic",
-                    "check-delivery",
-                    "retry-delivery",
-                    "dismiss-stop",
-                    "discard-draft",
+                    "composer-recovery",
                 ] {
                     let b = w.find(id).bounds();
                     assert!(
@@ -165,6 +162,9 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             assert!(commands.try_recv().is_err(), "No automatic Check/execute");
+            cx.update_window(h, |_, w, cx| w.click("composer-recovery", cx))
+                .unwrap();
+            frame(cx, h);
             cx.update_window(h, |_, w, cx| w.click("check-delivery", cx))
                 .unwrap();
             frame(cx, h);
@@ -249,7 +249,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("delivery-diagnostic").bounds();
-                let tray = w.find("composer-tray").bounds();
+                let tray = gpui_kit::Bounds::new(Default::default(), w.viewport_size());
                 assert!(
                     b.left() >= tray.left()
                         && b.right() <= tray.right()
@@ -260,7 +260,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     let target = w.find(id);
                     assert!(
                         target.visible(),
-                        "{id} must remain visible beside unconfirmed private adoption"
+                        "{id} must remain reachable in contextual Recovery"
                     );
                     let bounds = target.bounds();
                     assert!(

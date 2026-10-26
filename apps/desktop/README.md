@@ -204,11 +204,21 @@ agent's isolated working copy is inherited. Selection is retained per private dr
 legacy unsent folder-only drafts keep their text and require an explicit project choice.
 Pending deliveries keep their original destination and payload. Empty, unavailable or
 changed project choices cannot create a chat. See `docs/project-based-chat-creation.md`.
-Enter or Send submits; Shift-Enter inserts a newline. Marked text cannot submit. Follow-up
-queues behind current work; unchecking it selects the existing steer delivery
-mode. Sending does not force the reader down the transcript. Stop is available
+Enter or Send steers current work, or starts a turn when idle. Option-Enter explicitly
+queues a follow-up; Shift-Enter inserts a newline. There is no Follow-up toggle.
+Marked text cannot submit. Sending never stops work or forces the reader down the
+transcript. The named, keyboard-reachable Stop icon appears only
 for a working chat or its queued input; withdrawn text is saved separately, never
 merged into newer typing. Copy or explicitly remove that recovery text.
+Its reserved slot keeps Send and the 76pt tray/34pt editor stable across work
+transitions. Pending actions disable both actions with visible waiting feedback;
+errors and Unknown delivery recovery remain beside the original draft.
+See [composer controls](docs/composer-controls.md) for the source audit and checks.
+Ordinary drafts have no Discard/recovery toolbar. **Recovery…** appears only for
+unresolved delivery, an unadopted created chat, a rejected result or recovered text.
+It reveals the relevant explicit actions in a native popover; error and Unknown
+status remain visible while it is closed. Opening it never checks, retries or
+discards anything automatically.
 
 Drafts survive navigation/restart, independently of Swift. A single-owner private
 0700 directory contains 0600 state/lock files at macOS `~/Library/Application

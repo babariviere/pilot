@@ -13,7 +13,6 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        checkbox::Checkbox,
         input::{InputEvent, InputState, Textarea, TextareaState},
         radio::RadioGroup,
     },
@@ -21,6 +20,9 @@ use gpui_kit::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(feature = "native-probes")]
+#[path = "composer_probe.rs"]
+pub(crate) mod composer_probe;
 #[cfg(feature = "native-probes")]
 #[path = "delivery_probe.rs"]
 pub(crate) mod delivery_probe;
@@ -36,6 +38,8 @@ mod projects;
 pub(crate) mod question_probe;
 #[path = "chat_questions.rs"]
 mod questions;
+#[path = "chat_recovery.rs"]
+mod recovery;
 
 pub(crate) enum EditorEvent {
     AddProject,
@@ -67,7 +71,6 @@ pub(crate) struct ChatEditor {
     thinking_held: bool,
     background_work: bool,
     corner: Entity<crate::dither_view::CornerView>,
-    follow_up: bool,
     pending: BTreeMap<String, u64>,
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
@@ -142,7 +145,6 @@ impl ChatEditor {
                     cx,
                 )
             }),
-            follow_up: true,
             pending: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
@@ -591,7 +593,41 @@ impl ChatEditor {
             .is_some_and(|key| self.pending.contains_key(key))
             || self.draft().is_some_and(|d| d.pending.is_some())
     }
+    fn stop_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
+        let selected = self.selected.clone();
+        crate::ui::icon_action(
+            id,
+            "Stop current work",
+            AppIcon::Stop,
+            crate::ui::Action::Secondary,
+        )
+        .rounded_full()
+        .size_6()
+        .tooltip(if self.waiting() {
+            "Waiting for Local action. Stop is unavailable."
+        } else {
+            "Stop current work. Withdrawn queued text is kept for recovery."
+        })
+        .disabled(!self.ready() || !self.writable || self.waiting() || self.error.is_some())
+        .on_click(cx.listener(move |view, _, window, cx| {
+            if view.selected == selected {
+                view.submit(true, window, cx);
+            }
+        }))
+    }
     fn submit(&mut self, stop: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_mode(stop, false, window, cx);
+    }
+
+    // Swift: Return/button steers (or starts); Option-Return explicitly queues.
+    // This choice is captured once in the existing immutable delivery envelope.
+    fn submit_mode(
+        &mut self,
+        stop: bool,
+        follow_up: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !stop && self.questions.current.is_some() {
             self.answer_question(None, window, cx);
             return;
@@ -633,7 +669,7 @@ impl ChatEditor {
             client.command(WriteCommand::Submit {
                 key: key.clone(),
                 draft: Box::new(draft),
-                follow_up: self.follow_up,
+                follow_up,
                 stop,
                 request,
             })
@@ -776,10 +812,10 @@ impl Render for ChatEditor {
         let is_new = key.starts_with("new:");
         let can_edit = self.writable && self.state.book.is_some() && !self.closing;
         let blocked = !self.ready() || !self.writable || self.waiting() || self.error.is_some();
+        let submitting = self.pending.contains_key(&key);
         let settled = draft
             .settled_revision
             .is_some_and(|revision| draft.revision <= revision);
-        let stop_key = key.clone();
         let send_key = key.clone();
         let saved = self
             .state
@@ -798,7 +834,6 @@ impl Render for ChatEditor {
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
         // A settled empty chat draft disappears on its own. A new-chat slot and an
         // unresolved delivery never retire by themselves, so they can be discarded.
-        let discardable = is_new || draft.pending.is_some() || draft.created.is_some();
         let spec = crate::dither::Spec::composer(
             self.busy || self.thinking || self.background_work,
             self.background_work && !self.thinking,
@@ -868,6 +903,22 @@ impl Render for ChatEditor {
             .min_w_0()
             .rounded(px(crate::appearance::Radius::CARD))
             .bg(crate::appearance::card(cx))
+            .capture_key_down(
+                cx.listener(|view, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    let key = &event.keystroke;
+                    if key.key == "enter"
+                        && key.modifiers.alt
+                        && !key.modifiers.shift
+                        && !key.modifiers.control
+                        && !key.modifiers.platform
+                    {
+                        // Scoped to the ordinary textarea, never question choices or
+                        // model/project fields. Consume even when guarded by preedit.
+                        cx.stop_propagation();
+                        view.submit_mode(false, true, window, cx);
+                    }
+                }),
+            )
             .child(
                 Textarea::new(&self.text)
                     .appearance(false)
@@ -877,6 +928,15 @@ impl Render for ChatEditor {
             );
         #[cfg(any(test, feature = "native-probes"))]
         let input = input.test_support();
+        let stop_slot = div()
+            .id("composer-stop-slot")
+            .size_6()
+            .flex_shrink_0()
+            .when(!is_new && self.busy, |slot| {
+                slot.child(self.stop_button("local-stop", cx))
+            });
+        #[cfg(any(test, feature = "native-probes"))]
+        let stop_slot = stop_slot.test_support();
         let controls = div()
             .id("composer-controls")
             .h_flex()
@@ -888,13 +948,17 @@ impl Render for ChatEditor {
             .py(px(6.))
             .child(
                 div()
+                    .h_flex()
+                    .gap_2()
                     .flex_1()
                     .min_w_0()
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
-                    .children(self.models.is_none().then_some(if self.closing {
+                    .children((self.models.is_none() || submitting).then_some(if submitting {
+                        "Waiting for Local action…"
+                    } else if self.closing {
                         "Saving before closing…"
                     } else if !self.writable {
                         "This chat is read-only."
@@ -909,29 +973,9 @@ impl Render for ChatEditor {
                     .h_flex()
                     .flex_shrink_0()
                     .gap_2()
-                    .child(
-                        Checkbox::new("follow-up")
-                            .rounded(px(crate::appearance::Radius::SMALL))
-                            .label("Follow-up")
-                            .checked(self.follow_up)
-                            .on_change(cx.listener(|view, next, _, cx| {
-                                view.follow_up = *next;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("local-stop")
-                            .small()
-                            .ghost()
-                            .label("Stop")
-                            .icon(AppIcon::Stop.asset())
-                            .disabled(blocked || is_new || !self.busy)
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                if view.selected.as_ref() == Some(&stop_key) {
-                                    view.submit(true, window, cx);
-                                }
-                            })),
-                    )
+                    // Reserve the same small slot while idle. Work transitions
+                    // neither move Send nor mount an irrelevant disabled action.
+                    .child(stop_slot)
                     .child(
                         Button::new("local-send")
                             .primary()
@@ -943,6 +987,11 @@ impl Render for ChatEditor {
                                 "Create chat"
                             } else {
                                 "Send"
+                            })
+                            .tooltip(if self.busy {
+                                "Steer current work (Enter). Queue a follow-up with Option-Enter. Never stops the current run."
+                            } else {
+                                "Send (Enter). Option-Enter sends as a follow-up; Shift-Enter inserts a new line."
                             })
                             .disabled(
                                 blocked
@@ -975,62 +1024,10 @@ impl Render for ChatEditor {
             footer = footer.child(div().text_xs().text_color(cx.theme().danger).child(error));
         }
         if let Some(intent) = pending {
-            let id = intent.id.clone();
-            let retry_id = id.clone();
-            let dismiss_id = id.clone();
-            footer = footer.child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(div().text_xs().child(SharedString::from(format!(
-                        "Delivery {}. Original intent retained.",
-                        intent.state
-                    ))))
-                    .child(
-                        Button::new("check-delivery")
-                            .small()
-                            .label("Check")
-                            .icon(AppIcon::Retry.asset())
-                            .disabled(intent.operation.is_none())
-                            .on_click(cx.listener(move |view, _, _, _| {
-                                if let Some(client) = &view.client {
-                                    client.command(WriteCommand::Check {
-                                        id: id.clone(),
-                                        retry: false,
-                                    });
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("retry-delivery")
-                            .small()
-                            .label("Retry same intent")
-                            .icon(AppIcon::Retry.asset())
-                            .disabled(intent.operation.is_none() || intent.state == "pending")
-                            .on_click(cx.listener(move |view, _, _, _| {
-                                if let Some(client) = &view.client {
-                                    client.command(WriteCommand::Check {
-                                        id: retry_id.clone(),
-                                        retry: true,
-                                    });
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("dismiss-stop")
-                            .small()
-                            .label("Acknowledge Stop uncertainty")
-                            .icon(AppIcon::Info.asset())
-                            .disabled(intent.operation.is_some())
-                            .on_click(cx.listener(move |view, _, _, _| {
-                                if let Some(client) = &view.client {
-                                    client.command(WriteCommand::DismissStop {
-                                        id: dismiss_id.clone(),
-                                    });
-                                }
-                            })),
-                    ),
-            );
+            footer = footer.child(crate::ui::text(
+                crate::ui::Text::Caption,
+                format!("Delivery {}. Original intent retained.", intent.state),
+            ));
         } else if let Some(last) = &draft.last {
             footer = footer.child(
                 div()
@@ -1076,76 +1073,15 @@ impl Render for ChatEditor {
                     .child(self.state.notice),
             );
         }
-        if let Some(target) = draft.created.clone() {
-            let key = key.clone();
-            let revision = draft.revision;
-            footer = footer.child(
-                Button::new("open-created")
-                    .small()
-                    .label("Open created chat (draft stays here)")
-                    .icon(AppIcon::Chats.asset())
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.emit(EditorEvent::OpenCreated {
-                            key: key.clone(),
-                            revision,
-                            target: target.clone(),
-                        })
-                    })),
-            );
-        }
-        if !draft.recovered.is_empty() {
-            let revision = draft.recovery_revision;
-            let recovery_key = key.clone();
-            let copy_key = key.clone();
-            footer = footer.child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("copy-recovered")
-                            .small()
-                            .label("Copy recovered text")
-                            .icon(AppIcon::Copy.asset())
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if let Some(draft) = view.cache.get(&copy_key) {
-                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                        draft.recovered.join("\n\n"),
-                                    ));
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new("remove-recovered")
-                            .small()
-                            .label("Remove recovered text")
-                            .icon(AppIcon::Close.asset())
-                            .on_click(cx.listener(move |view, _, _, _| {
-                                if let Some(client) = &view.client {
-                                    client.command(WriteCommand::ClearRecovery {
-                                        key: recovery_key.clone(),
-                                        revision,
-                                    });
-                                }
-                            })),
-                    ),
-            );
-        }
-        if discardable {
-            footer = footer.child(
-                div().h_flex().w_full().child(
-                    Button::new("discard-draft")
-                        .small()
-                        .ghost()
-                        .label("Discard draft")
-                        .disabled(self.question_blocks_discard(cx))
-                        .tooltip("Discard applies to the ordinary message draft, not a separate question reply.")
-                        .icon(AppIcon::Close.asset())
-                        .accessibility_label("Discard draft and copy its text to the clipboard")
-                        .on_click(
-                            cx.listener(|view, _, window, cx| view.discard_draft(window, cx)),
-                        ),
-                ),
-            );
+        if draft.pending.is_some()
+            || draft.created.is_some()
+            || !draft.recovered.is_empty()
+            || draft
+                .last
+                .as_ref()
+                .is_some_and(|last| last.state == "rejected")
+        {
+            footer = footer.child(self.recovery_menu(&key, window, cx));
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
         if let Some(label) = self.activity_label() {

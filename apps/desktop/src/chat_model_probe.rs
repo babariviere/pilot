@@ -169,7 +169,7 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                     model,
                     thinking,
                     w.find("local-send").bounds(),
-                    w.find("local-stop").bounds(),
+                    w.find("composer-stop-slot").bounds(),
                 ] {
                     assert!(
                         b.left() >= tray.left()

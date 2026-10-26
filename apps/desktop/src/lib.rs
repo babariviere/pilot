@@ -13,6 +13,8 @@ mod chat_actions_view;
 mod chat_actions_worker;
 mod chat_editor;
 #[cfg(feature = "native-probes")]
+pub use chat_editor::composer_probe::run_composer_probe;
+#[cfg(feature = "native-probes")]
 pub use chat_editor::delivery_probe::run_delivery_probe;
 mod chat_model_reader;
 mod chat_models;

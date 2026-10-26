@@ -524,6 +524,9 @@ fn discarding_a_draft_copies_its_text_queues_the_discard_and_clears_the_row(
             editor.select("new:slot".into(), true, false, window, cx);
         });
         window.render_frame(cx);
+        assert!(window.try_find("discard-draft").is_none());
+        window.click("composer-recovery", cx);
+        window.render_frame(cx);
         assert_eq!(
             window.find_all("discard-draft").len(),
             1,

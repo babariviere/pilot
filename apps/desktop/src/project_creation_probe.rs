@@ -446,6 +446,9 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
                     pump(cx, handle, &editor, &updates);
                     assert_eq!(server.seen.lock().unwrap().envelopes.len(), 1);
+                    cx.update_window(handle, |_, w, cx| w.click("composer-recovery", cx))
+                        .unwrap();
+                    pump(cx, handle, &editor, &updates);
                     cx.update_window(handle, |_, w, cx| w.click("check-delivery", cx))
                         .unwrap();
                     until(cx, handle, &editor, &updates, |e| {

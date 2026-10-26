@@ -664,7 +664,10 @@ fn pending_delivery(cx: &mut HeadlessAppContext) {
         assert_eq!(view.read(cx).editor, editor);
         assert_eq!(input.read(cx).value().as_ref(), text);
         assert!(editor.read(cx).shell_probe().2.unwrap().pending.is_some());
-        assert_eq!(w.find("local-stop").disabled(), Some(true));
+        assert!(
+            w.try_find("local-stop").is_none(),
+            "Idle pending chat has no Stop action"
+        );
     })
     .unwrap();
     assert!(commands.try_recv().is_err());

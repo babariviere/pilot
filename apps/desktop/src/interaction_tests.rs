@@ -980,6 +980,66 @@ async fn ready(daemon: &Daemon, temp: &Temp) -> (Interaction, async_channel::Rec
     until(&updates, |s| s.book.is_some()).await;
     (client, updates)
 }
+
+#[tokio::test]
+async fn composer_controls_send_routes_idle_running_and_explicit_follow_up_without_stop() {
+    for behavior in [Behavior::AnswerIdle, Behavior::Accept] {
+        for follow_up in [false, true] {
+            let daemon = Daemon::start(behavior).await;
+            let temp = Temp::new();
+            let (client, updates) = ready(&daemon, &temp).await;
+            assert!(client.command(WriteCommand::Submit {
+                key: "chat:a".into(),
+                draft: Box::new(draft(1, "日本語 👩‍💻 e\u{301}")),
+                follow_up,
+                stop: false,
+                request: 1,
+            }));
+            let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+            assert!(state.error.is_none(), "{:?}", state.error);
+            {
+                let seen = daemon.seen.lock().unwrap();
+                assert_eq!(seen.executions, 1);
+                assert_eq!(seen.stops, 0, "Send never cancels current work");
+                let envelope = &seen.envelopes[0];
+                assert_eq!(envelope["kind"], "chat-send");
+                assert_eq!(envelope["targetId"], "a");
+                let payload: Value =
+                    serde_json::from_str(envelope["payload"].as_str().unwrap()).unwrap();
+                assert_eq!(
+                    payload["mode"],
+                    if follow_up { "followUp" } else { "steer" }
+                );
+                assert_eq!(payload["message"], "日本語 👩‍💻 e\u{301}");
+            }
+            assert!(client.command(WriteCommand::Close));
+            until(&updates, |s| s.flushed).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn composer_controls_explicit_stop_never_executes_a_send_and_keeps_withdrawn_text() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert!(client.command(WriteCommand::Submit {
+        key: "chat:a".into(),
+        draft: Box::new(draft(1, "newer ordinary draft")),
+        follow_up: false,
+        stop: true,
+        request: 1,
+    }));
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    assert!(state.error.is_none());
+    assert_eq!(daemon.seen.lock().unwrap().stops, 1);
+    assert_eq!(daemon.seen.lock().unwrap().executions, 0);
+    let d = &state.book.as_ref().unwrap().drafts["chat:a"];
+    assert_eq!(d.text, "newer ordinary draft");
+    assert!(d.recovered.iter().any(|r| r == "synthetic queued input"));
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
 fn submit(client: &Interaction, key: &str, revision: u64, text: &str, request: u64, stop: bool) {
     let draft = draft(revision, text);
     assert!(client.edit(key.into(), draft.clone()));

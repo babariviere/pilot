@@ -5,7 +5,7 @@ use crate::{
     question::{AnswerDraft, Identity, Kind, Projection, Question},
     ui::{self, Action, Text},
 };
-use gpui_kit::component::radio::Radio;
+use gpui_kit::component::{checkbox::Checkbox, radio::Radio};
 use gpui_kit::{FocusHandle, Focusable, StatefulInteractiveElement};
 use std::sync::Arc;
 
@@ -686,11 +686,7 @@ impl ChatEditor {
             );
         }
         if self.busy {
-            panel = panel.child(
-                ui::action("question-stop", "Stop", Action::Quiet)
-                    .disabled(!self.ready() || self.waiting())
-                    .on_click(cx.listener(|v, _, w, cx| v.submit(true, w, cx))),
-            );
+            panel = panel.child(self.stop_button("question-stop", cx));
         }
         #[cfg(any(test, feature = "native-probes"))]
         let panel = panel.test_support();

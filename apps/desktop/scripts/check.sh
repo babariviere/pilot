@@ -79,3 +79,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test questions
 
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission_tasks -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission_tasks
+
+# Contextual composer controls, synthetic only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test composer_controls -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test composer_controls

@@ -173,7 +173,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     (
                         window.find("composer-input").bounds(),
                         window.find("composer-controls").bounds(),
-                        window.find("local-stop").bounds(),
+                        window.find("composer-stop-slot").bounds(),
                         window.find("local-send").bounds(),
                     )
                 })
