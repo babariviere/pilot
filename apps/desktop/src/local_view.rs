@@ -982,6 +982,8 @@ impl LocalViewer {
             })
         });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
+        let context_entry = context_usage_view::entry(cx);
+        editor.update(cx, |editor, _| editor.set_context_entry(context_entry.into()));
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
         let missions = cx.new(crate::mission_browser_view::Browser::new);
@@ -1909,7 +1911,6 @@ impl Render for LocalViewer {
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
-                            .child(self.context_usage_action(cx))
                             .child(self.conversation_links_action(cx))
                             .child(self.workspace_changes_action(cx))
                             .child(self.queued_message_action(cx))

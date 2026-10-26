@@ -1,4 +1,4 @@
-//! On-demand header information. Reads only the existing bounded Local summary feed.
+//! Composer disclosure. Reads only the existing bounded Local summary feed.
 use super::*;
 use crate::ui::{self, Action, Text};
 use gpui_kit::component::WindowExt;
@@ -66,13 +66,32 @@ impl Render for Info {
         content
     }
 }
-impl LocalViewer {
-    pub(super) fn context_usage_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let chat = self.selected.as_ref().and_then(|id| {
-            self.state
-                .chats
-                .iter()
-                .find(|c| &c.id == id && !c.local_draft)
+pub(super) struct Entry {
+    viewer: gpui_kit::WeakEntity<LocalViewer>,
+    _subscription: Subscription,
+}
+pub(super) fn entry(cx: &mut Context<LocalViewer>) -> Entity<Entry> {
+    let viewer = cx.entity();
+    cx.new(|cx| Entry {
+        viewer: viewer.downgrade(),
+        _subscription: cx.observe(&viewer, |_, _, cx| cx.notify()),
+    })
+}
+impl Entry {
+    fn allowed(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.viewer
+            .update(cx, |v, cx| v.project_choices_ready(window, cx))
+            .unwrap_or(false)
+    }
+}
+impl Render for Entry {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let viewer = self.viewer.upgrade();
+        let view = viewer.as_ref().map(|v| v.read(cx));
+        let chat = view.and_then(|v| {
+            v.selected
+                .as_ref()
+                .and_then(|id| v.state.chats.iter().find(|c| &c.id == id && !c.local_draft))
         });
         let meter = chat.and_then(|c| crate::context_meter::Meter::reported(&c.context_usage));
         let description = meter
@@ -103,12 +122,16 @@ impl LocalViewer {
         div()
             .flex_none()
             .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if !v.project_choices_ready(w, cx) {
+                if !v.allowed(w, cx) {
                     cx.stop_propagation();
                 }
             }))
-            .child(button.on_click(cx.listener(|v, _, w, cx| v.open_context_usage(w, cx))))
+            .child(button.on_click(cx.listener(|entry, _, w, cx| {
+                let _ = entry.viewer.update(cx, |v, cx| v.open_context_usage(w, cx));
+            })))
     }
+}
+impl LocalViewer {
     fn open_context_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_choices_ready(window, cx) {
             return;

@@ -55,6 +55,23 @@ pub(super) fn states(
         cx.update_window(h, |_, w, cx| {
             let control = w.find("context-usage");
             assert!(control.visible());
+            let tray = w.find("composer-tray").bounds();
+            let input = w.find("composer-input").bounds();
+            let send = w.find("local-send").bounds();
+            assert_eq!(tray.size.height, px(76.));
+            assert_eq!(input.size.height, px(34.));
+            assert!(
+                control.bounds().left() >= tray.left()
+                    && control.bounds().right() <= tray.right()
+                    && control.bounds().top() >= input.bottom()
+                    && control.bounds().bottom() <= tray.bottom()
+            );
+            assert!(control.bounds().right() <= send.left());
+            assert_eq!(
+                w.find_all("context-usage").len(),
+                1,
+                "move, never duplicate"
+            );
             assert!(control.bounds().right() <= w.viewport_size().width);
             if let Some(b) = bounds {
                 assert_eq!(b, control.bounds(), "usage changes must not reflow header");

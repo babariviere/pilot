@@ -56,6 +56,7 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct ChatEditor {
+    context_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
     models: Option<model_picker::Models>,
     client: Option<Interaction>,
@@ -124,6 +125,7 @@ impl ChatEditor {
             }
         });
         Self {
+            context_entry: None,
             questions,
             models: None,
             client,
@@ -156,6 +158,9 @@ impl ChatEditor {
         }
     }
 
+    pub(crate) fn set_context_entry(&mut self, entry: gpui_kit::AnyView) {
+        self.context_entry = Some(entry);
+    }
     fn prune_cache(&mut self) {
         self.cache.retain(|key, draft| {
             self.state
@@ -975,6 +980,7 @@ impl Render for ChatEditor {
                     .gap_2()
                     // Reserve the same small slot while idle. Work transitions
                     // neither move Send nor mount an irrelevant disabled action.
+                    .children((!is_new).then(|| self.context_entry.clone()).flatten())
                     .child(stop_slot)
                     .child(
                         Button::new("local-send")

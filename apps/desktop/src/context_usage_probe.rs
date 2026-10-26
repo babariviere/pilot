@@ -1,4 +1,4 @@
-//! Actual mounted header/info/navigation, synthetic summaries, no Local actions.
+//! Actual mounted composer/info/navigation, synthetic summaries, no Local actions.
 use super::*;
 use gpui_kit::{
     AnyWindowHandle, Bounds, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds,
@@ -47,7 +47,7 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
             }))).unwrap();
             settle(cx, h);
             meter::states(cx, h, &view, captures.as_deref(), width, dark);
-            // The new header action must not steal or commit active composer preedit.
+            // The disclosure must not steal or commit active composer preedit.
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {
                 input.update(cx, |i, cx| {

@@ -1,6 +1,6 @@
 # Read-only chat context usage
 
-Use **Context…** in a Local chat's header. This native information dialog does
+Use **Context…** in a Local chat's composer controls, beside model/thinking and Send. This native information dialog does
 not resize the conversation/composer and has no policy or mutation actions.
 Escape, the close button, or Done dismiss it through Kit's existing focus owner.
 Opening is refused while an existing input has marked IME text.
@@ -78,7 +78,7 @@ content-private fixed-size projection, separate token classes and worker removal
 One real identity-pinned reader/faux-WebSocket case covers initial unknown,
 updates, disappearance, exact ID separation, bounded teardown and GET-only
 traffic without new usage reads. The offscreen native probe mounts the production
-header/dialog at680/1100 in light/dark, clicks disclosure/sidebar/Done, dismisses
+composer/dialog at680/1100 in light/dark, clicks disclosure/sidebar/Done, dismisses
 with Escape, asserts unchanged composer bounds and checks late navigation fences.
 Optional captures use `PILOT_NEXT_CONTEXT_USAGE_DIR` and synthetic content only.
 These are macOS scoped checks, not live account, OS input, motion, full-suite or
@@ -89,9 +89,22 @@ invalid, partial, reported zero and over-limit) at both widths/appearances. It
 checks stable control bounds, exact descriptions, ring absence/presence, native
 Tab traversal/Enter activation/Escape focus restoration and same-ID generation
 invalidation. Existing composer IME and late other-chat source checks remain.
-Captures include both the unobstructed header and open details. Checks use
+Captures include both the unobstructed composer and open details. Checks use
 `--unit context_usage --test context_usage --lint`, plus the `context_meter`
 library filter under the shared verification slot. Rationale: only the bounded
-usage presentation and existing header/dialog seam change; full suites stay in
+usage presentation and existing composer/dialog seam change; full suites stay in
 CI. The fixed native arc has no transition or task-completion clock; static
 captures are not FPS or operating-system IME proof.
+
+
+## Composer placement
+
+User-approved placement follows Swift: one Context entry in the composer control
+row, removed from the header. The existing LocalViewer still owns scope and the
+protected dialog; a weak, read-only observing entry lives in the editor's passive
+view slot. It does not mirror usage into drafts, install another source, change
+model controls or dispatch an editor send event. It stays available for selected
+read-only history and stays absent from a new-chat draft. The tray/input retain
+76/34pt geometry. Mounted checks assert containment, exactly one entry, no overlap
+with Send, stable bounds, IME and keyboard/focus behavior. Model-picker/new-chat
+and composer control probes cover the affected composition, not broad suites.
