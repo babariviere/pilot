@@ -80,6 +80,18 @@ impl DeliveryReport {
 }
 
 pub(crate) enum WriteCommand {
+    RetireAnswer {
+        key: String,
+        revision: u64,
+        identity: crate::question::ReplyIdentity,
+        recover: bool,
+    },
+    Answer {
+        key: String,
+        draft: Box<Draft>,
+        question: Arc<crate::question::Question>,
+        request: u64,
+    },
     Model {
         session: String,
         request: u64,
@@ -387,7 +399,8 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         // obsolete timer armed after their durable save/adoption.
         autosave = Autosave::default();
         let handled = match &command {
-            Some(WriteCommand::Submit { key, request, .. }) => Some((key.clone(), *request)),
+            Some(WriteCommand::Submit { key, request, .. })
+            | Some(WriteCommand::Answer { key, request, .. }) => Some((key.clone(), *request)),
             _ => None,
         };
         status.notice_key = match &command {
@@ -396,9 +409,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 Some(format!("mission:{}", target.source))
             }
             Some(WriteCommand::Submit { key, .. })
+            | Some(WriteCommand::Answer { key, .. })
             | Some(WriteCommand::RetireCreated { key, .. })
             | Some(WriteCommand::ClearRecovery { key, .. })
             | Some(WriteCommand::RetireEmpty { key, .. }) => Some(key.clone()),
+            Some(WriteCommand::RetireAnswer { key, .. }) => Some(key.clone()),
             Some(WriteCommand::Check { id, .. }) | Some(WriteCommand::DismissStop { id }) => store
                 .as_ref()
                 .ok()
@@ -496,6 +511,30 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 _=close.recv()=>{closing=true;Ok("Closing. Interrupted mission conversion is not retried.")}
                             }
                         }
+                        Some(WriteCommand::Answer {
+                            key,
+                            draft,
+                            question,
+                            request,
+                        }) => {
+                            if status.handled.get(&key).is_some_and(|old| *old >= request) {
+                                Ok("This UI request was already handled.")
+                            } else if store
+                                .book
+                                .drafts
+                                .get(&key)
+                                .is_some_and(|d| d.pending.is_some())
+                            {
+                                Ok("Delivery is already pending. Check its receipt.")
+                            } else {
+                                tokio::select! {
+                                    result=submit_answer(&client,&options,store,AnswerSubmission {key:&key,draft:&draft,question:&question},&mut delivery_report,|store| {
+                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Question reply intent saved. Waiting for Local delivery.";publish(&updates,&replace,status.clone());
+                                    })=>result,
+                                    _=close.recv()=>{closing=true;Ok("Closing. Any interrupted reply remains unconfirmed.")}
+                                }
+                            }
+                        }
                         Some(WriteCommand::Submit {
                             key,
                             draft,
@@ -557,6 +596,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         Some(WriteCommand::RetireEmpty { key, revision }) => {
                             store.retire_empty(&key, revision).map(|_| "")
                         }
+                        Some(WriteCommand::RetireAnswer {
+                            key,
+                            revision,
+                            identity,
+                            recover,
+                        }) => store
+                            .retire_answer(&key, revision, &identity, recover)
+                            .map(|_| "Question reply retained or settled privately."),
                         Some(WriteCommand::Close) => {
                             status.flushed = true;
                             Ok("Drafts saved.")
@@ -686,7 +733,7 @@ async fn writable(
     client: &reqwest::Client,
     options: &LocalOptions,
     target: &str,
-) -> Result<(), Failure> {
+) -> Result<Value, Failure> {
     if !crate::delivery_store::token(target) {
         return Err("Invalid Local chat target");
     }
@@ -695,7 +742,58 @@ async fn writable(
     if value["id"] != target || !crate::local_model::interactive_local(&value) {
         return Err("This Local conversation is retained, archived, continued or not writable");
     }
+    Ok(value)
+}
+
+fn question_turn_idle(summary: &Value) -> Result<(), Failure> {
+    if !matches!(
+        summary["state"].as_str(),
+        Some("idle" | "parked" | "failed")
+    ) {
+        return Err(
+            "The agent turn changed or is unavailable. Question reply retained; nothing sent",
+        );
+    }
     Ok(())
+}
+struct AnswerSubmission<'a> {
+    key: &'a str,
+    draft: &'a Draft,
+    question: &'a crate::question::Question,
+}
+async fn submit_answer(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    store: &mut Store,
+    request: AnswerSubmission<'_>,
+    report: &mut Option<DeliveryReport>,
+    prepared: impl FnOnce(&Store),
+) -> Result<&'static str, Failure> {
+    let AnswerSubmission {
+        key,
+        draft,
+        question,
+    } = request;
+    let target = key
+        .strip_prefix("chat:")
+        .ok_or("Question replies require an existing Local chat")?;
+    let answer = draft
+        .answer
+        .as_ref()
+        .ok_or("Question reply capture is missing")?;
+    if answer.reply(question)?.is_none() {
+        return Err("Choose an answer or write a reply");
+    }
+    gate(client, options).await?;
+    if store.book.model_changes.contains_key(target) {
+        return Err("A model switch is unconfirmed. Question reply retained");
+    }
+    question_turn_idle(&writable(client, options, target).await?)?;
+    // The native owner has checked its exact current question projection.
+    // Local only offers ordinary steering, not an atomic question-CAS endpoint.
+    let intent = store.prepare_answer(key, draft, question, answer)?;
+    prepared(store);
+    reconcile(client, options, store, &intent.id, true, report).await
 }
 
 struct Submission<'a> {
@@ -857,9 +955,13 @@ async fn reconcile(
             diagnostic.stage = Stage::Target;
             diagnostic.category = Category::InFlight;
             diagnostic.status = None;
-            writable(client, options, &op.target_id)
+            let summary = writable(client, options, &op.target_id)
                 .await
                 .inspect_err(|_| diagnostic.category = Category::Identity)?;
+            if intent.answer.is_some() {
+                question_turn_idle(&summary)
+                    .inspect_err(|_| diagnostic.category = Category::Refused)?;
+            }
         }
         diagnostic.stage = Stage::Identity;
         diagnostic.category = Category::InFlight;

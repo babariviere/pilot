@@ -200,3 +200,9 @@ name = "mission_inspector"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "questions"
+harness = false
+test = false
+required-features = ["native-probes"]

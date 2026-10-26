@@ -1,6 +1,206 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
 
+fn question_answer_fixture() -> Arc<crate::question::Question> {
+    Arc::new(crate::question::Question::parse(4,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true})).unwrap())
+}
+fn question_answer_command(
+    client: &Interaction,
+    question: Arc<crate::question::Question>,
+    request: u64,
+) {
+    let mut captured = draft(2, "Keep ordinary 日本語 👩‍💻");
+    captured.answer = Some(
+        crate::question::AnswerDraft::capture(
+            &question,
+            2,
+            std::collections::BTreeSet::from([0, 1]),
+            " own words ".into(),
+        )
+        .unwrap(),
+    );
+    assert!(client.edit("chat:a".into(), captured.clone()));
+    assert!(client.command(WriteCommand::Answer {
+        key: "chat:a".into(),
+        draft: Box::new(captured),
+        question,
+        request
+    }));
+}
+#[tokio::test]
+async fn question_answer_courier_uses_steer_once_and_keeps_ordinary_draft() {
+    let daemon = Daemon::start(Behavior::AnswerIdle).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert!(
+        daemon.seen.lock().unwrap().requests.is_empty(),
+        "Never auto-answer"
+    );
+    let question = question_answer_fixture();
+    question_answer_command(&client, question.clone(), 1);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let draft = &state.book.as_ref().unwrap().drafts["chat:a"];
+    assert_eq!(draft.text, "Keep ordinary 日本語 👩‍💻");
+    assert!(draft.pending.is_none());
+    assert_eq!(draft.last.as_ref().unwrap().state, "accepted");
+    assert_eq!(
+        draft
+            .last
+            .as_ref()
+            .unwrap()
+            .answer
+            .as_ref()
+            .unwrap()
+            .question,
+        question.identity
+    );
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.executions, 1);
+        assert_eq!(seen.envelopes.len(), 1);
+        let op = &seen.envelopes[0];
+        assert_eq!(op["kind"], "chat-send");
+        assert_eq!(op["targetId"], "a");
+        assert_eq!(
+            serde_json::from_str::<Value>(op["payload"].as_str().unwrap()).unwrap(),
+            json!({"message":"- Typecheck\n- Tests\n\nown words","mode":"steer"})
+        );
+    }
+    question_answer_command(&client, question.clone(), 1);
+    until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    question_answer_command(&client, question, 2);
+    until(&updates, |s| s.handled.get("chat:a") == Some(&2)).await;
+    assert_eq!(
+        daemon.seen.lock().unwrap().executions,
+        1,
+        "Repeated confirmation cannot create another answer"
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+#[tokio::test]
+async fn question_answer_courier_gates_identity_permissions_turn_and_source_capture() {
+    for behavior in [
+        Behavior::Readonly,
+        Behavior::AnswerDelegated,
+        Behavior::Accept,
+        Behavior::BadIdentity,
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        question_answer_command(&client, question_answer_fixture(), 1);
+        let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+        assert!(state.book.as_ref().unwrap().pending.is_empty());
+        assert_eq!(daemon.seen.lock().unwrap().executions, 0);
+        assert_eq!(
+            state.book.as_ref().unwrap().drafts["chat:a"].text,
+            "Keep ordinary 日本語 👩‍💻"
+        );
+        assert!(client.command(WriteCommand::Close));
+        until(&updates, |s| s.flushed).await;
+    }
+    let daemon = Daemon::start(Behavior::AnswerIdle).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    let question = question_answer_fixture();
+    let mut captured = draft(2, "ordinary");
+    captured.answer = Some(
+        crate::question::AnswerDraft::capture(
+            &question,
+            2,
+            std::collections::BTreeSet::from([0]),
+            "mine".into(),
+        )
+        .unwrap(),
+    );
+    let changed =
+        Arc::new(crate::question::Question::parse(8, &json!({"question":"Different?"})).unwrap());
+    assert!(client.edit("chat:a".into(), captured.clone()));
+    assert!(client.command(WriteCommand::Answer {
+        key: "chat:a".into(),
+        draft: Box::new(captured),
+        question: changed,
+        request: 1
+    }));
+    until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    assert!(
+        daemon.seen.lock().unwrap().requests.is_empty(),
+        "Mismatched captured identity fails before network"
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+#[tokio::test]
+async fn question_answer_courier_unknown_restart_never_replays_and_explicit_retry_is_exact() {
+    let daemon = Daemon::start(Behavior::AnswerLost).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    question_answer_command(&client, question_answer_fixture(), 1);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let intent = state
+        .book
+        .as_ref()
+        .unwrap()
+        .pending
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(intent.state, "unknown");
+    assert!(intent.answer.is_some());
+    let original = serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        daemon.seen.lock().unwrap().envelopes.as_slice(),
+        &[original.clone()]
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+    drop(client);
+    drop(updates);
+    let before = daemon.seen.lock().unwrap().requests.len();
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert_eq!(
+        daemon.seen.lock().unwrap().requests.len(),
+        before,
+        "Restart does not look up or execute"
+    );
+    assert!(client.command(WriteCommand::Check {
+        id: intent.id.clone(),
+        retry: false
+    }));
+    until(&updates, |s| {
+        s.delivery_reports
+            .get(&intent.id)
+            .is_some_and(|r| r.delivery.diagnostic.unwrap().category == Category::Unknown)
+    })
+    .await;
+    assert_eq!(
+        daemon.seen.lock().unwrap().envelopes.len(),
+        1,
+        "Check cannot execute"
+    );
+    assert!(client.command(WriteCommand::Check {
+        id: intent.id.clone(),
+        retry: true
+    }));
+    let done = until(&updates, |s| {
+        s.book.as_ref().is_some_and(|b| b.pending.is_empty())
+    })
+    .await;
+    assert_eq!(
+        done.book.as_ref().unwrap().drafts["chat:a"].text,
+        "Keep ordinary 日本語 👩‍💻"
+    );
+    assert_eq!(
+        daemon.seen.lock().unwrap().envelopes.as_slice(),
+        &[original.clone(), original]
+    );
+    assert_eq!(daemon.seen.lock().unwrap().executions, 1);
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+
 #[tokio::test]
 async fn delivery_diagnostic_memory_ack_survives_capacity_and_failed_check() {
     use crate::delivery_store::{RECOVER_CAP, STATE_CAP};
@@ -614,6 +814,9 @@ impl Drop for Temp {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Behavior {
+    AnswerIdle,
+    AnswerLost,
+    AnswerDelegated,
     Accept,
     Pending,
     Reject,
@@ -707,7 +910,7 @@ impl Daemon {
                                 }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
                                     let id=path.rsplit('/').next().unwrap();
-                                    json!({"id":id,"mode":"ask","control":behavior==Behavior::Readonly,"state":"working","projectId":seen.projects.get(id)})
+                                    json!({"id":id,"mode":"ask","control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {
@@ -716,7 +919,7 @@ impl Daemon {
                                     if path.ends_with("/receipt") {seen.operations.get(&id).cloned().unwrap_or_else(||json!({"state":"unknown"}))}
                                     else {
                                         seen.envelopes.push(payload.clone());
-                                        if behavior==Behavior::LostBeforeAdmission&&seen.envelopes.len()==1{return;}
+                                        if matches!(behavior,Behavior::LostBeforeAdmission|Behavior::AnswerLost)&&seen.envelopes.len()==1{return;}
                                         let state=if behavior==Behavior::Pending{"pending"}else if matches!(behavior,Behavior::Reject|Behavior::RejectThenLookupRefused){"rejected"}else{"accepted"};
                                         let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]},"reason":"private provider body /sensitive"});
                                         if !seen.operations.contains_key(&id){

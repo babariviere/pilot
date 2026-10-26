@@ -1,6 +1,332 @@
 use super::*;
 
 #[test]
+fn question_discard_guard_keeps_separate_reply_and_original_pending_identity() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let q = question_fixture(4);
+    let captured = question_capture(&q, 2, "question words kept independently");
+    save(&mut store, "chat:a", captured.clone());
+    let before = serde_json::to_vec(&store.book).unwrap();
+    assert!(store.discard_draft("chat:a", 2).is_err());
+    assert_eq!(serde_json::to_vec(&store.book).unwrap(), before);
+    let intent = store
+        .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+        .unwrap();
+    let original = serde_json::to_vec(&store.book).unwrap();
+    let envelope = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    assert!(store.discard_draft("chat:a", 2).is_err());
+    assert_eq!(serde_json::to_vec(&store.book).unwrap(), original);
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        envelope
+    );
+    assert!(store.book.abandoned.is_empty());
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(store.book.pending[&intent.id].answer, intent.answer);
+    assert_eq!(store.book.drafts["chat:a"].text, captured.text);
+}
+
+#[test]
+fn question_answer_edits_do_not_unlock_settled_ordinary_message() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let ordinary = draft(1, "unchanged rejected ordinary message");
+    let rejected = store.prepare("chat:a", &ordinary, false, false).unwrap();
+    store.finish(&rejected.id, "rejected", None).unwrap();
+    let q = question_fixture(4);
+    let mut reply = question_capture(&q, 2, "question words");
+    reply.text = ordinary.text.clone();
+    assert!(
+        store.prepare("chat:a", &reply, false, false).is_err(),
+        "Coalesced question-only capture cannot unlock ordinary delivery"
+    );
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), reply)]))
+        .unwrap();
+    let saved = store.book.drafts["chat:a"].clone();
+    assert!(
+        saved
+            .settled_revision
+            .is_some_and(|revision| revision >= saved.revision),
+        "Question-only edits must preserve the ordinary settled guard"
+    );
+    let intent = store
+        .prepare_answer("chat:a", &saved, &q, saved.answer.as_ref().unwrap())
+        .unwrap();
+    store.finish(&intent.id, "accepted", None).unwrap();
+    let saved = store.book.drafts["chat:a"].clone();
+    assert!(
+        store.prepare("chat:a", &saved, false, false).is_err(),
+        "Answering is not editing the ordinary message"
+    );
+    store
+        .retire_answer(
+            "chat:a",
+            saved.revision,
+            &saved.answer.as_ref().unwrap().identity,
+            false,
+        )
+        .unwrap();
+    let saved = store.book.drafts["chat:a"].clone();
+    assert!(
+        store.prepare("chat:a", &saved, false, false).is_err(),
+        "Private question cleanup is not an ordinary edit"
+    );
+    let mut edited = saved;
+    edited.revision += 1;
+    edited.text.push_str(" with an actual edit");
+    assert!(store.prepare("chat:a", &edited, false, false).is_ok());
+    let direct = Temp::new();
+    let mut store = Store::open(direct.0.clone(), host()).unwrap();
+    let rejected = store.prepare("chat:a", &ordinary, false, false).unwrap();
+    store.finish(&rejected.id, "rejected", None).unwrap();
+    let mut reply = question_capture(&q, 2, "direct question words");
+    reply.text = ordinary.text;
+    let intent = store
+        .prepare_answer("chat:a", &reply, &q, reply.answer.as_ref().unwrap())
+        .unwrap();
+    store.finish(&intent.id, "accepted", None).unwrap();
+    let saved = store.book.drafts["chat:a"].clone();
+    assert!(
+        store.prepare("chat:a", &saved, false, false).is_err(),
+        "Direct admission preserves the same ordinary guard"
+    );
+}
+
+#[test]
+fn question_composer_private_retirement_requires_ack_or_explicit_recovery() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let q = question_fixture(4);
+    let mut captured = question_capture(&q, 2, " raw own words ");
+    captured.text.clear();
+    let identity = captured.answer.as_ref().unwrap().identity.clone();
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), captured.clone())]))
+        .unwrap();
+    assert!(store.retire_answer("chat:a", 2, &identity, false).is_err());
+    let intent = store
+        .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+        .unwrap();
+    assert!(
+        store.retire_answer("chat:a", 2, &identity, true).is_err(),
+        "Uncertain original intent stays exact"
+    );
+    store.finish(&intent.id, "accepted", None).unwrap();
+    store.retire_empty("chat:a", 2).unwrap();
+    assert!(
+        store.book.drafts.contains_key("chat:a"),
+        "Question ACK guard cannot be pruned while its purpose remains"
+    );
+    store.retire_answer("chat:a", 2, &identity, false).unwrap();
+    assert!(store.book.drafts["chat:a"].answer.is_none());
+    assert!(store.book.drafts["chat:a"].recovered.is_empty());
+    store.retire_empty("chat:a", 3).unwrap();
+    assert!(!store.book.drafts.contains_key("chat:a"));
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), captured)]))
+        .unwrap();
+    store.retire_answer("chat:a", 2, &identity, true).unwrap();
+    assert_eq!(
+        store.book.drafts["chat:a"].recovered.as_ref(),
+        &["Tests\n\n raw own words ".to_string()]
+    );
+}
+
+fn question_fixture(entry: u64) -> crate::question::Question {
+    crate::question::Question::parse(entry,&serde_json::json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true})).unwrap()
+}
+fn question_capture(question: &crate::question::Question, revision: u64, text: &str) -> Draft {
+    let mut ordinary = draft(revision, "Ordinary unsent 👩‍💻 e\u{301}");
+    ordinary.answer = Some(
+        crate::question::AnswerDraft::capture(
+            question,
+            revision,
+            std::collections::BTreeSet::from([1]),
+            text.into(),
+        )
+        .unwrap(),
+    );
+    ordinary
+}
+#[test]
+fn question_answer_acceptance_keeps_ordinary_draft_and_its_send_revision() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let q = question_fixture(4);
+    save(
+        &mut store,
+        "chat:a",
+        draft(1, "Ordinary unsent 👩‍💻 e\u{301}"),
+    );
+    let captured = question_capture(&q, 2, " own words ");
+    let intent = store
+        .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+        .unwrap();
+    let op = intent.operation.as_ref().unwrap();
+    assert_eq!(op.kind, "chat-send");
+    assert_eq!(op.target_id, "a");
+    let payload: serde_json::Value = serde_json::from_str(&op.payload).unwrap();
+    assert_eq!(
+        payload,
+        serde_json::json!({"message":"Tests\n\nown words","mode":"steer"})
+    );
+    store.finish(&intent.id, "accepted", None).unwrap();
+    let kept = &store.book.drafts["chat:a"];
+    assert_eq!(kept.text, captured.text);
+    assert!(kept.settled_revision.is_none());
+    assert!(kept.created.is_none());
+    assert_eq!(
+        kept.last
+            .as_ref()
+            .unwrap()
+            .answer
+            .as_ref()
+            .unwrap()
+            .question,
+        q.identity
+    );
+    assert!(
+        store
+            .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+            .is_err(),
+        "No duplicate answer while waiting for transcript"
+    );
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(store.book.drafts["chat:a"].text, captured.text);
+    let regular = store.prepare("chat:a", &captured, false, false).unwrap();
+    assert!(regular.answer.is_none());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&regular.operation.unwrap().payload).unwrap()["message"],
+        captured.text
+    );
+}
+#[test]
+fn question_answer_unknown_restart_and_rejection_never_retarget_or_clear_ordinary() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let q = question_fixture(4);
+    let captured = question_capture(&q, 2, "original reply");
+    let intent = store
+        .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+        .unwrap();
+    let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    save(&mut store, "chat:a", draft(3, "Newer ordinary"));
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    assert_eq!(store.book.drafts["chat:a"].text, "Newer ordinary");
+    let next = question_fixture(8);
+    let retarget = question_capture(&next, 4, "different");
+    assert!(
+        store
+            .prepare_answer(
+                "chat:a",
+                &retarget,
+                &next,
+                retarget.answer.as_ref().unwrap()
+            )
+            .is_err()
+    );
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    store.finish(&intent.id, "rejected", None).unwrap();
+    assert_eq!(store.book.drafts["chat:a"].text, "Newer ordinary");
+    assert!(
+        store.book.drafts["chat:a"].recovered.is_empty(),
+        "Question rejection does not replace ordinary recovery"
+    );
+    assert_eq!(
+        store.book.drafts["chat:a"].answer.as_ref().unwrap().text,
+        "original reply"
+    );
+    assert!(
+        store
+            .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+            .is_err()
+    );
+}
+#[test]
+fn question_answer_replaced_unsent_reply_is_recoverable_and_capacity_refuses_loss() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let q = question_fixture(4);
+    let first = question_capture(&q, 2, " raw own words \u{200b}");
+    save(&mut store, "chat:a", first.clone());
+    let next = question_fixture(8);
+    let second = question_capture(&next, 3, "next");
+    save(&mut store, "chat:a", second);
+    assert_eq!(store.book.drafts["chat:a"].text, first.text);
+    assert_eq!(
+        store.book.drafts["chat:a"].recovered.as_ref(),
+        &["Tests\n\n raw own words \u{200b}".to_string()]
+    );
+    let full = Temp::new();
+    let mut store = Store::open(full.0.clone(), host()).unwrap();
+    let mut first = first;
+    first.recovered = Arc::new(vec!["keep".into(); 8]);
+    save(&mut store, "chat:a", first.clone());
+    assert!(
+        store
+            .save_edits(BTreeMap::from([(
+                "chat:a".into(),
+                question_capture(&next, 3, "next")
+            )]))
+            .is_err()
+    );
+    assert!(!store.is_faulted());
+    assert!(store.book.drafts["chat:a"].answer == first.answer);
+}
+#[test]
+fn question_answer_capture_legacy_and_write_failure_preserve_original_state() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "chat:a", draft(1, "ordinary"));
+    let before = fs::read(temp.0.join("state-v1.json")).unwrap();
+    assert!(
+        !String::from_utf8(before.clone())
+            .unwrap()
+            .contains("\"answer\"")
+    );
+    let q = question_fixture(4);
+    let captured = question_capture(&q, 2, "own");
+    let other = question_fixture(8);
+    assert!(
+        store
+            .prepare_answer(
+                "chat:a",
+                &captured,
+                &other,
+                captured.answer.as_ref().unwrap()
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .prepare_answer("new:slot", &captured, &q, captured.answer.as_ref().unwrap())
+            .is_err()
+    );
+    assert_eq!(before, fs::read(temp.0.join("state-v1.json")).unwrap());
+    store.fail_write = true;
+    assert!(
+        store
+            .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
+            .is_err()
+    );
+    assert!(store.book.pending.is_empty());
+    assert_eq!(store.book.drafts["chat:a"].text, "ordinary");
+    assert_eq!(before, fs::read(temp.0.join("state-v1.json")).unwrap());
+}
+
+#[test]
 fn delivery_diagnostic_survives_autosave_other_owner_and_restart_without_tuple_changes() {
     use super::diagnostic::{Acknowledgment, Category, Diagnostic, Stage};
     let temp = Temp::new();

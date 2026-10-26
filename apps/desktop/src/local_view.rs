@@ -1355,6 +1355,23 @@ impl LocalViewer {
         self.editor.update(cx, |editor, cx| {
             editor.activity(self.state.thinking && self.selected.is_some(), cx)
         });
+        let question_fresh = self.state.generation == self.generation
+            && self.state.loaded
+            && !self.state.page_busy
+            && self.selected.as_ref().is_some_and(|id| {
+                self.state.chats.iter().any(|chat| {
+                    &chat.id == id && matches!(chat.state.as_str(), "idle" | "parked" | "failed")
+                })
+            });
+        self.editor.update(cx, |editor, cx| {
+            editor.question_context(
+                self.selected.as_deref(),
+                self.state.question.clone(),
+                question_fresh,
+                window,
+                cx,
+            )
+        });
         self.restore_reader(cx);
         self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);

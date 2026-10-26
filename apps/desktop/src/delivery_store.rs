@@ -57,6 +57,8 @@ pub(crate) struct Delivery {
     pub(crate) revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) diagnostic: Option<Diagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) answer: Option<crate::question::ReplyIdentity>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,6 +82,8 @@ pub(crate) struct Draft {
     pub(crate) recovery_revision: u64,
     #[serde(default)]
     pub(crate) settled_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) answer: Option<crate::question::AnswerDraft>,
 }
 impl Default for Draft {
     fn default() -> Self {
@@ -96,6 +100,7 @@ impl Default for Draft {
             recovered: Arc::new(Vec::new()),
             recovery_revision: 0,
             settled_revision: None,
+            answer: None,
         }
     }
 }
@@ -103,6 +108,43 @@ impl Draft {
     pub(crate) fn editable(&self) -> bool {
         self.pending.is_none() && self.created.is_none()
     }
+}
+
+// Question-only metadata edits must not count as editing an already-settled
+// ordinary message. Actual ordinary text/config changes keep legacy semantics.
+fn question_settled_guard(old: &Draft, next: &Draft) -> Option<u64> {
+    let guard = old.settled_revision;
+    if guard.is_some_and(|revision| old.revision <= revision)
+        && old.answer != next.answer
+        && old.text == next.text
+        && old.cwd == next.cwd
+        && old.project_id == next.project_id
+        && old.model_choice == next.model_choice
+        && old.mode == next.mode
+    {
+        guard.map(|revision| revision.max(next.revision))
+    } else {
+        guard
+    }
+}
+
+fn retain_answer_draft(old: &Draft, next: &mut Draft) -> Result<(), Failure> {
+    if next.answer.is_none() || !old.editable() {
+        next.answer = old.answer.clone();
+    }
+    if let (Some(before), Some(after)) = (&old.answer, &next.answer)
+        && before.identity.question != after.identity.question
+    {
+        let text = before.recovery();
+        if !text.is_empty() {
+            if next.recovered.len() >= 8 {
+                return Err("Question reply recovery is full; copy previous input first");
+            }
+            Arc::make_mut(&mut next.recovered).push(text);
+            next.recovery_revision += 1;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -116,6 +158,8 @@ pub(crate) struct Intent {
     pub(crate) state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) diagnostic: Option<Diagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) answer: Option<crate::question::ReplyIdentity>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,6 +195,7 @@ impl Delivery {
                 .into(),
             revision: intent.revision,
             diagnostic: intent.diagnostic,
+            answer: intent.answer.clone(),
         }
     }
     pub(crate) fn same_operation(&self, other: &Self) -> bool {
@@ -158,6 +203,7 @@ impl Delivery {
             && self.target == other.target
             && self.kind == other.kind
             && self.revision == other.revision
+            && self.answer == other.answer
     }
     pub(crate) fn matches(&self, intent: &Intent, key: &str) -> bool {
         intent.key == key && self.same_operation(&Self::from_intent(intent))
@@ -181,6 +227,12 @@ pub(crate) fn hash(value: &str) -> String {
 }
 
 fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
+    if let Some(answer) = &draft.answer {
+        answer.validate()?;
+        if !key.starts_with("chat:") || answer.identity.revision > draft.revision {
+            return Err("Question reply draft owner differs");
+        }
+    }
     if let Some(choice) = &draft.model_choice {
         choice.validate()?;
     }
@@ -267,6 +319,16 @@ impl Book {
         }
         for (key, draft) in &self.drafts {
             validate_draft(key, draft)?;
+            if let Some(answer) = draft.last.as_ref().and_then(|last| last.answer.as_ref()) {
+                answer.validate()?;
+                if !key.starts_with("chat:")
+                    || draft.last.as_ref().is_none_or(|last| {
+                        last.kind != "chat-send" || answer.revision > last.revision
+                    })
+                {
+                    return Err("Stored question delivery owner differs");
+                }
+            }
             if let Some(diagnostic) = draft.last.as_ref().and_then(|last| last.diagnostic) {
                 diagnostic.validate()?;
             }
@@ -286,6 +348,23 @@ impl Book {
             }
         }
         for (id, intent) in &self.pending {
+            if let Some(answer) = &intent.answer {
+                answer.validate()?;
+                if !intent.key.starts_with("chat:")
+                    || answer.revision > intent.revision
+                    || intent
+                        .operation
+                        .as_ref()
+                        .is_none_or(|op| op.kind != "chat-send")
+                    || self
+                        .drafts
+                        .get(&intent.key)
+                        .and_then(|d| d.answer.as_ref())
+                        .is_none_or(|d| d.identity != *answer)
+                {
+                    return Err("Pending question reply ownership differs");
+                }
+            }
             if let Some(diagnostic) = intent.diagnostic {
                 diagnostic.validate()?;
             }
@@ -541,6 +620,8 @@ impl Store {
                     draft.recovered = old.recovered.clone();
                     draft.recovery_revision = old.recovery_revision;
                     draft.settled_revision = old.settled_revision;
+                    retain_answer_draft(old, &mut draft)?;
+                    draft.settled_revision = question_settled_guard(old, &draft);
                     if !old.editable() {
                         draft.model_choice = old.model_choice.clone();
                         draft.project_id = old.project_id.clone();
@@ -562,29 +643,74 @@ impl Store {
         follow_up: bool,
         stop: bool,
     ) -> Result<Intent, Failure> {
+        self.prepare_delivery(key, captured, follow_up, stop, None)
+    }
+    pub(crate) fn prepare_answer(
+        &mut self,
+        key: &str,
+        captured: &Draft,
+        question: &crate::question::Question,
+        answer: &crate::question::AnswerDraft,
+    ) -> Result<Intent, Failure> {
+        if !key.starts_with("chat:") || captured.answer.as_ref() != Some(answer) {
+            return Err("Question reply capture does not match its owning draft");
+        }
+        let message = answer
+            .reply(question)?
+            .ok_or("Choose an answer or write a reply")?;
+        self.prepare_delivery(
+            key,
+            captured,
+            false,
+            false,
+            Some((answer.identity.clone(), message)),
+        )
+    }
+    fn prepare_delivery(
+        &mut self,
+        key: &str,
+        captured: &Draft,
+        follow_up: bool,
+        stop: bool,
+        answer: Option<(crate::question::ReplyIdentity, String)>,
+    ) -> Result<Intent, Failure> {
         validate_draft(key, captured)?;
         self.change(|book| {
             if stop&&serde_json::to_vec(book).map_err(|_|"Cannot budget Stop recovery")?.len()>STATE_CAP-RECOVER_CAP-1024*1024 {return Err("Private state has no room to retain withdrawn Stop text. Copy/review existing recovery first.");}
             let existing=book.drafts.get(key).cloned().unwrap_or_else(||captured.clone());
             if stop&&existing.recovered.len()>=8{return Err("Recovered text storage is full. Copy and remove recovered text before Stop.");}
-            if let Some(id)=&existing.pending {return book.pending.get(id).cloned().ok_or("Missing pending intent");}
-            if !stop&&existing.settled_revision.is_some_and(|revision|captured.revision<=revision) {return Err("This draft revision already settled. Edit before starting a new delivery.");}
+            if let Some(id)=&existing.pending {
+                let intent=book.pending.get(id).cloned().ok_or("Missing pending intent")?;
+                if answer.as_ref().map(|(a,_)|a)!=intent.answer.as_ref() {return Err("Another delivery is unconfirmed; original intent retained");}
+                return Ok(intent);
+            }
+            if let Some((identity,_))=&answer {
+                if existing.revision>captured.revision {return Err("Question reply capture is stale; input retained");}
+                if let Some(last)=&existing.last && let Some(previous)=&last.answer
+                    && previous.question==identity.question && (last.state=="accepted" || previous.revision>=identity.revision) {
+                    return Err("This question reply already settled; wait for the transcript or edit a rejected reply");
+                }
+            }
+            if answer.is_none()&&!stop&&question_settled_guard(&existing,captured).is_some_and(|revision|captured.revision<=revision) {return Err("This draft revision already settled. Edit before starting a new delivery.");}
             if book.pending.len()>=32 {return Err("Pending delivery capacity reached");}
             if existing.created.is_some() {return Err("This new-chat draft already created a chat. Open it or start a separate draft.");}
             if existing.revision<captured.revision {
                 let mut newer=captured.clone();newer.last=existing.last.clone();newer.created=existing.created.clone();newer.recovered=existing.recovered.clone();newer.recovery_revision=existing.recovery_revision;newer.settled_revision=existing.settled_revision;
+                retain_answer_draft(&existing,&mut newer)?;
+                newer.settled_revision=question_settled_guard(&existing,&newer);
                 book.drafts.insert(key.into(),newer);
             }
             else if !book.drafts.contains_key(key) {book.drafts.insert(key.into(),existing.clone());}
             let id=Uuid::new_v4().to_string();
             let target=if let Some(id)=key.strip_prefix("chat:") {id.into()} else if !stop {Uuid::new_v4().to_string()} else {return Err("Stop requires an existing Local chat");};
             let operation=if stop {None} else {
-                if captured.text.trim().is_empty() {return Err("Message is empty");}
+                let message=answer.as_ref().map_or(captured.text.as_str(),|(_,message)|message.as_str());
+                if message.trim().is_empty() {return Err("Message is empty");}
                 let create=key.starts_with("new:");
                 if create&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
                 // Project ID is the supported SpawnRequest contract. No cwd
                 // override: the daemon owns project/workspace resolution.
-                let mut payload=if create {serde_json::json!({"message":captured.text,"projectId":captured.project_id,"mode":captured.mode})} else {serde_json::json!({"message":captured.text,"mode":if follow_up {"followUp"} else {"steer"}})};
+                let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":captured.mode})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
                 if create&&let Some(choice)=&captured.model_choice{
                     if captured.project_id.as_deref()!=Some(choice.project_id.as_str())||captured.cwd!=choice.cwd{return Err("Model choice belongs to another project directory. Choose it again explicitly.");}
                     payload["model"]=choice.choice.model.clone().into();
@@ -595,7 +721,7 @@ impl Store {
                 let sequence=book.next_sequence;book.next_sequence+=1;
                 Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
             };
-            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None};
+            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None,answer:answer.as_ref().map(|(a,_)|a.clone())};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
             book.pending.insert(id,intent.clone());Ok(intent)
         })
@@ -744,14 +870,14 @@ impl Store {
                 .map_or("stop", |op| op.kind.as_str())
                 .to_string();
             let accepted = state == "accepted";
-            if kind != "stop" {
+            if kind != "stop" && intent.answer.is_none() {
                 draft.settled_revision = Some(
                     draft
                         .settled_revision
                         .map_or(intent.revision, |old| old.max(intent.revision)),
                 );
             }
-            if accepted && kind != "stop" {
+            if accepted && kind != "stop" && intent.answer.is_none() {
                 if draft.revision == intent.revision {
                     draft.text.clear();
                 }
@@ -760,6 +886,7 @@ impl Store {
                 }
             }
             if state == "rejected"
+                && intent.answer.is_none()
                 && draft.revision != intent.revision
                 && let Some(operation) = &intent.operation
             {
@@ -794,6 +921,7 @@ impl Store {
                 // Install the new observation separately; details must never
                 // make an otherwise valid settlement exceed the snapshot cap.
                 diagnostic: None,
+                answer: intent.answer,
             });
             Ok(())
         })
@@ -843,6 +971,7 @@ impl Store {
             if key.starts_with("chat:")
                 && book.drafts.get(key).is_some_and(|draft| {
                     draft.revision == revision
+                        && draft.answer.is_none()
                         && draft.text.is_empty()
                         && draft.pending.is_none()
                         && draft.created.is_none()
@@ -865,6 +994,9 @@ impl Store {
             if draft.revision != revision {
                 return Err("Draft changed. Review it before discarding.");
             }
+            if draft.answer.is_some() || draft.pending.as_ref().and_then(|id|book.pending.get(id)).is_some_and(|intent|intent.answer.is_some()) {
+                return Err("Discard applies to the ordinary message draft; the separate question reply is retained");
+            }
             if let Some(id) = draft.pending.clone() {
                 let Some(intent) = book.pending.remove(&id) else {
                     return Err("Pending delivery ownership is corrupt");
@@ -880,6 +1012,56 @@ impl Store {
                 }
             }
             book.drafts.remove(key);
+            Ok(())
+        })
+    }
+    pub(crate) fn retire_answer(
+        &mut self,
+        key: &str,
+        revision: u64,
+        identity: &crate::question::ReplyIdentity,
+        recover: bool,
+    ) -> Result<(), Failure> {
+        self.change(|book| {
+            let draft = book
+                .drafts
+                .get_mut(key)
+                .ok_or("Question reply draft is missing")?;
+            if draft.revision != revision
+                || draft.pending.is_some()
+                || draft
+                    .answer
+                    .as_ref()
+                    .is_none_or(|a| a.identity != *identity)
+            {
+                return Err("Question reply changed; original input retained");
+            }
+            let accepted = draft.last.as_ref().is_some_and(|last| {
+                last.state == "accepted" && last.answer.as_ref() == Some(identity)
+            });
+            if !recover && !accepted {
+                return Err("Only a confirmed accepted reply may be cleared automatically");
+            }
+            if recover {
+                let text = draft.answer.as_ref().unwrap().recovery();
+                if !text.is_empty() {
+                    if draft.recovered.len() >= 8 {
+                        return Err(
+                            "Recovery is full; copy and remove previous recovered text first",
+                        );
+                    }
+                    Arc::make_mut(&mut draft.recovered).push(text);
+                    draft.recovery_revision += 1;
+                }
+            }
+            draft.answer = None;
+            let ordinary_settled = draft
+                .settled_revision
+                .is_some_and(|revision| draft.revision <= revision);
+            draft.revision += 1;
+            if ordinary_settled {
+                draft.settled_revision = Some(draft.revision);
+            }
             Ok(())
         })
     }

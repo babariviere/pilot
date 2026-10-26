@@ -1,6 +1,345 @@
 use super::*;
 
 #[gpui_kit::test]
+fn question_discard_guard_refuses_live_or_saved_reply_without_capture(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let q = question_composer_fixture(4);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text
+                .update(cx, |s, cx| s.set_value("ordinary retained", w, cx));
+            e.changed(cx);
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+            e.questions.input.update(cx, |s, cx| {
+                s.set_value("last native reply character 日本語", w, cx)
+            });
+            let revision = e.cache["chat:a"].revision;
+            assert!(
+                e.cache["chat:a"].answer.is_none(),
+                "Programmatic set_value emits no Change"
+            );
+            e.discard_draft(w, cx);
+            assert_eq!(e.selected.as_deref(), Some("chat:a"));
+            assert_eq!(e.cache["chat:a"].revision, revision);
+            assert!(
+                e.cache["chat:a"].answer.is_none(),
+                "Ordinary discard cannot capture/rekey question input"
+            );
+            assert_eq!(
+                e.questions.input.read(cx).value().as_ref(),
+                "last native reply character 日本語"
+            );
+            assert_eq!(e.cache["chat:a"].text, "ordinary retained");
+            e.changed(cx);
+            let answer = e.cache["chat:a"].answer.clone();
+            e.questions.input.update(cx, |s, cx| s.set_value("", w, cx));
+            e.discard_draft(w, cx);
+            assert_eq!(e.selected.as_deref(), Some("chat:a"));
+            assert!(e.cache["chat:a"].answer == answer);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(commands.try_recv().is_err());
+}
+#[gpui_kit::test]
+fn question_discard_guard_preserves_preedit_and_stale_adoption_scope(cx: &mut TestAppContext) {
+    use gpui_kit::{ElementInputHandler, test::TestInput};
+    let (handle, view, commands) = setup(cx);
+    let q = question_composer_fixture(4);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+            e.focus(w, cx);
+        });
+        w.render_frame(cx);
+        let handler = ElementInputHandler::new(
+            w.find_by_label("Your question reply").bounds(),
+            view.read(cx).questions.input.clone(),
+        );
+        TestInput::new(handler, w).compose_text(None, "にほん", Some(3..3), cx);
+        view.update(cx, |e, cx| {
+            let revision = e.cache["chat:a"].revision;
+            e.discard_draft(w, cx);
+            assert!(e.question_marked(w, cx));
+            assert_eq!(e.selected.as_deref(), Some("chat:a"));
+            assert_eq!(e.cache["chat:a"].revision, revision);
+            assert!(e.cache["chat:a"].answer.is_none());
+            e.question_context(
+                Some("b"),
+                crate::question::Projection::Pending(question_composer_fixture(8)),
+                true,
+                w,
+                cx,
+            );
+            e.discard_draft(w, cx);
+            assert_eq!(e.selected.as_deref(), Some("chat:a"));
+            assert_eq!(e.questions.current.as_ref().unwrap().identity, q.identity);
+            assert!(!e.cache.contains_key("chat:b"));
+            assert!(e.question_marked(w, cx));
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn question_composer_single_group_arrows_and_enter_select_without_sending(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let q=std::sync::Arc::new(crate::question::Question::parse(4,&serde_json::json!({"question":"Choose one","options":[{"label":"One"},{"label":"Two"}]})).unwrap());
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+            e.focus(w, cx);
+        });
+        w.render_frame(cx);
+        w.press("shift-tab", cx);
+        w.render_frame(cx);
+        assert_eq!(
+            w.find(format!("question-choices-4-{}", q.identity.fingerprint))
+                .focused(),
+            Some(true)
+        );
+        w.press("down", cx);
+        w.render_frame(cx);
+        w.press("down", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        let draft = &view.read(cx).cache["chat:a"];
+        assert_eq!(draft.answer.as_ref().unwrap().selected, BTreeSet::from([1]));
+        let revision = draft.revision;
+        w.render_frame(cx);
+        w.press("enter", cx);
+        assert_eq!(
+            view.read(cx).cache["chat:a"].revision,
+            revision,
+            "Activation of the selected radio is not a new edit"
+        );
+        view.update(cx, |e, cx| e.permission(false, false, cx));
+        w.press("up", cx);
+        assert_eq!(
+            view.read(cx).cache["chat:a"]
+                .answer
+                .as_ref()
+                .unwrap()
+                .selected,
+            BTreeSet::from([1])
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        commands.try_recv().is_err(),
+        "Arrows and group Enter never confirm delivery"
+    );
+}
+
+fn question_composer_fixture(id: u64) -> std::sync::Arc<crate::question::Question> {
+    std::sync::Arc::new(crate::question::Question::parse(id,&serde_json::json!({"question":"Which checks should run?","context":"Choose explicitly. Your existing message stays separate.","options":[{"label":"Typecheck","detail":"Check shared types","suggested":true},{"label":"Tests"}],"multiSelect":true})).unwrap())
+}
+#[gpui_kit::test]
+fn question_composer_choice_then_explicit_reply_preserves_ordinary(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup_width(cx, 680.);
+    let q = question_composer_fixture(4);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text
+                .update(cx, |s, cx| s.set_value("ordinary draft 👩‍💻", w, cx));
+            e.changed(cx);
+            e.permission(true, false, cx);
+            let draft = e.cache.get_mut("chat:a").unwrap();
+            draft.settled_revision = Some(draft.revision);
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+        });
+        w.render_frame(cx);
+        w.click(format!("question-4-{}-0", q.identity.fingerprint), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        commands.try_recv().is_err(),
+        "Choosing an option is not confirmation"
+    );
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| e.focus(w, cx));
+        w.input("own words 日本語", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        assert_eq!(view.read(cx).cache["chat:a"].text, "ordinary draft 👩‍💻");
+        assert_eq!(
+            view.read(cx).cache["chat:a"]
+                .answer
+                .as_ref()
+                .unwrap()
+                .labels,
+            &["Typecheck"]
+        );
+        w.render_frame(cx);
+        let draft = &view.read(cx).cache["chat:a"];
+        assert!(
+            draft
+                .settled_revision
+                .is_some_and(|revision| revision >= draft.revision),
+            "Question edits cannot unlock settled ordinary input"
+        );
+        w.click("answer-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    match commands.try_recv().unwrap() {
+        WriteCommand::Answer {
+            key,
+            draft,
+            question,
+            ..
+        } => {
+            assert_eq!(key, "chat:a");
+            assert_eq!(question.identity, q.identity);
+            assert_eq!(draft.text, "ordinary draft 👩‍💻");
+            assert_eq!(
+                draft
+                    .answer
+                    .as_ref()
+                    .unwrap()
+                    .reply(&question)
+                    .unwrap()
+                    .as_deref(),
+                Some("Typecheck\n\nown words 日本語")
+            );
+        }
+        _ => panic!("Expected typed question reply command"),
+    }
+    assert!(commands.try_recv().is_err());
+}
+#[gpui_kit::test]
+fn question_composer_preedit_defers_new_identity_without_erasing_either_draft(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{ElementInputHandler, test::TestInput};
+    let (handle, view, commands) = setup_width(cx, 680.);
+    let q = question_composer_fixture(4);
+    let next = question_composer_fixture(8);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text.update(cx, |s, cx| s.set_value("ordinary", w, cx));
+            e.changed(cx);
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+        });
+        w.render_frame(cx);
+        let handler = ElementInputHandler::new(
+            w.find_by_label("Your question reply").bounds(),
+            view.read(cx).questions.input.clone(),
+        );
+        TestInput::new(handler, w).compose_text(None, "にほん", Some(3..3), cx);
+        view.update(cx, |e, cx| {
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(next.clone()),
+                true,
+                w,
+                cx,
+            );
+            assert_eq!(e.questions.current.as_ref().unwrap().identity, q.identity);
+            assert!(!e.capture_navigation(w, cx));
+            e.answer_question(None, w, cx);
+        });
+        w.press("enter", cx);
+        w.render_frame(cx);
+        w.click("answer-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(commands.try_recv().is_err());
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.questions.input.update(cx, |s, cx| s.unmark_text(w, cx))
+        });
+        w.render_frame(cx);
+        w.click("show-current-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        let e = view.read(cx);
+        assert_eq!(
+            e.questions.current.as_ref().unwrap().identity,
+            next.identity
+        );
+        assert_eq!(e.cache["chat:a"].text, "ordinary");
+        assert_eq!(
+            e.cache["chat:a"].answer.as_ref().unwrap().identity.question,
+            q.identity
+        );
+        assert_eq!(e.cache["chat:a"].answer.as_ref().unwrap().text, "にほん");
+        w.render_frame(cx);
+        w.click("keep-question-reply", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        matches!(
+            commands.try_recv().unwrap(),
+            WriteCommand::RetireAnswer { recover: true, .. }
+        ),
+        "Only a private recovery request, never an answer"
+    );
+}
+#[gpui_kit::test]
+fn question_composer_readonly_stale_source_and_access_never_answer(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let q = question_composer_fixture(4);
+    cx.update_window(handle,|_,w,cx| {
+        view.update(cx,|e,cx| {
+            e.question_context(Some("a"),crate::question::Projection::Pending(q.clone()),true,w,cx);
+            e.questions.input.update(cx,|s,cx|s.set_value("reply",w,cx));e.changed(cx);
+            e.permission(false,false,cx);e.answer_question(None,w,cx);
+            e.permission(true,false,cx);e.question_context(Some("a"),crate::question::Projection::Pending(q.clone()),false,w,cx);e.answer_question(None,w,cx);
+            e.question_context(Some("b"),crate::question::Projection::Pending(q.clone()),true,w,cx);e.answer_question(None,w,cx);
+            let access=std::sync::Arc::new(crate::question::Question::parse(12,&serde_json::json!({"question":"Allow database access?","databaseAccess":{"requestId":"grant-1"}})).unwrap());
+            e.question_context(Some("a"),crate::question::Projection::Pending(access),true,w,cx);e.answer_question(None,w,cx);
+        });
+        w.render_frame(cx);assert!(w.try_find("answer-question").is_none());
+    }).unwrap();
+    cx.run_until_parked();
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
 fn delivery_diagnostic_stays_with_exact_owner_after_autosave_navigation_and_legacy_restore(
     cx: &mut TestAppContext,
 ) {

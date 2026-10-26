@@ -31,6 +31,11 @@ mod model_picker;
 pub(crate) mod project_creation_probe;
 #[path = "chat_projects.rs"]
 mod projects;
+#[cfg(feature = "native-probes")]
+#[path = "question_probe.rs"]
+pub(crate) mod question_probe;
+#[path = "chat_questions.rs"]
+mod questions;
 
 pub(crate) enum EditorEvent {
     AddProject,
@@ -47,6 +52,7 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct ChatEditor {
+    questions: questions::Questions,
     models: Option<model_picker::Models>,
     client: Option<Interaction>,
     text: Entity<TextareaState>,
@@ -88,6 +94,21 @@ impl ChatEditor {
         });
         let cwd =
             cx.new(|cx| InputState::new(window, cx).placeholder("Absolute Local working folder"));
+        let questions = questions::Questions::new(window, cx);
+        let question_events = cx.subscribe_in(
+            &questions.input,
+            window,
+            |view, _, event, window, cx| match event {
+                InputEvent::Change => {
+                    view.record_question_edit(false, cx);
+                    view.resume_question_context(window, cx);
+                }
+                InputEvent::PressEnter { shift: false, .. } => {
+                    view.answer_question(None, window, cx)
+                }
+                _ => {}
+            },
+        );
         let text_events =
             cx.subscribe_in(&text, window, |view, _, event, window, cx| match event {
                 InputEvent::Change => view.changed(cx),
@@ -100,6 +121,7 @@ impl ChatEditor {
             }
         });
         Self {
+            questions,
             models: None,
             client,
             text,
@@ -128,7 +150,7 @@ impl ChatEditor {
             state: WriteState::default(),
             error: None,
             closing: false,
-            _subscriptions: vec![text_events, cwd_events],
+            _subscriptions: vec![text_events, cwd_events, question_events],
         }
     }
 
@@ -141,6 +163,7 @@ impl ChatEditor {
                 || key.starts_with("new:")
                 || !draft.text.is_empty()
                 || !draft.recovered.is_empty()
+                || draft.answer.is_some()
                 || self.pending.contains_key(key)
                 || self.unsaved_local.contains(key)
         });
@@ -155,6 +178,8 @@ impl ChatEditor {
         self.selected.as_deref()
     }
     pub(crate) fn browse_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.changed(cx);
+        self.questions.reset();
         self.selected = None;
         self.project_picker = None;
         self.writable = false;
@@ -245,6 +270,7 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) {
         self.changed(cx);
+        self.questions.reset();
         self.prune_cache();
         if self.cache.len() >= DRAFT_CAP && !self.cache.contains_key(&key) {
             self.selected = None;
@@ -295,11 +321,14 @@ impl ChatEditor {
     }
 
     pub(crate) fn marked(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.text.update(cx, |state, cx| {
-            state.marked_text_range(window, cx).is_some()
-        }) || self.cwd.update(cx, |state, cx| {
-            state.marked_text_range(window, cx).is_some()
-        }) || self.project_query_marked(window, cx)
+        self.question_marked(window, cx)
+            || self.text.update(cx, |state, cx| {
+                state.marked_text_range(window, cx).is_some()
+            })
+            || self.cwd.update(cx, |state, cx| {
+                state.marked_text_range(window, cx).is_some()
+            })
+            || self.project_query_marked(window, cx)
             || self.model_query_marked(window, cx)
     }
     #[cfg(feature = "native-probes")]
@@ -356,10 +385,12 @@ impl ChatEditor {
         }
         self.sync_project_picker(window, cx);
         self.sync_models(window, cx);
+        self.load_question_input(window, cx);
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.record_edit(false, cx);
+        self.record_question_edit(false, cx);
     }
     fn record_edit(&mut self, force: bool, cx: &mut Context<Self>) {
         let Some(key) = self.selected.clone() else {
@@ -402,6 +433,10 @@ impl ChatEditor {
     /// Removes the selected draft. Its text is copied out first, and the store abandons any
     /// unresolved delivery, so the same operation is never sent again.
     fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.question_blocks_discard(cx) || self.question_marked(window, cx) {
+            cx.notify();
+            return;
+        }
         let Some(key) = self.selected.clone() else {
             return;
         };
@@ -490,6 +525,7 @@ impl ChatEditor {
                     && saved.text.is_empty()
                     && saved.pending.is_none()
                     && saved.recovered.is_empty()
+                    && saved.answer.is_none()
                     && (saved.last.is_some() || saved.revision > 0)
                     && self.cache.get(key).is_some_and(|local| {
                         local.revision == saved.revision && local.text.is_empty()
@@ -516,6 +552,7 @@ impl ChatEditor {
         }
         if !marked {
             self.load_input(window, cx);
+            self.retire_settled_question(cx);
         }
         self.open_completed(cx);
         if self.state.flushed {
@@ -555,6 +592,10 @@ impl ChatEditor {
             || self.draft().is_some_and(|d| d.pending.is_some())
     }
     fn submit(&mut self, stop: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !stop && self.questions.current.is_some() {
+            self.answer_question(None, window, cx);
+            return;
+        }
         self.changed(cx);
         if !self.ready()
             || !self.writable
@@ -632,7 +673,13 @@ impl ChatEditor {
     }
     pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ready() && self.selected.is_some() {
-            self.text.update(cx, |state, cx| state.focus(window, cx));
+            if self.questions.current.is_some() {
+                self.questions
+                    .input
+                    .update(cx, |state, cx| state.focus(window, cx));
+            } else {
+                self.text.update(cx, |state, cx| state.focus(window, cx));
+            }
         }
     }
     fn delivery_detail(&self, key: &str, draft: &Draft) -> Option<(String, String)> {
@@ -915,7 +962,12 @@ impl Render for ChatEditor {
             );
         #[cfg(any(test, feature = "native-probes"))]
         let controls = controls.test_support();
-        footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
+        if let Some(question) = self.question_panel(cx) {
+            footer = footer.child(question);
+        } else {
+            footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
+        }
+        footer = footer.children(self.question_recovery(cx));
         if self.models.is_some() && self.has_model_notice() {
             footer = footer.child(self.model_notices(cx));
         }
@@ -1085,6 +1137,8 @@ impl Render for ChatEditor {
                         .small()
                         .ghost()
                         .label("Discard draft")
+                        .disabled(self.question_blocks_discard(cx))
+                        .tooltip("Discard applies to the ordinary message draft, not a separate question reply.")
                         .icon(AppIcon::Close.asset())
                         .accessibility_label("Discard draft and copy its text to the clipboard")
                         .on_click(

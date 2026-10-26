@@ -74,3 +74,5 @@ bash scripts/cargo.sh test --locked --features native-probes --test mission_insp
 # Exact row menus, synthetic Local archive/restore and confirmed conversion only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test chat_actions -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test chat_actions
+bash scripts/cargo.sh clippy --locked --features native-probes --test questions -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test questions

@@ -183,6 +183,7 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) question: crate::question::Projection,
     pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
@@ -714,6 +715,11 @@ async fn run(
         view.loaded = model.loaded && !model.prefix_pending;
         view.queued = model.queued;
         view.thinking = model.thinking && !fenced;
+        view.question = if fenced {
+            crate::question::Projection::Unavailable
+        } else {
+            model.question()
+        };
         #[cfg(test)]
         {
             view.test_publications += 1;

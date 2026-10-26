@@ -241,6 +241,8 @@ fn bounded(text: &str, cap: usize) -> String {
 
 #[derive(Default)]
 pub(crate) struct LiveTranscript {
+    question_pending: crate::question::Pending,
+    question_run_active: bool,
     entries: BTreeMap<u64, Vec<Message>>,
     aliases: HashMap<(u64, usize), u64>,
     live: Option<Value>,
@@ -268,12 +270,24 @@ pub(crate) struct LiveTranscript {
 }
 
 struct SavedHistory {
+    question_pending: crate::question::Pending,
     head: Option<u64>,
     cursor: Option<u64>,
     entries: BTreeMap<u64, Vec<Message>>,
 }
 
 impl LiveTranscript {
+    pub(crate) fn question(&self) -> crate::question::Projection {
+        use crate::question::Projection;
+        if !self.loaded || self.prefix_pending || self.question_run_active || self.queued != 0 {
+            return Projection::Unavailable;
+        }
+        match self.question_pending.current() {
+            Ok(Some(question)) => Projection::Pending(question),
+            Ok(None) => Projection::None,
+            Err(error) => Projection::Invalid(error),
+        }
+    }
     fn key(&mut self) -> u64 {
         self.next_key += 1;
         (1 << 63) + self.next_key
@@ -426,6 +440,9 @@ impl LiveTranscript {
         }
     }
     fn entry(&mut self, entry: &Value, promote: Option<u64>) {
+        // Metadata is bounded independently from row admission. Even a user
+        // entry beyond the visual row cap must close an old question.
+        self.question_pending.observe(entry);
         let Some(id) = entry["id"].as_u64().filter(|id| *id < (1 << 53)) else {
             return;
         };
@@ -559,6 +576,11 @@ impl LiveTranscript {
 
     /// Returned changes are applied in sequence on one background owner.
     pub(crate) fn apply(&mut self, event: &Value) {
+        match event["type"].as_str() {
+            Some("run_start") => self.question_run_active = true,
+            Some("run_end" | "run_error" | "error") => self.question_run_active = false,
+            _ => {}
+        }
         if matches!(event["type"].as_str(), Some("run_start" | "run_end")) {
             self.thinking_suppressed = false;
         }
@@ -586,11 +608,15 @@ impl LiveTranscript {
                 let active = event["entries"].as_array().cloned().unwrap_or_default();
                 let head = active.iter().filter_map(|e| e["head"].as_u64()).min();
                 let kept = self.saved_history.take().unwrap_or_else(|| SavedHistory {
+                    question_pending: std::mem::take(&mut self.question_pending),
                     head: self.active_head,
                     cursor: self.cursor,
                     entries: std::mem::take(&mut self.entries),
                 });
                 self.entries.clear();
+                self.question_pending = crate::question::Pending::default();
+                self.question_run_active =
+                    event["run"].is_object() || event["generation"].is_object();
                 self.saved_history = Some(kept);
                 self.active_head = head;
                 self.limited = false;
@@ -747,6 +773,7 @@ impl LiveTranscript {
             && self.active_head.is_some()
             && kept.head == self.active_head
         {
+            self.question_pending.merge(kept.question_pending);
             self.cursor = kept.cursor;
             for (id, rows) in kept.entries {
                 if Some(id) >= self.active_head {
@@ -1085,6 +1112,101 @@ fn change_message(message: &mut Value, change: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn question_entry(id: u64, head: u64) -> Value {
+        json!({"id":id,"head":head,"kind":"pilot.question","data":{"question":"Which checks?","options":[{"label":"Tests"}]},"model":[]})
+    }
+    fn pending_question_id(model: &LiveTranscript) -> Option<u64> {
+        match model.question() {
+            crate::question::Projection::Pending(q) => Some(q.identity.entry),
+            _ => None,
+        }
+    }
+    #[test]
+    fn question_projection_waits_snapshot_prefix_and_run_not_background_jobs() {
+        let mut model = LiveTranscript::default();
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(
+            &json!({"type":"snapshot","entries":[question_entry(4,1)],"run":{"startedAt":1}}),
+        );
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"run_end"}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"jobs_update","jobs":[{"status":"running"}]}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"run_start"}));
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"run_error"}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"queue_update","items":[{"id":1}],"automatic":[]}));
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"queue_update","items":[],"automatic":[]}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)],"generation":{"message":{"role":"assistant","content":[]}}}));
+        assert_eq!(pending_question_id(&model), None);
+    }
+    #[test]
+    fn question_projection_prefix_actual_user_compaction_and_invalid_latest() {
+        let mut model = LiveTranscript::default();
+        model.apply(
+            &json!({"type":"snapshot","entries":[question_entry(10,1)],"prefixPending":true}),
+        );
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"snapshot_prefix","entries":[{"id":11,"head":1,"kind":"pi.user","model":[{"role":"user","content":"Already answered"}]}]}));
+        assert_eq!(pending_question_id(&model), None);
+        let mut bad = question_entry(12, 1);
+        bad["data"]["question"] = " ".into();
+        model.apply(&json!({"type":"entry_appended","entry":bad}));
+        assert!(matches!(
+            model.question(),
+            crate::question::Projection::Invalid(_)
+        ));
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(21,20)]}));
+        assert_eq!(pending_question_id(&model), Some(21));
+        model.apply(&json!({"type":"entry_appended","entry":{"id":22,"kind":"pi.compaction","model":[{"role":"user","content":"Summary"}]}}));
+        assert_eq!(pending_question_id(&model), Some(21));
+        model.apply(&json!({"type":"entry_appended","entry":{"id":23,"kind":"pilot.activity","model":[{"role":"user","content":"Continue"}]}}));
+        assert_eq!(pending_question_id(&model), None);
+    }
+    #[test]
+    fn question_projection_same_head_history_restore_different_head_reset() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"snapshot","entries":[{"id":8,"head":1,"kind":"pi.assistant","model":[]}],"prefixPending":true}));
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"snapshot_prefix","entries":[]}));
+        assert_eq!(
+            pending_question_id(&model),
+            Some(4),
+            "Same canonical head may retain loaded older question metadata"
+        );
+        model.apply(&json!({"type":"snapshot","entries":[{"id":20,"head":5,"kind":"pi.assistant","model":[]}]}));
+        assert_eq!(
+            pending_question_id(&model),
+            None,
+            "Never transfer question metadata across a changed head"
+        );
+    }
+    #[test]
+    fn question_projection_user_beyond_row_cap_or_invalid_identity_fails_closed() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        for id in 10..10 + ENTRY_CAP as u64 {
+            model.entries.insert(id, Vec::new());
+        }
+        let mut messages = vec![json!({"role":"assistant","content":"bounded ignored rows"}); 33];
+        messages.push(json!({"role":"user","content":"New actual input"}));
+        model.apply(&json!({"type":"entry_appended","entry":{"id":99999,"kind":"pi.user","model":messages}}));
+        assert_eq!(pending_question_id(&model), None);
+        assert!(!model.entries.contains_key(&99999));
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(8,1)]}));
+        model.apply(&json!({"type":"entry_appended","entry":{"id":"invalid","kind":"pi.user","model":[{"role":"user","content":"Unknown boundary"}]}}));
+        assert!(matches!(
+            model.question(),
+            crate::question::Projection::Invalid(_)
+        ));
+    }
     use serde_json::json;
     #[test]
     fn corner_summary_projection_preserves_action_eligibility_and_background_work() {

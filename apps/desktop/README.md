@@ -114,6 +114,13 @@ See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifec
 
 ## Use real Local chats
 
+Ordinary agent questions now have explicit single/multiple-choice answers,
+suggested options and a separate own-words reply field. Selection never sends,
+and the existing message draft stays separate. Unknown replies retain their
+original operation for explicit Check/Retry. Database-access decisions remain
+unavailable here. See [structured questions](docs/questions.md) for the existing
+steering contract, identity guards and recovery.
+
 ```sh
 cd apps/desktop
 bash scripts/cargo.sh build --locked

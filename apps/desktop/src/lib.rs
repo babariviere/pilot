@@ -45,6 +45,9 @@ mod project_add_view;
 mod project_registration;
 #[cfg(any(test, feature = "native-probes"))]
 mod project_registration_fixture;
+mod question;
+#[cfg(feature = "native-probes")]
+pub use chat_editor::question_probe::run_question_probe;
 mod scoped_models;
 #[cfg(any(test, feature = "native-probes"))]
 mod scoped_models_fixture;
