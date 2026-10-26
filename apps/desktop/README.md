@@ -196,6 +196,11 @@ the window, not app restart. Pending/unconfirmed creates cannot be resent;
 validated 201 responses provide the actual task ID/number. Creation never starts
 or assigns a chat. See [task creation and recovery](docs/mission-task-creation.md).
 
+Task details offer **Change status…** with exact-task confirmation and explicit
+submission. The form discloses delegation, linked-PR sync and coordinator/phase
+side effects; uncertain writes cannot be retried or settled by refresh. See
+[task status and authority](docs/task-status.md).
+
 ### Make an existing chat a mission
 
 In an eligible Local chat, choose **Make a mission…**. Review the title and optional

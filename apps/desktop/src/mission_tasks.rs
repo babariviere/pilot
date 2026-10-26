@@ -13,6 +13,8 @@ pub(crate) struct Task {
     pub(crate) number: u64,
     pub(crate) title: String,
     pub(crate) status: String,
+    /// Swift's workStatus: stored status when phase gating projects Blocked.
+    pub(crate) work_status: String,
     pub(crate) body: String,
     pub(crate) context: String,
     order: f64,
@@ -96,6 +98,14 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             number,
             title: text(&t["title"], 800)?,
             status: text(&t["status"], 40)?,
+            work_status: text(
+                if t["storedStatus"].is_null() {
+                    &t["status"]
+                } else {
+                    &t["storedStatus"]
+                },
+                40,
+            )?,
             body: if t["body"].is_null() {
                 String::new()
             } else {

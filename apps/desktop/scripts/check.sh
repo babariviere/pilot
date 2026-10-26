@@ -92,3 +92,5 @@ bash scripts/cargo.sh clippy --locked --features native-probes --test mission_br
 bash scripts/cargo.sh test --locked --features native-probes --test mission_brief
 bash scripts/cargo.sh clippy --locked --features native-probes --test mission_task_create -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test mission_task_create
+bash scripts/cargo.sh clippy --locked --features native-probes --test task_status -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test task_status

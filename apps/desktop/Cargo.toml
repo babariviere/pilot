@@ -244,6 +244,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "task_status"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "composer_controls"
 harness = false
 test = false

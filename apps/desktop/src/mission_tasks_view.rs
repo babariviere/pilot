@@ -89,6 +89,8 @@ pub(crate) struct Pane {
     pub(crate) creation: Option<Entity<crate::mission_task_create_view::Form>>,
     creations: Vec<(Entity<crate::mission_task_create_view::Form>, Subscription)>,
     create_error: Option<&'static str>,
+    pub(crate) status_form: Option<Entity<crate::task_status_view::Form>>,
+    statuses: Vec<(Entity<crate::task_status_view::Form>, Subscription)>,
 }
 impl Pane {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -106,12 +108,18 @@ impl Pane {
             creation: None,
             creations: Vec::new(),
             create_error: None,
+            status_form: None,
+            statuses: Vec::new(),
         }
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
-        self.creation
+        self.status_form
             .as_ref()
             .is_some_and(|f| f.read(cx).owns_focus(w, cx))
+            || self
+                .creation
+                .as_ref()
+                .is_some_and(|f| f.read(cx).owns_focus(w, cx))
             || self.trigger.contains_focused(w, cx)
             || self.detail_focus.contains_focused(w, cx)
             || self
@@ -131,6 +139,7 @@ impl Pane {
         }
         self.options = options;
         if self.state.target(key) {
+            self.hide_status(w, cx);
             if let Some(form) = self.creation.take() {
                 form.update(cx, |f, _| f.visible = false);
             }
@@ -152,6 +161,7 @@ impl Pane {
         if self.marked(w, cx) {
             return;
         }
+        self.hide_status(w, cx);
         let (Some(key), Some(options)) = (self.state.key.clone(), self.options.clone()) else {
             return;
         };
@@ -201,6 +211,111 @@ impl Pane {
         });
         self.creation = Some(form);
         self.opened = true;
+        cx.notify();
+    }
+    fn hide_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.status_form.take() {
+            if f.read(cx).owns_focus(w, cx) {
+                self.trigger.focus(w, cx);
+            }
+            f.update(cx, |f, cx| {
+                f.visible = false;
+                cx.notify();
+            });
+        }
+    }
+    fn change_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            return;
+        }
+        let (Some(snapshot), Some(id), Some(options)) = (
+            &self.state.snapshot,
+            &self.state.selected,
+            self.options.clone(),
+        ) else {
+            return;
+        };
+        let Some(t) = snapshot.task(id) else {
+            return;
+        };
+        let target = crate::task_status::Target {
+            key: snapshot.key.clone(),
+            task: t.id.clone(),
+            number: t.number,
+            title: t.title.clone(),
+            current: t.work_status.clone(),
+        };
+        if target.key.home != crate::mission_browser::Home::local(&options.host()) {
+            return;
+        }
+        let prior = self
+            .statuses
+            .iter()
+            .find(|(f, _)| f.read(cx).matches(&target, &options))
+            .map(|(f, _)| f.clone());
+        let form = if let Some(f) = prior {
+            f
+        } else {
+            if self.statuses.len() >= 32 {
+                self.create_error = Some(
+                    "Status drafts reached this window's 32-task limit. Existing choices and receipts are retained.",
+                );
+                cx.notify();
+                return;
+            }
+            let f = cx.new(|cx| crate::task_status_view::Form::new(target, options, cx));
+            let sub = cx.subscribe_in(
+                &f,
+                w,
+                |v, source, event: &crate::task_status_view::Event, w, cx| {
+                    if v.status_form.as_ref() == Some(source) {
+                        match event {
+                            crate::task_status_view::Event::Close => {
+                                v.hide_status(w, cx);
+                                if v.state.selected.as_ref().is_some_and(|id| {
+                                    v.state
+                                        .snapshot
+                                        .as_ref()
+                                        .is_some_and(|s| s.task(id).is_some())
+                                }) {
+                                    v.detail_focus.focus(w, cx);
+                                }
+                            }
+                            crate::task_status_view::Event::NewIntent => {
+                                if !v.state.busy
+                                    && v.state.error.is_none()
+                                    && let Some(s) = &v.state.snapshot
+                                    && s.key == source.read(cx).target.key
+                                    && let Some(t) = s.task(&source.read(cx).target.task)
+                                {
+                                    let target = crate::task_status::Target {
+                                        key: s.key.clone(),
+                                        task: t.id.clone(),
+                                        number: t.number,
+                                        title: t.title.clone(),
+                                        current: t.work_status.clone(),
+                                    };
+                                    source.update(cx, |f, cx| f.new_intent(target, cx));
+                                }
+                            }
+                        }
+                        cx.notify();
+                    }
+                },
+            );
+            self.statuses.push((f.clone(), sub));
+            f
+        };
+        self.hide_status(w, cx);
+        form.update(cx, |f, cx| {
+            f.visible = true;
+            f.focus(w, cx);
+            cx.notify();
+        });
+        if let Some(f) = self.creation.take() {
+            f.update(cx, |f, _| f.visible = false);
+        }
+        self.status_form = Some(form);
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -299,6 +414,9 @@ impl Pane {
         }
     }
     fn select(&mut self, id: &str, generation: u64, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            return;
+        }
         if !self.opened
             || self.state.generation != generation
             || !self
@@ -309,6 +427,7 @@ impl Pane {
         {
             return;
         }
+        self.hide_status(w, cx);
         self.state.selected = Some(id.into());
         if let Some(list) = &self.list {
             list.update(cx, |l, cx| {
@@ -329,6 +448,7 @@ impl Pane {
         if self.marked(w, cx) {
             return;
         }
+        self.hide_status(w, cx);
         if let Some(form) = self.creation.take() {
             form.update(cx, |f, _| f.visible = false);
         }
@@ -341,6 +461,10 @@ impl Pane {
         cx.notify();
     }
     fn back(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) {
+            return;
+        }
+        self.hide_status(w, cx);
         self.state.selected = None;
         if let Some(l) = &self.list {
             l.update(cx, |l, cx| l.focus(w, cx));
@@ -422,7 +546,7 @@ impl Render for Pane {
                     } else if self.state.error.is_some() {
                         "Task read failed. Retained tasks are stale."
                     } else {
-                        "Read-only snapshot. Refresh explicitly to update."
+                        "Task snapshot. Refresh explicitly to update."
                     },
                 )),
         );
@@ -485,6 +609,14 @@ impl Render for Pane {
                                     .on_click(cx.listener(|v, _, w, cx| v.back(w, cx))),
                                 )
                                 .child(
+                                    ui::action(
+                                        "mission-task-status",
+                                        "Change status…",
+                                        Action::Quiet,
+                                    )
+                                    .on_click(cx.listener(|v, _, w, cx| v.change_status(w, cx))),
+                                )
+                                .child(
                                     ui::action("mission-tasks-copy", "Copy task", Action::Quiet)
                                         .on_click(cx.listener(move |v, _, _, cx| {
                                             if v.opened
@@ -528,6 +660,9 @@ impl Render for Pane {
                         ),
                 );
             }
+        }
+        if let Some(form) = &self.status_form {
+            root = root.child(form.clone());
         }
         root
     }

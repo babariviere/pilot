@@ -198,6 +198,7 @@ chmod +x "$1"
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission_inspector"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission_tasks"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission_task_create"], calls)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "task_status"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "chat_actions"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "questions"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "composer_controls"], calls)
@@ -333,7 +334,7 @@ class WorkflowTests(unittest.TestCase):
         harness = desktop / "tests/settings_state.rs"
         self.assertIn('#[path = "../src/settings_state.rs"]', harness.read_text())
         self.assertTrue((desktop / "src/settings_state.rs").is_file())
-        self.assertEqual(len(re.findall(r'#\[test\]', harness.read_text())), 17)
+        self.assertEqual(len(re.findall(r'#\[test\]', harness.read_text())), 20)
 
     def test_rust_is_parallel_sibling_reached_by_both_existing_wrappers(self):
         source = WORKFLOW.read_text()

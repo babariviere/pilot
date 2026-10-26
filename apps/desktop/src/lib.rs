@@ -80,6 +80,15 @@ mod mission_tasks;
 mod mission_tasks_probe;
 mod mission_tasks_reader;
 mod mission_tasks_view;
+mod task_status;
+mod task_status_transport;
+mod task_status_view;
+#[cfg(any(test, feature = "native-probes"))]
+mod task_status_fixture;
+#[cfg(feature = "native-probes")]
+mod task_status_probe;
+#[cfg(feature = "native-probes")]
+pub use task_status_probe::run_task_status_probe;
 #[cfg(feature = "native-probes")]
 pub use mission_task_create_probe::run_mission_task_create_probe;
 #[cfg(feature = "native-probes")]
