@@ -3,9 +3,10 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type TestContext, test } from "node:test";
+import { before, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionAttempt, type MemoryCompactionTrace } from "./memory-compaction.ts";
@@ -14,6 +15,9 @@ import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 import type { SlackClassifierContext } from "./slack-classifier.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
+
+// Process-wide hooks must capture the real SDK factory, never an individual test's catalog fake.
+before(() => installCredentialBrokerHooks());
 
 type Model = Parameters<ModelRuntime["completeSimple"]>[0];
 const model = (id: string, input: number, output: number): Model => ({

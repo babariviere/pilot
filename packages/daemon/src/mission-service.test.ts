@@ -9,6 +9,7 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict } from "./errors.ts";
@@ -3639,6 +3640,8 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 
 test("task starts reject invalid model/thinking before spawning, and record explicit and default choices", async (t) => {
 	const f = await fixture(t);
+	// Install the process-wide wrapper before mocking its factory, so it cannot capture a catalog-only fake.
+	await installCredentialBrokerHooks();
 	const models = [
 		["claude-opus-5-5", 4, 20, true],
 		["small", 0.1, 0.4, false],
