@@ -100,6 +100,7 @@ mod project_tests {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) pull_requests: Vec<crate::jump::PullRequest>,
     pub(crate) failure: Option<crate::session_failure::Failure>,
     pub(crate) context_usage: crate::context_usage::Usage,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
@@ -145,6 +146,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     }
     let (signal, background_work) = decoration(value);
     Some(Chat {
+        pull_requests: crate::jump::pull_requests(value),
         failure: crate::session_failure::read(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),

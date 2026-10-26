@@ -445,7 +445,9 @@ nonarchived chats; explicit search also finds retained/archived chats. Arrow key
 choose, Return opens, Escape or Cmd/Ctrl-K closes and restores focus. No actions
 or background reads run from search; explicit chat opens use the existing Local
 subscription contract. Catalog/search work runs off the UI thread only while
-open; closing releases it. See [jump evidence](evidence/jump.md).
+open; closing releases it. Search by `123`, `#123` or `PR #123` to prioritize chats with an exact loaded
+PR association, showing repository/project context. No GitHub lookup or title-digit
+inference is performed. See [jump evidence](evidence/jump.md).
 
 Swift-style 4/6/8/10/12/14-point radii shape small
 controls, rows, controls, cards, user bubbles and composer trays. Native 2-point

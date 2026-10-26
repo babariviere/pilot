@@ -20,7 +20,8 @@ reasoning, canonical write or inferred authority is involved in building/search.
   chats other than the selected reader. Explicit queries can find archived or
   retained read-only chats; existing reader/write restrictions remain unchanged.
 - Up to256 projects/1000 summaries, at most1259 catalog entries and six rows per
-  each of three groups (18 matches), virtualized. Queries stop at240 scalars or32
+  each ordinary group (18 text matches), virtualized. Exact PR matches form a
+  leading group containing every matching catalog chat, not a six-row subset. Queries stop at240 scalars or32
   words, with explicit refusal rather than truncated-prefix matches. Normalized
   labels/indexes are built off-thread; bounded search also runs off-thread.
 - The palette exists only while open, uses existing feeds and creates no timer or
@@ -127,3 +128,50 @@ labelled static reference, not GPUI/rendering or acceptance evidence. Offscreen
 checks do not establish OS IME, macOS15 hardware, visible smoothness, full Swift
 parity or a CPU/RSS win. HTML/browser, shaders, terminal, Linux verification,
 updater/release/default switch and Swift removal remain excluded.
+
+## PR-number discovery
+
+Swift audit: `PilotCore/CommandPalette.swift` recognizes bare and hash-prefixed
+numbers and prioritizes `linkedPullRequests` owners. Its chat catalog navigates
+by session ID. The existing protocol summary already carries `pullRequest`,
+`pullRequests` and explicit `boundPullRequests` URLs. Rust previously discarded
+these association fields. The bounded Chat projection now retains only valid
+number/repository pairs, deduplicated per chat, not PR titles or opener targets.
+Object numbers must agree with their HTTP(S) PR URL; malformed entries are
+ignored. Explicit bound PR URLs also work before health metadata arrives.
+No endpoint, GitHub request, title/branch inference or URL-opening action added.
+
+Bare `123`, `#123`, `PR123`, `PR 123` and `PR #123` prefer exact numeric PR
+associations. `1234` is not a metadata match for `123`. Ordinary title/context
+matching continues in separate capped groups, including numeric chat titles.
+Every exact matching catalog chat remains independently selectable, including
+same-title, same-PR and archived/read-only entries. The row detail leads with
+the matched PR number and owner/repository (plus host for non-GitHub domains),
+then existing project/state context. Selection and activation remain canonical
+chat IDs, with existing draft, IME, source and query-epoch guards unchanged.
+
+Coverage remains the existing loaded Local catalog (first1000 summaries and256
+projects), not a complete server/GitHub/archive search. Missing metadata cannot
+be discovered. The existing `secondary-k` binding is Command on macOS and
+Control elsewhere in the pinned GPUI implementation; no platform guard changes
+or Linux qualification are implied.
+
+Focused verification uses `check-scoped.py --unit jump::tests --test jump
+--native-probes --lint`. This covers matching/projection plus the mounted real
+palette and strict library/native lint/build, using shared serial admission,
+CPU2/4GiB mbx and workspace-private outputs. No broad performance gate is needed
+for this summary-only feature. Native assertions cover PR ambiguity, arrows,
+retained selected ID across summary refresh, old-query Enter refusal, PR Enter
+canonical destination and existing IME/draft/stale-source guards at680/1100 in
+both themes. Captures are synthetic offscreen GPUI, not a SwiftUI mock, OS IME,
+visible-motion/performance acceptance or Linux proof.
+
+Final focused qualification: **4/4 library tests and4/4 native scenes passed**,
+strict Clippy with warnings denied and selected test/native builds passed.
+`rustfmt --check` for the changed focused sources and `git diff --check` passed.
+The existing `block0.1.6` future-compatibility warning remains. The first build
+caught a missing restored-draft initializer, then an added Escape assertion
+incorrectly inspected backing draft state rather than the live textarea. Both
+were corrected; neither failing run is counted as successful evidence. The final
+run removed an unnecessary URL-length cap under the simpler-code decision.
+No new state machine, subscription, transport request or recovery layer added.

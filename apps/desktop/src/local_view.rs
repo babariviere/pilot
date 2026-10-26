@@ -695,6 +695,7 @@ impl LocalViewer {
         view.state.chats = Arc::new(vec![
             Chat {
                 failure: None,
+                pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 id: "synthetic".into(),
                 title: "Synthetic Local chat".into(),
@@ -712,6 +713,7 @@ impl LocalViewer {
             },
             Chat {
                 failure: None,
+                pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 id: "synthetic-two".into(),
                 title: "Transcript review".into(),
@@ -729,6 +731,7 @@ impl LocalViewer {
             },
             Chat {
                 failure: None,
+                pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 id: "synthetic-archive".into(),
                 title: "Earlier conversation".into(),
@@ -891,6 +894,7 @@ impl LocalViewer {
         let mut chats = view.state.chats.as_ref().clone();
         chats.push(Chat {
             failure: None,
+            pull_requests: Vec::new(),
             context_usage: Default::default(),
             id: "synthetic-failed".into(),
             title: "Review a failed check with a long title that stays on one line".into(),
@@ -1188,6 +1192,7 @@ impl LocalViewer {
                     view.open(
                         Chat {
                             failure: None,
+                            pull_requests: Vec::new(),
                             context_usage: Default::default(),
                             id: target.clone(),
                             title: "Local chat".into(),
@@ -1933,6 +1938,7 @@ impl LocalViewer {
                 .into_iter()
                 .map(|(key, title)| Chat {
                     failure: None,
+                    pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     model_configuration: None,
                     id: key,
@@ -2271,6 +2277,7 @@ mod refresh_tests {
                 v.open(
                     Chat {
                         failure: None,
+                        pull_requests: Vec::new(),
                         context_usage: Default::default(),
                         model_configuration: None,
                         id: "other".into(),

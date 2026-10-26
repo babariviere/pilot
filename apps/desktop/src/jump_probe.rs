@@ -53,8 +53,9 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             ])).unwrap());
             v.state.chats=Arc::new([
                 json!({"id":"synthetic","title":"Current conversation","state":"idle","projectId":"a"}),
-                json!({"id":"other","title":"Review package","state":"idle","projectId":"b"}),
-                json!({"id":"archive","title":"Old review","state":"idle","archivedAt":1})
+                json!({"id":"other","title":"Review package","state":"idle","projectId":"b","pullRequest":{"number":123,"url":"https://github.com/o/boreal/pull/123"}}),
+                json!({"id":"archive","title":"Review package","state":"idle","archivedAt":1,"projectId":"a","pullRequest":{"number":123,"url":"https://github.com/o/resume/pull/123"}}),
+                json!({"id":"longer","title":"Unrelated","pullRequest":{"number":1234,"url":"https://github.com/o/boreal/pull/1234"}})
             ].iter().map(|x|crate::local_model::chat(x).unwrap()).collect());
             v.state.cursor=Some(100);v.transcript.update(cx,|t,cx|{t.history_scope(10);t.replace_readonly(rows(),true,cx);});v.rebuild_nav(w,cx);v
         }))).unwrap();
@@ -110,6 +111,102 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                     Page::Chat,
                     "background/menu navigation cannot override active search intent"
                 );
+                w.input("#123", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("jump-row-chat:other").is_some());
+                assert!(w.try_find("jump-row-chat:archive").is_some());
+                assert!(w.try_find("jump-row-chat:longer").is_none());
+                let p = v.read(cx).jump.as_ref().unwrap();
+                assert_eq!(p.read(cx).probe(cx).3.as_deref(), Some("chat:other"));
+                w.press("down", cx);
+                assert_eq!(
+                    v.read(cx)
+                        .jump
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .probe(cx)
+                        .3
+                        .as_deref(),
+                    Some("chat:archive")
+                );
+                w.press("up", cx);
+                assert_eq!(
+                    v.read(cx)
+                        .jump
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .probe(cx)
+                        .3
+                        .as_deref(),
+                    Some("chat:other")
+                );
+                v.update(cx, |v, cx| {
+                    v.state.chats = Arc::new(v.state.chats.as_ref().clone());
+                    cx.notify();
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    v.read(cx)
+                        .jump
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .probe(cx)
+                        .3
+                        .as_deref(),
+                    Some("chat:other")
+                );
+                w.press("secondary-a", cx);
+                w.input("#999", cx);
+                w.press("enter", cx);
+                assert!(v.read(cx).jump.is_some(), "old PR query cannot activate");
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-a", cx);
+                w.input("#123", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("pr-{}-{}.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                w.press("escape", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(v.read(cx).jump.is_none());
+                assert_eq!(
+                    v.read(cx)
+                        .editor
+                        .read(cx)
+                        .shell_probe()
+                        .0
+                        .read(cx)
+                        .value()
+                        .as_ref(),
+                    "Keep 👩‍💻 e\u{301}"
+                );
+                w.press("secondary-k", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
                 w.input("ＲＥＳＵＭＥ", cx);
             })
             .unwrap();
@@ -251,7 +348,7 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                 // Programmatic set_value is not a native Change notification.
                 // Drive the real search input, including its list controller.
                 w.press("secondary-a", cx);
-                w.input("Review package", cx);
+                w.input("PR #123", cx);
             })
             .unwrap();
             settle(cx, h);
@@ -297,12 +394,11 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update(|cx| assert!(v.read(cx).jump.is_none()));
             cx.update_window(h,|_,w,cx|{
-            v.update(cx,|v,cx|{let mut chats=v.state.chats.as_ref().clone();chats.push(crate::local_model::chat(&json!({"id":"other","title":"Review package","state":"idle","projectId":"b"})).unwrap());v.state.chats=Arc::new(chats);v.rebuild_nav(w,cx);});
+            v.update(cx,|v,cx|{let mut chats=v.state.chats.as_ref().clone();chats.insert(0,crate::local_model::chat(&json!({"id":"other","title":"Review package","state":"idle","projectId":"b","pullRequest":{"number":123,"url":"https://github.com/o/boreal/pull/123"}})).unwrap());v.state.chats=Arc::new(chats);v.rebuild_nav(w,cx);});
             w.press("secondary-k",cx);
         }).unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.input("Review package", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| w.input("123", cx)).unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| w.press("enter", cx))
                 .unwrap();
@@ -353,7 +449,7 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             assert!(reads.try_recv().is_err() && writes.try_recv().is_err());
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"native_offscreen":true,"keyboard_pointer_jumps":true,"unicode":true,"draft_and_palette_preedit":true,"stale_source_refused":true,"faux_open_reads":1,"canonical_write_commands":0,"catalog_capacity":1259,"visible_max":18,"close_releases_palette":true,"empty_error_pages_retained":true})
+                json!({"width":width,"mode":mode.name(),"native_offscreen":true,"keyboard_pointer_jumps":true,"unicode":true,"draft_and_palette_preedit":true,"stale_source_refused":true,"faux_open_reads":1,"canonical_write_commands":0,"exact_pr_keyboard":true,"same_title_repositories":true,"catalog_capacity":1259,"visible_max":18,"close_releases_palette":true,"empty_error_pages_retained":true})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

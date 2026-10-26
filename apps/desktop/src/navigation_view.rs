@@ -250,6 +250,7 @@ impl LocalViewer {
             Target::Draft(key) => self.open(
                 Chat {
                     failure: None,
+                    pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     id: key.clone(),
                     title: "New Local chat draft".into(),

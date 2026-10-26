@@ -112,6 +112,10 @@ impl ListDelegate for JumpList {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
         let e = self.entry(ix)?;
+        let detail = self
+            .catalog
+            .as_ref()?
+            .detail(e, &self.owner.upgrade()?.read(cx).query);
         let owner = self.owner.clone();
         let destination = e.destination.clone();
         let icon = match &destination {
@@ -124,7 +128,7 @@ impl ListDelegate for JumpList {
         let epoch = self.epoch;
         Some(
             ListItem::new(SharedString::from(format!("jump-{}", e.id)))
-                .accessibility_label(SharedString::from(format!("{} · {}", e.title, e.detail)))
+                .accessibility_label(SharedString::from(format!("{} · {}", e.title, detail)))
                 .on_click(move |_, w, cx| {
                     cx.stop_propagation();
                     let _ = owner.update(cx, |v, cx| v.activate(destination.clone(), epoch, w, cx));
@@ -156,7 +160,7 @@ impl ListDelegate for JumpList {
                                         .truncate()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(SharedString::from(e.detail.clone())),
+                                        .child(SharedString::from(detail)),
                                 ),
                         ),
                 ),
@@ -369,9 +373,11 @@ impl Render for JumpPalette {
             .min_w_0()
             .gap_2()
             .child(div().font_semibold().child("Jump to…"))
-            .child(div().flex_1().min_h_0().min_w_0().child(
-                List::new(&self.list).search_placeholder("Pages, projects and loaded chats…"),
-            ))
+            .child(
+                div().flex_1().min_h_0().min_w_0().child(
+                    List::new(&self.list).search_placeholder("Pages, projects, chats or PR #…"),
+                ),
+            )
             .child(
                 div()
                     .text_xs()
