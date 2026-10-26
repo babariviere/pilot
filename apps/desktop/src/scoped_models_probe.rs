@@ -141,6 +141,8 @@ pub fn run_scoped_models_probe(cx: &mut HeadlessAppContext) {
                 m.probe_state().0 && !m.probe_state().1
             });
             assert_eq!(server.puts(), 0);
+            crate::scoped_models_view::groups_probe::run(cx, settings, &scope, width, mode);
+            assert_eq!(server.puts(), 0);
             cx.update_window(settings, |_, w, cx| {
                 let root = w.find("settings-root").bounds();
                 assert_eq!(root.size.width, px(width));

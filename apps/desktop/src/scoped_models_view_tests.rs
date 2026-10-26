@@ -1,6 +1,85 @@
 use super::*;
 use crate::scoped_models::{Reply, hash};
 use gpui_kit::{TestAppContext, WindowOptions};
+#[test]
+fn provider_sections_filter_then_budget_without_changing_catalog_identity_or_order() {
+    let candidate = |id: &str, provider: &str, name: &str| Candidate {
+        id: id.into(),
+        provider: provider.into(),
+        name: name.into(),
+        search_key: format!("{provider} {id} {name}").to_lowercase(),
+    };
+    let catalog = vec![
+        candidate("not-provider/z", "z-provider", "Shared 日本語"),
+        candidate("different/2", "a-provider", "Second"),
+        candidate("different/1", "a-provider", "Shared 日本語"),
+        candidate("custom", "", "Custom"),
+    ];
+    let before = catalog.clone();
+    let (matched, groups) = provider_groups(&catalog, "", 3);
+    assert_eq!(matched, 4);
+    assert_eq!(
+        groups.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+        ["", "a-provider"]
+    );
+    assert_eq!(
+        groups[1]
+            .1
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        ["different/2", "different/1"]
+    );
+    let (_, full) = provider_groups(&catalog, "", 30);
+    assert_eq!(full.len(), 3);
+    let (matched, filtered) = provider_groups(&catalog, "shared 日本語", 30);
+    assert_eq!(matched, 2);
+    assert_eq!(
+        filtered.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+        ["a-provider", "z-provider"]
+    );
+    assert_eq!(
+        provider_groups(&catalog, "z-provider", 30).1[0].1[0].id,
+        "not-provider/z"
+    );
+    assert!(provider_groups(&catalog, "absent", 30).1.is_empty());
+    assert!(provider_groups(&catalog, "", 0).1.is_empty());
+    assert_eq!(catalog, before);
+}
+
+#[gpui_kit::test]
+fn grouped_selection_appends_only_exact_id_without_sorting_literal_patterns(
+    cx: &mut TestAppContext,
+) {
+    let (h, v) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.source = Some(LocalOptions::synthetic(1));
+            let literals = vec![
+                "z/*:high".into(),
+                "p/unavailable".into(),
+                "p/unavailable".into(),
+                "p/two:low".into(),
+            ];
+            v.apply(snapshot(Some(literals.clone())), w, cx);
+            v.observed = v.baseline.clone();
+            let hash = v.baseline.as_ref().unwrap().scope_hash.clone();
+            let _ = provider_groups(&v.observed.as_ref().unwrap().candidates, "", 30);
+            assert_eq!(v.selection(cx), Some(literals.clone()));
+            v.choose("p/one", true, w, cx);
+            let mut expected = literals.clone();
+            expected.push("p/one".into());
+            assert_eq!(v.selection(cx), Some(expected));
+            v.choose("p/one", false, w, cx);
+            assert_eq!(v.selection(cx), Some(literals));
+            assert_eq!(v.baseline.as_ref().unwrap().scope_hash, hash);
+            assert!(v.worker.is_none());
+            assert!(v.pending.is_none());
+            assert_eq!(v.request, 0);
+        })
+    })
+    .unwrap();
+}
 fn setup(cx: &mut TestAppContext) -> (gpui_kit::AnyWindowHandle, Entity<ScopedModels>) {
     cx.update(gpui_kit::init);
     cx.update(|cx| {

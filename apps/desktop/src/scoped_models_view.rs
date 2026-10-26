@@ -1,7 +1,7 @@
 //! Retained Local settings editor. Only explicit Save may PUT, Check is GET-only.
 use crate::{
     LocalOptions,
-    scoped_models::{Save, Snapshot},
+    scoped_models::{Candidate, Save, Snapshot},
     scoped_models_worker::{Command, Update, Worker},
     ui::{self, Action, FieldRow, Notice, Text, Tone},
 };
@@ -44,6 +44,36 @@ pub(crate) struct ScopedModels {
 }
 pub(crate) struct ScopeChanged;
 impl gpui_kit::EventEmitter<ScopeChanged> for ScopedModels {}
+// Presentation only: provider identity comes from the catalog, never an ID split.
+// Sort sections by exact provider key; retain catalog order within each section.
+// Filter before applying the existing global display budget, omitting empty groups.
+fn provider_groups<'a>(
+    candidates: &'a [Candidate],
+    query: &str,
+    shown: usize,
+) -> (usize, Vec<(&'a str, Vec<&'a Candidate>)>) {
+    let mut groups = std::collections::BTreeMap::<&str, Vec<&Candidate>>::new();
+    let mut matched = 0;
+    for candidate in candidates {
+        if query.is_empty() || candidate.search_key.contains(query) {
+            groups
+                .entry(&candidate.provider)
+                .or_default()
+                .push(candidate);
+            matched += 1;
+        }
+    }
+    let mut remaining = shown;
+    let groups = groups
+        .into_iter()
+        .filter_map(|(provider, mut rows)| {
+            rows.truncate(remaining);
+            remaining -= rows.len();
+            (!rows.is_empty()).then_some((provider, rows))
+        })
+        .collect();
+    (matched, groups)
+}
 impl ScopedModels {
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_state(&self) -> (bool, bool, bool, bool, Option<Vec<String>>) {
@@ -373,6 +403,9 @@ impl ScopedModels {
     }
 }
 
+#[cfg(feature = "native-probes")]
+#[path = "scoped_models_groups_probe.rs"]
+pub(crate) mod groups_probe;
 #[cfg(test)]
 #[path = "scoped_models_view_tests.rs"]
 mod tests;
@@ -389,17 +422,11 @@ impl Render for ScopedModels {
             .take(256)
             .collect::<String>()
             .to_lowercase();
-        let candidates = self
+        let (matched, groups) = self
             .observed
             .as_ref()
-            .map(|s| {
-                s.candidates
-                    .iter()
-                    .filter(|c| query.is_empty() || c.search_key.contains(&query))
-                    .collect::<Vec<_>>()
-            })
+            .map(|s| provider_groups(&s.candidates, &query, self.shown))
             .unwrap_or_default();
-        let matched = candidates.len();
         div().id("scoped-models").test_support().v_flex().gap_3().min_w_0()
             .child(ui::header("scoped-models-title","Scoped models",Text::Title)
                 .child(ui::text(Text::Body,"Choose pi’s global models on this Mac. Changes apply only when you save.")))
@@ -416,12 +443,16 @@ impl Render for ScopedModels {
             .children(self.confirm_revert.then(||Notice::new("This discards the unsaved selection and adopts the last observed pi list without writing. It does not prove that an unconfirmed earlier save failed.").tone(Tone::Warning)))
             .when(!self.all,|this|this
                 .child(FieldRow::new("scope-search-row","Available models",Input::new(&self.search).aria_label("Find authenticated models").disabled(!editable)))
-                .children(candidates.into_iter().take(self.shown).map(|c|{
+                .children(groups.into_iter().map(|(provider, candidates)| {
+                    div().id(SharedString::from(format!("scope-provider-{provider}"))).test_support().v_flex().gap_3().min_w_0()
+                        .child(ui::heading(SharedString::from(format!("scope-provider-title-{provider}")), SharedString::from(if provider.is_empty() { "Unspecified provider" } else { provider }), Text::Headline))
+                        .children(candidates.into_iter().map(|c|{
                     let id=c.id.clone();let checked=selection.as_ref().is_some_and(|p|p.iter().any(|s|s==&id));
                     FieldRow::new(SharedString::from(format!("scope-row-{id}")),SharedString::from(c.name.clone()),
                         Checkbox::new(SharedString::from(format!("scope-model-{id}"))).label("Include model").accessibility_label(SharedString::from(format!("Include {}",id))).checked(checked).disabled(!editable)
                             .on_change(cx.listener(move|v,checked,w,cx|v.choose(&id,*checked,w,cx))))
                         .description(SharedString::from(c.id.clone()))
+                }))
                 }))
                 .child(ui::text(Text::Caption,SharedString::from(format!("Showing {} of {matched} authenticated models. Unavailable patterns are preserved.",matched.min(self.shown)))))
                 .when(matched>self.shown,|this|this.child(ui::action("scope-show-more","Show more models",Action::Quiet).on_click(cx.listener(|v,_,_,cx|{v.shown=(v.shown+30).min(2048);cx.notify();}))))

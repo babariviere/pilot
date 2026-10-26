@@ -25,6 +25,23 @@ An observed newline/control-bearing legacy pattern is refused, not silently spli
 different patterns by the line editor. Matching readback settles only the submitted value;
 a newer native input commit is retained, not overwritten by the response.
 
+### Provider sections
+
+Available models are grouped by the catalog's exact `provider` identity, in stable
+lexical provider order, retaining catalog order within each section. An empty provider
+is labeled “Unspecified provider”; model IDs are never split or relabeled to infer it.
+Search retains provider headings for matching results and omits empty sections. The
+existing 30-model display budget applies across the grouped results; Show more reveals
+the next batch without fetching or selecting anything. Provider headings are passive,
+not bulk toggles. Existing per-model checkboxes retain Tab/Space activation and show
+exact literal membership, not inferred wildcard or thinking-suffix matches.
+
+Grouping only changes presentation. Selection still appends/removes the exact chosen
+model ID in the existing literal list; it never sorts, expands or rewrites that list.
+Unavailable/custom patterns, duplicates, wildcards and thinking suffixes stay in the
+advanced editor with their original ordering. All, defaults, project overrides and
+the Save/CAS/readback contract remain unchanged.
+
 ## Authority and truthful outcomes
 
 Audited existing Swift ScopedModelsTransport/State/Store/Section, LocalModelScope,
@@ -80,6 +97,15 @@ worker lifetime across close/reopen, conflict review/zero resend, advanced Unico
 input with duplicates/suffix, real framework marked text, lost-write equality recovery,
 retained editor/reader and unsent text. Captures are actual offscreen GPUI, not mockups.
 
+The same native target includes `scoped_models_groups_probe.rs`, injecting a bounded
+synthetic multi-provider catalog into the real Settings section. It exercises section
+order, shared-name and provider search, empty results, pointer selection, native
+Tab/Space checked state, literal ordering and search preedit guards without Save or
+Check. The surrounding faux daemon asserts zero PUT during this grouping-only flow.
+Pure grouping and retained-view tests live in `scoped_models_view_tests.rs`.
+Focused verification: `python3 scripts/check-scoped.py --unit scoped_models_view
+--test scoped_models --lint` (shared native slot and CPU2/4GiB wrapper).
+
 No real authorization file, production pi settings or automated live action is exercised.
 Static/offscreen checks do not establish OS IME/AX, visible motion, throughput/large-history
 performance, Wayland acceptance, full Swift parity, release readiness or user acceptance.
@@ -118,3 +144,20 @@ fixture-hang receipts remain failed, not rewritten as passing. Earlier dark-labe
 captures were found to follow System during visual inspection, so they are not dark
 qualification. The final fixture pins synthetic committed appearance and asserts it.
 No production state, real capability file or live mutation was used in these checks.
+
+### Provider grouping qualification
+
+Focused `check-scoped.py --unit scoped_models_view --test scoped_models --lint`
+passed on 2026-10-26: six view/grouping tests, production-library/native-target
+Clippy and four actual Settings windows (680/1100, light/dark). The native target
+runs both the grouping-only flow with zero faux PUT and the original complete
+scope-save/conflict/readback flow against its owned fake server. Inspected captures
+show readable provider headings, filtered sections and explicit checked state in
+both appearances; these are actual offscreen GPUI, not SwiftUI mocks or motion proof.
+No live scope writes, defaults, credentials or project changes were exercised.
+
+Private receipts/captures: `/tmp/scoped-provider-193/check-4.json` and
+`*-scope-provider-search.png` / `*-scope-providers.png`. Earlier compile-helper
+and fixture-reset failures remain failed receipts. Relevant checks use the shared
+serial native slot, CPU2/4GiB mbx and private targets. Reconciliation onto `8b0c6b61`
+changed only unrelated daemon task-release code, not any checked desktop input.
