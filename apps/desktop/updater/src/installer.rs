@@ -275,7 +275,12 @@ fn entry_identity(parent: &File, relative: &Path) -> Result<(u64, u64), Error> {
     if metadata.st_mode & libc::S_IFMT != libc::S_IFDIR {
         return Err(Error::RecoveryRequired);
     }
-    Ok((metadata.st_dev as u64, metadata.st_ino))
+    // Darwin's dev_t is signed 32-bit; Linux already reports a u64.
+    #[cfg(target_os = "macos")]
+    let device = metadata.st_dev as u64;
+    #[cfg(not(target_os = "macos"))]
+    let device = metadata.st_dev;
+    Ok((device, metadata.st_ino))
 }
 
 impl Staged {
@@ -689,5 +694,20 @@ impl Platform for MacPlatform {
                 .arg(transaction),
             std::time::Duration::from_secs(15),
         )
+    }
+}
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn relative_directory_identity_matches_metadata() {
+        let directory = std::env::temp_dir().canonicalize().unwrap();
+        let metadata = fs::symlink_metadata(&directory).unwrap();
+        let parent = File::open(&directory).unwrap();
+        assert_eq!(
+            entry_identity(&parent, Path::new(".")).unwrap(),
+            (metadata.dev(), metadata.ino())
+        );
     }
 }
