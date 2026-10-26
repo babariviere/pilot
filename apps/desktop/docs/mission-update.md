@@ -54,8 +54,8 @@ ACK behind that barrier. The event JSON exposes no independent fsync receipt;
 the UI says acknowledged, not independently verified durable storage. Headers,
 an event seen in a GET, or a lost response are never treated as that ACK.
 
-The bounded shelf retains at most eight source/options-qualified forms in the
-window. It never evicts drafts, Pending or Unknown to make room. Text, receipts
+The shelf retains source/options-qualified forms without a lifetime count limit
+in the window. It never evicts drafts, Pending or Unknown to make room. Text, receipts
 and uncertainty are memory-only, not promised across process restart, which is
 disclosed beside the field. Native edits beyond the UTF-16 cap are rejected in
 full, retaining the prior text (and resetting undo history). Workers/channels

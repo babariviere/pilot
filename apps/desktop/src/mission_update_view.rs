@@ -264,11 +264,6 @@ impl Shelf {
         }) {
             f.clone()
         } else {
-            if self.forms.len() >= model::FORM_CAP {
-                return Err(
-                    "Eight update forms are retained. No text or delivery state was discarded.",
-                );
-            }
             let f = cx.new(|cx| Form::new(key, options, w, cx));
             self.subscriptions
                 .push(cx.subscribe_in(&f, w, |v, form, _: &Close, _, cx| {

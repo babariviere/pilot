@@ -40,8 +40,8 @@ coordinator before save/emit fails, so every post-dispatch error, lost connectio
 wrong identity/title or invalid body is **unconfirmed**, never safe to replay.
 
 A retained form processes the exact pending request completion even if the dialog
-closed. One Rename may be pending per window. At most16 per-chat forms/reports
-are retained; an unconfirmed one cannot be overwritten, cleared by GET/WS/title
+closed. One Rename may be pending per window. Per-chat forms/reports are retained
+without a lifetime count limit; an unconfirmed one cannot be overwritten, cleared by GET/WS/title
 visibility or resubmitted by reopening. Passive pending/error/receipt information
 remains beside existing chat-action status after closing. These records are
 window-memory only, not crash-durable operation receipts. No automatic retry or

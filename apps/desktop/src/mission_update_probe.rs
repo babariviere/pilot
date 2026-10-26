@@ -104,6 +104,7 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf
     }
 }
 pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
+    capacity(cx);
     let dir = std::env::var_os("PILOT_NEXT_UPDATE_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();
@@ -521,5 +522,63 @@ fn root(cx: &mut HeadlessAppContext) {
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     eprintln!(
         "mission update: actual Root marked-editor caret, sibling pre-blur, keyboard navigation/palette/settings/project guards and unmark recovery passed"
+    );
+}
+
+fn capacity(cx: &mut HeadlessAppContext) {
+    let server = Server::start();
+    let (h, shelf) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                show: false,
+                ..Default::default()
+            },
+            cx,
+            |_, cx| cx.new(crate::mission_update_view::Shelf::new),
+        )
+        .unwrap()
+    });
+    cx.update_window(h, |_, w, cx| {
+        shelf.update(cx, |shelf, cx| {
+            let key = |n| crate::mission_browser::Key {
+                home: crate::mission_browser::Home::local(&server.options.host()),
+                id: format!("mission-{n}"),
+            };
+            let mut retained = Vec::new();
+            for n in 0..12 {
+                shelf.show(key(n), server.options.clone(), w, cx).unwrap();
+                let f = shelf.current.clone().unwrap();
+                f.update(cx, |f, cx| {
+                    f.text.update(cx, |i, cx| {
+                        i.set_value(format!("Unsent update 日本語 {n}"), w, cx)
+                    });
+                    if n < 2 {
+                        let s = f.state.begin(&f.key, "Captured update").unwrap();
+                        if n == 1 {
+                            assert!(f.state.finish(&s, Outcome::Unknown("lost")));
+                        }
+                    }
+                });
+                retained.push(f);
+            }
+            for (n, f) in retained.iter().enumerate() {
+                shelf.show(key(n), server.options.clone(), w, cx).unwrap();
+                assert_eq!(shelf.current.as_ref(), Some(f));
+                assert_eq!(
+                    f.read(cx).text.read(cx).value().as_ref(),
+                    format!("Unsent update 日本語 {n}")
+                );
+                if n < 2 {
+                    f.update(cx, |f, _| assert!(f.state.begin(&f.key, "Again").is_err()));
+                }
+            }
+        });
+        w.remove_window();
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(server.posts(), 0);
+    println!(
+        "mission updates: twelve targets, same-target drafts and Pending/Unknown retained PASS"
     );
 }

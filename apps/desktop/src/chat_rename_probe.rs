@@ -201,6 +201,8 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                 menu(cx, h, "Rename…");
                 cx.update_window(h, |_, w, cx| click_label(w, "Rename…", cx))
                     .unwrap();
+                // Drain the real dialog entrance before pointer admission.
+                cx.advance_clock(Duration::from_millis(300));
                 settle(cx, h);
                 cx.update_window(h, |_, w, cx| {
                     assert_eq!(w.viewport_size(), size(px(width), px(840.)));
@@ -225,6 +227,8 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                 menu(cx, h, "Rename…");
                 cx.update_window(h, |_, w, cx| click_label(w, "Rename…", cx))
                     .unwrap();
+                // Drain the real dialog entrance before pointer admission.
+                cx.advance_clock(Duration::from_millis(300));
                 settle(cx, h);
                 let form =
                     cx.update(|cx| view.read(cx).chat_actions.read(cx).renames["source"].clone());
@@ -389,6 +393,15 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                     .collect::<Vec<_>>();
                 assert_eq!(posts[0].1, "/api/sessions/source/title");
                 assert_eq!(posts[0].2, json!({"title":"New title 👩‍💻"}));
+                if !routing && width == 1100. && mode == ThemeMode::Dark {
+                    cx.update_window(h, |_, w, cx| {
+                        view.update(cx, |v, cx| {
+                            super::chat_actions_navigation::probe_rename_capacity(v, w, cx)
+                        });
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                }
                 // Close/drain draft ownership before removing its private fixture directory.
                 cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
                 cx.run_until_parked();

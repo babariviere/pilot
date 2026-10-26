@@ -81,13 +81,6 @@ impl Popup {
             return;
         }
         if !self.drafts.contains_key(&row.id) {
-            if self.drafts.len() >= 16 {
-                self.error = Some(
-                    "Draft capacity reached (16 messages). Retained text and receipts have not been discarded.",
-                );
-                cx.notify();
-                return;
-            }
             let text = row.text().unwrap_or("").to_owned();
             let input = cx.new(|cx| {
                 let mut i = TextareaState::new(w, cx).auto_grow(3, 6);
@@ -573,12 +566,6 @@ impl LocalViewer {
         {
             f.clone()
         } else {
-            if self.queue_forms.len() >= 16 {
-                self.nav_error =
-                    Some("Queue draft capacity reached (16 chats). Existing drafts retained.");
-                cx.notify();
-                return;
-            }
             let f = cx.new(|cx| Popup::new(options, source, cx));
             let sub = cx.subscribe_in(&f, w, |v, f, _: &Closed, w, cx| {
                 if v.queue_open.as_ref() != Some(f) {

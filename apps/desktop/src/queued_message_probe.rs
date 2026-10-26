@@ -33,6 +33,7 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     settle(cx, h);
 }
 pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
+    capacity(cx);
     let captures = std::env::var_os("PILOT_NEXT_QUEUED_MESSAGE_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();
@@ -307,5 +308,81 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     println!(
         "queued-message native: 4 actual root layouts/IME/capture/late-ACK cases plus confirmed removal/capability/Unknown passed"
+    );
+}
+
+fn capacity(cx: &mut HeadlessAppContext) {
+    let server = Server::new();
+    let (client, commands) = LocalClient::synthetic_commands();
+    let (h, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                show: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                cx.new(|cx| {
+                    let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                    v.client = Some(client);
+                    v.usage_options = Some(server.options());
+                    v
+                })
+            },
+        )
+        .unwrap()
+    });
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            let mut retained = Vec::new();
+            for n in 0..20 {
+                let id = format!("queue-{n}");
+                let mut chat = v.state.chats[0].clone();
+                chat.id = id.clone(); chat.writable = true;
+                Arc::make_mut(&mut v.state.chats).push(chat);
+                v.selected = Some(id);
+                v.open_queue(w, cx);
+                let f = v.queue_open.clone().expect("queue beyond sixteen chats");
+                f.update(cx, |f,cx| {
+                    f.current = true;
+                    let rows = Snapshot::read(&json!((1..=20).map(|id| json!({
+                        "id":id,"mode":"followUp","content":format!("Original {id}"),"guardToken":"a".repeat(64)
+                    })).collect::<Vec<_>>()));
+                    for row in &rows.rows { f.select(row.clone(),w,cx); }
+                    assert_eq!(f.drafts.len(), 20);
+                    let d = f.drafts.get_mut(&1).unwrap();
+                    d.input.update(cx, |i,cx| i.set_value(format!("Unsent 日本語 {n}"),w,cx));
+                    let op = d.state.begin(&f.source, &d.row, Change::Remove).unwrap();
+                    if n % 2 == 1 { assert!(d.state.finish(&op, Outcome::Unknown("lost"))); }
+                    f.select(rows.rows[0].clone(), w, cx);
+                    assert_eq!(f.selected, Some(1));
+                    assert!(f.drafts[&1].state.blocked());
+                    assert_eq!(f.drafts[&1].input.read(cx).value().as_ref(), format!("Unsent 日本語 {n}"));
+                });
+                f.update(cx, |f,cx| f.close(w,cx));
+                w.close_dialog(cx);
+                v.queue_open = None;
+                retained.push(f);
+            }
+            for (n,f) in retained.iter().enumerate() {
+                v.selected = Some(format!("queue-{n}"));
+                v.open_queue(w,cx);
+                assert_eq!(v.queue_open.as_ref(), Some(f));
+                assert_eq!(f.read(cx).drafts[&1].input.read(cx).value().as_ref(), format!("Unsent 日本語 {n}"));
+                assert!(f.read(cx).drafts[&1].state.blocked());
+                f.update(cx, |f,cx| f.close(w,cx));
+                w.close_dialog(cx);
+                v.queue_open = None;
+            }
+            assert_eq!(v.queue_forms.len(),20);
+        });
+        w.remove_window();
+    }).unwrap();
+    cx.run_until_parked();
+    assert!(server.writes.lock().unwrap().is_empty());
+    assert!(commands.is_empty());
+    println!(
+        "queue forms: twenty chats x twenty edit drafts, same-target text and Pending/Unknown retained PASS"
     );
 }

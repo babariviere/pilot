@@ -7,7 +7,7 @@ or start a chat. Editing, deleting, status, ownership, model, phase and dependen
 changes remain separate work.
 
 The production task pane retains one source-immutable form per Local home,
-mission and pinned connection (at most 16, no eviction). Both native text editors
+mission and pinned connection (no lifetime count limit or eviction). Both native text editors
 survive navigation, closing the disclosure and errors. These are in-process
 drafts, **not restart-durable storage**, as stated beside the form. Pending and
 unconfirmed submissions retain their original text and identity. Close returns

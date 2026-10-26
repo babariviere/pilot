@@ -3,8 +3,8 @@
 Open a mission's Tasks, select a task, then **Change status…**. Choosing a
 status does not write. The confirmation shows the captured task ID, title and
 current → chosen status; **Change status** is the explicit commit. Close/Escape
-restores mounted task focus. Choices and operation results are retained for up
-to 32 exact tasks in this window, not across process restart. There is no text
+restores mounted task focus. Choices and operation results are retained for exact
+tasks without a lifetime count limit in this window, not across process restart. There is no text
 input or agent-start control in this form. Existing sibling-editor preedit
 capture remains authoritative before pointer blur or navigation.
 

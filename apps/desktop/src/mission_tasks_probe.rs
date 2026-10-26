@@ -101,6 +101,7 @@ fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
     settle(cx, h);
 }
 pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
+    crate::mission_tasks_view::capacity_probe::run(cx);
     let dir = std::env::var_os("PILOT_NEXT_TASKS_DIR").map(std::path::PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();

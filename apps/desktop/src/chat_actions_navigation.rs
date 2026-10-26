@@ -270,10 +270,6 @@ impl LocalViewer {
             if a.renames.values().any(|f| f.read(cx).pending) {
                 return None;
             }
-            if !a.renames.contains_key(&evidence.target.chat.id) && a.renames.len() >= 16 {
-                a.error("This window has reached its rename report limit.", cx);
-                return None;
-            }
             let options = a.options.clone()?;
             let id = evidence.target.chat.id.clone();
             let form = cx.new(|cx| crate::chat_rename_view::Rename::new(options, evidence, w, cx));
@@ -288,4 +284,63 @@ impl LocalViewer {
             crate::chat_rename_view::Rename::open(form, w, cx);
         }
     }
+}
+
+#[cfg(feature = "native-probes")]
+pub(super) fn probe_rename_capacity(
+    v: &mut LocalViewer,
+    w: &mut Window,
+    cx: &mut Context<LocalViewer>,
+) {
+    use gpui_kit::component::WindowExt;
+    let chats = v.state.chats.clone();
+    let options = v.chat_actions.read(cx).options.clone().unwrap();
+    let mut retained = Vec::new();
+    for n in 0..20 {
+        let mut raw = crate::chat_rename_fixture::source();
+        raw["id"] = serde_json::json!(format!("rename-{n}"));
+        let chat = crate::local_model::chat(&raw).unwrap();
+        Arc::make_mut(&mut v.state.chats).push(chat.clone());
+        let evidence = Evidence::read(&Target::new(&options, chat), &raw, true).unwrap();
+        v.open_row_rename(evidence.clone(), w, cx);
+        let f = v.chat_actions.read(cx).renames[&evidence.target.chat.id].clone();
+        f.update(cx, |f, cx| {
+            f.input.update(cx, |i, cx| {
+                i.set_value(format!("Retained 日本語 {n}"), w, cx)
+            });
+            if n == 0 {
+                f.outcome = Some(crate::chat_actions::Outcome::Unknown);
+            }
+        });
+        retained.push((evidence, f));
+        w.close_dialog(cx);
+    }
+    for (n, (e, f)) in retained.iter().enumerate() {
+        assert_eq!(
+            f.read(cx).input.read(cx).value().as_ref(),
+            format!("Retained 日本語 {n}")
+        );
+        assert!(f.read(cx).evidence == *e);
+    }
+    v.open_row_rename(retained[0].0.clone(), w, cx);
+    assert_eq!(v.chat_actions.read(cx).renames["rename-0"], retained[0].1);
+    w.close_dialog(cx);
+    let f = &retained[1].1;
+    f.update(cx, |f, _| f.pending = true);
+    v.open_row_rename(retained[1].0.clone(), w, cx);
+    assert_eq!(v.chat_actions.read(cx).renames["rename-1"], *f);
+    w.close_dialog(cx);
+    v.open_row_rename(retained[2].0.clone(), w, cx);
+    assert_eq!(v.chat_actions.read(cx).renames["rename-2"], retained[2].1);
+    f.update(cx, |f, _| {
+        f.pending = false;
+        f.outcome = Some(crate::chat_actions::Outcome::Acknowledged);
+    });
+    v.open_row_rename(retained[1].0.clone(), w, cx);
+    assert_ne!(v.chat_actions.read(cx).renames["rename-1"], *f);
+    w.close_dialog(cx);
+    v.state.chats = chats;
+    println!(
+        "rename forms: twenty targets, retained text/evidence, Pending/Unknown reopening and completed reuse PASS"
+    );
 }

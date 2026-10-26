@@ -211,13 +211,6 @@ impl Pane {
         let form = if let Some(f) = prior {
             f
         } else {
-            if self.creations.len() >= 16 {
-                self.create_error = Some(
-                    "Task drafts reached this window's 16-mission limit. Existing text is retained; copy it before closing the app.",
-                );
-                cx.notify();
-                return;
-            }
             let f = cx.new(|cx| crate::mission_task_create_view::Form::new(key, options, w, cx));
             let sub = cx.subscribe_in(
                 &f,
@@ -293,13 +286,6 @@ impl Pane {
         let form = if let Some(f) = prior {
             f
         } else {
-            if self.statuses.len() >= 32 {
-                self.create_error = Some(
-                    "Status drafts reached this window's 32-task limit. Existing choices and receipts are retained.",
-                );
-                cx.notify();
-                return;
-            }
             let f = cx.new(|cx| crate::task_status_view::Form::new(target, options, cx));
             let sub = cx.subscribe_in(
                 &f,
@@ -721,3 +707,7 @@ impl Render for Pane {
         root
     }
 }
+
+#[cfg(feature = "native-probes")]
+#[path = "mission_forms_capacity_probe.rs"]
+pub(crate) mod capacity_probe;

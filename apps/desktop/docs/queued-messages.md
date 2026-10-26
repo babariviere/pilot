@@ -30,8 +30,8 @@ Remove requires a second confirmation. Empty text never means Remove or Send.
   projection caps at128 rows/512KiB; receipts cap at4KiB. Over-limit or malformed
   queue snapshots disable mutation, never silently truncate an editable payload.
 
-Drafts and receipts are retained for up to16 messages per chat and16 chats per
-window, not across app restart. Close does not cancel an admitted operation.
+Drafts and receipts are retained without lifetime message/chat count limits in
+this window, not across app restart. Close does not cancel an admitted operation.
 Completion updates only its immutable operation, without reopening or taking
 focus. Preedit is guarded before blur and across internal pointer actions;
 plain Return remains text, Command-Return explicitly saves, Escape closes only

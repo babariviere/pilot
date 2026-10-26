@@ -4,7 +4,6 @@ use serde_json::Value;
 
 pub(crate) const TEXT_UNITS: usize = 8_000;
 pub(crate) const WIRE_BYTES: usize = 64 * 1024;
-pub(crate) const FORM_CAP: usize = 8;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Submission {
     pub(crate) id: String,
