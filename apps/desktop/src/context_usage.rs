@@ -55,6 +55,10 @@ fn number(value: Option<u64>) -> String {
         .unwrap_or_else(|| "Unknown".into())
 }
 impl Usage {
+    /// Comparable fields from the same summary only. Never merge partial reports.
+    pub(crate) fn context_pair(&self) -> Option<(u64, u64)> {
+        self.tokens.zip(self.window)
+    }
     pub(crate) fn read(value: &Value) -> Self {
         Self {
             tokens: count(&value["context"]["tokens"]),
@@ -63,14 +67,21 @@ impl Usage {
             child: Tokens::read(&value["ai"]["child"]["tokens"]),
         }
     }
-    pub(crate) fn lines(&self) -> Vec<String> {
+    pub(crate) fn context_line(&self) -> String {
         let percent = self
             .tokens
             .zip(self.window)
             .map(|(tokens, window)| format!(" ({:.1}%)", tokens as f64 / window as f64 * 100.))
             .unwrap_or_default();
+        format!(
+            "Reported context: {} / {} tokens{percent}",
+            number(self.tokens),
+            number(self.window)
+        )
+    }
+    pub(crate) fn lines(&self) -> Vec<String> {
         vec![
-            format!("Reported context: {} / {} tokens{percent}", number(self.tokens), number(self.window)),
+            self.context_line(),
             "Freshness unknown. Latest worker report, not a live measurement or a count of the visible history.".into(),
             self.direct.line("Direct reported tokens"),
             self.child.line("Child reported tokens"),

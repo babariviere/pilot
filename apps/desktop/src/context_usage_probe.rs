@@ -5,6 +5,8 @@ use gpui_kit::{
     WindowOptions, size, test::TestWindowExt,
 };
 use serde_json::json;
+#[path = "context_meter_probe.rs"]
+mod meter;
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..4 {
         cx.run_until_parked();
@@ -44,6 +46,7 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
                 v
             }))).unwrap();
             settle(cx, h);
+            meter::states(cx, h, &view, captures.as_deref(), width, dark);
             // The new header action must not steal or commit active composer preedit.
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {

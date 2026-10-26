@@ -5,6 +5,30 @@ not resize the conversation/composer and has no policy or mutation actions.
 Escape, the close button, or Done dismiss it through Kit's existing focus owner.
 Opening is refused while an existing input has marked IME text.
 
+The same control now includes a compact neutral ring and **Context reported**
+when the existing summary supplies both safe nonnegative integer tokens and a
+positive window. Hover or its accessible name reports exact used/window counts
+and the unclamped percentage; click or keyboard activation opens the unchanged
+details. The visual arc alone is bounded to 0–100%. Over-limit reports explicitly
+disclose that cap. Unknown, invalid and partial reports retain **Context…** without
+a gauge, including empty conversations. The control has fixed width across these
+states, no animation, polling, severity thresholds or compaction action.
+
+This is a native adaptation of MonoCode at
+`26465c620977f3951d0a532a0f7db32c3c179007`:
+`src/features/sessions/ui/ContextMeter.tsx` (`MeterRing`, 14pt ring, 2pt stroke,
+skip the used arc at zero), and
+`src/features/sessions/model/contextUsage.ts` (`contextRatio`, bounded visual ratio).
+Copyright (c) 2026 Nick; the existing complete MIT notice remains in
+[`../licenses/MONOCODE.txt`](../licenses/MONOCODE.txt). Upstream LICENSE and NOTICE
+were reviewed at that exact local clone revision. NOTICE states non-affiliation
+and provider-mark ownership; this adaptation copies no marks or assets. No web
+runtime is imported. Upstream empty-history inference, 75/90 severity colors,
+partial-reading merges and Compact now are deliberately not adopted. Pilot's
+existing summary projection, identity-pinned reader and unknown freshness remain
+authoritative. An open dialog also pins its navigation generation, so returning
+to the same ID cannot revive that disclosure after navigation.
+
 ## Sources and coverage
 
 - Swift's `ComposerUsage.swift` reads `SessionSummary.usage.context` and
@@ -59,3 +83,15 @@ with Escape, asserts unchanged composer bounds and checks late navigation fences
 Optional captures use `PILOT_NEXT_CONTEXT_USAGE_DIR` and synthetic content only.
 These are macOS scoped checks, not live account, OS input, motion, full-suite or
 Linux/Wayland acceptance.
+
+The meter adds two pure cases and a mounted six-state matrix (reported, unknown,
+invalid, partial, reported zero and over-limit) at both widths/appearances. It
+checks stable control bounds, exact descriptions, ring absence/presence, native
+Tab traversal/Enter activation/Escape focus restoration and same-ID generation
+invalidation. Existing composer IME and late other-chat source checks remain.
+Captures include both the unobstructed header and open details. Checks use
+`--unit context_usage --test context_usage --lint`, plus the `context_meter`
+library filter under the shared verification slot. Rationale: only the bounded
+usage presentation and existing header/dialog seam change; full suites stay in
+CI. The fixed native arc has no transition or task-completion clock; static
+captures are not FPS or operating-system IME proof.

@@ -6,15 +6,17 @@ use gpui_kit::component::WindowExt;
 struct Info {
     viewer: gpui_kit::WeakEntity<LocalViewer>,
     chat: String,
+    generation: u64,
     _subscription: Subscription,
 }
 impl Render for Info {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewer = self.viewer.upgrade();
-        let active = viewer
-            .as_ref()
-            .map(|v| v.read(cx))
-            .filter(|v| v.page == Page::Chat && v.selected.as_deref() == Some(self.chat.as_str()));
+        let active = viewer.as_ref().map(|v| v.read(cx)).filter(|v| {
+            v.page == Page::Chat
+                && v.selected.as_deref() == Some(self.chat.as_str())
+                && v.generation == self.generation
+        });
         let mut content = div()
             .id("context-usage-info")
             .test_support()
@@ -66,6 +68,37 @@ impl Render for Info {
 }
 impl LocalViewer {
     pub(super) fn context_usage_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let chat = self.selected.as_ref().and_then(|id| {
+            self.state
+                .chats
+                .iter()
+                .find(|c| &c.id == id && !c.local_draft)
+        });
+        let meter = chat.and_then(|c| crate::context_meter::Meter::reported(&c.context_usage));
+        let description = meter
+            .as_ref()
+            .map(|m| m.description.clone())
+            .unwrap_or_else(|| {
+                "Context details. Comparable reported usage unknown. Freshness unknown.".into()
+            });
+        let mut button = ui::action(
+            "context-usage",
+            if meter.is_some() {
+                "Context reported"
+            } else {
+                "Context…"
+            },
+            Action::Quiet,
+        )
+        .w(px(142.))
+        .accessibility_label(SharedString::from(description.clone()))
+        .tooltip(SharedString::from(description))
+        .disabled(chat.is_none());
+        if let Some(meter) = meter {
+            button = button.child(meter.ring(cx));
+        } else {
+            button = button.icon(AppIcon::Info.asset());
+        }
         // Guard before a sibling pointer event can commit/clear editor preedit.
         div()
             .flex_none()
@@ -74,18 +107,7 @@ impl LocalViewer {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                ui::action("context-usage", "Context…", Action::Quiet)
-                    .icon(AppIcon::Info.asset())
-                    .disabled(self.selected.as_ref().is_none_or(|id| {
-                        !self
-                            .state
-                            .chats
-                            .iter()
-                            .any(|c| &c.id == id && !c.local_draft)
-                    }))
-                    .on_click(cx.listener(|v, _, w, cx| v.open_context_usage(w, cx))),
-            )
+            .child(button.on_click(cx.listener(|v, _, w, cx| v.open_context_usage(w, cx))))
     }
     fn open_context_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_choices_ready(window, cx) {
@@ -103,6 +125,7 @@ impl LocalViewer {
         let info = cx.new(|cx| Info {
             viewer: viewer.downgrade(),
             chat,
+            generation: self.generation,
             _subscription: cx.observe(&viewer, |_, _, cx| cx.notify()),
         });
         window.open_dialog(cx, move |dialog, _, _| {
