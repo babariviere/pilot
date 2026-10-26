@@ -7,7 +7,7 @@ use crate::{
 use gpui_kit::{
     AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    TestSupportExt, Window,
+    TestSupportExt, WeakEntity, Window,
     component::{
         ActiveTheme, Icon, IconName, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -53,6 +53,11 @@ impl Choices {
             .filter_map(|id| self.groups.get(id))
             .max_by_key(|(seq, _, _)| *seq)
             .map(|(_, open, all)| (*open, *all))
+    }
+    fn open(&self, work: &Work) -> bool {
+        // Activity/results update the compact header, never disclosure intent.
+        // Choices are keyed by canonical calls, not the current group/render ID.
+        self.choice(work).is_some_and(|(open, _)| open)
     }
     fn choose(&mut self, work: &Work, open: bool, all: bool) {
         self.sequence += 1;
@@ -301,7 +306,9 @@ impl WorkUi {
             } else {
                 let id = work.id;
                 let choices = self.choices.clone();
+                let owner = cx.weak_entity();
                 let view = cx.new(|_| WorkView {
+                    owner,
                     data: work,
                     children,
                     choices,
@@ -355,17 +362,26 @@ fn automatic_preview(work: &Work) -> Vec<usize> {
         .collect()
 }
 pub(crate) struct WorkView {
+    owner: WeakEntity<TranscriptView>,
     data: Arc<Work>,
     children: Vec<Entity<StepView>>,
     choices: Rc<RefCell<Choices>>,
 }
 impl EventEmitter<Change> for WorkView {}
 impl WorkView {
+    fn choose(&mut self, open: bool, cx: &mut Context<Self>) {
+        // Stop tail following before the first expanded frame can measure a
+        // tall group. An emitted event is delivered after that frame in native
+        // pointer dispatch, too late to retain the clicked header's anchor.
+        let change = Change::Disclosure(format!("group:{}", self.data.id));
+        let _ = self
+            .owner
+            .update(cx, |owner, cx| owner.work_changed(&change, cx));
+        self.choices.borrow_mut().choose(&self.data, open, true);
+        cx.notify();
+    }
     fn open(&self) -> bool {
-        self.choices.borrow().choice(&self.data).map_or(
-            self.data.active || self.data.failures > 0 || self.data.uncertain > 0,
-            |(open, _)| open,
-        )
+        self.choices.borrow().open(&self.data)
     }
 }
 impl Render for WorkView {
@@ -408,9 +424,7 @@ impl Render for WorkView {
             )
             .on_click(cx.listener(|view, _, _, cx| {
                 let open = !view.open();
-                view.choices.borrow_mut().choose(&view.data, open, true);
-                cx.emit(Change::Disclosure(format!("group:{}", view.data.id)));
-                cx.notify();
+                view.choose(open, cx);
             })),
         );
         if open {
@@ -429,9 +443,7 @@ impl Render for WorkView {
                         .self_start()
                         .label(format!("Show {hidden} more steps"))
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.choices.borrow_mut().choose(&view.data, true, true);
-                            cx.emit(Change::Disclosure(format!("group:{}", view.data.id)));
-                            cx.notify();
+                            view.choose(true, cx);
                         })),
                 );
             }
@@ -746,6 +758,59 @@ mod preview_tests {
     use super::*;
     use crate::local_model::LiveTranscript;
     use serde_json::json;
+
+    #[test]
+    fn activity_and_results_never_choose_group_disclosure() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"stable","name":"read","arguments":{"path":"synthetic.rs"}}]}]}}));
+        let mut work = model.rows()[0].work_data().unwrap().as_ref().clone();
+        let mut choices = Choices::default();
+        for choice in [None, Some(true), Some(false)] {
+            if let Some(open) = choice {
+                choices.choose(&work, open, true);
+            }
+            for (active, failures, uncertain) in
+                [(true, 0, 0), (false, 0, 0), (true, 1, 1), (false, 1, 1)]
+            {
+                work.active = active;
+                work.failures = failures;
+                work.uncertain = uncertain;
+                assert_eq!(
+                    choices.open(&work),
+                    choice.unwrap_or(false),
+                    "activity/results must not choose disclosure"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn choices_follow_canonical_calls_through_merge_split_and_new_render_ids() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read","arguments":{}},{"type":"toolCall","id":"b","name":"read","arguments":{}}]}]}}));
+        let mut merged = model.rows()[0].work_data().unwrap().as_ref().clone();
+        let mut a = merged.clone();
+        a.steps.truncate(1);
+        let mut b = merged.clone();
+        b.steps.remove(0);
+        let mut choices = Choices::default();
+        assert_eq!(choices.choice(&merged), None);
+        choices.choose(&a, true, true);
+        assert_eq!(choices.choice(&merged), Some((true, true)));
+        // Most recent explicit intent wins when separately chosen groups merge.
+        choices.choose(&b, false, true);
+        merged.id += 100;
+        assert_eq!(choices.choice(&merged), Some((false, true)));
+        choices.choose(&merged, true, true);
+        a.id += 200;
+        b.id += 300;
+        assert_eq!(choices.choice(&a), Some((true, true)));
+        assert_eq!(choices.choice(&b), Some((true, true)));
+        choices.choose(&merged, false, true);
+        assert_eq!(choices.choice(&a), Some((false, true)));
+        assert_eq!(choices.choice(&b), Some((false, true)));
+        assert_eq!(choices.groups.len(), 2, "no render-ID or event-key growth");
+    }
 
     #[test]
     fn automatic_preview_is_bounded_ordered_and_failure_aware() {

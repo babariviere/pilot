@@ -9,6 +9,7 @@ use serde_json::json;
 use std::time::Duration;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    run_working_stability_probe(cx);
     if std::env::var_os("PILOT_NEXT_TOOL_PRESENTATION_DIR").is_some() {
         run_tool_presentation_probe(cx);
         return;
@@ -59,6 +60,7 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
         let mut collapsed_y = 0.;
         for action in [
             "initial",
+            "open",
             "collapse",
             "expand",
             "stream",
@@ -79,7 +81,7 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
         ] {
             if matches!(
                 action,
-                "collapse" | "expand" | "rapid-collapse" | "rapid-expand" | "hold-again"
+                "open" | "collapse" | "expand" | "rapid-collapse" | "rapid-expand" | "hold-again"
             ) {
                 cx.update_window(handle, |_, window, cx| {
                     window.render_frame(cx);
@@ -322,7 +324,7 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 "settled",
             ] {
                 cx.update_window(handle, |_, window, cx| {
-                    if matches!(phase,"collapsed"|"expanded") { window.click(key.clone(),cx); }
+                    if phase=="expanded" { window.click(key.clone(),cx); }
                     if phase=="detail" { window.click("step-toggle-call:command",cx); }
                     if phase=="stream" {
                         model.apply(&json!({"type":"tool_execution_update","toolCallId":"command","output":{"append":"last synthetic line\n"}}));
@@ -341,7 +343,7 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                     assert!(viewport.right()<=px(width) && viewport.size.width>px(0.));
                     let (_,_,_,open,current)=view.read(cx).transcript.read(cx).disclosure_probe_state(group,cx);
                     if let Some(old)=entity { assert_eq!(current,old,"canonical group entity must survive"); } else { entity=Some(current); }
-                    assert_eq!(open,phase!="collapsed");
+                    assert_eq!(open,!matches!(phase,"live"|"collapsed"));
                     if matches!(phase,"detail"|"stream"|"copy"|"settled") { assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("command",cx).0); }
                     if phase=="copy" {
                         window.click("copy-call:command-Output",cx);
@@ -467,4 +469,184 @@ fn run_thinking_probe(cx: &mut HeadlessAppContext, captures: Option<&std::path::
             .unwrap();
         cx.run_until_parked();
     }
+}
+
+// Exercise actual production disclosure handlers across status and streaming
+// updates. No Local transport or operation is constructed by this fixture.
+fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
+    use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            for choice in ["unopened", "open", "closed"] {
+                let mut model = LiveTranscript::default();
+                model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"stable-a","name":"bash","arguments":{"command":"printf synthetic 日本語"}}]}]}}));
+                let rows = model.rows();
+                let group = rows[0].id();
+                let key = SharedString::from(format!("work-toggle-{group}"));
+                let (handle, view) = cx.update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                Default::default(),
+                                size(px(width), px(840.)),
+                            ))),
+                            show: false,
+                            focus: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |window, cx| {
+                            cx.new(|cx| {
+                                let view = LocalViewer::synthetic(window, cx);
+                                view.transcript
+                                    .update(cx, |v, cx| v.replace_readonly(rows, true, cx));
+                                view
+                            })
+                        },
+                    )
+                    .unwrap()
+                });
+                cx.update(|cx| Theme::change(mode, None, cx));
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    assert!(
+                        !view
+                            .read(cx)
+                            .transcript
+                            .read(cx)
+                            .disclosure_probe_state(group, cx)
+                            .3,
+                        "unopened Working must start collapsed, not follow activity"
+                    );
+                    if choice != "unopened" {
+                        window.click(key.clone(), cx);
+                    }
+                })
+                .unwrap();
+                cx.run_until_parked();
+                if choice == "closed" {
+                    cx.update_window(handle, |_, window, cx| {
+                        window.render_frame(cx);
+                        window.click(key.clone(), cx);
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                }
+                let mut entity = None;
+                let mut header_y: Option<f32> = None;
+                for phase in [
+                    "active",
+                    "stream",
+                    "success",
+                    "next-tool",
+                    "failure-unknown",
+                    "settled",
+                ] {
+                    match phase {
+                        "active" => model.apply(&json!({"type":"tool_execution_start","toolCallId":"stable-a","toolName":"bash"})),
+                        "stream" => model.apply(&json!({"type":"tool_execution_update","toolCallId":"stable-a","output":{"set":"synthetic output 日本語"}})),
+                        "success" => model.apply(&json!({"type":"tool_execution_end","toolCallId":"stable-a","entry":{"id":21,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":"stable-a","content":[{"type":"text","text":"synthetic result 日本語"}]}]}})),
+                        "next-tool" => {
+                            model.apply(&json!({"type":"entry_appended","entry":{"id":22,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"stable-b","name":"read","arguments":{"path":"synthetic.rs"}},{"type":"toolCall","id":"stable-c","name":"read","arguments":{"path":"unknown.rs"}}]}]}}));
+                            model.apply(&json!({"type":"tool_execution_start","toolCallId":"stable-b","toolName":"read"}));
+                        }
+                        "failure-unknown" => {
+                            model.apply(&json!({"type":"tool_execution_end","toolCallId":"stable-b","isError":true,"entry":{"id":23,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":"stable-b","isError":true,"content":[{"type":"text","text":"synthetic failure"}]}]}}));
+                            model.apply(&json!({"type":"run_end"}));
+                        }
+                        "settled" => model.apply(&json!({"type":"run_end"})),
+                        _ => unreachable!(),
+                    }
+                    let rows = model.rows();
+                    let work = rows[0].work_data().unwrap();
+                    assert_eq!(work.id, group);
+                    if phase == "active" {
+                        assert!(work.active);
+                    }
+                    if phase == "success" {
+                        assert!(!work.active);
+                    }
+                    if matches!(phase, "failure-unknown" | "settled") {
+                        assert_eq!((work.failures, work.uncertain), (1, 1));
+                    }
+                    cx.update_window(handle, |_, _, cx| {
+                        view.update(cx, |v, cx| {
+                            v.transcript
+                                .update(cx, |v, cx| v.replace_readonly(rows, false, cx))
+                        })
+                    })
+                    .unwrap();
+                    cx.run_until_parked();
+                    cx.update_window(handle, |_, window, cx| {
+                        window.render_frame(cx);
+                        assert_eq!(cx.theme().mode, mode);
+                        let (_, _, following, open, current) = view.read(cx).transcript.read(cx).disclosure_probe_state(group, cx);
+                        assert_eq!(open, choice == "open", "{choice}/{phase}: updates changed disclosure");
+                        if let Some(old) = entity { assert_eq!(current, old); } else { entity = Some(current); }
+                        let header = window.find(key.clone());
+                        let bounds = header.bounds();
+                        let y = f32::from(bounds.top());
+                        if let Some(old) = header_y { assert!((y-old).abs() <= 1., "header anchor moved during {phase}"); } else { header_y = Some(y); }
+                        assert!(header.label().unwrap().contains(if work_active_label(phase) { "Working" } else { "Worked" }));
+                        if matches!(phase, "failure-unknown" | "settled") {
+                            let label = header.label().unwrap();
+                            assert!(label.contains("1 failed") && label.contains("1 status unknown"));
+                            let status = window.within(key.clone()).find("disclosure-status").bounds();
+                            assert!(status.size.width > px(0.) && status.right() <= bounds.right());
+                        }
+                        assert_eq!(view.read(cx).transcript.read(cx).disclosure_probe_step("stable-a", cx), (false, 0), "group opening must not open/parse child details");
+                        println!("{}", json!({"probe":"working-stability", "width":width,"mode":mode.name(),"choice":choice,"phase":phase,"open":open,"following":following,"header_y":y}));
+                    }).unwrap();
+                }
+                if choice == "unopened"
+                    && let Some(dir) = std::env::var_os("PILOT_NEXT_WORKING_STABILITY_DIR")
+                {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    cx.capture_screenshot(handle)
+                        .expect("native renderer required")
+                        .save(dir.join(format!("working-{}-{}.png", width as u32, mode.name())))
+                        .unwrap();
+                }
+                // Warnings never force expansion, but their exact detail remains reachable.
+                cx.update_window(handle, |_, window, cx| {
+                    if choice != "open" {
+                        window.click(key.clone(), cx);
+                    }
+                })
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.click("step-toggle-call:stable-b", cx);
+                })
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    assert!(
+                        view.read(cx)
+                            .transcript
+                            .read(cx)
+                            .disclosure_probe_step("stable-b", cx)
+                            .0
+                    );
+                    window.click("copy-call:stable-b-Output", cx);
+                    assert_eq!(
+                        cx.read_from_clipboard().unwrap().text().unwrap(),
+                        "synthetic failure"
+                    );
+                })
+                .unwrap();
+                cx.update_window(handle, |_, window, _| window.remove_window())
+                    .unwrap();
+                cx.run_until_parked();
+            }
+        }
+    }
+}
+
+fn work_active_label(phase: &str) -> bool {
+    matches!(phase, "active" | "stream" | "next-tool")
 }
