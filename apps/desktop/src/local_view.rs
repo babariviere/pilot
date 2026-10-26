@@ -10,13 +10,13 @@ pub(crate) mod chat_model_probe;
 #[cfg(feature = "native-probes")]
 #[path = "chat_rename_probe.rs"]
 pub(crate) mod chat_rename_probe;
-#[path = "contextual_navigation.rs"]
-mod contextual_navigation;
-#[path = "context_usage_view.rs"]
-mod context_usage_view;
 #[cfg(feature = "native-probes")]
 #[path = "context_usage_probe.rs"]
 pub(crate) mod context_usage_probe;
+#[path = "context_usage_view.rs"]
+mod context_usage_view;
+#[path = "contextual_navigation.rs"]
+mod contextual_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
@@ -316,6 +316,9 @@ pub struct LocalViewer {
     chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
+    usage_options: Option<LocalOptions>,
+    usage_window: Option<gpui_kit::AnyWindowHandle>,
+    usage_events: Option<Subscription>,
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
     settings_events: Vec<Subscription>,
@@ -434,6 +437,7 @@ impl LocalViewer {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
+        view.usage_options = Some(options.clone());
         view.chat_actions
             .update(cx, |a, cx| a.connect(options.clone(), cx));
         let root = Store::default_path()
@@ -1113,6 +1117,9 @@ impl LocalViewer {
             chat_actions,
             settings,
             settings_window: None,
+            usage_options: None,
+            usage_window: None,
+            usage_events: None,
             settings_pane: None,
             settings_return: None,
             settings_events: Vec::new(),

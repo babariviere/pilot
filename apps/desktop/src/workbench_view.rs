@@ -5,6 +5,61 @@ use crate::appearance::{Space, TextRole};
 use gpui_kit::EntityInputHandler;
 
 impl LocalViewer {
+    pub(super) fn open_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A separate passive page preserves the current chat/draft and navigation.
+        if !self.project_choices_ready(window, cx) {
+            return;
+        }
+        if let Some(handle) = self.usage_window
+            && handle.update(cx, |_, w, _| w.activate_window()).is_ok()
+        {
+            return;
+        }
+        let options = self.usage_options.clone();
+        let result = gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(
+                    gpui_kit::Bounds::centered(None, gpui_kit::size(px(780.), px(720.)), cx),
+                )),
+                window_min_size: Some(gpui_kit::size(px(640.), px(440.))),
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                crate::appearance::follow_appearance(w, cx);
+                w.set_window_title("Usage · Local");
+                let pane = cx.new(|cx| crate::usage_overview_view::Usage::new(options, cx));
+                pane.update(cx, |p, cx| {
+                    p.focus(w, cx);
+                    p.load(7, w, cx);
+                });
+                let weak = pane.downgrade();
+                w.on_window_should_close(cx, move |_, cx| {
+                    let _ = weak.update(cx, |p, cx| p.close(cx));
+                    true
+                });
+                pane
+            },
+        );
+        match result {
+            Ok((handle, pane)) => {
+                let focus = window.focused(cx);
+                self.usage_window = Some(handle);
+                self.usage_events =
+                    Some(cx.observe_release_in(&pane, window, move |v, _, w, cx| {
+                        v.usage_window = None;
+                        if let Some(f) = &focus {
+                            f.focus(w, cx);
+                        }
+                        cx.notify();
+                    }));
+            }
+            Err(_) => {
+                self.nav_error = Some("Usage could not be opened. Try again.");
+            }
+        }
+        cx.notify();
+    }
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Same IME/search/picker guard as existing native navigation. Opening a separate
         // window never unmounts or retargets the transcript, composer or draft selection.
@@ -170,6 +225,9 @@ impl LocalViewer {
                 .when(archived,|this|this.child(div().id("archives-active").test_support().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
             .child(div().id("chat-list-pane").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
             .child(self.chat_actions.clone())
+            .child(crate::ui::action("open-usage", "Usage…", crate::ui::Action::Quiet)
+                .w_full().justify_start().accessibility_label("Open Local Usage")
+                .on_click(cx.listener(|view,_,window,cx|view.open_usage(window,cx))))
             .child(crate::ui::action("open-settings", "Settings…", crate::ui::Action::Quiet)
                 .w_full().justify_start().accessibility_label("Settings (Command-comma)")
                 .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx))))

@@ -159,9 +159,18 @@ mod transcript_view;
 mod typography;
 /// App-owned presentation contracts over Kit. See docs/design-system.md.
 pub mod ui;
+mod usage_overview;
+#[cfg(any(test, feature = "native-probes"))]
+mod usage_overview_fixture;
+#[cfg(feature = "native-probes")]
+mod usage_overview_probe;
+mod usage_overview_reader;
+mod usage_overview_view;
 mod work_view;
 #[cfg(feature = "native-probes")]
 pub use catalog_probe::run_catalog_probe;
+#[cfg(feature = "native-probes")]
+pub use usage_overview_probe::run_usage_overview_probe;
 
 #[cfg(feature = "native-probes")]
 pub use artifact_view::gallery::probe::run_artifact_gallery_probe;

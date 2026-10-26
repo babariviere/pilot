@@ -35,6 +35,12 @@ harness = false
 test = false
 required-features = ["native-probes"]
 
+[[test]]
+name = "usage_overview"
+path = "tests/usage_overview.rs"
+harness = false
+required-features = ["native-probes"]
+
 [patch.crates-io]
 gpui-base = { path = ".patched/gpui-base-0.8.0" }
 gpui-component = { path = ".patched/gpui-component-0.8.0" }

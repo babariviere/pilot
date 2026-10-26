@@ -48,6 +48,15 @@ direct/child token accounting. Missing values and context freshness stay unknown
 costs and subscription controls are not included. No composer geometry changes
 or extra network reads. See [context-usage.md](docs/context-usage.md).
 
+### Local Usage overview
+
+Open **Usage…** in the sidebar for read-only Local token/cost summaries and a
+daily trend over 7, 30 or 90 UTC days. Coverage remains explicitly partial and
+dated, costs are catalog estimates rather than billed charges, and missing
+evidence is never shown as zero. Refresh is manual. No remote hosts, resets,
+reconciliation writes or budget enforcement. The separate native page preserves
+the mounted conversation and draft. See [usage-overview.md](docs/usage-overview.md).
+
 ### Add a Local project
 
 Use **Add project…** beside project browsing or in the new-chat project chooser.
