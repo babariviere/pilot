@@ -38,6 +38,14 @@ final class NewSessionForm: ObservableObject {
 
     var canChooseExecutionHost: Bool { !busy && mission == nil && trackedItem == nil }
 
+    /// Only change an unsubmitted draft, never a frozen or uncertain chat start.
+    @discardableResult
+    func removeMissionAttachment(pendingCreate: Bool) -> Bool {
+        guard !busy, pendingOperationId == nil, !pendingCreate, mission != nil else { return false }
+        mission = nil
+        return true
+    }
+
     func resetChatContext() {
         mission = nil
         trackedItem = nil
@@ -387,8 +395,19 @@ struct TaskComposer: View {
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
                 if let mission = form.mission {
-                    Label(mission.title, icon: PilotIcon.mission)
-                        .font(.system(size: 12)).lineLimit(1)
+                    HStack(spacing: 4) {
+                        Label(mission.title, icon: PilotIcon.mission).lineLimit(1)
+                        Button {
+                            if form.removeMissionAttachment(pendingCreate: pendingCreate != nil) {
+                                app.draftProjectId = mission.projectId
+                            }
+                        } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
+                            .buttonStyle(.plain)
+                            .disabled(form.busy || form.pendingOperationId != nil || pendingCreate != nil)
+                            .help("Don't attach this chat to \(mission.title)")
+                            .accessibilityLabel("Remove mission attachment")
+                    }
+                        .font(.pilot(.caption))
                         .foregroundStyle(Theme.mutedForeground)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
