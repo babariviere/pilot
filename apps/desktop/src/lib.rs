@@ -27,6 +27,8 @@ mod mission_browser_view;
 mod mission_conversion;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_fixture;
+mod mission_inspector;
+mod mission_inspector_view;
 mod mission_reader;
 mod mission_transport;
 mod mission_view;
@@ -48,6 +50,8 @@ mod settings_worker;
 pub use local_view::chat_model_probe::run_chat_model_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::mission_inspector_probe::run_mission_inspector_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_probe::run_mission_probe;
 #[cfg(feature = "native-probes")]

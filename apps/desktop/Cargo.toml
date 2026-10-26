@@ -188,3 +188,9 @@ name = "delivery_diagnostics"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "mission_inspector"
+harness = false
+test = false
+required-features = ["native-probes"]

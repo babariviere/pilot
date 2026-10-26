@@ -183,6 +183,7 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
@@ -686,11 +687,13 @@ async fn run(
                             Err(error)=>view.projects_error=Some(error),
                         }
                     } else if value["type"] == "sessions" {
+                        crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         view.list_loaded=true;
                         let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).take(local_model::SESSION_CAP).collect::<Vec<_>>()).unwrap_or_default();
                         chats.sort_by(|a,b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.id.cmp(&b.id)));
                         view.chats = Arc::new(chats);
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
+                        crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         let chats = Arc::make_mut(&mut view.chats);
                         if let Some(old) = chats.iter_mut().find(|c| c.id == chat.id) { *old = chat; }
                         else if chats.len() < local_model::SESSION_CAP { chats.push(chat); }

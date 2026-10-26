@@ -21,6 +21,11 @@ pub(crate) mod jump_probe;
 #[cfg(feature = "native-probes")]
 #[path = "mission_browser_probe.rs"]
 pub(crate) mod mission_browser_probe;
+#[path = "mission_inspector_navigation.rs"]
+mod mission_inspector_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "mission_inspector_probe.rs"]
+pub(crate) mod mission_inspector_probe;
 #[path = "mission_navigation.rs"]
 mod mission_navigation;
 #[cfg(feature = "native-probes")]
@@ -271,6 +276,7 @@ pub struct LocalViewer {
     overview: Entity<Overview>,
     inbox: Entity<crate::inbox::Inbox>,
     missions: Entity<crate::mission_browser_view::Browser>,
+    mission_context: Entity<crate::mission_inspector_view::Pane>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
     pending_transcript: Option<(Vec<Message>, bool)>,
     nav_error: Option<&'static str>,
@@ -326,6 +332,16 @@ impl LocalViewer {
             KeyBinding::new("secondary-1", GoHome, None),
             KeyBinding::new("secondary-2", ShowAllChats, None),
             KeyBinding::new("secondary-3", ShowMissions, None),
+            KeyBinding::new(
+                "escape",
+                crate::mission_inspector_view::Close,
+                Some("MissionContext"),
+            ),
+            KeyBinding::new(
+                "secondary-alt-m",
+                crate::mission_inspector_view::Toggle,
+                None,
+            ),
             KeyBinding::new("secondary-[", NavigateBack, None),
             KeyBinding::new("secondary-]", NavigateForward, None),
             KeyBinding::new("secondary-,", crate::settings_view::OpenSettings, None),
@@ -360,6 +376,8 @@ impl LocalViewer {
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
         view.navigation_seeded = true;
         view.missions
+            .update(cx, |pane, _| pane.options(options.clone()));
+        view.mission_context
             .update(cx, |pane, _| pane.options(options.clone()));
         view.artifacts.update(cx, |pane, _| pane.options(options));
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
@@ -833,6 +851,7 @@ impl LocalViewer {
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
         let missions = cx.new(crate::mission_browser_view::Browser::new);
+        let (mission_context, mission_context_events) = Self::mission_context_parts(window, cx);
         let missions_events = cx.subscribe_in(
             &missions,
             window,
@@ -1024,6 +1043,7 @@ impl LocalViewer {
             overview,
             inbox,
             missions,
+            mission_context,
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -1052,6 +1072,7 @@ impl LocalViewer {
                 subscription,
                 mission_events,
                 missions_events,
+                mission_context_events,
                 add_project_events,
                 editor_events,
                 artifact_events,
@@ -1194,6 +1215,7 @@ impl LocalViewer {
             self.state.projects_loaded = state.projects_loaded;
             self.state.projects_error = state.projects_error;
             self.state.chats = state.chats;
+            self.state.mission_metadata = state.mission_metadata;
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
@@ -1235,6 +1257,7 @@ impl LocalViewer {
         } else {
             // An old chat never replaces the selected chat, even while switching quickly.
             self.state.chats = state.chats;
+            self.state.mission_metadata = state.mission_metadata;
             self.state.status = state.status;
             self.state.projects = state.projects;
             self.state.projects_loaded = state.projects_loaded;
@@ -1284,6 +1307,7 @@ impl LocalViewer {
         self.earlier_attempt = None;
         self.earlier_request = None;
         self.selected = None;
+        self.sync_mission_context(cx);
         self.chats.update(cx, |list, cx| {
             list.delegate_mut().opened = None;
             cx.notify();
@@ -1475,6 +1499,7 @@ impl LocalViewer {
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sync_missions(window, cx);
+        self.sync_mission_context(cx);
         self.editor.update(cx, |editor, cx| {
             editor.projects(
                 self.state.projects.clone(),
@@ -1678,6 +1703,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
+            .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|{if view.jump.is_none()&&!view.mission_open&&!view.add_project_open{view.chats.update(cx,|list,cx|list.focus(window,cx));}}))
@@ -1692,16 +1718,17 @@ impl Render for LocalViewer {
                     div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else {
-                div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                let conversation = div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                     .child(div().v_flex().px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
                         .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
                         .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
                         .child(div().h_flex().items_center().gap_2().min_w_0()
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
+                            .child(self.mission_context_action(cx))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
-                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))))
+                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))))
                             .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
                                 .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(760.)).mx_auto()
@@ -1717,7 +1744,8 @@ impl Render for LocalViewer {
                             .on_click(cx.listener(|view,_,_,cx|{view.details_open = !view.details_open;cx.notify();})))
                         .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
                         .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
-                        .into_any_element()
+                        .into_any_element();
+                self.mission_companion(conversation, window, cx)
                 }
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))

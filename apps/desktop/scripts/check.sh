@@ -69,3 +69,5 @@ bash scripts/cargo.sh clippy --locked --features native-probes --test artifact_g
 bash scripts/cargo.sh test --locked --features native-probes --test artifact_gallery
 bash scripts/cargo.sh clippy --locked --features native-probes --test delivery_diagnostics -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test delivery_diagnostics
+bash scripts/cargo.sh clippy --locked --features native-probes --test mission_inspector -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test mission_inspector
