@@ -378,9 +378,13 @@ gallery, then explicitly open a pinned revision. Stored images decode lazily
 for visible tiles; generated sources never run to populate the gallery. See
 [gallery ownership, limits and keyboard paths](docs/artifact-gallery.md).
 Canonical artifact publication entries have exact pinned native visual previews
-inside the conversation, with Expand. Source/copy remain in the expanded pane. At most two painted previews
-run at once; offscreen readers close, and expansion transfers the same reader
-to the pane. Content stays actual size in a bounded scrollable viewport.
+inside the conversation, with Expand. Source/copy remain in the expanded pane.
+All paint-visible supported images and artifacts render automatically, with FIFO
+bounded worker admission instead of a two-item visibility cap. Offscreen readers
+close, and artifact expansion transfers the same reader to the pane.
+Expanded readers offer Fit, 100%, bounded zoom and Reset with two-axis pan.
+Native charts/canvas/Mermaid repaint native geometry, not rasterized previews;
+text, tables and controls retain native legibility and interaction.
 Other kinds retain explicit Open cards; body links/JSON and legacy tool-only
 output are not parsed into reads. Neither surface can switch owners or silently
 open the latest revision. See [inline ownership and bounds](docs/inline-visuals.md).
@@ -398,7 +402,10 @@ viewport margins and approximated curves; animation/pointer scheduling and
 non-uniform strokes/transformed text remain unsupported. SwiftUI
 previews, image nodes inside visuals and stacked/out-of-domain charts show honest placeholders.
 Stored raster image artifacts separately support native PNG/JPEG and labelled
-first-frame GIF previews, fit/actual-size viewing and explicit source copy.
+first-frame GIF previews, fit/100%/zoom/pan viewing and explicit source copy.
+Already-loaded stored conversation images use the same bounded decoder and
+automatically preview when visible, with an expanded native image dialog.
+See [conversation images](docs/conversation-images.md).
 WebP previews remain unsupported with their stored source/provenance retained.
 See [stored image boundaries and checks](docs/stored-images.md) and the
 [pinned allocation audit](docs/image-allocation-audit.md); pixel/buffer limits

@@ -26,14 +26,19 @@ pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
         _ => t.foreground,
     }
 }
-pub(crate) fn render<T: 'static>(chart: Arc<Chart>, key: &str, cx: &Context<T>) -> AnyElement {
+pub(crate) fn render_scaled<T: 'static>(
+    chart: Arc<Chart>,
+    key: &str,
+    scale: f32,
+    cx: &Context<T>,
+) -> AnyElement {
     let colors = chart
         .series
         .iter()
         .map(|s| color(&s.color, cx))
         .collect::<Vec<_>>();
     let border = cx.theme().border;
-    let height = chart.height;
+    let height = chart.height * scale;
     use gpui_kit::InteractiveElement;
     let mut view = div()
         .id(SharedString::from(key.to_owned()))
@@ -45,7 +50,7 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, key: &str, cx: &Context<T>) 
     for (i, s) in chart.series.iter().enumerate() {
         legend = legend.child(
             div()
-                .text_xs()
+                .text_size(px(11. * scale))
                 .text_color(colors[i])
                 .child(SharedString::from(s.name.clone())),
         );
@@ -174,7 +179,7 @@ pub(crate) fn render<T: 'static>(chart: Arc<Chart>, key: &str, cx: &Context<T>) 
     .child(
         div()
             .relative()
-            .h(px(18.))
+            .h(px(18. * scale))
             .mx_3()
             .min_w_0()
             .text_xs()

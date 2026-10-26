@@ -1,11 +1,12 @@
 # Stored conversation image previews
 
-Pilot Next offers **Preview image** for already-loaded, committed Local message
-image blocks. PNG/JPEG show a static raster; GIF shows only its first frame.
-WebP and other formats, missing inline bytes and over-budget content retain a
-truthful placeholder. Preview failures stay beside the image, with Retry preview.
-Hide image releases the current preview. Normal text selection/copy is unchanged;
-Copy source identity copies bounded provenance, never image bytes.
+Pilot Next automatically shows already-loaded, paint-visible committed Local
+message images. PNG/JPEG show a static raster; GIF shows its first frame.
+Unsupported or over-budget content retains a truthful placeholder. Click the
+image or Expand for the native reader. Fit, 100%, zoom and Reset are contextual
+reader controls; two-axis wheel/trackpad scrolling pans magnified content.
+Ordinary transcript scrolling never changes zoom. Copy source identity retains
+bounded provenance; expanded Copy source retains the exact embedded data URL.
 
 ## Actual source contract
 
@@ -44,16 +45,20 @@ frame scratch, and existing advisory codec allocation limits. See the
 [raster allocation audit](image-allocation-audit.md). These are not an RSS ceiling.
 No animation-frame collection or WebP decoder is introduced.
 
-One nonqueued global permit is shared with artifact previews. The transcript
-retains one current decoded raster (maximum 32 MiB), not an image LRU; a retired
-raster can briefly remain until the deferred app-resource release runs. Explicit
-preview avoids eagerly decoding a whole loaded history. Source strings and pixels
-are Arc-backed; rendering neither clones base64 nor decodes pixels. Decoding,
-orientation and BGRA conversion use the background executor. A canceled codec
-retains the permit until it finishes bounded work. A busy permit produces a
-retryable placeholder, not a queue. Generation/source/entry changes, Hide and
-release cancel work, discard late results and retire painted pixels with
-`App::drop_image`. No native GPU residency measurement is claimed.
+One FIFO global read/decode permit is shared with artifact previews. Every
+paint-visible supported row queues automatically, not just a selected image.
+The transcript retains decoded pixels only for visible rows, retiring them on
+scroll-out, replacement, scope change or reset. Each raster keeps its existing
+32 MiB maximum; the viewport and existing source/row budgets bound the number
+of visible entries. There is no eager whole-history decoding or image LRU.
+Source strings and pixels are Arc-backed. Rendering does not decode pixels.
+Cancellation retains admission until bounded codec work finishes. Source,
+scope and cancellation-token checks reject late results, including same-row
+replacements. Expanded readers observe their canonical source and become inert
+if it is replaced or removed. The native dialog owns focus restoration and
+uses Kit's normal window-selection clearing on modal entry/exit. Composer draft
+text, its selection and active preedit remain with the existing editor owner;
+marked text prevents sibling reader opening before pointer blur.
 
 Supported rows reserve a 12-rem image viewport. Loading, decoded content and
 failure replace content inside it without moving subsequent rows. The absolute

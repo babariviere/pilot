@@ -228,7 +228,7 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
                     assert_eq!((r.width, r.height), (IMAGE_WIDTH, IMAGE_HEIGHT));
                     assert_eq!(r.image.frame_count(), 1);
                     cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()));
-                    w.find("artifact-raster-viewport").bounds()
+                    w.find("reader-viewport").bounds()
                 })
                 .unwrap();
             let shot = cx.capture_screenshot(h).unwrap();
@@ -251,12 +251,12 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
                     cx.read_from_clipboard().unwrap().text().unwrap(),
                     "sentinel"
                 );
-                w.click("artifact-image-scale", cx);
+                w.click("reader-actual", cx);
             })
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
-                assert!(pane.read(cx).image_actual);
+                assert_eq!(pane.read(cx).zoom.scale, Some(1.));
                 let b = w.find("artifact-raster-pixels").bounds();
                 assert!(
                     (f32::from(b.size.width) - IMAGE_WIDTH as f32 / w.scale_factor()).abs() < 1.
@@ -277,7 +277,7 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
                 .update_window(h, |_, w, cx| {
                     let b = w.find("artifact-raster-pixels").bounds();
                     w.scroll(
-                        "artifact-raster-viewport",
+                        "reader-viewport",
                         ScrollDelta::Pixels(point(px(-120.), px(0.))),
                         cx,
                     );
@@ -285,7 +285,7 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
                     // Exercise each native axis separately, without changing
                     // the production gesture policy to satisfy the fixture.
                     w.scroll(
-                        "artifact-raster-viewport",
+                        "reader-viewport",
                         ScrollDelta::Pixels(point(px(0.), px(-100.))),
                         cx,
                     );
@@ -306,9 +306,7 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
             // before testing its keyboard activation, rather than guessing.
             for _ in 0..8 {
                 if cx
-                    .update_window(h, |_, w, _| {
-                        w.find("artifact-image-scale").focused() == Some(true)
-                    })
+                    .update_window(h, |_, w, _| w.find("reader-actual").focused() == Some(true))
                     .unwrap()
                 {
                     break;
@@ -318,7 +316,7 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
             }
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(
-                    w.find("artifact-image-scale").focused(),
+                    w.find("reader-actual").focused(),
                     Some(true),
                     "scale must be reachable through native tab traversal"
                 );
@@ -327,10 +325,11 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
-                assert!(!pane.read(cx).image_actual, "native keyboard scale toggle");
+                w.click("reader-fit", cx);
+                assert_eq!(pane.read(cx).zoom.scale, None, "native fit");
                 assert_eq!(
                     w.find("artifact-raster-pixels").bounds(),
-                    w.find("artifact-raster-viewport").bounds(),
+                    w.find("reader-viewport").bounds(),
                     "fit mode clears actual-size scroll displacement"
                 );
                 w.click("artifact-source", cx);

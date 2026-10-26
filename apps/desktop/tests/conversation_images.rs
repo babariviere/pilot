@@ -9,6 +9,8 @@ fn main() {
     cx.update(|cx| {
         gpui_kit::init(cx);
         pilot_desktop::init_appearance(cx);
+        pilot_desktop::TranscriptView::bind_keys(cx);
+        pilot_desktop::LocalViewer::bind_keys(cx);
     });
     pilot_desktop::run_conversation_images_probe(&mut cx);
 }

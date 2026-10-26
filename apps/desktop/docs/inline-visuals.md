@@ -18,8 +18,8 @@ Read `docs/native/visuals.md`, `crates/monocode-gpui/src/visuals.rs`,
   a concise title, unobtrusive source access, errors local to their visual.
   Its `VisualView::render` separates title/actions/content; its source view
   bounds long programs instead of stretching the conversation with code.
-* Adapt: its lazy retained-view pattern (`RETAINED_VISUALS = 8`) becomes at most
-  two **paint-visible** readers and eight small closed reader-state owners.
+* Adapt: its lazy retained-view pattern (`RETAINED_VISUALS = 8`) becomes **paint-visible** readers and eight small closed reader-state owners,
+  without a content-count gate.
   Pilot keeps its stricter exact revision and hello identity checks. Expansion
   transfers the same reader entity to the existing pane, not a cloned VM.
   Existing Kit buttons, checkbox, slider, charts and canvas retain their typed
@@ -44,12 +44,16 @@ for this first slice rather than adopting uncapped layout work.
 rows, after the frame. Hydrating history alone starts nothing. Membership is
 sampled on scroll/geometry/transcript changes, not empty cached-control redraws.
 Duplicate pins
-share one owner and one mounted control tree. At most two distinct visible
-previews are admitted; additional rows keep an explicit Open path. Scrolling
+share one owner and one mounted control tree. All distinct visible previews are admitted. Worker concurrency is not a
+content visibility limit. Scrolling
 away closes readers, preserving bounded local state by exact revision. New
 readers wait for canceled readers' completion receivers before starting. The
-existing process semaphore, sandbox attestation, deadline and kill/reap behavior
-are unchanged. The cache never retains a worker for an offscreen artifact.
+existing two-process semaphore queues FIFO. Idle readers release their helper
+before publication, retaining the validated scene/state, not a VM. A control or
+canvas request reconstructs closures from committed state in the same bounded
+lane, verifies that the reconstructed tree and state match, then dispatches.
+A mismatch fails closed rather than targeting different controls. Sandbox
+attestation, source/wire limits, deadlines and kill/reap behavior remain intact. The cache never retains a worker for an offscreen artifact.
 Untyped pin reads are serialized through the existing single image-envelope
 permit until their exact metadata arrives; this does not raise image limits.
 
@@ -57,7 +61,11 @@ permit until their exact metadata arrives; this does not raise image limits.
 scene validator, native renderer, slider pacing and generation/state-version
 fences. The fixed 440pt viewport keeps row geometry stable during load, controls
 and tool events. Content scrolls at actual size rather than shrinking charts.
-The inline header intentionally has no Source button. The expanded pane retains
+Expanded raster readers have Fit, 100%, zoom and Reset controls. Native chart,
+canvas and Mermaid geometry is repainted at bounded scale, never rasterized.
+Text, tables and controls keep native text/interaction metrics. The expanded
+reader owns two-axis scrolling and middle-button drag panning; inline wheel
+scrolling never zooms. The inline header intentionally has no Source button. The expanded pane retains
 its existing source/provenance, native selection and exact-copy path. The existing
 raster renderer is reused when an untyped pin resolves to an image.
 Pane expansion preserves local state and source mode. Back closes the pane;

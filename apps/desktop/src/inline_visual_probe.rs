@@ -89,7 +89,7 @@ if line=="\r\n"{break;} }
                                 let tail=path.strip_prefix("/api/sessions/owner/artifacts/").expect("only exact current-chat reads");
                                 let(id,r)=tail.split_once("?revision=").unwrap();let r=r.parse::<u32>().unwrap();assert!((1..=2).contains(&r));
                                 records.lock().unwrap().push((id.into(),r));
-                                let(kind,source)=match id {"raster"=>("image",raster.as_str()),"raster-gif"=>("image",gif.as_str()),"legacy"=>("html","<script>inert stored source</script>"),"broken"=>("visual","()=>{throw new Error('Synthetic local failure') }"),_=>("visual",SOURCE)};
+                                let(kind,source)=match id {"raster" | "raster-a" | "raster-b" | "raster-c"=>("image",raster.as_str()),"raster-gif"=>("image",gif.as_str()),"legacy"=>("html","<script>inert stored source</script>"),"broken"=>("visual","()=>{throw new Error('Synthetic local failure') }"),_=>("visual",SOURCE)};
                                 json!({"id":id,"sessionId":"owner","revision":r,"title":"Regional study · 日本語 résumé","kind":kind,"source":source,"data":null,"createdAt":1,"updatedAt":2,"visual":{"api":1,"engine":"quickjs-ng 0.17.0"}})
                             }.to_string();
                             let mut stream=stream.into_inner();stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await?;stream.write_all(body.as_bytes()).await?;Ok(())
@@ -180,7 +180,196 @@ fn ready(t: &Entity<TranscriptView>, cx: &App) -> bool {
             .is_some_and(|_| p.read(cx).inline_probe_snapshot().live)
     })
 }
+fn three_visible_readers(cx: &mut HeadlessAppContext) {
+    for width in [680., 1100.] {
+        for dark in [false, true] {
+            let server = Server::new();
+            cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                )
+            });
+            let rows = ["three-a", "three-b", "three-c"]
+                .into_iter()
+                .enumerate()
+                .map(|(ix, id)| {
+                    let mut r = reference(id, 1);
+                    r.kind = "visual".into();
+                    Message::artifact(900 + ix as u64, r)
+                })
+                .collect();
+            let (h, view) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1600.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            crate::LocalViewer::inline_visual_fixture(
+                                server.options.clone(),
+                                rows,
+                                w,
+                                cx,
+                            )
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            let t = cx.update(|cx| view.read(cx).inline_probe_transcript());
+            cx.update(|cx| {
+                view.update(cx, |v, cx| {
+                    v.inline_probe_enable(server.options.clone(), cx)
+                })
+            });
+            wait(cx, h, |cx| {
+                let panes = t.read(cx).inline_probe_panes();
+                panes.len() == 3
+                    && panes.iter().all(|(_, p)| {
+                        let s = p.read(cx).inline_probe_snapshot();
+                        assert!(s.error.is_none(), "queued reader: {:?}", s.error);
+                        s.scene.is_some() && s.live
+                    })
+            });
+            wait(cx, h, |cx| {
+                t.read(cx)
+                    .inline_probe_panes()
+                    .iter()
+                    .all(|(_, p)| p.read(cx).inline_probe_idle())
+            });
+            if let Some(dir) =
+                std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from)
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("three-{width}-{dark}-inline.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                for id in 900u64..903 {
+                    let scope = w.within(("message", id));
+                    let b = scope.find("inline-visual").bounds();
+                    assert!(b.size.width > px(300.) && b.size.height > px(400.));
+                }
+                w.within(("message", 902u64)).click("0.1.2", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                t.read(cx)
+                    .inline_probe_panes()
+                    .iter()
+                    .find(|(r, _)| r.id == "three-c")
+                    .is_some_and(|(_, p)| {
+                        p.read(cx)
+                            .inline_probe_snapshot()
+                            .state
+                            .is_some_and(|s| s.contains("\"clicks\":1"))
+                    })
+            });
+            let p = cx.update(|cx| {
+                t.read(cx)
+                    .inline_probe_panes()
+                    .into_iter()
+                    .find(|(r, _)| r.id == "three-c")
+                    .unwrap()
+                    .1
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.within(("message", 902u64)).click("inline-expand", cx)
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.click("reader-actual", cx);
+                w.click("reader-in", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| p.read(cx).inline_probe_idle());
+            cx.update_window(h, |_, w, cx| {
+                let b = w.find("chart-plot").bounds();
+                assert!(
+                    b.size.height >= px(199.),
+                    "native chart height grows, not a bitmap"
+                );
+                w.click("0.1.2", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                let s = p.read(cx).inline_probe_snapshot();
+                assert!(s.error.is_none(), "scaled dispatch: {:?}", s.error);
+                s.state.is_some_and(|s| s.contains("\"clicks\":2"))
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.click("reader-reset", cx);
+                w.click("artifact-copy-source", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), SOURCE);
+            })
+            .unwrap();
+            wait(cx, h, |cx| p.read(cx).inline_probe_idle());
+            if let Some(dir) =
+                std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from)
+            {
+                std::fs::create_dir_all(&dir).unwrap();
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("three-{width}-{dark}-expanded.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.click("artifact-gallery", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update(|cx| {
+                t.update(cx, |t, cx| {
+                    let rows = ["raster-a", "raster-b", "raster-c"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(ix, id)| {
+                            let mut r = reference(id, 1);
+                            r.kind = "image".into();
+                            Message::artifact(950 + ix as u64, r)
+                        })
+                        .collect();
+                    t.replace_readonly(rows, true, cx);
+                    t.inline_probe_scroll(0, cx);
+                })
+            });
+            wait(cx, h, |cx| {
+                let panes = t.read(cx).inline_probe_panes();
+                panes.len() == 3
+                    && panes.iter().all(|(_, p)| {
+                        let s = p.read(cx).inline_probe_snapshot();
+                        assert!(s.error.is_none(), "queued raster artifact: {:?}", s.error);
+                        s.raster.is_some()
+                    })
+            });
+            if let Some(dir) =
+                std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from)
+            {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("three-{width}-{dark}-raster.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+}
 pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
+    three_visible_readers(cx);
     let captures = std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();

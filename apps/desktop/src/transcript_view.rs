@@ -727,11 +727,19 @@ impl TranscriptView {
     ) -> impl IntoElement + use<> {
         let row = &self.transcript.messages()[ix];
         if row.image_data().is_some() {
-            return div()
+            let mut image = div()
                 .id(("message", row.id()))
                 .w_full()
                 .min_w_0()
                 .child(self.render_image(row, cx, owner));
+            if let Some(guard) = self.history_guard.clone() {
+                image = image.capture_any_mouse_down(move |_, w, cx| {
+                    if !guard(w, cx) {
+                        cx.stop_propagation();
+                    }
+                });
+            }
+            return image;
         }
         if let Some(reference) = row.artifact_data() {
             return self.inline_row(row.id(), reference, cx, owner);

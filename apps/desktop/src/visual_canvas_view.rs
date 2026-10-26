@@ -11,16 +11,17 @@ pub(crate) fn palette(cx: &App) -> [Hsla; 13] {
     ]
     .map(|n| crate::visual_chart_view::color(n, cx))
 }
-pub(crate) fn paint(
+pub(crate) fn paint_scaled(
     plan: &Plan,
     bounds: Bounds<Pixels>,
     colors: &[Hsla; 13],
     mono: &SharedString,
+    scale: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
-    if (f32::from(bounds.size.width) - plan.width).abs() > 0.75
-        || (f32::from(bounds.size.height) - plan.height).abs() > 0.75
+    if (f32::from(bounds.size.width) / scale - plan.width).abs() > 0.75
+        || (f32::from(bounds.size.height) / scale - plan.height).abs() > 0.75
     {
         return;
     }
@@ -35,13 +36,15 @@ pub(crate) fn paint(
                     continue;
                 }
                 let mut builder = if paint.stroke {
-                    PathBuilder::stroke(px(paint.width))
+                    PathBuilder::stroke(px(paint.width * scale))
                 } else {
                     PathBuilder::fill()
                 };
-                builder.move_to(bounds.origin + point(px(points[0][0]), px(points[0][1])));
+                builder.move_to(
+                    bounds.origin + point(px(points[0][0] * scale), px(points[0][1] * scale)),
+                );
                 for p in &points[1..] {
-                    builder.line_to(bounds.origin + point(px(p[0]), px(p[1])));
+                    builder.line_to(bounds.origin + point(px(p[0] * scale), px(p[1] * scale)));
                 }
                 if *closed || !paint.stroke {
                     builder.close();
@@ -83,7 +86,7 @@ pub(crate) fn paint(
                 };
                 let line = window.text_system().shape_line(
                     SharedString::from(text.clone()),
-                    px(*size),
+                    px(*size * scale),
                     &[run],
                     None,
                 );
@@ -93,12 +96,12 @@ pub(crate) fn paint(
                     _ => px(0.),
                 };
                 let y = match baseline {
-                    1 => px(*size / 2.),
-                    2 => px(*size),
+                    1 => px(*size * scale / 2.),
+                    2 => px(*size * scale),
                     _ => px(0.),
                 };
-                let origin = bounds.origin + point(px(at[0]) - x, px(at[1]) - y);
-                let _ = line.paint(origin, px(*size), TextAlign::Left, None, window, cx);
+                let origin = bounds.origin + point(px(at[0] * scale) - x, px(at[1] * scale) - y);
+                let _ = line.paint(origin, px(*size * scale), TextAlign::Left, None, window, cx);
             }
         }
     }

@@ -158,19 +158,9 @@ async fn run(
 ) {
     let mut snapshot = Snapshot::default();
     let permit = if matches!(reference.kind.as_str(), "image" | "unknown") {
-        match crate::artifact_image::Permit::acquire() {
-            Ok(permit) => Some(permit),
-            Err(message) => {
-                snapshot.error = Some(Fault {
-                    kind: "image",
-                    message: message.into(),
-                    line: None,
-                    limit: None,
-                });
-                publish(&updates, &replace, snapshot);
-                return;
-            }
-        }
+        Some(
+            tokio::select! {biased; _=cancelled.recv()=>return, p=crate::artifact_image::Permit::queued()=>p},
+        )
     } else {
         None
     };
@@ -190,10 +180,13 @@ async fn run(
     };
     snapshot.revision = Some(revision.clone());
     if revision.reference.kind == "image" {
-        let permit = permit.map_or_else(crate::artifact_image::Permit::acquire, Ok);
-        let raster = permit.and_then(|_permit| {
-            crate::artifact_image::decode(&revision.source, || cancelled.is_closed())
-        });
+        let _permit = match permit {
+            Some(p) => p,
+            None => {
+                tokio::select! {biased; _=cancelled.recv()=>return, p=crate::artifact_image::Permit::queued()=>p}
+            }
+        };
+        let raster = { crate::artifact_image::decode(&revision.source, || cancelled.is_closed()) };
         if cancelled.is_closed() {
             return;
         }
@@ -253,14 +246,38 @@ async fn run(
         if events.is_closed() || updates.is_closed() {
             break;
         }
+        session.stop().await;
         publish(&updates, &replace, snapshot.clone());
         let Ok(command) = events.recv().await else {
             break;
         };
-        session.clock(now());
+        if !matches!(command, Command::Retry) {
+            // As with Retry, join startup even if the row retires mid-spawn.
+            // Cancelling attestation would drop an unreaped helper.
+            if let Err(error) = session.prepare().await {
+                result = Err(error);
+                continue;
+            }
+            if cancelled.is_closed() {
+                break;
+            }
+            let resumed = tokio::select! {biased; _=cancelled.recv()=>None, result=session.resume()=>Some(result)};
+            match resumed {
+                None => break,
+                Some(Err(error)) => {
+                    result = Err(error);
+                    continue;
+                }
+                Some(Ok(())) => {}
+            }
+        }
         let next = match command {
-            Command::Retry => retry(&mut session, &cancelled).await,
+            Command::Retry => {
+                session.clock(now());
+                retry(&mut session, &cancelled).await
+            }
             Command::Event { version, id, value } => {
+                session.clock(now());
                 tokio::select! {biased;_=cancelled.recv()=>None,result=session.event(version,&id,value)=>Some(result)}
             }
             Command::Draw {

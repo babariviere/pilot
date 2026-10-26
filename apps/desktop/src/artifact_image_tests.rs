@@ -233,9 +233,36 @@ fn cancellation_fences_all_output() {
     assert!(n.get() >= 4);
 }
 #[test]
-fn permits_are_nonqueued_and_release_on_drop() {
+fn try_permit_refuses_busy_lane_and_releases_on_drop() {
     let p = Permit::acquire().unwrap();
     assert!(Permit::acquire().is_err());
     drop(p);
     assert!(Permit::acquire().is_ok());
+}
+#[tokio::test]
+async fn visible_decode_admission_is_fifo_and_cancelled_waiters_leave_the_queue() {
+    let busy = Permit::acquire().unwrap();
+    let (tx, rx) = async_channel::bounded(3);
+    let cancelled = tokio::spawn(async { Permit::queued().await });
+    tokio::task::yield_now().await;
+    cancelled.abort();
+    let _ = cancelled.await;
+    let mut tasks = Vec::new();
+    for id in 0..3 {
+        let tx = tx.clone();
+        tasks.push(tokio::spawn(async move {
+            let _permit = Permit::queued().await;
+            tx.send(id).await.unwrap();
+        }));
+        tokio::task::yield_now().await;
+    }
+    assert!(rx.is_empty());
+    drop(busy);
+    for expected in 0..3 {
+        assert_eq!(rx.recv().await.unwrap(), expected);
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    drop(Permit::acquire().unwrap());
 }

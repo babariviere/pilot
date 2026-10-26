@@ -33,6 +33,8 @@ pub(crate) struct Element {
     id: SharedString,
     prepared: Arc<Prepared>,
     epoch: u64,
+    scale: f32,
+    reader: bool,
 }
 impl Element {
     pub(crate) fn new(id: String, prepared: Arc<Prepared>) -> Self {
@@ -40,7 +42,14 @@ impl Element {
             id: id.into(),
             prepared,
             epoch: 0,
+            scale: 1.,
+            reader: false,
         }
+    }
+    pub(crate) fn scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self.reader = true;
+        self
     }
     pub(crate) fn scope(mut self, epoch: u64) -> Self {
         self.epoch = epoch;
@@ -53,13 +62,25 @@ impl RenderOnce for Element {
         // Keyed state retires on unmount. It owns no jobs, timers or host callbacks.
         let key: SharedString =
             format!("{}:{}:{}", self.id, self.epoch, self.prepared.source).into();
-        window.use_keyed_state(key, cx, |_, cx| View {
+        let scale = self.scale;
+        let reader = self.reader;
+        let view = window.use_keyed_state(key, cx, |_, cx| View {
             id: self.id,
             prepared: self.prepared,
             source: false,
             expanded: false,
             focus: cx.focus_handle(),
-        })
+            scale,
+            reader,
+        });
+        view.update(cx, |v, cx| {
+            if v.scale != scale || v.reader != reader {
+                v.scale = scale;
+                v.reader = reader;
+                cx.notify();
+            }
+        });
+        view
     }
 }
 struct View {
@@ -68,12 +89,15 @@ struct View {
     source: bool,
     expanded: bool,
     focus: FocusHandle,
+    scale: f32,
+    reader: bool,
 }
 impl View {
     fn key(&self, suffix: &str) -> SharedString {
         format!("{}-{suffix}", self.id).into()
     }
     fn diagram(&self, diagram: &model::Diagram, cx: &App) -> AnyElement {
+        let scale = self.scale;
         let plan = self.prepared.diagram.as_ref().unwrap().clone();
         let ink = cx.theme().foreground;
         let border = cx.theme().muted_foreground;
@@ -83,8 +107,8 @@ impl View {
             .test_support()
             .relative()
             .flex_shrink_0()
-            .w(px(diagram.width))
-            .h(px(diagram.height));
+            .w(px(diagram.width * scale))
+            .h(px(diagram.height * scale));
         content = content.child(
             canvas(
                 |bounds, _, _| bounds,
@@ -94,11 +118,16 @@ impl View {
                             let mut path = if fill {
                                 PathBuilder::fill()
                             } else {
-                                PathBuilder::stroke(px(1.5))
+                                PathBuilder::stroke(px(1.5 * scale))
                             };
-                            path.move_to(bounds.origin + point(px(points[0][0]), px(points[0][1])));
+                            path.move_to(
+                                bounds.origin
+                                    + point(px(points[0][0] * scale), px(points[0][1] * scale)),
+                            );
                             for p in &points[1..] {
-                                path.line_to(bounds.origin + point(px(p[0]), px(p[1])));
+                                path.line_to(
+                                    bounds.origin + point(px(p[0] * scale), px(p[1] * scale)),
+                                );
                             }
                             if closed {
                                 path.close();
@@ -146,10 +175,10 @@ impl View {
             let diamond = node.node.shape == Shape::Diamond;
             let box_view = div()
                 .absolute()
-                .left(px(node.x))
-                .top(px(node.y))
-                .w(px(NODE_W))
-                .h(px(NODE_H))
+                .left(px(node.x * scale))
+                .top(px(node.y * scale))
+                .w(px(NODE_W * scale))
+                .h(px(NODE_H * scale))
                 .when(!diamond, |v| {
                     v.bg(background).border_1().border_color(border)
                 })
@@ -162,9 +191,9 @@ impl View {
                         .id(self.key(&format!("label-{}", node.node.id)))
                         .test_support()
                         .aria_label(SharedString::from(node.node.label.clone()))
-                        .w(px(if diamond { 120. } else { 208. }))
-                        .text_size(px(13.))
-                        .line_height(px(18.))
+                        .w(px(if diamond { 120. * scale } else { 208. * scale }))
+                        .text_size(px(13. * scale))
+                        .line_height(px(18. * scale))
                         .text_center()
                         .child(SelectableText::new(
                             self.key(&format!("text-{}", node.node.id)),
@@ -181,11 +210,11 @@ impl View {
                 content = content.child(
                     div()
                         .absolute()
-                        .left(px(route.label_at[0]))
-                        .top(px(route.label_at[1]))
-                        .w(px(160.))
-                        .text_size(px(12.))
-                        .line_height(px(16.))
+                        .left(px(route.label_at[0] * scale))
+                        .top(px(route.label_at[1] * scale))
+                        .w(px(160. * scale))
+                        .text_size(px(12. * scale))
+                        .line_height(px(16. * scale))
                         .bg(background)
                         .child(SelectableText::new(
                             self.key(&format!("edge-{ix}")),
@@ -227,7 +256,7 @@ impl Render for View {
                     }),
                 ),
             );
-        if self.prepared.diagram.is_ok() {
+        if self.prepared.diagram.is_ok() && !self.reader {
             header = header.child(
                 ui::action(
                     self.key("expand"),
@@ -259,7 +288,11 @@ impl Render for View {
                 .test_support()
                 .w_full()
                 .min_w_0()
-                .h(px(height.min(diagram.height)))
+                .h(px(if self.reader {
+                    diagram.height * self.scale
+                } else {
+                    height.min(diagram.height)
+                }))
                 .overflow_scroll()
                 .bg(ui::Surface::Page.color(cx))
                 .child(self.diagram(diagram, cx))

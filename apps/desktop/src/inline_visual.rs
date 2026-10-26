@@ -17,6 +17,10 @@ impl ArtifactPane {
     pub(crate) fn inline_probe_snapshot(&self) -> Snapshot {
         self.snapshot.clone()
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_idle(&self) -> bool {
+        !self.busy
+    }
     pub(crate) fn inline_drains(&self) -> Vec<async_channel::Receiver<()>> {
         let mut drains = self.reader_drains();
         if let Some(worker) = &self.worker {
@@ -189,7 +193,7 @@ impl ArtifactPane {
                 content = content
                     .relative()
                     .overflow_hidden()
-                    .child(crate::artifact_image_view::preview(raster, false, window));
+                    .child(crate::artifact_image_view::preview(raster));
             } else if !revision.visual_supported {
                 content = content.child(crate::ui::text(crate::ui::Text::Caption, "No native inline preview for this artifact. Source is retained; Expand opens its detail."));
             } else if let Some(scene) = self.snapshot.scene.clone() {

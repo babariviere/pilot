@@ -46,8 +46,10 @@ describe the oriented preview. Source bytes and their SHA-256 remain unchanged.
 
 ## Ownership and interaction
 
-One nonqueued permit admits image/untyped reads and decoding globally. An untyped
-visual read releases it before entering the unchanged visual runtime. Closing or
+One FIFO permit admits image/untyped reads and decoding globally. Visible
+readers wait their turn instead of showing an admission failure. An untyped
+visual read releases this permit before entering the separately bounded visual
+runtime. Closing or
 switching cancels network work and checks cancellation between decode stages.
 An in-flight codec is not forcibly preempted and retains admission until it ends.
 Generation, owner and exact revision fences discard stale publication.
@@ -59,10 +61,12 @@ No historical image LRU or data-URL-keyed GPUI resource loader is introduced.
 Native Metal does not implement the test-support atlas `contains` query, so GPU
 retirement is source/API evidence, not a dynamically measured VRAM guarantee.
 
-Fit to window is the default. Actual size maps one stored pixel to one device
-pixel independently of application rem zoom, with a two-axis viewport. Fit
-resets scroll displacement and pins the image box within the viewport while
-native `ObjectFit::Contain` preserves its painted aspect ratio.
+Fit is the default. 100% maps one stored pixel to one device pixel independently
+of application rem zoom. Zoom in/out stays between 10% and 800%. Fit and Reset
+clear pan displacement; Contain preserves the painted aspect ratio. The native
+viewport supports two-axis wheel/trackpad pan and middle-button dragging, plus
+Option-arrow pan and ⌘+/⌘−, ⌘1 and ⌘0 keyboard controls in the expanded reader.
+Ordinary transcript wheel packets never zoom content.
 
 Source disclosure shows bounded provenance, not megabytes of base64 text.
 Copy source explicitly prepares the exact stored string off-UI, then fences its

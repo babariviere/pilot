@@ -465,6 +465,13 @@ impl LocalViewer {
         self.transcript.clone()
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_input(
+        &self,
+        cx: &App,
+    ) -> Entity<gpui_kit::component::input::TextareaState> {
+        self.editor.read(cx).shell_probe().0
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn inline_visual_fixture(
         options: LocalOptions,
         rows: Vec<Message>,

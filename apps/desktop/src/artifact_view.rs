@@ -58,7 +58,7 @@ pub(crate) struct ArtifactPane {
     generation: u64,
     busy: bool,
     source: bool,
-    image_actual: bool,
+    zoom: crate::reader_zoom::Zoom,
     retired_image: Option<Arc<gpui_kit::RenderImage>>,
     source_copy: Option<Task<()>>,
     states: VecDeque<(Reference, String)>,
@@ -79,6 +79,22 @@ struct SliderBinding {
     _subscription: Subscription,
 }
 impl ArtifactPane {
+    fn reader_scale(&self) -> f32 {
+        if self.inline {
+            return 1.;
+        }
+        self.zoom.scale.unwrap_or_else(|| {
+            let width = self.zoom.viewport.get()[0].max(240.);
+            let natural = self.snapshot.scene.as_ref().map_or(width, |s| {
+                s.mermaids
+                    .values()
+                    .filter_map(|m| m.diagram.as_ref().ok())
+                    .map(|d| d.width)
+                    .fold(width, f32::max)
+            });
+            (width / natural).clamp(0.1, 1.)
+        })
+    }
     pub(crate) fn new() -> Self {
         Self {
             inline: false,
@@ -94,7 +110,7 @@ impl ArtifactPane {
             generation: 0,
             busy: false,
             source: false,
-            image_actual: false,
+            zoom: Default::default(),
             retired_image: None,
             source_copy: None,
             states: VecDeque::new(),
@@ -258,7 +274,7 @@ impl ArtifactPane {
         self.generation += 1;
         self.busy = false;
         self.source = false;
-        self.image_actual = false;
+        self.zoom = Default::default();
     }
     fn flush_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(image) = self.retired_image.take() {
@@ -763,6 +779,7 @@ impl ArtifactPane {
         }
         *budget -= 8;
         let kind = value["type"].as_str().unwrap_or("");
+        let scale = self.reader_scale();
         let bytes: usize = match kind {
             "text" => value["runs"]
                 .as_array()
@@ -1165,7 +1182,7 @@ impl ArtifactPane {
                 let cost = prepared.diagram.as_ref().map_or(128, |p| p.nodes.len()*8+p.routes.iter().map(|r|r.points.len()*2).sum::<usize>());
                 if cost > *budget { return Self::note("Diagram exceeds aggregate native display budget. Exact source is retained."); }
                 *budget -= cost;
-                crate::native_mermaid_view::Element::new(format!("mermaid-{}-{path}", cx.entity_id()), prepared.clone()).scope(self.generation).into_any_element()
+                crate::native_mermaid_view::Element::new(format!("mermaid-{}-{path}", cx.entity_id()), prepared.clone()).scope(self.generation).scale(scale).into_any_element()
             }).unwrap_or_else(|| Self::note("Native diagram display limit reached (8). Exact source remains in the artifact source; no browser fallback.")),
             "canvas" => {
                 if value["animated"] == true {
@@ -1206,7 +1223,7 @@ impl ArtifactPane {
                         {
                             return;
                         }
-                        let width = f32::from(bounds.size.width) as f64;
+                        let width = f32::from(bounds.size.width) as f64 / scale as f64;
                         if queued.as_ref().is_some_and(|f| {
                             f.version == version
                                 && (f.width - width).abs() < 0.5
@@ -1226,8 +1243,8 @@ impl ArtifactPane {
                     },
                     move |bounds, _, window, cx| {
                         if let Some(plan) = &plan {
-                            crate::visual_canvas_view::paint(
-                                plan, bounds, &colors, &mono, window, cx,
+                            crate::visual_canvas_view::paint_scaled(
+                                plan, bounds, &colors, &mono, scale, window, cx,
                             );
                         }
                     },
@@ -1238,9 +1255,10 @@ impl ArtifactPane {
                     .test_support()
                     .relative()
                     .w_full()
-                    .h(px(height as f32))
-                    .min_h(px(height as f32))
-                    .max_h(px(height as f32))
+                    .max_w(px(2000. * scale))
+                    .h(px(height as f32 * scale))
+                    .min_h(px(height as f32 * scale))
+                    .max_h(px(height as f32 * scale))
                     .overflow_hidden()
                     .child(canvas)
                     .when(error.is_some(), |d| {
@@ -1269,7 +1287,7 @@ impl ArtifactPane {
                         )
                     } else {
                         *budget -= points;
-                        crate::visual_chart_view::render(chart.clone(), path, cx)
+                        crate::visual_chart_view::render_scaled(chart.clone(), path, scale, cx)
                     }
                 }
                 Some(Err(message)) => Self::note(message),
@@ -1290,6 +1308,25 @@ impl Render for ArtifactPane {
             .id("artifact-detail")
             .test_support()
             .track_focus(&focus)
+            .on_key_down(cx.listener(|v, event, window, cx| {
+                if !v.inline
+                    && !v.source
+                    && let Some(command) = crate::reader_zoom::Zoom::key(event)
+                {
+                    let fit = v.snapshot.raster.as_ref().map_or(v.reader_scale(), |r| {
+                        v.zoom.image_fit(
+                            r.width as f32 / window.scale_factor(),
+                            r.height as f32 / window.scale_factor(),
+                        )
+                    });
+                    v.zoom.apply(command, fit);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if !v.source && v.zoom.pan_key(event) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(
                 cx.listener(|_, _: &gpui_kit::base::input::Copy, window, cx| {
                     let text = gpui_kit::base::TextSelection::selected_text(window, cx);
@@ -1491,52 +1528,39 @@ impl Render for ArtifactPane {
             }
             if let Some(raster) = &self.snapshot.raster {
                 view = view.child(
-                    div()
-                        .h_flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(
-                            crate::ui::text(
-                                crate::ui::Text::Caption,
-                                format!(
-                                    "{} · {} × {} pixels · {} encoded bytes{}",
-                                    raster.mime,
-                                    raster.width,
-                                    raster.height,
-                                    raster.encoded_bytes,
-                                    if raster.first_frame {
-                                        " · first frame only"
-                                    } else {
-                                        ""
-                                    }
-                                ),
-                            )
-                            .text_color(cx.theme().muted_foreground),
+                    div().h_flex().flex_wrap().gap_2().child(
+                        crate::ui::text(
+                            crate::ui::Text::Caption,
+                            format!(
+                                "{} · {} × {} pixels · {} encoded bytes{}",
+                                raster.mime,
+                                raster.width,
+                                raster.height,
+                                raster.encoded_bytes,
+                                if raster.first_frame {
+                                    " · first frame only"
+                                } else {
+                                    ""
+                                }
+                            ),
                         )
-                        .when(!self.source, |row| {
-                            row.child(
-                                crate::ui::action(
-                                    "artifact-image-scale",
-                                    if self.image_actual {
-                                        "Fit to window"
-                                    } else {
-                                        "Actual size"
-                                    },
-                                    crate::ui::Action::Quiet,
-                                )
-                                .on_click(cx.listener(
-                                    move |view, _, _, cx| {
-                                        if view.generation == generation
-                                            && view.snapshot.raster.is_some()
-                                        {
-                                            view.image_actual = !view.image_actual;
-                                            cx.notify();
-                                        }
-                                    },
-                                )),
-                            )
-                        }),
+                        .text_color(cx.theme().muted_foreground),
+                    ),
                 );
+            }
+            if !self.source && (self.snapshot.raster.is_some() || scene.is_some()) {
+                let fit = self.snapshot.raster.as_ref().map_or(1., |r| {
+                    self.zoom.image_fit(
+                        r.width as f32 / window.scale_factor(),
+                        r.height as f32 / window.scale_factor(),
+                    )
+                });
+                view = view.child(self.zoom.toolbar(cx, move |v, command, cx| {
+                    if v.generation == generation && !v.source {
+                        v.zoom.apply(command, fit);
+                        cx.notify();
+                    }
+                }));
             }
             let mut content = div()
                 .id(SharedString::from(scope))
@@ -1551,8 +1575,11 @@ impl Render for ArtifactPane {
                     content
                         .overflow_y_scroll()
                         .child(div().text_xs().child(SharedString::from(format!(
-                            "{} · stored timestamps {} / {} ms Unix",
-                            revision.reference.kind, revision.created_at, revision.updated_at
+                            "{} · stored timestamps {} / {} ms Unix · {} native nodes",
+                            revision.reference.kind,
+                            revision.created_at,
+                            revision.updated_at,
+                            self.snapshot.scene.as_ref().map_or(0, |s| s.nodes)
                         ))));
                 if revision.reference.kind == "image" {
                     content=content.child(self.text("artifact-source-text".into(),format!("Stored embedded image source ({} bytes). Copy source explicitly to obtain the exact data URL.\nOwner: {}\nArtifact: {}\nRevision: {}",revision.source.len(),revision.reference.session,revision.reference.id,revision.reference.revision)));
@@ -1569,22 +1596,27 @@ impl Render for ArtifactPane {
                     ));
                 }
             } else if let Some(raster) = &self.snapshot.raster {
-                content = content.relative().overflow_hidden().child(
-                    crate::artifact_image_view::preview(raster, self.image_actual, window),
-                );
+                content =
+                    content
+                        .relative()
+                        .overflow_hidden()
+                        .child(crate::artifact_image_view::zoomed(
+                            raster, &self.zoom, window, cx,
+                        ));
             } else if let Some(scene) = scene {
-                content = content.overflow_y_scroll();
-                content = content.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from(format!(
-                            "{} validated nodes · {} canvas nodes",
-                            scene.nodes,
-                            scene.canvases.len()
-                        ))),
-                );
-                content = content.child(self.node(&scene.root, "0", &mut 4096, cx));
+                let width = self.zoom.viewport.get()[0].max(240.);
+                let natural = scene
+                    .mermaids
+                    .values()
+                    .filter_map(|m| m.diagram.as_ref().ok())
+                    .map(|d| d.width)
+                    .fold(width, f32::max);
+                let native = div()
+                    .flex_shrink_0()
+                    .w(px(natural * self.reader_scale()))
+                    .child(self.node(&scene.root, "0", &mut 4096, cx))
+                    .into_any_element();
+                content = content.child(self.zoom.surface(native, cx));
             }
             view = view.child(content);
         }

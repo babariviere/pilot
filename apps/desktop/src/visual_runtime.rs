@@ -113,7 +113,7 @@ impl Process {
                 "Visual helper teardown failed; restart the app",
             ));
         }
-        let permit = SLOTS.clone().try_acquire_owned().map_err(|_| {
+        let permit = SLOTS.clone().acquire_owned().await.map_err(|_| {
             Fault::new(
                 "busy",
                 "Native visual worker limit reached; retry when another visual closes",

@@ -1,6 +1,7 @@
-//! Actual offscreen transcript painting, using the production faux Local reader.
+//! Mounted production images, FIFO admission and reader geometry. Synthetic only.
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use gpui_kit::test::TestEventExt;
 use gpui_kit::{
     AnyWindowHandle, Bounds, HeadlessAppContext, ScrollDelta, WindowBounds, WindowOptions, point,
     size, test::TestWindowExt,
@@ -9,7 +10,6 @@ use std::{
     io::Cursor,
     time::{Duration, Instant},
 };
-
 struct ResizeHost {
     view: Entity<TranscriptView>,
     width: f32,
@@ -30,14 +30,14 @@ fn frame(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     cx.run_until_parked();
     cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
 }
-fn loaded(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<TranscriptView>) {
-    let end = Instant::now() + Duration::from_secs(6);
+fn wait(cx: &mut HeadlessAppContext, h: AnyWindowHandle, check: impl Fn(&App) -> bool) {
+    let end = Instant::now() + Duration::from_secs(10);
     loop {
         frame(cx, h);
-        if cx.update(|cx| view.read(cx).images.stop.is_none()) {
+        if cx.update(|cx| check(cx)) {
             break;
         }
-        assert!(Instant::now() < end, "bounded image completion");
+        assert!(Instant::now() < end, "image settle");
         std::thread::yield_now();
     }
     frame(cx, h);
@@ -49,15 +49,150 @@ fn encoded(color: [u8; 3]) -> String {
     image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
     STANDARD.encode(bytes.into_inner())
 }
+fn composer_reader_guards(
+    cx: &mut HeadlessAppContext,
+    options: &crate::LocalOptions,
+    source: &Arc<crate::conversation_images::Source>,
+    width: f32,
+) {
+    use gpui_kit::{EntityInputHandler, Focusable};
+    let rows = vec![
+        Message::live(
+            10,
+            "Assistant".into(),
+            "Readable selected conversation text, retained while inspecting an image.".into(),
+        ),
+        Message::image(100, "Stored image".into(), (**source).clone())
+            .anchored(crate::model::ReaderKey::model(1, 0, Some(0))),
+    ];
+    let (h, viewer) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(width), px(840.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                cx.new(|cx| crate::LocalViewer::inline_visual_fixture(options.clone(), rows, w, cx))
+            },
+        )
+        .unwrap()
+    });
+    let (t, input) = cx.update(|cx| {
+        let v = viewer.read(cx);
+        (v.inline_probe_transcript(), v.inline_probe_input(cx))
+    });
+    wait(cx, h, |cx| {
+        t.read(cx)
+            .images
+            .entries
+            .get(&100)
+            .is_some_and(|e| e.raster.is_some())
+    });
+    cx.update_window(h, |_, w, cx| {
+        input.update(cx, |i, cx| {
+            i.focus(w, cx);
+            i.replace_text_in_range(None, "draft 👩🏽‍💻", w, cx);
+            i.replace_and_mark_text_in_range(None, "に", Some(1..1), w, cx);
+        });
+    })
+    .unwrap();
+    for _ in 0..4 {
+        frame(cx, h);
+    }
+    cx.update_window(h, |_, w, cx| {
+        w.click(("conversation-image-viewport", 100u64), cx);
+        assert!(
+            input.update(cx, |i, cx| i.marked_text_range(w, cx).is_some()),
+            "image click keeps preedit"
+        );
+        assert!(
+            w.try_find("reader-fit").is_none(),
+            "preedit blocks reader opening"
+        );
+        input.update(cx, |i, cx| {
+            let marked = i.marked_text_range(w, cx).unwrap();
+            i.replace_text_in_range(Some(marked), "", w, cx);
+        });
+    })
+    .unwrap();
+    for _ in 0..4 {
+        frame(cx, h);
+    }
+    let text = cx.update(|cx| t.read(cx).history_probe_row(10));
+    let selection = cx
+        .update_window(h, |_, w, cx| {
+            let b = text.read(cx).bounds();
+            w.drag(
+                point(b.left() + px(2.), b.center().y),
+                point(b.left() + px(160.), b.center().y),
+                cx,
+            );
+            text.read(cx).selected_source_range().unwrap()
+        })
+        .unwrap();
+    cx.update_window(h, |_, w, cx| {
+        assert!(selection.start < selection.end);
+        input.update(cx, |i, cx| {
+            i.focus(w, cx);
+            i.set_selected_range(0..5, cx);
+        });
+        w.click(("conversation-image-expand", 100u64), cx);
+    })
+    .unwrap();
+    for _ in 0..4 {
+        frame(cx, h);
+    }
+    cx.update_window(h, |_, w, cx| {
+        w.press("secondary-1", cx);
+    })
+    .unwrap();
+    frame(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        let b = w.find("artifact-raster-pixels").bounds();
+        assert!(
+            (f32::from(b.size.width) - 1600. / w.scale_factor()).abs() < 1.,
+            "keyboard actual size"
+        );
+        w.press("secondary-+", cx);
+    })
+    .unwrap();
+    frame(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        w.press("secondary-0", cx);
+        w.press("escape", cx);
+    })
+    .unwrap();
+    wait(cx, h, |cx| input.read(cx).value().contains("draft"));
+    for _ in 0..24 {
+        frame(cx, h);
+    }
+    cx.update_window(h, |_, w, cx| {
+        assert!(
+            input.focus_handle(cx).is_focused(w),
+            "close restores mounted composer"
+        );
+        assert_eq!(input.read(cx).selected_range(), 0..5);
+        assert_eq!(input.read(cx).value().as_ref(), "draft 👩🏽‍💻");
+    })
+    .unwrap();
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
+}
 pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
     let server = crate::conversation_images::fixture::Server::start(encoded([24, 110, 220]));
     let capture = crate::local_client::read_local_capture(server.options.clone(), "owner").unwrap();
     let original = capture.state.rows;
-    let image_id = original
+    let base = original
         .iter()
-        .find(|r| r.image_data().is_some())
+        .find_map(|r| r.image_data())
         .unwrap()
-        .id();
+        .clone();
     let captures =
         std::env::var_os("PILOT_NEXT_CONVERSATION_IMAGES_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
@@ -75,12 +210,22 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                     cx,
                 )
             });
+            composer_reader_guards(cx, &server.options, &base, width);
+            let rows: Vec<_> = (0..3)
+                .map(|n| {
+                    let mut source = (*base).clone();
+                    source.block = n as usize;
+                    Message::image(100 + n, format!("Stored image {}", n + 1), source)
+                        .anchored(crate::model::ReaderKey::model(1, 0, Some(n as usize)))
+                })
+                .collect();
+            let permit = crate::artifact_image::Permit::acquire().unwrap();
             let (h, host) = cx.update(|cx| {
                 gpui_kit::open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             Default::default(),
-                            size(px(width), px(760.)),
+                            size(px(width), px(1200.)),
                         ))),
                         show: false,
                         focus: false,
@@ -89,10 +234,10 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                     cx,
                     |w, cx| {
                         let view = cx.new(|cx| {
-                            let mut view = TranscriptView::readonly(w, cx);
-                            view.history_scope(1);
-                            view.replace_readonly(original.clone(), true, cx);
-                            view
+                            let mut t = TranscriptView::readonly(w, cx);
+                            t.history_scope(1);
+                            t.replace_readonly(rows.clone(), true, cx);
+                            t
                         });
                         cx.new(|_| ResizeHost { view, width })
                     },
@@ -103,340 +248,280 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             for _ in 0..8 {
                 frame(cx, h);
             }
-            let selection_id = original
-                .iter()
-                .find(|r| r.is_assistant() && r.image_data().is_none())
-                .unwrap()
-                .id();
-            let (before, selection, range) = cx
-                .update_window(h, |_, w, cx| {
-                    let b = w.find(("conversation-image-viewport", image_id)).bounds();
-                    assert!(b.size.width > px(300.) && b.size.width < px(width));
-                    let text_id = original
-                        .iter()
-                        .find(|r| r.image_data().is_none())
-                        .unwrap()
-                        .id();
-                    w.click(("copy-source", text_id), cx);
-                    assert_eq!(
-                        cx.read_from_clipboard().unwrap().text().unwrap(),
-                        "Stored conversation image"
-                    );
-                    w.click(("conversation-image-source", image_id), cx);
-                    let text = cx.read_from_clipboard().unwrap().text().unwrap();
-                    assert!(
-                        text.contains("test-daemon")
-                            && text.contains("test-lineage")
-                            && text.contains("owner")
-                            && text.contains("block: Some(1)")
-                    );
-                    assert!(!text.contains("iVBOR"));
-                    cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()));
-                    w.click(("conversation-image-preview", image_id), cx);
-                    assert!(view.read(cx).images.stop.is_some());
-                    assert!(view.read(cx).images.raster.is_none());
-                    let selection = view.read(cx).history_probe_row(selection_id);
-                    let text_bounds = selection.read(cx).bounds();
-                    let from = point(text_bounds.left() + px(3.), text_bounds.center().y);
-                    let to = point(from.x + px(150.), from.y);
-                    assert!(w.find("viewport").bounds().contains(&from));
-                    w.drag(from, to, cx);
-                    let range = selection
+            assert_eq!(
+                cx.update(|cx| view.read(cx).images.entries.len()),
+                3,
+                "all visible rows queued"
+            );
+            assert!(cx.update(|cx| {
+                view.read(cx)
+                    .images
+                    .entries
+                    .values()
+                    .all(|e| e.raster.is_none() && e.error.is_none())
+            }));
+            drop(permit);
+            wait(cx, h, |cx| {
+                view.read(cx).images.entries.len() == 3
+                    && view
                         .read(cx)
-                        .selected_source_range()
-                        .unwrap_or_else(|| {
-                            panic!("actual visible text drag at {from:?} within {text_bounds:?}")
-                        });
-                    assert!(range.start < range.end);
-                    (b, selection, range)
-                })
-                .unwrap();
-            loaded(cx, h, &view);
-            let bounds = cx
-                .update_window(h, |_, w, cx| {
-                    assert_eq!(
-                        cx.read_from_clipboard().unwrap().text().unwrap(),
-                        "sentinel"
-                    );
-                    assert!(view.read(cx).images.raster.is_some());
-                    assert_eq!(
-                        selection.read(cx).selected_source_range(),
-                        Some(range.clone())
-                    );
-                    let b = w.find(("conversation-image-pixels", image_id)).bounds();
-                    assert_eq!(
-                        b,
-                        w.find(("conversation-image-viewport", image_id)).bounds()
-                    );
-                    assert_eq!(b, before, "decoding does not resize the row");
-
-                    b
-                })
-                .unwrap();
-            let shot = cx.capture_screenshot(h).unwrap();
-            let scale = shot.width() as f32 / width;
-            let pixel = shot
-                .get_pixel(
-                    (f32::from(bounds.center().x) * scale) as u32,
-                    (f32::from(bounds.center().y) * scale) as u32,
-                )
-                .0;
-            for (a, b) in pixel[..3].iter().zip([24u8, 110, 220]) {
-                assert!(a.abs_diff(b) < 5, "actual BGRA paint: {pixel:?}");
-            }
-            if let Some(dir) = &captures {
-                shot.save(dir.join(format!(
-                    "{}-{}.png",
-                    width as u32,
-                    if dark { "dark" } else { "light" }
-                )))
-                .unwrap();
-            }
-            // The mounted parent really shrinks and grows. Headless Window::resize
-            // is not used as evidence: Kit's test platform does not implement it.
-            let pixels =
-                cx.update(|cx| view.read(cx).images.raster.as_ref().unwrap().image.clone());
-            cx.update(|cx| {
-                host.update(cx, |host, cx| {
-                    host.width = width - 120.;
-                    cx.notify();
-                })
+                        .images
+                        .entries
+                        .values()
+                        .all(|e| e.raster.is_some())
             });
-            for _ in 0..8 {
+            let anchor = cx.update(|cx| view.read(cx).history_probe_anchor(cx));
+            cx.update_window(h, |_, w, cx| {
+                for id in 100u64..103 {
+                    let b = w.find(("conversation-image-pixels", id)).bounds();
+                    assert_eq!(b, w.find(("conversation-image-viewport", id)).bounds());
+                    assert!(b.size.width > px(300.) && b.right() <= px(width));
+                }
+                w.click(("conversation-image-source", 100u64), cx);
+                assert!(
+                    cx.read_from_clipboard()
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .contains("test-lineage")
+                );
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-three.png")))
+                    .unwrap();
+            }
+            // Composition admission guard blocks expanded sibling intent.
+            cx.update(|cx| view.update(cx, |v, _| v.history_guard = Some(Rc::new(|_, _| false))));
+            cx.update_window(h, |_, w, cx| {
+                w.click(("conversation-image-expand", 100u64), cx)
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, _| assert!(w.try_find("reader-fit").is_none()))
+                .unwrap();
+            cx.update(|cx| view.update(cx, |v, _| v.history_guard = None));
+            cx.update_window(h, |_, w, cx| {
+                w.click(("conversation-image-expand", 100u64), cx)
+            })
+            .unwrap();
+            for _ in 0..6 {
                 frame(cx, h);
             }
             cx.update_window(h, |_, w, cx| {
-                let b = w.find(("conversation-image-viewport", image_id)).bounds();
-                assert!(b.size.width < before.size.width - px(100.));
-                assert_eq!(b, w.find(("conversation-image-pixels", image_id)).bounds());
-                assert_eq!(
-                    selection.read(cx).selected_source_range(),
-                    Some(range.clone())
-                );
-                assert!(Arc::ptr_eq(
-                    &pixels,
-                    &view.read(cx).images.raster.as_ref().unwrap().image
-                ));
+                let b = w.find("reader-viewport").bounds();
+                assert!(b.size.width > px(400.) && b.size.height > px(400.));
+                w.click("reader-actual", cx);
             })
             .unwrap();
-            drop(pixels);
-            cx.update(|cx| {
-                host.update(cx, |host, cx| {
-                    host.width = width;
-                    cx.notify();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let before = w.find("artifact-raster-pixels").bounds();
+                assert!((f32::from(before.size.width) - 1600. / w.scale_factor()).abs() < 1.);
+                w.click("reader-in", cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let before = w.find("artifact-raster-pixels").bounds();
+                assert!((f32::from(before.size.width) - 2000. / w.scale_factor()).abs() < 1.);
+                w.scroll(
+                    "reader-viewport",
+                    ScrollDelta::Pixels(point(px(-80.), px(0.))),
+                    cx,
+                );
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                for _ in 0..4 {
+                    w.click("reader-in", cx);
+                }
+            })
+            .unwrap();
+            frame(cx, h);
+            let before_pan = cx
+                .update_window(h, |_, w, cx| {
+                    let before = w.find("artifact-raster-pixels").bounds();
+                    let start = w.find("reader-viewport").bounds().center();
+                    w.pointer_down(start, gpui_kit::MouseButton::Middle, cx);
+                    w.pointer_move(
+                        start - point(px(64.), px(48.)),
+                        Some(gpui_kit::MouseButton::Middle),
+                        cx,
+                    );
+                    w.pointer_up(
+                        start - point(px(64.), px(48.)),
+                        gpui_kit::MouseButton::Middle,
+                        cx,
+                    );
+                    before
                 })
-            });
-            for _ in 0..8 {
-                frame(cx, h);
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, _| {
+                let after = w.find("artifact-raster-pixels").bounds();
+                assert_eq!(after.size, before_pan.size, "pan never changes scale");
+                assert!(
+                    after.origin.x < before_pan.origin.x && after.origin.y < before_pan.origin.y
+                );
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-zoom-pan.png")))
+                    .unwrap();
             }
-            // Same entry/block/presentation ID, different exact bytes: retire old pixels.
-            let old = cx
-                .update(|cx| Arc::downgrade(&view.read(cx).images.raster.as_ref().unwrap().image));
-            let mut switched = original.clone();
+            cx.update_window(h, |_, w, cx| {
+                w.click("reader-fit", cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    w.find("artifact-raster-pixels").bounds(),
+                    w.find("reader-viewport").bounds()
+                );
+                w.click("reader-actual", cx);
+                w.click("reader-reset", cx);
+                w.click("conversation-reader-copy", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                cx.read_from_clipboard()
+                    .and_then(|c| c.text())
+                    .is_some_and(|s| s.starts_with("data:image/png;base64,"))
+            });
+            assert!(
+                cx.update(|cx| cx.read_from_clipboard().unwrap().text().unwrap()
+                    == format!("data:{};base64,{}", base.mime, base.data.as_ref().unwrap()))
+            );
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            frame(cx, h);
+            assert_eq!(
+                anchor,
+                cx.update(|cx| view.read(cx).history_probe_anchor(cx))
+            );
+            // Replacing same presentation ID fences source and automatically loads new bytes.
+            let mut changed = rows.clone();
             let mut source = crate::conversation_images::Source::read(
-                1,
+                0,
                 &serde_json::json!({"mimeType":"image/png","data":encoded([220,90,30])}),
                 &mut crate::conversation_images::INLINE_CAP.clone(),
             );
-            source.owner = switched
-                .iter()
-                .find_map(|r| r.image_data())
-                .unwrap()
-                .owner
-                .clone();
-            let ix = switched.iter().position(|r| r.id() == image_id).unwrap();
-            switched[ix] = Message::image(image_id, "Stored image · user".into(), source)
-                .anchored(crate::model::ReaderKey::model(1, 0, Some(1)));
-            cx.update(|cx| {
-                view.update(cx, |v, cx| v.replace_readonly(switched.clone(), false, cx))
-            });
-            frame(cx, h);
-            assert!(old.upgrade().is_none(), "retired decoded pixels released");
+            source.owner = base.owner.clone();
+            changed[0] = Message::image(100, "Changed".into(), source)
+                .anchored(crate::model::ReaderKey::model(1, 0, Some(0)));
             cx.update_window(h, |_, w, cx| {
-                w.click(("conversation-image-preview", image_id), cx)
-            })
-            .unwrap();
-            loaded(cx, h, &view);
-            assert!(cx.update(|cx| view.read(cx).images.raster.is_some()));
-            let switched_shot = cx.capture_screenshot(h).unwrap();
-            let switched_pixel = switched_shot
-                .get_pixel(
-                    (f32::from(bounds.center().x) * scale) as u32,
-                    (f32::from(bounds.center().y) * scale) as u32,
-                )
-                .0;
-            for (a, b) in switched_pixel[..3].iter().zip([220u8, 90, 30]) {
-                assert!(
-                    a.abs_diff(b) < 5,
-                    "source replacement pixels: {switched_pixel:?}"
-                );
-            }
-            // Component Button deliberately avoids taking focus on pointer press.
-            // Traverse the bounded fixture's actual tab stops instead of assuming
-            // that clicking Copy source moved keyboard focus.
-            for _ in 0..8 {
-                if cx
-                    .update_window(h, |_, w, _| {
-                        w.find(("conversation-image-preview", image_id)).focused() == Some(true)
-                    })
-                    .unwrap()
-                {
-                    break;
-                }
-                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
-                frame(cx, h);
-            }
-            cx.update_window(h, |_, w, cx| {
-                assert_eq!(
-                    w.find(("conversation-image-preview", image_id)).focused(),
-                    Some(true)
-                );
-                w.press("space", cx);
+                w.click(("conversation-image-expand", 100u64), cx)
             })
             .unwrap();
             frame(cx, h);
-            assert!(cx.update(|cx| view.read(cx).images.raster.is_none()));
-            cx.update_window(h, |_, w, cx| w.press("space", cx))
-                .unwrap();
-            loaded(cx, h, &view);
-            assert!(cx.update(|cx| view.read(cx).images.raster.is_some()));
-            // Add a tall message and keep the image reader anchor while streaming text changes.
-            let mut tall = switched.clone();
-            tall.push(Message::live(
-                777,
-                "assistant".into(),
-                "long content\n".repeat(300),
-            ));
-            cx.update(|cx| {
-                view.update(cx, |v, cx| {
-                    v.replace_readonly(tall.clone(), false, cx);
-                    v.scroller
-                        .update(cx, |s, cx| s.restore_anchor(1, px(0.), cx));
-                })
-            });
-            for _ in 0..8 {
-                frame(cx, h);
-            }
-            let anchor = cx.update(|cx| view.read(cx).history_probe_anchor(cx));
-            *tall.last_mut().unwrap() =
-                Message::live(777, "assistant".into(), "streamed content\n".repeat(320));
-            cx.update(|cx| view.update(cx, |v, cx| v.replace_readonly(tall, false, cx)));
-            for _ in 0..8 {
-                frame(cx, h);
-            }
-            let after = cx.update(|cx| view.read(cx).history_probe_anchor(cx));
-            assert_eq!(anchor.0, after.0);
-            assert!((anchor.1 - after.1).abs() < 1.);
-            cx.update_window(h, |_, w, cx| {
-                w.scroll(
-                    "viewport",
-                    ScrollDelta::Pixels(point(px(0.), px(-100.))),
-                    cx,
-                )
-            })
-            .unwrap();
-            frame(cx, h);
-            cx.update(|cx| view.update(cx, |v, cx| v.clear_image(cx)));
-            let busy_permit = crate::artifact_image::Permit::acquire().unwrap();
-            cx.update(|cx| view.update(cx, |v, cx| v.open_image(image_id, cx)));
-            frame(cx, h);
-            assert!(
-                cx.update(|cx| view.read(cx).images.error.is_some()
-                    && view.read(cx).images.stop.is_none())
-            );
-            drop(busy_permit);
-            // Truthful unsupported/overlimit/malformed states are mounted, not only modeled.
-            for (mime, data, decode_error) in [
-                ("image/webp", "AAAA".to_owned(), false),
-                (
-                    "image/png",
-                    "A".repeat(crate::conversation_images::INLINE_CAP + 1),
-                    false,
-                ),
-                ("image/png", "AAAA".to_owned(), true),
-            ] {
-                let mut source = crate::conversation_images::Source::read(
-                    1,
-                    &serde_json::json!({"mimeType":mime,"data":data}),
-                    &mut crate::conversation_images::INLINE_CAP.clone(),
-                );
-                source.owner = original
-                    .iter()
-                    .find_map(|r| r.image_data())
-                    .unwrap()
-                    .owner
-                    .clone();
-                let row = Message::image(image_id, "Stored image · You".into(), source)
-                    .anchored(crate::model::ReaderKey::model(1, 0, Some(1)));
-                cx.update(|cx| view.update(cx, |v, cx| v.replace_readonly(vec![row], true, cx)));
-                for _ in 0..4 {
-                    frame(cx, h);
-                }
-                cx.update_window(h, |_, w, cx| {
-                    if decode_error {
-                        w.click(("conversation-image-preview", image_id), cx);
-                    } else {
-                        assert!(w.find(("conversation-image-problem", image_id)).visible());
-                        assert!(
-                            w.try_find(("conversation-image-preview", image_id))
-                                .is_none()
-                        );
-                    }
-                })
-                .unwrap();
-                if decode_error {
-                    loaded(cx, h, &view);
-                    assert!(cx.update(|cx| view.read(cx).images.error.is_some()
-                        && view.read(cx).images.raster.is_none()));
-                    cx.update_window(h, |_, w, _| {
-                        assert!(w.find(("conversation-image-status", image_id)).visible())
-                    })
-                    .unwrap();
-                }
-                if let Some(dir) = &captures {
-                    cx.capture_screenshot(h)
-                        .unwrap()
-                        .save(dir.join(format!(
-                            "{}-{}-{}.png",
-                            width as u32,
-                            if dark { "dark" } else { "light" },
-                            if decode_error {
-                                "error"
-                            } else if mime == "image/webp" {
-                                "unsupported"
-                            } else {
-                                "overlimit"
-                            }
-                        )))
-                        .unwrap();
-                }
-            }
-            cx.update(|cx| view.update(cx, |v, cx| v.replace_readonly(original.clone(), true, cx)));
+            cx.update(|cx| view.update(cx, |v, cx| v.replace_readonly(changed.clone(), false, cx)));
             for _ in 0..4 {
                 frame(cx, h);
             }
-            // A chat/generation reset cancels outstanding work and clears even identical rows.
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("conversation-reader-copy").is_none(),
+                    "retired source is inert"
+                );
+                w.press("escape", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                view.read(cx).images.entries.len() == 3
+                    && view
+                        .read(cx)
+                        .images
+                        .entries
+                        .values()
+                        .all(|e| e.raster.is_some())
+            });
+            // Offscreen retirement, then revisit. No whole-history decoding.
+            let mut history = changed.clone();
+            history.extend(
+                (200..240)
+                    .map(|id| Message::live(id, "Assistant".into(), "Plain content\n".repeat(10))),
+            );
             cx.update(|cx| {
                 view.update(cx, |v, cx| {
-                    v.open_image(image_id, cx);
+                    v.replace_readonly(history, false, cx);
+                    v.scroller.update(cx, |s, cx| s.scroll_to_item(30, cx));
+                })
+            });
+            wait(cx, h, |cx| view.read(cx).images.entries.is_empty());
+            cx.update(|cx| {
+                view.update(cx, |v, cx| {
+                    v.scroller.update(cx, |s, cx| s.scroll_to_item(0, cx))
+                })
+            });
+            wait(cx, h, |cx| {
+                view.read(cx)
+                    .images
+                    .entries
+                    .values()
+                    .any(|e| e.raster.is_some())
+            });
+            // Unsupported and malformed sources stay truthful, not blank.
+            for (mime, data) in [("image/webp", "AAAA"), ("image/png", "AAAA")] {
+                let mut s = crate::conversation_images::Source::read(
+                    0,
+                    &serde_json::json!({"mimeType":mime,"data":data}),
+                    &mut crate::conversation_images::INLINE_CAP.clone(),
+                );
+                s.owner = base.owner.clone();
+                cx.update(|cx| {
+                    view.update(cx, |v, cx| {
+                        v.replace_readonly(
+                            vec![
+                                Message::image(100, "Bad".into(), s)
+                                    .anchored(crate::model::ReaderKey::model(1, 0, Some(0))),
+                            ],
+                            true,
+                            cx,
+                        )
+                    })
+                });
+                for _ in 0..8 {
+                    frame(cx, h);
+                }
+                if mime == "image/png" {
+                    wait(cx, h, |cx| {
+                        view.read(cx)
+                            .images
+                            .entries
+                            .get(&100)
+                            .is_some_and(|e| e.error.is_some())
+                    });
+                }
+                cx.update_window(h, |_, w, _| {
+                    assert!(
+                        w.find((
+                            if mime == "image/png" {
+                                "conversation-image-status"
+                            } else {
+                                "conversation-image-problem"
+                            },
+                            100u64
+                        ))
+                        .visible()
+                    )
+                })
+                .unwrap();
+            }
+            cx.update(|cx| {
+                view.update(cx, |v, cx| {
                     v.history_scope(2);
                     v.replace_readonly(Vec::new(), true, cx);
                 })
             });
-            loaded(cx, h, &view);
-            assert!(cx.update(|cx| view.read(cx).images.raster.is_none()
-                && view.read(cx).images.selected.is_none()));
-            let end = Instant::now() + Duration::from_secs(6);
-            loop {
-                frame(cx, h);
-                if let Ok(permit) = crate::artifact_image::Permit::acquire() {
-                    drop(permit);
-                    break;
-                }
-                assert!(Instant::now() < end, "cancelled codec releases admission");
-                std::thread::yield_now();
-            }
-            assert!(cx.update(|cx| view.read(cx).images.raster.is_none()));
+            frame(cx, h);
+            assert!(cx.update(|cx| view.read(cx).images.entries.is_empty()));
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         }
     }
@@ -447,8 +532,5 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             .unwrap()
             .iter()
             .all(|r| r.starts_with("GET "))
-    );
-    println!(
-        "conversation_images: actual 680/1100 light/dark pixels, source identity, source switch, scroll anchor, cancellation passed"
     );
 }

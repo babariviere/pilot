@@ -1,8 +1,8 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
 pub mod bundled_runtime;
+mod bundled_runtime_view;
 #[cfg(target_os = "macos")]
 mod updates_view;
-mod bundled_runtime_view;
 pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
@@ -245,6 +245,7 @@ mod artifact_image;
 mod artifact_image_view;
 mod artifact_model;
 mod artifact_view;
+mod reader_zoom;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::inline_visual::probe::run_inline_visual_probe;
 mod artifact_worker;

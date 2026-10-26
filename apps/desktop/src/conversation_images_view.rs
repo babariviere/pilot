@@ -1,55 +1,83 @@
-//! Transcript-owned, on-demand single preview. No URI resource loader or cache.
+//! Paint-admitted stored images. One FIFO decode lane, all visible rows retained.
 use super::*;
-use gpui_kit::{AnyElement, ObjectFit, StyledImage, TestSupportExt, img};
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+use gpui_kit::{
+    AnyElement, ObjectFit, StyledImage, TestSupportExt, canvas, component::WindowExt, img,
 };
-
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+pub(super) struct Entry {
+    key: crate::model::ReaderKey,
+    source: Arc<crate::conversation_images::Source>,
+    raster: Option<crate::artifact_image::Raster>,
+    error: Option<&'static str>,
+    stop: Arc<AtomicBool>,
+    _task: Task<()>,
+}
+impl Drop for Entry {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+    }
+}
 #[derive(Default)]
 pub(super) struct Preview {
     serial: u64,
     scope: u64,
-    selected: Option<(u64, Arc<crate::conversation_images::Source>)>,
-    raster: Option<crate::artifact_image::Raster>,
-    error: Option<&'static str>,
-    stop: Option<Arc<AtomicBool>>,
-    task: Option<Task<()>>,
+    entries: BTreeMap<u64, Entry>,
+    pub(super) painted: Rc<RefCell<Vec<u64>>>,
 }
 impl Preview {
     pub(super) fn selected_id_source_missing(&self, rows: &[Message], scope: u64) -> bool {
-        self.selected.as_ref().is_some_and(|(id, source)| {
-            self.scope != scope
-                || !rows
-                    .iter()
-                    .any(|row| row.id() == *id && row.image_data() == Some(source))
-        })
-    }
-}
-impl Drop for Preview {
-    fn drop(&mut self) {
-        if let Some(stop) = &self.stop {
-            stop.store(true, Ordering::Release);
-        }
+        self.scope != scope
+            || self.entries.iter().any(|(id, e)| {
+                !rows.iter().any(|r| {
+                    r.id() == *id
+                        && r.reader_key().as_ref() == Some(&e.key)
+                        && r.image_data() == Some(&e.source)
+                })
+            })
     }
 }
 impl TranscriptView {
     pub(super) fn clear_image(&mut self, cx: &mut App) {
         self.images.serial += 1;
-        if let Some(stop) = self.images.stop.take() {
-            stop.store(true, Ordering::Release);
+        for (_, entry) in std::mem::take(&mut self.images.entries) {
+            if let Some(raster) = &entry.raster {
+                let image = raster.image.clone();
+                cx.defer(move |cx| cx.drop_image(image, None));
+            }
         }
-        self.images.task = None;
-        self.images.selected = None;
-        self.images.error = None;
-        if let Some(raster) = self.images.raster.take() {
-            // Deferred until any borrowed window has been reattached to App.
-            cx.defer(move |cx| {
-                cx.drop_image(raster.image, None);
-            });
+    }
+    pub(super) fn reconcile_images(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
+        let retired: Vec<_> = self
+            .images
+            .entries
+            .keys()
+            .copied()
+            .filter(|id| !ids.contains(id))
+            .collect();
+        for id in retired {
+            if let Some(e) = self.images.entries.remove(&id)
+                && let Some(raster) = &e.raster
+            {
+                let image = raster.image.clone();
+                cx.defer(move |cx| cx.drop_image(image, None));
+            }
+        }
+        for id in ids {
+            self.open_image(id, cx);
         }
     }
     fn open_image(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.images.entries.contains_key(&id) {
+            return;
+        }
         let Some(source) = self
             .transcript
             .messages()
@@ -63,58 +91,75 @@ impl TranscriptView {
         if source.problem.is_some() || source.owner.is_none() {
             return;
         }
-        self.clear_image(cx);
-        self.images.selected = Some((id, source.clone()));
-        self.images.scope = self.history_scope;
-        let permit = match crate::artifact_image::Permit::acquire() {
-            Ok(permit) => permit,
-            Err(error) => {
-                self.images.error = Some(error);
-                cx.notify();
-                return;
-            }
+        let Some(key) = self
+            .transcript
+            .messages()
+            .iter()
+            .find(|r| r.id() == id)
+            .and_then(Message::reader_key)
+        else {
+            return;
         };
+        self.images.scope = self.history_scope;
         let serial = self.images.serial;
         let scope = self.history_scope;
-        self.images.scope = scope;
         let stop = Arc::new(AtomicBool::new(false));
-        self.images.stop = Some(stop.clone());
-        self.images.task = Some(cx.spawn(async move |view, cx| {
+        let decode_stop = stop.clone();
+        let decode_source = source.clone();
+        let entry_stop = stop.clone();
+        let task = cx.spawn(async move |view, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let _permit = permit;
-                    source.decode(|| stop.load(Ordering::Acquire))
+                    let _permit = crate::artifact_image::Permit::queued().await;
+                    decode_source.decode(|| decode_stop.load(Ordering::Acquire))
                 })
                 .await;
-            let _ = view.update(cx, |view, cx| {
-                if view.images.serial != serial || view.history_scope != scope {
+            let _ = view.update(cx, |v, cx| {
+                if v.images.serial != serial || v.history_scope != scope {
                     return;
                 }
+                let Some(entry) = v
+                    .images
+                    .entries
+                    .get_mut(&id)
+                    .filter(|e| Arc::ptr_eq(&e.stop, &stop))
+                else {
+                    return;
+                };
                 match result {
-                    Ok(raster) => view.images.raster = Some(raster),
-                    Err(error) => view.images.error = Some(error),
+                    Ok(raster) => entry.raster = Some(raster),
+                    Err(e) => entry.error = Some(e),
                 }
-                view.images.stop = None;
                 cx.notify();
             });
-        }));
+        });
+        self.images.entries.insert(
+            id,
+            Entry {
+                key,
+                source,
+                raster: None,
+                error: None,
+                stop: entry_stop,
+                _task: task,
+            },
+        );
         cx.notify();
     }
     pub(super) fn render_image(
         &self,
         row: &Message,
-        cx: &App,
+        _cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
     ) -> AnyElement {
         let source = row.image_data().unwrap();
         let id = row.id();
-        let active = self.images.scope == self.history_scope
-            && self
-                .images
-                .selected
-                .as_ref()
-                .is_some_and(|(key, selected)| *key == id && selected == source);
+        let entry = self
+            .images
+            .entries
+            .get(&id)
+            .filter(|e| &e.source == source && self.images.scope == self.history_scope);
         let error = source
             .problem
             .or(if source.owner.is_none() {
@@ -122,79 +167,106 @@ impl TranscriptView {
             } else {
                 None
             })
-            .or(if active { self.images.error } else { None });
-        let provenance_owner = source
-            .owner
-            .as_ref()
-            .map(|(host, chat)| {
-                format!(
-                    "Local · daemon {} · lineage {} · chat {}",
-                    host.daemon_id, host.lineage_id, chat
-                )
-            })
-            .unwrap_or_else(|| "Unqualified source".into());
+            .or(entry.and_then(|e| e.error));
         let provenance = format!(
             "{} · {:?} · {} · source {}",
-            provenance_owner,
+            source
+                .owner
+                .as_ref()
+                .map(|(h, c)| format!(
+                    "Local · daemon {} · lineage {} · chat {}",
+                    h.daemon_id, h.lineage_id, c
+                ))
+                .unwrap_or_else(|| "Unqualified source".into()),
             row.reader_key(),
             source.mime,
-            source
-                .hash
-                .as_deref()
-                .unwrap_or("unavailable (not retained)")
+            source.hash.as_deref().unwrap_or("unavailable")
         );
         let scope = self.history_scope;
-        let captured = source.clone();
         let copy_owner = owner.clone();
         let copy_source = source.clone();
+        let copy_key = row.reader_key();
+        let expand_source = source.clone();
+        let expand_key = row.reader_key();
+        let pointer_source = source.clone();
+        let pointer_key = row.reader_key();
+        let painted = self.images.painted.clone();
+        let identity = Button::new(("conversation-image-source", id))
+            .ghost()
+            .small()
+            .label("Copy source identity")
+            .on_click(move |_, _, cx| {
+                let _ = copy_owner.update(cx, |v, cx| {
+                    if v.history_scope == scope
+                        && v.transcript.messages().iter().any(|r| {
+                            r.id() == id
+                                && r.reader_key() == copy_key
+                                && r.image_data() == Some(&copy_source)
+                        })
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(provenance.clone()));
+                    }
+                });
+            });
+        let supported =
+            source.data.is_some() && source.owner.is_some() && row.reader_key().is_some();
+        let expand_owner = owner.clone();
+        let mut actions = div().h_flex().gap_1().child(identity);
+        if supported {
+            actions = actions.child(
+                Button::new(("conversation-image-expand", id))
+                    .ghost()
+                    .small()
+                    .label("Expand")
+                    .disabled(entry.and_then(|e| e.raster.as_ref()).is_none())
+                    .on_click(move |_, w, cx| {
+                        let _ = expand_owner.update(cx, |v, cx| {
+                            v.expand_image(id, scope, &expand_source, &expand_key, w, cx)
+                        });
+                    }),
+            );
+        }
         let mut content = div()
-            .text_color(cx.theme().muted_foreground)
             .id(("conversation-image", id))
             .test_support()
+            .relative()
             .v_flex()
             .w_full()
             .min_w_0()
             .gap_2()
+            .child(
+                canvas(
+                    move |bounds, w, _| {
+                        let visible = bounds.intersect(&w.content_mask().bounds);
+                        if visible.size.width > px(0.) && visible.size.height > px(0.) {
+                            let mut rows = painted.borrow_mut();
+                            if !rows.contains(&id) {
+                                rows.push(id);
+                            }
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .child(
                 div()
                     .h_flex()
                     .flex_wrap()
                     .justify_between()
                     .gap_2()
-                    .child(crate::ui::text(
-                        crate::ui::Text::Caption,
-                        format!("{} · {}", row.display_label(), source.mime),
-                    ))
                     .child(
-                        Button::new(("conversation-image-source", id))
-                            .ghost()
-                            .small()
-                            .label("Copy source identity")
-                            .on_click(move |_, _, cx| {
-                                let _ = copy_owner.update(cx, |view, cx| {
-                                    if view.history_scope == scope
-                                        && view.transcript.messages().iter().any(|row| {
-                                            row.id() == id && row.image_data() == Some(&copy_source)
-                                        })
-                                    {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            provenance.clone(),
-                                        ));
-                                    }
-                                });
-                            }),
-                    ),
+                        crate::ui::text(
+                            crate::ui::Text::Caption,
+                            format!("{} · {}", row.display_label(), source.mime),
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    )
+                    .child(actions),
             );
-        if (source.data.is_none() || source.owner.is_none())
-            && let Some(error) = error
-        {
-            content = content.child(
-                crate::ui::text(crate::ui::Text::Caption, error)
-                    .id(("conversation-image-problem", id))
-                    .test_support(),
-            );
-        }
-        if source.data.is_some() && source.owner.is_some() {
+        if supported {
             let mut viewport = div()
                 .id(("conversation-image-viewport", id))
                 .test_support()
@@ -203,7 +275,7 @@ impl TranscriptView {
                 .min_w_0()
                 .h_48()
                 .overflow_hidden();
-            if active && let Some(raster) = &self.images.raster {
+            if let Some(raster) = entry.and_then(|e| e.raster.as_ref()) {
                 viewport = viewport.child(
                     img(raster.image.clone())
                         .object_fit(ObjectFit::Contain)
@@ -217,63 +289,199 @@ impl TranscriptView {
                 );
             } else {
                 viewport = viewport.child(
-                    crate::ui::text(
-                        crate::ui::Text::Caption,
-                        if let Some(error) = error {
-                            error
-                        } else if active {
-                            "Loading image…"
-                        } else {
-                            "Stored image preview"
-                        },
-                    )
-                    .id(("conversation-image-status", id))
-                    .test_support(),
+                    crate::ui::text(crate::ui::Text::Caption, error.unwrap_or("Loading image…"))
+                        .id(("conversation-image-status", id))
+                        .test_support(),
                 );
             }
-            content = content.child(viewport).child(
-                div().h_flex().child(
-                    Button::new(("conversation-image-preview", id))
-                        .ghost()
-                        .small()
-                        .label(if active && self.images.raster.is_some() {
-                            "Hide image"
-                        } else if active && error.is_some() {
-                            "Retry preview"
-                        } else {
-                            "Preview image"
-                        })
-                        .disabled(active && self.images.stop.is_some())
-                        .on_click(move |_, _, cx| {
-                            let _ = owner.update(cx, |view, cx| {
-                                if view.history_scope != scope
-                                    || !view.transcript.messages().iter().any(|row| {
-                                        row.id() == id && row.image_data() == Some(&captured)
-                                    })
-                                {
-                                    return;
-                                }
-                                if active && view.images.raster.is_some() {
-                                    view.clear_image(cx);
-                                    cx.notify();
-                                } else {
-                                    view.open_image(id, cx);
-                                }
-                            });
-                        }),
-                ),
-            );
-            if source.mime == "image/gif" {
-                content = content.child(crate::ui::text(
+            content = content.child(viewport.cursor_pointer().on_click(move |_, w, cx| {
+                let _ = owner.update(cx, |v, cx| {
+                    v.expand_image(id, scope, &pointer_source, &pointer_key, w, cx)
+                });
+            }));
+        } else {
+            content = content.child(
+                crate::ui::text(
                     crate::ui::Text::Caption,
-                    "First frame only. Animation is not played.",
-                ));
-            }
+                    error.unwrap_or("Source identity unavailable. No preview loaded."),
+                )
+                .id(("conversation-image-problem", id))
+                .test_support(),
+            );
+        }
+        if source.mime == "image/gif" {
+            content = content.child(crate::ui::text(
+                crate::ui::Text::Caption,
+                "First frame only",
+            ));
         }
         content.into_any_element()
     }
+    fn expand_image(
+        &mut self,
+        id: u64,
+        scope: u64,
+        source: &Arc<crate::conversation_images::Source>,
+        key: &Option<crate::model::ReaderKey>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .transcript
+            .messages()
+            .iter()
+            .any(|r| r.id() == id && &r.reader_key() == key && r.image_data() == Some(source))
+        {
+            return;
+        }
+        if self.history_scope != scope || self.history_guard.as_ref().is_some_and(|g| !g(w, cx)) {
+            return;
+        }
+        let Some(e) = self.images.entries.get(&id) else {
+            return;
+        };
+        let Some(raster) = e.raster.clone() else {
+            return;
+        };
+        let source = e.source.clone();
+        let key = e.key.clone();
+        let parent = cx.entity();
+        let reader = cx.new(|cx| ImageReader {
+            parent: parent.downgrade(),
+            key,
+            scope,
+            id,
+            source,
+            raster: Some(raster),
+            zoom: Default::default(),
+            focus: cx.focus_handle(),
+            source_copy: None,
+            _watch: cx.observe(&parent, |_, _, cx| {
+                cx.notify();
+            }),
+        });
+        let focus = reader.read(cx).focus.clone();
+        w.open_dialog(cx, move |dialog, w, _| {
+            let closing = reader.clone();
+            dialog
+                .on_close(move |_, _, cx| {
+                    closing.update(cx, |v, _| {
+                        v.source_copy = None;
+                        v.raster = None;
+                    })
+                })
+                .title("Image")
+                .w(px((f32::from(w.viewport_size().width) - 48.).min(1040.)))
+                .child(
+                    div()
+                        .h(px((f32::from(w.viewport_size().height) - 180.).max(240.)))
+                        .child(reader.clone()),
+                )
+        });
+        focus.focus(w, cx);
+    }
 }
-
+struct ImageReader {
+    parent: gpui_kit::WeakEntity<TranscriptView>,
+    key: crate::model::ReaderKey,
+    scope: u64,
+    id: u64,
+    source: Arc<crate::conversation_images::Source>,
+    raster: Option<crate::artifact_image::Raster>,
+    zoom: crate::reader_zoom::Zoom,
+    focus: gpui_kit::FocusHandle,
+    _watch: Subscription,
+    source_copy: Option<Task<()>>,
+}
+impl ImageReader {
+    fn valid(&self, cx: &App) -> bool {
+        self.raster.is_some()
+            && self.parent.upgrade().is_some_and(|p| {
+                let p = p.read(cx);
+                p.history_scope == self.scope
+                    && p.transcript.messages().iter().any(|r| {
+                        r.id() == self.id
+                            && r.reader_key().as_ref() == Some(&self.key)
+                            && r.image_data() == Some(&self.source)
+                    })
+            })
+    }
+    fn copy_source(&mut self, cx: &mut Context<Self>) {
+        if !self.valid(cx) || self.source_copy.is_some() {
+            return;
+        }
+        let source = self.source.clone();
+        self.source_copy = Some(cx.spawn(async move |reader, cx| {
+            let text = cx
+                .background_executor()
+                .spawn(async move {
+                    source
+                        .data
+                        .as_ref()
+                        .map(|d| format!("data:{};base64,{}", source.mime, d))
+                })
+                .await;
+            let _ = reader.update(cx, |reader, cx| {
+                reader.source_copy = None;
+                if reader.valid(cx)
+                    && let Some(text) = text
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+}
+impl Render for ImageReader {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.valid(cx) || self.raster.is_none() {
+            self.raster = None;
+            self.source_copy = None;
+            return div()
+                .child("Image source changed. Close this reader.")
+                .into_any_element();
+        }
+        let raster = self.raster.as_ref().unwrap();
+        let fit = self.zoom.image_fit(
+            raster.width as f32 / w.scale_factor(),
+            raster.height as f32 / w.scale_factor(),
+        );
+        let controls = self.zoom.toolbar(cx, move |v, command, cx| {
+            v.zoom.apply(command, fit);
+            cx.notify();
+        });
+        let pixels = crate::artifact_image_view::zoomed(raster, &self.zoom, w, cx);
+        div()
+            .id("conversation-reader")
+            .track_focus(&self.focus)
+            .v_flex()
+            .size_full()
+            .gap_2()
+            .on_key_down(cx.listener(move |v, event, _, cx| {
+                if let Some(command) = crate::reader_zoom::Zoom::key(event) {
+                    v.zoom.apply(command, fit);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if v.zoom.pan_key(event) {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(controls)
+            .child(
+                Button::new("conversation-reader-copy")
+                    .ghost()
+                    .small()
+                    .label("Copy source")
+                    .disabled(self.source_copy.is_some())
+                    .on_click(cx.listener(|v, _, _, cx| v.copy_source(cx))),
+            )
+            .child(div().flex_1().min_h_0().child(pixels))
+            .into_any_element()
+    }
+}
 #[cfg(feature = "native-probes")]
 #[path = "conversation_images_probe.rs"]
 pub(crate) mod probe;

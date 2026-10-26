@@ -55,6 +55,27 @@ impl Session {
         self.process = Some(process);
         Ok(())
     }
+    /// Reconstruct idle closures from committed state before dispatch. A changed
+    /// tree/state fails closed rather than targeting different controls.
+    pub(crate) async fn resume(&mut self) -> Result<(), Fault> {
+        let state = self.state.clone();
+        let scene = self.scene.clone();
+        let version = self.version;
+        let result = self.load().await;
+        let same = result.is_ok()
+            && self.state == state
+            && self.scene.as_ref().map(|s| &s.root) == scene.as_ref().map(|s| &s.root);
+        self.version = version;
+        if !same {
+            self.state = state;
+            self.scene = scene;
+            self.stop().await;
+            return result.and(Err(invalid(
+                "Reader changed while resuming. Reopen this preview.",
+            )));
+        }
+        Ok(())
+    }
     pub(crate) async fn load(&mut self) -> Result<(), Fault> {
         let request = json!({"kind":"load","source":self.program.source,"data":self.program.data,"state":self.state,"seed":self.program.seed,"now":self.program.now});
         self.apply(request).await
@@ -181,6 +202,50 @@ fn validate_state(state: &str) -> Result<(), Fault> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn idle_resume_preserves_state_version_and_rejects_changed_closures() {
+        for (source, stateful) in [
+            (
+                "({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(s.n),ui.button({label:'Change',onClick:()=>s.n++})]);}",
+                true,
+            ),
+            (
+                "({ui})=>{let n=0;return()=>ui.column([ui.text(n),ui.button({label:'Change',onClick:()=>n++})]);}",
+                false,
+            ),
+        ] {
+            let mut session = Session::new(
+                Program {
+                    source: source.into(),
+                    data: Value::Null,
+                    seed: "resume".into(),
+                    now: 0.,
+                },
+                None,
+            )
+            .unwrap();
+            session.retry().await.unwrap();
+            session
+                .event(session.version, "0.1", Value::Null)
+                .await
+                .unwrap();
+            let version = session.version;
+            let state = session.state.clone();
+            let root = session.scene.as_ref().unwrap().root.clone();
+            session.stop().await;
+            session.prepare().await.unwrap();
+            let result = session.resume().await;
+            assert_eq!(result.is_ok(), stateful);
+            assert_eq!(session.version, version);
+            assert_eq!(session.state, state);
+            assert_eq!(session.scene.as_ref().unwrap().root, root);
+            if stateful {
+                session.event(version, "0.1", Value::Null).await.unwrap();
+            }
+            session.stop().await;
+        }
+    }
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn failed_handler_state_is_not_committed_and_retry_has_a_fresh_vm() {

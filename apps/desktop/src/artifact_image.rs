@@ -5,10 +5,7 @@ use image::{ImageDecoder, ImageFormat, ImageReader};
 use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, LazyLock},
 };
 
 pub(crate) const ENCODED_CAP: usize = 16 * 1024 * 1024;
@@ -21,21 +18,30 @@ pub(crate) const BUFFER_CAP: u64 = 32 * 1024 * 1024;
 // image::Limits::max_alloc is non-strict/advisory, not a process/RSS guarantee.
 // The source, encoded input, dimensions and native RGBA admission are independent.
 pub(crate) const ADVISORY_CODEC_LIMIT: u64 = 96 * 1024 * 1024;
-static BUSY: AtomicBool = AtomicBool::new(false);
+static ADMISSION: LazyLock<Arc<tokio::sync::Semaphore>> =
+    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(1)));
 
-/// Nonqueued global read/decode admission. Cancelled codecs retain their permit
-/// until bounded work completes; switching readers cannot accumulate decoders.
-pub(crate) struct Permit;
+/// One global decode/read lane. Async callers queue FIFO, never deny content.
+/// Cancelled codecs retain admission until their bounded work finishes.
+pub(crate) struct Permit {
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
 impl Permit {
     pub(crate) fn acquire() -> Result<Self, &'static str> {
-        BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| Self)
+        ADMISSION
+            .clone()
+            .try_acquire_owned()
+            .map(|_permit| Self { _permit })
             .map_err(|_| "Another preview is finishing. Retry this preview shortly.")
     }
-}
-impl Drop for Permit {
-    fn drop(&mut self) {
-        BUSY.store(false, Ordering::Release);
+    pub(crate) async fn queued() -> Self {
+        Self {
+            _permit: ADMISSION
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("image admission stays open"),
+        }
     }
 }
 

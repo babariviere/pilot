@@ -97,11 +97,12 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
                 let viewport = w.find(key("viewport")).bounds();
                 let drawing = w.find(key("drawing")).bounds();
                 assert!(viewport.size.width > px(400.) && viewport.size.width <= px(width));
-                assert!(drawing.size.height > viewport.size.height);
+                assert_eq!(drawing.size.height, viewport.size.height);
                 let label = w.find(key("label-A"));
                 assert!(label.visible());
                 assert_eq!(label.label(), Some("Receive request"));
-                assert!(label.bounds().size.width >= px(200.));
+                let fitted = 208. * pane.read(cx).reader_scale();
+                assert!((f32::from(label.bounds().size.width) - fitted).abs() < 1.);
                 cx.write_to_clipboard(ClipboardItem::new_string("sentinel".into()));
                 w.click(key("copy"), cx);
             })
@@ -121,9 +122,21 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             frame(cx, h);
-            // Traverse real native tab stops rather than assuming macOS clicks focus.
+            // Reader zoom scales native paths AND selectable label geometry.
+            cx.update_window(h, |_, w, cx| {
+                w.click("reader-actual", cx);
+                w.click("reader-in", cx);
+            })
+            .unwrap();
+            for _ in 0..4 {
+                frame(cx, h);
+            }
             cx.update_window(h, |_, w, cx| {
                 let b = w.find(key("label-A")).bounds();
+                assert!(
+                    (f32::from(b.size.width) - 260.).abs() < 1.,
+                    "native label zoom geometry"
+                );
                 w.drag(
                     point(b.left() + px(1.), b.center().y),
                     point(b.right() - px(1.), b.center().y),
@@ -135,39 +148,37 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
                 );
             })
             .unwrap();
-            frame(cx, h);
-            for _ in 0..12 {
-                if cx
-                    .update_window(h, |_, w, _| w.find(key("expand")).focused() == Some(true))
-                    .unwrap()
-                {
-                    break;
-                }
-                cx.update_window(h, |_, w, cx| w.focus_next(cx)).unwrap();
-                frame(cx, h);
-            }
             cx.update_window(h, |_, w, cx| {
-                assert_eq!(w.find(key("expand")).focused(), Some(true));
-                w.press("enter", cx);
+                w.click("reader-in", cx);
+                w.click("reader-in", cx);
             })
             .unwrap();
-            frame(cx, h);
+            for _ in 0..4 {
+                frame(cx, h);
+            }
             let old = cx
                 .update_window(h, |_, w, cx| {
-                    assert!(w.find(key("viewport")).bounds().size.height > px(500.));
-                    let before = w.find(key("drawing")).bounds().origin;
+                    let old = w.find(key("drawing")).bounds().origin;
                     w.scroll(
-                        key("viewport"),
+                        "reader-viewport",
                         ScrollDelta::Pixels(point(px(0.), px(-180.))),
                         cx,
                     );
-                    before
+                    old
                 })
                 .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.find(key("drawing")).bounds().origin.y < old.y);
-                w.click(key("expand"), cx);
+                w.press("secondary-0", cx);
+            })
+            .unwrap();
+            for _ in 0..4 {
+                frame(cx, h);
+            }
+            assert!(cx.update(|cx| pane.read(cx).zoom.scale.is_none()));
+            cx.update_window(h, |_, w, cx| {
+                w.click("reader-actual", cx);
             })
             .unwrap();
             frame(cx, h);

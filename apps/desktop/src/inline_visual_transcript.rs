@@ -11,7 +11,6 @@ use std::{
 #[path = "inline_visual_probe.rs"]
 pub(crate) mod probe;
 
-const LIVE: usize = 2;
 const CACHED: usize = 8;
 fn append_drains(
     pending: &mut Vec<async_channel::Receiver<()>>,
@@ -156,9 +155,6 @@ impl TranscriptView {
         };
         let mut desired: Vec<(u64, Reference)> = Vec::new();
         for (id, reference) in rows {
-            if desired.len() == LIVE {
-                break;
-            }
             if self.inline_visuals.owner.as_deref() != Some(&reference.session)
                 || !self.transcript.messages().iter().any(|r| {
                     r.id() == id
@@ -227,7 +223,9 @@ impl TranscriptView {
             let index = match index {
                 Some(index) => index,
                 None => {
-                    if self.inline_visuals.entries.len() == CACHED {
+                    if self.inline_visuals.entries.len() >= CACHED
+                        && self.inline_visuals.entries.iter().any(|e| e.row.is_none())
+                    {
                         let index = self
                             .inline_visuals
                             .entries
@@ -301,6 +299,7 @@ impl TranscriptView {
         let surveyed = self.inline_visuals.surveyed.clone();
         let scroller = self.scroller.clone();
         let revision = self.inline_visuals.revision;
+        let images = self.images.painted.clone();
         // Prepaint runs before child paint, even for a retained/cached transcript.
         // Deferred reconciliation happens after all actual row paints. No timer/poll.
         canvas(
@@ -324,10 +323,16 @@ impl TranscriptView {
                     return;
                 }
                 painted.borrow_mut().clear();
+                images.borrow_mut().clear();
                 let painted = painted.clone();
+                let images = images.clone();
                 window.defer(cx, move |window, cx| {
                     let rows = std::mem::take(&mut *painted.borrow_mut());
-                    let _ = weak.update(cx, |v, cx| v.inline_reconcile(rows, window, cx));
+                    let ids = std::mem::take(&mut *images.borrow_mut());
+                    let _ = weak.update(cx, |v, cx| {
+                        v.reconcile_images(ids, cx);
+                        v.inline_reconcile(rows, window, cx);
+                    });
                 });
             },
             |_, _, _, _| {},
@@ -356,7 +361,7 @@ impl TranscriptView {
                 }
             });
         }
-        let candidate = matches!(reference.kind.as_str(), "visual" | "unknown");
+        let candidate = matches!(reference.kind.as_str(), "visual" | "unknown" | "image");
         if candidate && self.inline_visuals.enabled {
             let painted = self.inline_visuals.painted.clone();
             let reference = reference.clone();
@@ -406,7 +411,12 @@ impl TranscriptView {
                 }),
         );
         if candidate && self.inline_visuals.enabled {
-            row = row.h(px(crate::artifact_view::inline_visual::HEIGHT)).child(crate::ui::text(crate::ui::Text::Caption, "Native preview loads when visible. At most two run inline; expand another to inspect it.").text_color(cx.theme().muted_foreground));
+            row = row
+                .h(px(crate::artifact_view::inline_visual::HEIGHT))
+                .child(
+                    crate::ui::text(crate::ui::Text::Caption, "Loading native preview…")
+                        .text_color(cx.theme().muted_foreground),
+                );
         }
         row
     }
