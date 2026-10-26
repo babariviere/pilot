@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.69.0](https://github.com/babariviere/pilot/compare/v1.68.0...v1.69.0) (2026-10-26)
+
+
+### Features
+
+* **desktop:** find chats by exact PR number in Jump ([3bb193a](https://github.com/babariviere/pilot/commit/3bb193abb40314c95afa85eabd8755800d77b94b))
+* **desktop:** integrate verified app updates and retained runtime ([4f01f0c](https://github.com/babariviere/pilot/commit/4f01f0c1b2c98bcc623ae617e513a1d08f96e4ff))
+* **desktop:** render native visuals inline in conversations ([6c09974](https://github.com/babariviere/pilot/commit/6c099749d8edebe33198c61d9d9c46f6bdd4ecff))
+* **desktop:** show all inline previews with native reader zoom ([77039a9](https://github.com/babariviere/pilot/commit/77039a94903ec92eb0f1f67ab2958561e3398b86))
+
+
+### Bug Fixes
+
+* **artifacts:** reject invalid and unsupported Mermaid ([adda5d9](https://github.com/babariviere/pilot/commit/adda5d92217b1585c52e68c276e675a4b0a2e51a))
+* **desktop:** remove lifetime chat-action report limit ([2c84cd5](https://github.com/babariviere/pilot/commit/2c84cd5b0e37f8a137c444870c554396fe6eb4d7))
+* **updater:** preserve device identity across platform types ([39ebd51](https://github.com/babariviere/pilot/commit/39ebd51044b5e7a667633fbaf1afd3eafaaba372))
+
 ## [1.68.0](https://github.com/babariviere/pilot/compare/v1.67.0...v1.68.0) (2026-10-26)
 
 
