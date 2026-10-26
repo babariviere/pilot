@@ -42,6 +42,7 @@ pub(crate) struct Message {
     tool_ids: Option<Arc<Vec<String>>>,
     work_note: bool,
     artifact: Option<Arc<crate::artifact_model::Reference>>,
+    image: Option<Arc<crate::conversation_images::Source>>,
 }
 
 impl Message {
@@ -67,6 +68,7 @@ impl Message {
             tool_ids: None,
             work_note: false,
             artifact: None,
+            image: None,
         }
     }
     pub(crate) fn id(&self) -> u64 {
@@ -126,6 +128,25 @@ impl Message {
     }
     pub(crate) fn work_data(&self) -> Option<&Arc<crate::tool_presentation::Work>> {
         self.work.as_ref()
+    }
+    pub(crate) fn image_data(&self) -> Option<&Arc<crate::conversation_images::Source>> {
+        self.image.as_ref()
+    }
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.source.len()
+            + self
+                .image
+                .as_ref()
+                .map_or(0, |image| image.retained_bytes())
+    }
+    pub(crate) fn image(id: u64, label: String, image: crate::conversation_images::Source) -> Self {
+        let mut row = Self::live(
+            id,
+            label,
+            format!("Stored image · block {}", image.block + 1),
+        );
+        row.image = Some(Arc::new(image));
+        row
     }
     pub(crate) fn artifact_data(&self) -> Option<&Arc<crate::artifact_model::Reference>> {
         self.artifact.as_ref()
@@ -293,6 +314,7 @@ impl Transcript {
             tool_ids: None,
             work_note: false,
             artifact: None,
+            image: None,
         });
     }
 
@@ -378,6 +400,7 @@ fn history_message(ix: usize) -> Message {
         tool_ids: None,
         work_note: false,
         artifact: None,
+        image: None,
     }
 }
 

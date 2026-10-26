@@ -617,6 +617,7 @@ async fn run(
                     view.artifacts=Arc::new(Vec::new());
                     view.artifact_metadata=Default::default();
                     model = LiveTranscript::default();
+                    model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
                     view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));

@@ -97,6 +97,19 @@ test=false
             self.assertTrue(scoped.plan(self.args(*values), self.root)[3])
         self.assertFalse(scoped.plan(self.args("--test", "settings_state"), self.root)[3])
 
+    def test_conversation_images_use_static_rasters_not_the_visual_worker(self):
+        self.assertFalse(scoped.plan(self.args("--unit", "conversation_images"), self.root)[3])
+        (self.root / "tests/conversation_images.rs").write_text("fn main() {}\n")
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text() + '''
+[[test]]
+name="conversation_images"
+harness=false
+required-features=["native-probes"]
+''')
+        self.assertFalse(scoped.plan(self.args("--test", "conversation_images"), self.root)[3])
+        self.assertTrue(scoped.plan(self.args("--test", "conversation_images", "--worker"), self.root)[3])
+
     def test_native_platform_and_argument_parser_are_fail_closed(self):
         with patch.object(scoped.platform, "system", return_value="Linux"), self.assertRaises(ValueError):
             scoped.plan(self.args("--test", "controls"), self.root)

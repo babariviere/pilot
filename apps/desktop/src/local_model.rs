@@ -246,6 +246,7 @@ fn bounded(text: &str, cap: usize) -> String {
 #[derive(Default)]
 pub(crate) struct LiveTranscript {
     pub(crate) failure_run_serial: u64,
+    pub(crate) image_owner: Option<(crate::delivery_store::Host, String)>,
     question_pending: crate::question::Pending,
     question_run_active: bool,
     entries: BTreeMap<u64, Vec<Message>>,
@@ -366,7 +367,7 @@ impl LiveTranscript {
         };
         let mut rows = Vec::new();
         for (block_ix, block) in blocks.iter().enumerate() {
-            if block["type"] == "thinking"
+            if matches!(block["type"].as_str(), Some("thinking" | "image"))
                 || (block["type"] == "text"
                     && block["text"].as_str().unwrap_or("").trim().is_empty())
             {
@@ -533,7 +534,11 @@ impl LiveTranscript {
                     }
                 } else {
                     let row = message(key, value, &format!("{label} · entry {id}"));
-                    if role != "unknown" || row.source() != "[No text content]" {
+                    let only_images = row.source() == "[No text content]"
+                        && value["content"].as_array().is_some_and(|blocks| {
+                            blocks.iter().any(|block| block["type"] == "image")
+                        });
+                    if !only_images && (role != "unknown" || row.source() != "[No text content]") {
                         rows.push(row);
                     }
                 }
@@ -542,6 +547,59 @@ impl LiveTranscript {
                         *row = row
                             .clone()
                             .anchored(crate::model::ReaderKey::model(id, ix, None));
+                    }
+                }
+                if matches!(role, "user" | "assistant" | "toolResult")
+                    && let Some(blocks) = value["content"].as_array().filter(|blocks| {
+                        blocks
+                            .iter()
+                            .take(256)
+                            .any(|block| block["type"] == "image")
+                    })
+                {
+                    let retained: usize = self
+                        .entries
+                        .values()
+                        .flatten()
+                        .map(Message::retained_bytes)
+                        .sum();
+                    let added: usize = rows.iter().map(Message::retained_bytes).sum();
+                    let mut remaining =
+                        (SOURCE_CAP - MESSAGE_CAP - 32 * 65536).saturating_sub(retained + added);
+                    // Reserve small identity/placeholder rows, and include text in
+                    // the unchanged per-message source budget.
+                    remaining =
+                        remaining
+                            .saturating_sub(64 * 1024)
+                            .min(MESSAGE_CAP.saturating_sub(
+                                rows[first_row..].iter().map(Message::retained_bytes).sum(),
+                            ));
+                    for (block_ix, block) in blocks
+                        .iter()
+                        .take(256)
+                        .enumerate()
+                        .filter(|(_, b)| b["type"] == "image")
+                    {
+                        let mut image = crate::conversation_images::Source::read(
+                            block_ix,
+                            block,
+                            &mut remaining,
+                        );
+                        image.owner = self.image_owner.clone();
+                        // A separate presentation allocation, never a guessed canonical ID.
+                        let row_key = self.block_key(key, block_ix + 256, Some((id, ix)));
+                        rows.push(
+                            Message::image(row_key, format!("Stored image · {label}"), image)
+                                .anchored(crate::model::ReaderKey::model(id, ix, Some(block_ix))),
+                        );
+                    }
+                    if role == "assistant" {
+                        rows[first_row..].sort_by_key(|row| match row.reader_key() {
+                            Some(crate::model::ReaderKey::Entry { block, .. }) => {
+                                block.unwrap_or(0)
+                            }
+                            _ => 0,
+                        });
                     }
                 }
             }
@@ -558,9 +616,9 @@ impl LiveTranscript {
             .entries
             .values()
             .flatten()
-            .map(|m| m.source().len())
+            .map(Message::retained_bytes)
             .sum();
-        let added_bytes: usize = rows.iter().map(|m| m.source().len()).sum();
+        let added_bytes: usize = rows.iter().map(Message::retained_bytes).sum();
         if retained_rows + rows.len() > ROW_CAP - 33
             || retained_bytes + added_bytes > SOURCE_CAP - MESSAGE_CAP - 32 * 65536
         {
@@ -1023,9 +1081,7 @@ fn message(id: u64, value: &Value, label: &str) -> Message {
                 "toolCall" => {
                     source.push_str("\n\n[Tool call. Actions/arguments are not rendered.]\n\n")
                 }
-                "image" => {
-                    source.push_str("\n\n[Image omitted. No image loading in this viewer.]\n\n")
-                }
+                "image" => {}
                 _ => source.push_str("\n\n[Unsupported content block]\n\n"),
             }
             if source.len() > MESSAGE_CAP {

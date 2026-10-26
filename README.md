@@ -130,6 +130,9 @@ unchanged; outstanding accounting memory and release verification is documented 
 - **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams,
   animated GLSL shaders and static SwiftUI renders. Artifacts stay attached to their chat and can be linked to
   missions and tasks.
+  Pilot Next can preview supported inline images already stored in loaded Local conversations, with
+  bounded decoding and explicit unsupported/over-limit states. This does not add attachment creation;
+  see [stored conversation images](apps/desktop/docs/conversation-images.md).
 - **Query your databases.** Give a project's chats read-only or read-write Postgres access per environment,
   granted up front or when you answer the agent's request. See [Databases](#databases).
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack

@@ -1,3 +1,5 @@
+#[path = "conversation_images_view.rs"]
+pub(crate) mod conversation_images_view;
 use std::{collections::HashMap, time::Duration};
 
 use gpui_kit::{
@@ -33,6 +35,7 @@ pub(crate) struct HistoryControls {
 type HistoryGuard = std::rc::Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub struct TranscriptView {
     transcript: Transcript,
+    images: conversation_images_view::Preview,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
     // for real histories rather than retaining one parser per historical row.
     text_states: Vec<Option<Entity<TextViewState>>>,
@@ -118,6 +121,7 @@ impl TranscriptView {
             state.set_submit_on_enter(true, cx);
             state
         });
+        let image_release = cx.on_release(|view, cx| view.clear_image(cx));
         let subscription =
             cx.subscribe_in(
                 &composer,
@@ -148,11 +152,13 @@ impl TranscriptView {
         });
         let mut view = Self {
             transcript,
+            images: Default::default(),
             text_states: Vec::new(),
             scroller,
             composer,
             _subscriptions: vec![
                 subscription,
+                image_release,
                 scroll_subscription,
                 history_scroll,
                 fonts_subscription,
@@ -184,7 +190,8 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextViewState>> {
         let row = &self.transcript.messages()[ix];
-        if row.work_data().is_some() || row.artifact_data().is_some() {
+        if row.work_data().is_some() || row.artifact_data().is_some() || row.image_data().is_some()
+        {
             return None;
         }
         // User input is not Markdown: a typed image URL cannot trigger a fetch.
@@ -227,6 +234,13 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         assert!(self.readonly);
+        if reset
+            || self
+                .images
+                .selected_id_source_missing(&rows, self.history_scope)
+        {
+            self.clear_image(cx);
+        }
         if reset {
             self.history_slack = px(0.);
         }
@@ -268,7 +282,10 @@ impl TranscriptView {
         );
         for ix in 0..self.transcript.messages().len() {
             let row = &self.transcript.messages()[ix];
-            let state = if row.work_data().is_some() || row.artifact_data().is_some() {
+            let state = if row.work_data().is_some()
+                || row.artifact_data().is_some()
+                || row.image_data().is_some()
+            {
                 self.text_subscriptions.remove(&row.id());
                 None
             } else if let Some((old, state)) = retained.remove(&row.id()) {
@@ -593,6 +610,13 @@ impl TranscriptView {
         owner: gpui_kit::WeakEntity<Self>,
     ) -> impl IntoElement + use<> {
         let row = &self.transcript.messages()[ix];
+        if row.image_data().is_some() {
+            return div()
+                .id(("message", row.id()))
+                .w_full()
+                .min_w_0()
+                .child(self.render_image(row, cx, owner));
+        }
         if let Some(reference) = row.artifact_data() {
             let reference = (**reference).clone();
             return div()

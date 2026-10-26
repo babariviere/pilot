@@ -317,3 +317,9 @@ required-features = ["native-probes"]
 name = "session_failure"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "conversation_images"
+path = "tests/conversation_images.rs"
+harness = false
+required-features = ["native-probes"]
