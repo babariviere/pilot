@@ -1,4 +1,91 @@
 use super::*;
+
+#[gpui_kit::test]
+fn delivery_diagnostic_stays_with_exact_owner_after_autosave_navigation_and_legacy_restore(
+    cx: &mut TestAppContext,
+) {
+    use crate::delivery_store::{
+        Delivery,
+        diagnostic::{Acknowledgment, Category, Diagnostic, Stage},
+    };
+    let (handle, view, commands) = setup_width(cx, 680.);
+    let path =
+        std::env::temp_dir().join(format!("delivery-detail-editor-{}", uuid::Uuid::new_v4()));
+    let mut store = Store::open(path.clone(), book().host.clone()).unwrap();
+    let intent = store
+        .prepare(
+            "chat:a",
+            &Draft {
+                revision: 1,
+                text: "retained native text 👩‍💻".into(),
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .unwrap();
+    let mut delivery = Delivery::from_intent(&intent);
+    delivery.diagnostic = Some(Diagnostic {
+        stage: Stage::Lookup,
+        category: Category::Refused,
+        status: Some(503),
+        acknowledgment: Acknowledgment::Unknown,
+    });
+    store.record_diagnostic("chat:a", &delivery).unwrap();
+    let mut state = WriteState {
+        book: Some(std::sync::Arc::new(store.book.clone())),
+        notice: "Draft saved.",
+        ..Default::default()
+    };
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.accept(state.clone(), w, cx);
+            let detail = e.delivery_detail("chat:a", &e.cache["chat:a"]).unwrap();
+            assert!(detail.1.contains("Receipt check · HTTP 503"));
+            e.select("chat:b".into(), true, false, w, cx);
+            assert!(e.delivery_detail("chat:b", &Draft::default()).is_none());
+            e.select("chat:a".into(), true, false, w, cx);
+            assert!(
+                e.delivery_detail("chat:a", &e.cache["chat:a"])
+                    .unwrap()
+                    .1
+                    .contains("HTTP 503")
+            );
+            let mut wrong = delivery.clone();
+            wrong.target = "other".into();
+            state.delivery_reports.insert(
+                intent.id.clone(),
+                crate::interaction::DeliveryReport {
+                    key: "chat:a".into(),
+                    delivery: wrong,
+                    saved: false,
+                    save_error: Some(Category::PrivateWrite),
+                },
+            );
+            e.accept(state.clone(), w, cx);
+            assert!(
+                !e.delivery_detail("chat:a", &e.cache["chat:a"])
+                    .unwrap()
+                    .1
+                    .contains("not saved")
+            );
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.try_find("delivery-diagnostic").is_some());
+    })
+    .unwrap();
+    assert!(
+        commands.try_recv().is_err(),
+        "Rendering/navigation must not Check/execute/retry"
+    );
+    drop(store);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
 use crate::{
     delivery_store::{Host, Store},
     interaction::WriteState,

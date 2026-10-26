@@ -86,6 +86,18 @@ acknowledgment clears uncertainty without another model POST or claiming the ear
 request failed. Settings scope changes revalidate choices without replacing input or
 starting work. See [chat-models.md](docs/chat-models.md) for guards, limits and evidence.
 
+### Delivery diagnostics
+
+An uncertain retained delivery shows its last sanitized receipt-check or delivery-request
+stage, numeric HTTP status when available, and Local acknowledgment beside the original
+draft. Ordinary autosaves and another chat's notices do not replace these details.
+No provider response body, rejection text, prompt, path or full operation is logged.
+Private receipt-adoption failures keep known Local acknowledgment separate from local
+uncertainty. If diagnostic persistence is unconfirmed, the UI says so; memory-only
+details are not promised across restart. Opening the app never checks or resends an
+operation automatically. Existing **Check** and **Retry same intent** stay explicit.
+See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifecycle.
+
 ## Use real Local chats
 
 ```sh

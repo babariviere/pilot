@@ -1,5 +1,598 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
+
+#[tokio::test]
+async fn delivery_diagnostic_memory_ack_survives_capacity_and_failed_check() {
+    use crate::delivery_store::{RECOVER_CAP, STATE_CAP};
+    let daemon = Daemon::start(Behavior::RejectThenLookupRefused).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let mut initial = draft(1, "original immutable input");
+    initial.recovered = Arc::new(vec!["prior recovery".into(); 8]);
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), initial.clone())]))
+        .unwrap();
+    let intent = store.prepare("chat:a", &initial, false, false).unwrap();
+    let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    store
+        .save_edits(BTreeMap::from([(
+            "chat:a".into(),
+            draft(2, "newer native input"),
+        )]))
+        .unwrap();
+    let mut pad = Draft {
+        recovered: Arc::new(vec![String::new(); 4]),
+        ..Default::default()
+    };
+    let mut estimate = store.book.clone();
+    estimate.drafts.insert("chat:pad".into(), pad.clone());
+    let mut left = STATE_CAP - 16 - serde_json::to_vec(&estimate).unwrap().len();
+    for text in Arc::make_mut(&mut pad.recovered) {
+        let n = left.min(RECOVER_CAP);
+        *text = "x".repeat(n);
+        left -= n;
+    }
+    assert_eq!(left, 0);
+    store
+        .save_edits(BTreeMap::from([("chat:pad".into(), pad)]))
+        .unwrap();
+    assert!(!store.is_faulted());
+    drop(store);
+    let (client, updates) = ready(&daemon, &temp).await;
+    assert!(
+        daemon.seen.lock().unwrap().requests.is_empty(),
+        "Restart never checks delivery"
+    );
+    assert!(client.command(WriteCommand::Check {
+        id: intent.id.clone(),
+        retry: true
+    }));
+    let first = until(&updates, |s| s.delivery_reports.contains_key(&intent.id)).await;
+    let report = &first.delivery_reports[&intent.id];
+    assert_eq!(
+        report.delivery.diagnostic.unwrap().acknowledgment,
+        Acknowledgment::Rejected
+    );
+    assert_eq!(
+        report.delivery.diagnostic.unwrap().category,
+        Category::PrivateState
+    );
+    assert_eq!(report.save_error, Some(Category::PrivateCapacity));
+    assert!(!report.saved);
+    // Carry only the observation's acknowledgment, never another tuple's.
+    for acknowledgment in [Acknowledgment::Accepted, Acknowledgment::Rejected] {
+        let mut previous = report.clone();
+        previous
+            .delivery
+            .diagnostic
+            .as_mut()
+            .unwrap()
+            .acknowledgment = acknowledgment;
+        assert_eq!(
+            DeliveryReport::new(&intent, Some(&previous))
+                .delivery
+                .diagnostic
+                .unwrap()
+                .acknowledgment,
+            acknowledgment
+        );
+        for field in 0..5 {
+            let mut wrong = previous.clone();
+            match field {
+                0 => wrong.key = "chat:other".into(),
+                1 => wrong.delivery.id = "other".into(),
+                2 => wrong.delivery.target = "other".into(),
+                3 => wrong.delivery.kind = "chat-create".into(),
+                _ => wrong.delivery.revision += 1,
+            }
+            assert_eq!(
+                DeliveryReport::new(&intent, Some(&wrong))
+                    .delivery
+                    .diagnostic
+                    .unwrap()
+                    .acknowledgment,
+                Acknowledgment::Unknown
+            );
+        }
+    }
+    assert!(
+        first.error.is_none(),
+        "Non-I/O capacity must not fault the store"
+    );
+    assert!(
+        first.book.as_ref().unwrap().pending[&intent.id]
+            .diagnostic
+            .is_none()
+    );
+    assert!(client.command(WriteCommand::Check {
+        id: intent.id.clone(),
+        retry: false
+    }));
+    let second = until(&updates, |s| {
+        s.delivery_reports
+            .get(&intent.id)
+            .is_some_and(|r| r.delivery.diagnostic.unwrap().category == Category::Refused)
+    })
+    .await;
+    let diagnostic = second.delivery_reports[&intent.id]
+        .delivery
+        .diagnostic
+        .unwrap();
+    assert_eq!(
+        (diagnostic.stage, diagnostic.status),
+        (Stage::Lookup, Some(503))
+    );
+    assert_eq!(
+        diagnostic.acknowledgment,
+        Acknowledgment::Rejected,
+        "A failed Check must not erase the only memory-known acknowledgment"
+    );
+    assert!(second.error.is_none());
+    assert!(!second.delivery_reports[&intent.id].saved);
+    let kept = &second.book.as_ref().unwrap().pending[&intent.id];
+    assert_eq!(kept.state, "unknown");
+    assert!(kept.diagnostic.is_none());
+    assert_eq!(
+        serde_json::to_vec(kept.operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    assert_eq!(
+        second.book.as_ref().unwrap().drafts["chat:a"].text,
+        "newer native input"
+    );
+    assert_eq!(
+        daemon.seen.lock().unwrap().envelopes.len(),
+        1,
+        "Failed lookup must execute nothing"
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+
+#[tokio::test]
+async fn delivery_diagnostic_followup_malformed_state_and_identity_gate_never_execute() {
+    for bad_gate in [false, true] {
+        let daemon = Daemon::start(if bad_gate {
+            Behavior::BadIdentity
+        } else {
+            Behavior::Accept
+        })
+        .await;
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        let intent = store
+            .prepare("chat:a", &draft(1, "original"), false, false)
+            .unwrap();
+        let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+        if bad_gate {
+            store.pending(&intent.id).unwrap();
+        } else {
+            let op = intent.operation.as_ref().unwrap();
+            daemon.seen.lock().unwrap().operations.insert(intent.id.clone(),json!({
+                "state":"not-a-receipt-state","operationId":op.operation_id,"payloadHash":op.payload_hash,
+                "destination":op.destination,"targetId":op.target_id
+            }));
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .retry(reqwest::retry::never())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let mut report = None;
+        assert!(
+            reconcile(
+                &client,
+                &daemon.options,
+                &mut store,
+                &intent.id,
+                false,
+                &mut report
+            )
+            .await
+            .is_err()
+        );
+        let mut state = WriteState::default();
+        retain_report(&mut state, &mut store, report);
+        let d = state.delivery_reports[&intent.id]
+            .delivery
+            .diagnostic
+            .unwrap();
+        assert_eq!(
+            d.category,
+            if bad_gate {
+                Category::Identity
+            } else {
+                Category::Malformed
+            }
+        );
+        assert_eq!(
+            d.stage,
+            if bad_gate {
+                Stage::Identity
+            } else {
+                Stage::Lookup
+            }
+        );
+        assert_eq!(
+            d.acknowledgment,
+            if bad_gate {
+                Acknowledgment::Pending
+            } else {
+                Acknowledgment::Unknown
+            }
+        );
+        assert_eq!(
+            serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+            original
+        );
+        assert!(daemon.seen.lock().unwrap().envelopes.is_empty());
+    }
+}
+#[tokio::test]
+async fn delivery_diagnostic_followup_known_rejection_survives_non_io_adoption_failure_and_restart()
+{
+    let daemon = Daemon::start(Behavior::Reject).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let mut initial = draft(1, "original");
+    initial.recovered = Arc::new(vec!["retained recovery".into(); 8]);
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), initial.clone())]))
+        .unwrap();
+    let intent = store.prepare("chat:a", &initial, false, false).unwrap();
+    store
+        .save_edits(BTreeMap::from([("chat:a".into(), draft(2, "newer draft"))]))
+        .unwrap();
+    let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let mut report = None;
+    assert!(
+        reconcile(
+            &client,
+            &daemon.options,
+            &mut store,
+            &intent.id,
+            true,
+            &mut report
+        )
+        .await
+        .is_err()
+    );
+    let mut state = WriteState::default();
+    retain_report(&mut state, &mut store, report);
+    let d = state.delivery_reports[&intent.id]
+        .delivery
+        .diagnostic
+        .unwrap();
+    assert_eq!(
+        (d.stage, d.category, d.acknowledgment),
+        (
+            Stage::Adoption,
+            Category::PrivateState,
+            Acknowledgment::Rejected
+        )
+    );
+    assert!(!store.is_faulted());
+    assert!(state.delivery_reports[&intent.id].saved);
+    drop(store);
+    let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    assert_eq!(store.book.pending[&intent.id].diagnostic, Some(d));
+    assert_eq!(store.book.pending[&intent.id].state, "unknown");
+    assert_eq!(store.book.drafts["chat:a"].text, "newer draft");
+    assert_eq!(store.book.drafts["chat:a"].recovered.len(), 8);
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
+}
+#[tokio::test]
+async fn delivery_diagnostic_followup_diagnostic_write_cannot_erase_a_durable_acceptance() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "original"), false, false)
+        .unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let mut report = None;
+    assert!(
+        reconcile(
+            &client,
+            &daemon.options,
+            &mut store,
+            &intent.id,
+            true,
+            &mut report
+        )
+        .await
+        .is_ok()
+    );
+    assert!(store.book.pending.is_empty());
+    store.fail_write = true;
+    let mut state = WriteState::default();
+    retain_report(&mut state, &mut store, report);
+    assert_eq!(
+        state.delivery_reports[&intent.id]
+            .delivery
+            .diagnostic
+            .unwrap()
+            .acknowledgment,
+        Acknowledgment::Accepted
+    );
+    assert!(!state.delivery_reports[&intent.id].saved);
+    assert!(state.error.is_some());
+    drop(store);
+    let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let last = store.book.drafts["chat:a"].last.as_ref().unwrap();
+    assert_eq!(
+        (last.id.as_str(), last.target.as_str(), last.state.as_str()),
+        (intent.id.as_str(), intent.target.as_str(), "accepted")
+    );
+    assert!(
+        last.diagnostic.is_none(),
+        "Only the new diagnostic failed to persist, not acceptance"
+    );
+    assert!(store.book.pending.is_empty());
+    assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
+}
+
+#[tokio::test]
+async fn delivery_diagnostic_http_boundaries_are_typed_sanitized_and_exact() {
+    for (behavior, stage, category, status) in [
+        (
+            Behavior::LookupRefused,
+            Stage::Lookup,
+            Category::Refused,
+            503,
+        ),
+        (
+            Behavior::ExecuteRefused,
+            Stage::Execute,
+            Category::Refused,
+            503,
+        ),
+        (
+            Behavior::LookupMalformed,
+            Stage::Lookup,
+            Category::Malformed,
+            200,
+        ),
+        (
+            Behavior::LookupOversize,
+            Stage::Lookup,
+            Category::TooLarge,
+            200,
+        ),
+        (
+            Behavior::LookupTruncated,
+            Stage::Lookup,
+            Category::ResponseInterrupted,
+            200,
+        ),
+        (
+            Behavior::WrongReceipt,
+            Stage::Execute,
+            Category::ReceiptMismatch,
+            200,
+        ),
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        submit(&client, "chat:a", 1, "retained original", 1, false);
+        let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+        let book = state.book.as_ref().unwrap();
+        let intent = book.pending.values().next().unwrap();
+        let detail = intent.diagnostic.unwrap();
+        assert_eq!(
+            (detail.stage, detail.category, detail.status),
+            (stage, category, Some(status))
+        );
+        assert_eq!(detail.acknowledgment, Acknowledgment::Unknown);
+        assert!(state.delivery_reports[&intent.id].saved);
+        assert!(
+            !serde_json::to_string(book)
+                .unwrap()
+                .contains("private provider")
+        );
+        assert!(!detail.caption().contains("/sensitive"));
+        client.command(WriteCommand::Close);
+        until(&updates, |s| s.flushed).await;
+    }
+}
+
+#[tokio::test]
+async fn delivery_diagnostic_loss_autosave_other_owner_restart_and_lookup_only_keep_original() {
+    for behavior in [Behavior::LostBeforeAdmission, Behavior::LostAccepted] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        submit(&client, "new:slot", 1, "retained original", 1, false);
+        let state = until(&updates, |s| s.handled.get("new:slot") == Some(&1)).await;
+        let intent = state
+            .book
+            .as_ref()
+            .unwrap()
+            .pending
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+        let diagnostic = intent.diagnostic.unwrap();
+        assert_eq!(
+            (diagnostic.stage, diagnostic.category),
+            (Stage::Execute, Category::Interrupted)
+        );
+        assert!(client.edit("chat:other".into(), draft(1, "unrelated autosave")));
+        assert!(client.edit("new:slot".into(), draft(2, "newer draft")));
+        let autosaved = until(&updates, |s| s.notice == "Draft saved.").await;
+        assert_eq!(
+            autosaved.book.as_ref().unwrap().pending[&intent.id].diagnostic,
+            Some(diagnostic)
+        );
+        assert_eq!(
+            autosaved.delivery_reports[&intent.id].delivery.diagnostic,
+            Some(diagnostic)
+        );
+        client.command(WriteCommand::Close);
+        until(&updates, |s| s.flushed).await;
+        drop(client);
+        assert!(updates.recv().await.is_err());
+        let before = daemon.seen.lock().unwrap().requests.len();
+        let (client, updates) = Interaction::start(daemon.options.clone(), Ok(temp.0.clone()));
+        let restored = until(&updates, |s| s.book.is_some()).await;
+        assert_eq!(daemon.seen.lock().unwrap().requests.len(), before);
+        let kept = &restored.book.as_ref().unwrap().pending[&intent.id];
+        assert_eq!(kept.diagnostic, Some(diagnostic));
+        assert_eq!(
+            serde_json::to_vec(kept.operation.as_ref().unwrap()).unwrap(),
+            original
+        );
+        let envelopes = daemon.seen.lock().unwrap().envelopes.len();
+        client.command(WriteCommand::Check {
+            id: intent.id.clone(),
+            retry: false,
+        });
+        let checked = until(&updates, |s| {
+            s.delivery_reports
+                .get(&intent.id)
+                .is_some_and(|r| r.delivery.diagnostic.unwrap().stage == Stage::Lookup)
+        })
+        .await;
+        assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), envelopes);
+        if behavior == Behavior::LostBeforeAdmission {
+            let kept = &checked.book.as_ref().unwrap().pending[&intent.id];
+            assert_eq!(
+                serde_json::to_vec(kept.operation.as_ref().unwrap()).unwrap(),
+                original
+            );
+            assert_eq!(kept.diagnostic.unwrap().category, Category::Unknown);
+        } else {
+            assert_eq!(
+                checked.book.as_ref().unwrap().drafts["new:slot"]
+                    .last
+                    .as_ref()
+                    .unwrap()
+                    .id,
+                intent.id
+            );
+        }
+        client.command(WriteCommand::Close);
+        until(&updates, |s| s.flushed).await;
+    }
+}
+
+#[tokio::test]
+async fn delivery_diagnostic_valid_acknowledgments_never_retain_arbitrary_rejection_reason() {
+    for (behavior, ack) in [
+        (Behavior::Pending, Acknowledgment::Pending),
+        (Behavior::Accept, Acknowledgment::Accepted),
+        (Behavior::Reject, Acknowledgment::Rejected),
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        submit(&client, "chat:a", 1, "original draft", 1, false);
+        let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+        let report = state.delivery_reports.values().next().unwrap();
+        assert_eq!(report.delivery.diagnostic.unwrap().acknowledgment, ack);
+        assert!(report.saved);
+        assert!(
+            !serde_json::to_string(state.book.as_ref().unwrap())
+                .unwrap()
+                .contains("private provider")
+        );
+        let before = daemon.seen.lock().unwrap().envelopes.len();
+        if behavior == Behavior::Pending {
+            client.command(WriteCommand::Check {
+                id: report.delivery.id.clone(),
+                retry: false,
+            });
+            until(&updates, |s| s.notice.starts_with("Pending:")).await;
+            assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), before);
+        }
+        client.command(WriteCommand::Close);
+        until(&updates, |s| s.flushed).await;
+    }
+}
+
+#[tokio::test]
+async fn delivery_diagnostic_private_adoption_failure_retains_known_ack_in_existing_state() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "original"), false, false)
+        .unwrap();
+    let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    store.fail_write = true;
+    let mut report = None;
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    assert!(
+        reconcile(
+            &client,
+            &daemon.options,
+            &mut store,
+            &intent.id,
+            true,
+            &mut report
+        )
+        .await
+        .is_err()
+    );
+    let mut state = WriteState::default();
+    retain_report(&mut state, &mut store, report);
+    let detail = &state.delivery_reports[&intent.id];
+    assert_eq!(detail.delivery.diagnostic.unwrap().stage, Stage::Adoption);
+    assert_eq!(
+        detail.delivery.diagnostic.unwrap().category,
+        Category::PrivateWrite
+    );
+    assert_eq!(
+        detail.delivery.diagnostic.unwrap().acknowledgment,
+        Acknowledgment::Accepted
+    );
+    assert!(!detail.saved);
+    assert!(state.error.is_some());
+    assert_eq!(store.book.pending[&intent.id].state, "unknown");
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    let diagnostic = detail.delivery.diagnostic;
+    retain_report(&mut state, &mut store, None);
+    assert_eq!(
+        state.delivery_reports[&intent.id].delivery.diagnostic,
+        diagnostic
+    );
+    assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
+    drop(store);
+    let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    assert!(store.book.pending[&intent.id].diagnostic.is_none());
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+}
+
 use serde_json::json;
 use std::fs;
 use tokio::{
@@ -34,6 +627,12 @@ enum Behavior {
     ProjectsUnavailable,
     ProjectRemoved,
     ProjectPathChanged,
+    LookupRefused,
+    RejectThenLookupRefused,
+    ExecuteRefused,
+    LookupMalformed,
+    LookupOversize,
+    LookupTruncated,
 }
 #[derive(Default)]
 struct Seen {
@@ -82,6 +681,21 @@ impl Daemon {
                             let mut body=vec![0;length];reader.read_exact(&mut body).await.unwrap();
                             let payload=if body.is_empty(){Value::Null}else{serde_json::from_slice::<Value>(&body).unwrap()};
                             let mut stream=reader.into_inner();
+                            let reject_then_refuse=behavior==Behavior::RejectThenLookupRefused && path=="/api/operations/receipt" && !record.lock().unwrap().envelopes.is_empty();
+                            let fault=if (path=="/api/operations/receipt" && matches!(behavior,Behavior::LookupRefused|Behavior::LookupMalformed|Behavior::LookupOversize|Behavior::LookupTruncated)) || reject_then_refuse
+                                || (path=="/api/operations" && behavior==Behavior::ExecuteRefused) {
+                                Some(match behavior {
+                                    Behavior::LookupRefused|Behavior::ExecuteRefused|Behavior::RejectThenLookupRefused=>"HTTP/1.1 503 Unavailable\r\nContent-Length: 31\r\nConnection: close\r\n\r\nprivate provider body /sensitive",
+                                    Behavior::LookupOversize=>"HTTP/1.1 200 OK\r\nContent-Length: 4194305\r\nConnection: close\r\n\r\nx",
+                                    Behavior::LookupTruncated=>"HTTP/1.1 200 OK\r\nContent-Length: 128\r\nConnection: close\r\n\r\n{}",
+                                    _=>"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbad",
+                                })
+                            } else {None};
+                            if let Some(response)=fault {
+                                record.lock().unwrap().requests.push((method.clone(),path.clone()));
+                                let _=tokio::time::timeout(Duration::from_secs(1),stream.write_all(response.as_bytes())).await;
+                                return;
+                            }
                             if behavior==Behavior::Slow&&path=="/api/operations"{tokio::time::sleep(Duration::from_secs(30)).await;return;}
                             let response={
                                 let mut seen=record.lock().unwrap();seen.requests.push((method.clone(),path.clone()));
@@ -103,8 +717,8 @@ impl Daemon {
                                     else {
                                         seen.envelopes.push(payload.clone());
                                         if behavior==Behavior::LostBeforeAdmission&&seen.envelopes.len()==1{return;}
-                                        let state=if behavior==Behavior::Pending{"pending"}else if behavior==Behavior::Reject{"rejected"}else{"accepted"};
-                                        let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]}});
+                                        let state=if behavior==Behavior::Pending{"pending"}else if matches!(behavior,Behavior::Reject|Behavior::RejectThenLookupRefused){"rejected"}else{"accepted"};
+                                        let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]},"reason":"private provider body /sensitive"});
                                         if !seen.operations.contains_key(&id){
                                             if payload["kind"]=="chat-create"&&state=="accepted" {
                                                 let request:Value=serde_json::from_str(payload["payload"].as_str().unwrap()).unwrap();

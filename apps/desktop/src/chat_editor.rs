@@ -21,6 +21,9 @@ use gpui_kit::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(feature = "native-probes")]
+#[path = "delivery_probe.rs"]
+pub(crate) mod delivery_probe;
 #[path = "chat_model_picker.rs"]
 mod model_picker;
 #[cfg(feature = "native-probes")]
@@ -596,6 +599,44 @@ impl ChatEditor {
             self.text.update(cx, |state, cx| state.focus(window, cx));
         }
     }
+    fn delivery_detail(&self, key: &str, draft: &Draft) -> Option<(String, String)> {
+        let book = self.state.book.as_ref()?;
+        let summary = if let Some(id) = &draft.pending {
+            let intent = book.pending.get(id).filter(|i| i.key == key)?;
+            crate::delivery_store::Delivery::from_intent(intent)
+        } else {
+            draft.last.clone()?
+        };
+        let report = self
+            .state
+            .delivery_reports
+            .get(&summary.id)
+            .filter(|r| r.key == key && r.delivery.same_operation(&summary));
+        let diagnostic = report
+            .and_then(|r| r.delivery.diagnostic)
+            .or(summary.diagnostic)?;
+        let mut caption = diagnostic.caption();
+        if let Some(report) = report
+            && !report.saved
+        {
+            use crate::delivery_store::diagnostic::Category;
+            caption.push_str(
+                match report
+                    .save_error
+                    .filter(|error| *error != diagnostic.category)
+                {
+                    Some(Category::PrivateCapacity) => {
+                        " Details not durably confirmed for restart: storage full."
+                    }
+                    Some(Category::PrivateWrite) => {
+                        " Details not durably confirmed for restart: private write failed."
+                    }
+                    _ => " Details not durably confirmed for restart.",
+                },
+            );
+        }
+        Some((summary.id, caption))
+    }
     pub(crate) fn resource_navigation_issue(&self) -> Option<&'static str> {
         self.state
             .error
@@ -912,7 +953,21 @@ impl Render for ChatEditor {
                     ))),
             );
         }
+        let delivery_detail = self.delivery_detail(&key, draft);
+        if let Some((_, caption)) = &delivery_detail {
+            let detail = div()
+                .id("delivery-diagnostic")
+                .min_w_0()
+                .child(crate::ui::text(crate::ui::Text::Caption, caption.clone()));
+            #[cfg(any(test, feature = "native-probes"))]
+            let detail = detail.test_support();
+            footer = footer.child(detail);
+        }
         if !self.state.notice.is_empty()
+            && !delivery_detail.as_ref().is_some_and(|(id, _)| {
+                self.state.delivery_notice.as_ref() == Some(id)
+                    || matches!(self.state.notice, "Draft saved." | "Drafts saved.")
+            })
             && self
                 .state
                 .notice_key

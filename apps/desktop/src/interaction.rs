@@ -1,8 +1,9 @@
 //! User-driven Local courier and private draft writer. No legacy send/create POST.
 //! Recovery never executes: only explicit Retry can reuse a stored immutable intent.
+use crate::delivery_store::diagnostic::{Acknowledgment, Category, Diagnostic, Stage};
 use crate::{
     LocalOptions,
-    delivery_store::{Book, Draft, Failure, Operation, Store, valid_key},
+    delivery_store::{Book, Delivery, Draft, Failure, Intent, Operation, Store, valid_key},
     local_client::gate,
 };
 use serde_json::Value;
@@ -21,12 +22,61 @@ pub(crate) struct WriteState {
     pub(crate) flushed: bool,
     pub(crate) handled: BTreeMap<String, u64>,
     pub(crate) notice_key: Option<String>,
+    pub(crate) delivery_notice: Option<String>,
+    pub(crate) delivery_reports: BTreeMap<String, DeliveryReport>,
     pub(crate) mission: Option<crate::mission_conversion::Reply>,
     pub(crate) project: Option<crate::project_registration::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) model: Option<crate::chat_models::Reply>,
     pub(crate) mission_receipts:
         Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
+}
+
+/// Volatile observation of an exact retained operation, not another authority or store.
+#[derive(Clone)]
+pub(crate) struct DeliveryReport {
+    pub(crate) key: String,
+    pub(crate) delivery: Delivery,
+    pub(crate) saved: bool,
+    pub(crate) save_error: Option<Category>,
+}
+impl DeliveryReport {
+    fn new(intent: &Intent, previous: Option<&Self>) -> Self {
+        let mut delivery = Delivery::from_intent(intent);
+        delivery.diagnostic = Some(Diagnostic::started(Stage::Identity));
+        delivery.diagnostic.as_mut().unwrap().acknowledgment = previous
+            .filter(|old| old.key == intent.key && old.delivery.matches(intent, &intent.key))
+            .and_then(|old| old.delivery.diagnostic)
+            .map(|d| d.acknowledgment)
+            .filter(|ack| *ack != Acknowledgment::Unknown)
+            .or_else(|| {
+                intent
+                    .diagnostic
+                    .map(|d| d.acknowledgment)
+                    .filter(|ack| *ack != Acknowledgment::Unknown)
+            })
+            .unwrap_or(if intent.state == "pending" {
+                Acknowledgment::Pending
+            } else {
+                Acknowledgment::Unknown
+            });
+        Self {
+            key: intent.key.clone(),
+            delivery,
+            saved: false,
+            save_error: None,
+        }
+    }
+    fn retained(&self, book: &Book) -> bool {
+        book.pending
+            .get(&self.delivery.id)
+            .is_some_and(|i| self.delivery.matches(i, &self.key))
+            || book
+                .drafts
+                .get(&self.key)
+                .and_then(|d| d.last.as_ref())
+                .is_some_and(|last| last.same_operation(&self.delivery))
+    }
 }
 
 pub(crate) enum WriteCommand {
@@ -181,6 +231,35 @@ impl Interaction {
     }
 }
 
+fn retain_report(status: &mut WriteState, store: &mut Store, report: Option<DeliveryReport>) {
+    status.delivery_notice = report.as_ref().map(|r| r.delivery.id.clone());
+    if let Some(mut report) = report {
+        if let Some(d) = report.delivery.diagnostic.as_mut()
+            && d.category == Category::InFlight
+        {
+            d.category = Category::Interrupted;
+        }
+        // Only AFTER settlement. Diagnostic bytes never reserve adoption space.
+        match store.record_diagnostic(&report.key, &report.delivery) {
+            Ok(()) => report.saved = true,
+            Err(error) => report.save_error = Some(private_category(store, error)),
+        }
+        if report.retained(&store.book) {
+            status
+                .delivery_reports
+                .insert(report.delivery.id.clone(), report);
+        }
+    }
+    status
+        .delivery_reports
+        .retain(|_, r| r.retained(&store.book));
+    debug_assert!(status.delivery_reports.len() <= crate::delivery_store::DRAFT_CAP + 32);
+    if store.is_faulted() {
+        status.error =
+            Some("Private state write failed. Keep/copy unsaved text before restarting.");
+    }
+}
+
 fn publish(
     tx: &async_channel::Sender<WriteState>,
     replace: &async_channel::Receiver<WriteState>,
@@ -322,6 +401,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 .map(|i| i.key.clone()),
             _ => None,
         };
+        let mut delivery_report = None;
         let result = if let Ok(store) = &mut store {
             match flush(store, &edits) {
                 Err(error) => {
@@ -429,7 +509,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 Ok("Delivery is already pending. Check its receipt.")
                             } else {
                                 tokio::select! {
-                                    result=submit(&client,&options,store,Submission {key:&key,draft:&draft,follow_up,stop},|store| {
+                                    result=submit(&client,&options,store,Submission {key:&key,draft:&draft,follow_up,stop},&mut delivery_report,|store| {
                                         status.book=Some(Arc::new(store.book.clone()));status.notice="Intent saved. Waiting for Local delivery.";publish(&updates,&replace,status.clone());
                                     })=>result,
                                     _=close.recv()=>{closing=true;Ok("Closing. Any interrupted delivery remains unconfirmed.")}
@@ -437,8 +517,12 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             }
                         }
                         Some(WriteCommand::Check { id, retry }) => {
+                            // A failed/capacity-refused private note may leave
+                            // the only known ACK in this exact operation's
+                            // worker observation, not in the durable Book.
+                            delivery_report = status.delivery_reports.get(&id).cloned();
                             tokio::select! {
-                                result=reconcile(&client,&options,store,&id,retry)=>result,
+                                result=reconcile(&client,&options,store,&id,retry,&mut delivery_report)=>result,
                                 _=close.recv()=>{closing=true;Ok("Closing. Interrupted lookup is not rejection.")}
                             }
                         }
@@ -481,6 +565,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             }
             Err(*store.as_ref().err().expect("failed store"))
         };
+        if let Ok(store) = &mut store {
+            retain_report(&mut status, store, delivery_report);
+        }
         match result {
             Ok(notice) => status.notice = notice,
             Err(error) => {
@@ -519,25 +606,72 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
 }
 
 async fn read_json(request: reqwest::RequestBuilder) -> Result<Value, Failure> {
-    let mut response = request
-        .send()
+    read_delivery_json(request)
         .await
-        .map_err(|_| "Local request interrupted; delivery is not confirmed")?;
+        .map(|(value, _)| value)
+        .map_err(|e| e.message())
+}
+
+struct HttpFailure {
+    category: Category,
+    status: Option<u16>,
+}
+impl HttpFailure {
+    fn message(&self) -> Failure {
+        match self.category {
+            Category::Refused => "Local request refused or unavailable; delivery is not confirmed",
+            Category::ResponseInterrupted => {
+                "Local response interrupted; delivery is not confirmed"
+            }
+            Category::TooLarge => {
+                "Local response exceeds the 4 MiB bound; delivery is not confirmed"
+            }
+            Category::Malformed => "Invalid Local reply; delivery is not confirmed",
+            _ => "Local request interrupted; delivery is not confirmed",
+        }
+    }
+}
+async fn read_delivery_json(request: reqwest::RequestBuilder) -> Result<(Value, u16), HttpFailure> {
+    let mut response = request.send().await.map_err(|_| HttpFailure {
+        category: Category::Interrupted,
+        status: None,
+    })?;
+    let http_status = response.status().as_u16();
+    let status = Some(http_status);
     if response.status() != reqwest::StatusCode::OK {
-        return Err("Local request refused or unavailable; delivery is not confirmed");
+        return Err(HttpFailure {
+            category: Category::Refused,
+            status,
+        });
+    }
+    if response
+        .content_length()
+        .is_some_and(|n| n > 4 * 1024 * 1024)
+    {
+        return Err(HttpFailure {
+            category: Category::TooLarge,
+            status,
+        });
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "Local response interrupted; delivery is not confirmed")?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|_| HttpFailure {
+        category: Category::ResponseInterrupted,
+        status,
+    })? {
         if body.len() + chunk.len() > 4 * 1024 * 1024 {
-            return Err("Local response exceeds the 4 MiB bound; delivery is not confirmed");
+            return Err(HttpFailure {
+                category: Category::TooLarge,
+                status,
+            });
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|_| "Invalid Local reply; delivery is not confirmed")
+    serde_json::from_slice(&body)
+        .map(|v| (v, http_status))
+        .map_err(|_| HttpFailure {
+            category: Category::Malformed,
+            status,
+        })
 }
 
 async fn writable(
@@ -568,6 +702,7 @@ async fn submit(
     options: &LocalOptions,
     store: &mut Store,
     request: Submission<'_>,
+    report: &mut Option<DeliveryReport>,
     prepared: impl FnOnce(&Store),
 ) -> Result<&'static str, Failure> {
     let Submission {
@@ -637,7 +772,7 @@ async fn submit(
             ),
         }
     } else {
-        reconcile(client, options, store, &intent.id, true).await
+        reconcile(client, options, store, &intent.id, true, report).await
     }
 }
 
@@ -646,20 +781,39 @@ async fn operation(
     options: &LocalOptions,
     op: &Operation,
     lookup: bool,
+    diagnostic: &mut Diagnostic,
 ) -> Result<Value, Failure> {
+    diagnostic.stage = if lookup {
+        Stage::Lookup
+    } else {
+        Stage::Execute
+    };
+    diagnostic.category = Category::InFlight;
+    diagnostic.status = None;
     let body = serde_json::to_vec(op).map_err(|_| "Cannot encode immutable operation")?;
     let path = if lookup {
         "/api/operations/receipt"
     } else {
         "/api/operations"
     };
-    read_json(
+    match read_delivery_json(
         client
             .post(format!("{}{path}", options.loopback()))
             .header("Content-Type", "application/json")
             .body(body),
     )
     .await
+    {
+        Ok((value, status)) => {
+            diagnostic.status = Some(status);
+            Ok(value)
+        }
+        Err(error) => {
+            diagnostic.category = error.category;
+            diagnostic.status = error.status;
+            Err(error.message())
+        }
+    }
 }
 
 async fn reconcile(
@@ -668,24 +822,47 @@ async fn reconcile(
     store: &mut Store,
     id: &str,
     retry: bool,
+    report: &mut Option<DeliveryReport>,
 ) -> Result<&'static str, Failure> {
+    let previous = report.take();
     let Some(intent) = store.book.pending.get(id).cloned() else {
         return Ok("Delivery already settled.");
     };
     let Some(op) = &intent.operation else {
         return Ok("Stop has no receipt API. Its uncertainty cannot be safely retried.");
     };
-    gate(client, options).await?;
-    let mut receipt = operation(client, options, op, true).await?;
+    *report = Some(DeliveryReport::new(&intent, previous.as_ref()));
+    let diagnostic = report
+        .as_mut()
+        .unwrap()
+        .delivery
+        .diagnostic
+        .as_mut()
+        .unwrap();
+    gate(client, options)
+        .await
+        .inspect_err(|_| diagnostic.category = Category::Identity)?;
+    let mut receipt = operation(client, options, op, true, diagnostic).await?;
     if receipt["state"] == "unknown" && retry {
         // Explicit Retry retains the same envelope/target. Pending is NEVER re-posted.
         if op.kind == "chat-send" {
-            writable(client, options, &op.target_id).await?;
+            diagnostic.stage = Stage::Target;
+            diagnostic.category = Category::InFlight;
+            diagnostic.status = None;
+            writable(client, options, &op.target_id)
+                .await
+                .inspect_err(|_| diagnostic.category = Category::Identity)?;
         }
-        gate(client, options).await?;
-        receipt = operation(client, options, op, false).await?;
+        diagnostic.stage = Stage::Identity;
+        diagnostic.category = Category::InFlight;
+        diagnostic.status = None;
+        gate(client, options)
+            .await
+            .inspect_err(|_| diagnostic.category = Category::Identity)?;
+        receipt = operation(client, options, op, false, diagnostic).await?;
     }
     if receipt["state"] == "unknown" {
+        diagnostic.category = Category::Unknown;
         return Ok(
             "Delivery is unknown. Check or explicitly retry this same operation; do not create a fresh one.",
         );
@@ -696,25 +873,59 @@ async fn reconcile(
         || receipt["destination"]
             != serde_json::to_value(&op.destination).map_err(|_| "Invalid receipt destination")?
     {
+        diagnostic.category = Category::ReceiptMismatch;
         return Err("Receipt identity differs. Original draft and operation are retained.");
     }
     match receipt["state"].as_str() {
         Some("pending") => {
-            store.pending(id)?;
+            diagnostic.category = Category::Pending;
+            diagnostic.acknowledgment = Acknowledgment::Pending;
+            if let Err(error) = store.pending(id) {
+                adoption_failure(diagnostic, store, error);
+                return Err(error);
+            }
             Ok("Pending: daemon owns this delivery. Check later; it was not posted again.")
         }
         Some("accepted") => {
             if receipt["result"]["sessionId"] != op.target_id {
+                diagnostic.category = Category::ReceiptMismatch;
                 return Err("Accepted receipt target differs. Draft is retained.");
             }
-            store.finish(id, "accepted", None)?;
+            diagnostic.category = Category::Accepted;
+            diagnostic.acknowledgment = Acknowledgment::Accepted;
+            if let Err(error) = store.finish(id, "accepted", None) {
+                adoption_failure(diagnostic, store, error);
+                return Err(error);
+            }
             Ok("Accepted by Local. A reply may still be streaming or queued.")
         }
         Some("rejected") => {
-            store.finish(id, "rejected", None)?;
+            diagnostic.category = Category::Rejected;
+            diagnostic.acknowledgment = Acknowledgment::Rejected;
+            if let Err(error) = store.finish(id, "rejected", None) {
+                adoption_failure(diagnostic, store, error);
+                return Err(error);
+            }
             Ok("Rejected by Local. The owning draft is retained.")
         }
-        _ => Err("Unknown receipt state. Original draft and operation are retained."),
+        _ => {
+            diagnostic.category = Category::Malformed;
+            Err("Unknown receipt state. Original draft and operation are retained.")
+        }
+    }
+}
+
+fn adoption_failure(diagnostic: &mut Diagnostic, store: &Store, error: Failure) {
+    diagnostic.stage = Stage::Adoption;
+    diagnostic.category = private_category(store, error);
+}
+fn private_category(store: &Store, error: Failure) -> Category {
+    if store.is_faulted() {
+        Category::PrivateWrite
+    } else if error == "Private state is full. Nothing was discarded." {
+        Category::PrivateCapacity
+    } else {
+        Category::PrivateState
     }
 }
 

@@ -182,3 +182,9 @@ name = "artifact_gallery"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "delivery_diagnostics"
+harness = false
+test = false
+required-features = ["native-probes"]

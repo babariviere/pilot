@@ -18,6 +18,10 @@ pub(crate) const STATE_CAP: usize = 16 * 1024 * 1024;
 pub(crate) const RECOVER_CAP: usize = 4 * 1024 * 1024;
 pub(crate) type Failure = &'static str;
 
+#[path = "delivery_diagnostic.rs"]
+pub(crate) mod diagnostic;
+use diagnostic::Diagnostic;
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Host {
@@ -49,6 +53,8 @@ pub(crate) struct Delivery {
     pub(crate) target: String,
     pub(crate) kind: String,
     pub(crate) revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diagnostic: Option<Diagnostic>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +112,8 @@ pub(crate) struct Intent {
     pub(crate) target: String,
     pub(crate) operation: Option<Operation>,
     pub(crate) state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diagnostic: Option<Diagnostic>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,6 +131,32 @@ pub(crate) struct Book {
     pub(crate) project_registrations: BTreeMap<String, crate::project_registration::Attempt>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) model_changes: BTreeMap<String, crate::chat_models::Attempt>,
+}
+
+impl Delivery {
+    pub(crate) fn from_intent(intent: &Intent) -> Self {
+        Self {
+            id: intent.id.clone(),
+            state: intent.state.clone(),
+            target: intent.target.clone(),
+            kind: intent
+                .operation
+                .as_ref()
+                .map_or("stop", |op| op.kind.as_str())
+                .into(),
+            revision: intent.revision,
+            diagnostic: intent.diagnostic,
+        }
+    }
+    pub(crate) fn same_operation(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.target == other.target
+            && self.kind == other.kind
+            && self.revision == other.revision
+    }
+    pub(crate) fn matches(&self, intent: &Intent, key: &str) -> bool {
+        intent.key == key && self.same_operation(&Self::from_intent(intent))
+    }
 }
 
 pub(crate) fn token(value: &str) -> bool {
@@ -221,6 +255,9 @@ impl Book {
         }
         for (key, draft) in &self.drafts {
             validate_draft(key, draft)?;
+            if let Some(diagnostic) = draft.last.as_ref().and_then(|last| last.diagnostic) {
+                diagnostic.validate()?;
+            }
             if let Some(last) = &draft.last
                 && (!token(&last.id)
                     || !token(&last.target)
@@ -237,6 +274,9 @@ impl Book {
             }
         }
         for (id, intent) in &self.pending {
+            if let Some(diagnostic) = intent.diagnostic {
+                diagnostic.validate()?;
+            }
             if id != &intent.id
                 || !token(id)
                 || !token(&intent.target)
@@ -543,7 +583,7 @@ impl Store {
                 let sequence=book.next_sequence;book.next_sequence+=1;
                 Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
             };
-            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into()};
+            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
             book.pending.insert(id,intent.clone());Ok(intent)
         })
@@ -738,7 +778,39 @@ impl Store {
                 target: intent.target,
                 kind,
                 revision: intent.revision,
+                // The old lookup diagnostic is not this settlement's outcome.
+                // Install the new observation separately; details must never
+                // make an otherwise valid settlement exceed the snapshot cap.
+                diagnostic: None,
             });
+            Ok(())
+        })
+    }
+
+    pub(crate) fn record_diagnostic(
+        &mut self,
+        key: &str,
+        delivery: &Delivery,
+    ) -> Result<(), Failure> {
+        self.change(|book| {
+            let diagnostic = delivery.diagnostic.ok_or("Missing delivery observation")?;
+            diagnostic.validate()?;
+            if let Some(intent) = book.pending.get_mut(&delivery.id) {
+                if !delivery.matches(intent, key) {
+                    return Err("Delivery observation owner differs");
+                }
+                intent.diagnostic = Some(diagnostic);
+            } else {
+                let last = book
+                    .drafts
+                    .get_mut(key)
+                    .and_then(|d| d.last.as_mut())
+                    .ok_or("Delivery observation owner disappeared")?;
+                if !last.same_operation(delivery) {
+                    return Err("Delivery observation operation differs");
+                }
+                last.diagnostic = Some(diagnostic);
+            }
             Ok(())
         })
     }

@@ -194,6 +194,7 @@ chmod +x "$1"
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "scoped_models"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "artifact_images"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "artifact_gallery"], calls)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "delivery_diagnostics"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "catalog"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "settings"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission"], calls)

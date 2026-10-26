@@ -1,4 +1,150 @@
 use super::*;
+
+#[test]
+fn delivery_diagnostic_survives_autosave_other_owner_and_restart_without_tuple_changes() {
+    use super::diagnostic::{Acknowledgment, Category, Diagnostic, Stage};
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "retained original"), false, false)
+        .unwrap();
+    let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+    let mut delivery = Delivery::from_intent(&intent);
+    delivery.diagnostic = Some(Diagnostic {
+        stage: Stage::Lookup,
+        category: Category::Refused,
+        status: Some(503),
+        acknowledgment: Acknowledgment::Unknown,
+    });
+    store.record_diagnostic("chat:a", &delivery).unwrap();
+    let before = fs::read(temp.0.join("state-v1.json")).unwrap();
+    assert!(store.record_diagnostic("chat:b", &delivery).is_err());
+    let mut wrong = delivery.clone();
+    wrong.target = "another".into();
+    assert!(store.record_diagnostic("chat:a", &wrong).is_err());
+    assert_eq!(before, fs::read(temp.0.join("state-v1.json")).unwrap());
+    save(&mut store, "chat:b", draft(1, "other owner"));
+    save(&mut store, "chat:a", draft(2, "newer native text"));
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    let kept = &store.book.pending[&intent.id];
+    assert_eq!(kept.diagnostic, delivery.diagnostic);
+    assert_eq!(
+        serde_json::to_vec(kept.operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    assert_eq!(store.book.drafts["chat:a"].text, "newer native text");
+    assert_eq!(kept.state, "unknown");
+}
+
+#[test]
+fn delivery_diagnostic_legacy_absence_and_corrupt_detail_fail_closed() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "legacy"), false, false)
+        .unwrap();
+    let mut value = serde_json::to_value(&store.book).unwrap();
+    value["pending"][&intent.id]
+        .as_object_mut()
+        .unwrap()
+        .remove("diagnostic");
+    let bytes = serde_json::to_vec(&value).unwrap();
+    drop(store);
+    fs::write(temp.0.join("state-v1.json"), &bytes).unwrap();
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.pending[&intent.id].diagnostic.is_none());
+    drop(store);
+    value["pending"][&intent.id]["diagnostic"] = serde_json::json!({"stage":"lookup","category":"refused","status":0,"acknowledgment":"unknown"});
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(temp.0.join("state-v1.json"), &bytes).unwrap();
+    assert!(Store::open(temp.0.clone(), host()).is_err());
+    assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), bytes);
+}
+
+#[test]
+fn delivery_diagnostic_capacity_is_best_effort_and_never_blocks_existing_settlement() {
+    use super::diagnostic::{Acknowledgment, Category, Diagnostic, Stage};
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "capacity"), false, false)
+        .unwrap();
+    store
+        .change(|book| {
+            book.drafts.insert(
+                "chat:pad".into(),
+                Draft {
+                    recovered: Arc::new(vec![String::new(); 4]),
+                    ..Default::default()
+                },
+            );
+            let amount = STATE_CAP - 16 - serde_json::to_vec(book).unwrap().len();
+            let mut left = amount;
+            for text in Arc::make_mut(&mut book.drafts.get_mut("chat:pad").unwrap().recovered) {
+                let n = left.min(RECOVER_CAP);
+                *text = "x".repeat(n);
+                left -= n;
+            }
+            assert_eq!(left, 0);
+            Ok(())
+        })
+        .unwrap();
+    let original = store.book.pending[&intent.id].clone();
+    let mut d = Delivery::from_intent(&intent);
+    d.diagnostic = Some(Diagnostic {
+        stage: Stage::Lookup,
+        category: Category::Unknown,
+        status: Some(200),
+        acknowledgment: Acknowledgment::Unknown,
+    });
+    assert!(store.record_diagnostic("chat:a", &d).is_err());
+    assert!(!store.is_faulted());
+    assert!(store.book.pending[&intent.id] == original);
+    // Existing settlement frees its envelope, independent of diagnostic space.
+    store.finish(&intent.id, "accepted", None).unwrap();
+    assert!(store.book.pending.is_empty());
+    assert_eq!(
+        store.book.drafts["chat:a"].last.as_ref().unwrap().state,
+        "accepted"
+    );
+    d.diagnostic.as_mut().unwrap().category = Category::Accepted;
+    d.diagnostic.as_mut().unwrap().acknowledgment = Acknowledgment::Accepted;
+    store.record_diagnostic("chat:a", &d).unwrap();
+    save(&mut store, "chat:a", draft(2, "next local text"));
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(
+        store.book.drafts["chat:a"]
+            .last
+            .as_ref()
+            .unwrap()
+            .diagnostic,
+        d.diagnostic
+    );
+}
+
+#[test]
+fn delivery_diagnostic_write_failure_preserves_original_durable_bytes() {
+    use super::diagnostic::{Diagnostic, Stage};
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let intent = store
+        .prepare("chat:a", &draft(1, "durable"), false, false)
+        .unwrap();
+    let bytes = fs::read(temp.0.join("state-v1.json")).unwrap();
+    let mut d = Delivery::from_intent(&intent);
+    d.diagnostic = Some(Diagnostic::started(Stage::Lookup));
+    store.fail_write = true;
+    assert!(store.record_diagnostic("chat:a", &d).is_err());
+    assert!(store.is_faulted());
+    assert!(store.book.pending[&intent.id].diagnostic.is_none());
+    assert_eq!(bytes, fs::read(temp.0.join("state-v1.json")).unwrap());
+    drop(store);
+    let store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.pending[&intent.id] == intent);
+}
+
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {

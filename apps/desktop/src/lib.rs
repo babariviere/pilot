@@ -5,6 +5,8 @@ pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_editor;
+#[cfg(feature = "native-probes")]
+pub use chat_editor::delivery_probe::run_delivery_probe;
 mod chat_model_reader;
 mod chat_models;
 #[cfg(any(test, feature = "native-probes"))]
