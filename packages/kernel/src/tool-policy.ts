@@ -93,6 +93,20 @@ const POSTING: Array<{ pattern: RegExp; what: string }> = [
 ];
 const API_WRITE = /\s(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(?:raw-)?field\b|\s--input\b/i;
 const API_POSTING_PATH = /\/(?:comments|reviews|replies|merge)\b|\/pulls\/\d+\/reviews|\/issues\/\d+\/comments/;
+const REACTION_PATH = /\/(?:pulls|issues)\/comments\/\d+\/reactions(?=[\s"'?]|$)/g;
+const API_FIELD = /\s(?:-[fF]|--(?:raw-)?field)[\s=]/g;
+
+/** A +1 reaction on a comment acknowledges a fix. It is the one GitHub write agents may make. */
+function thumbsUpReaction(command: string): boolean {
+	return (
+		/\/(?:pulls|issues)\/comments\/\d+\/reactions(?=[\s"'?]|$)/.test(command) &&
+		!API_POSTING_PATH.test(command.replace(REACTION_PATH, "")) &&
+		(` ${command}`.match(API_FIELD)?.length ?? 0) === 1 &&
+		/\s(?:-[fF]|--(?:raw-)?field)[\s=]+(["']?)content=\+1\1(?=\s|$)/.test(` ${command}`) &&
+		!/\s--input\b/.test(command) &&
+		!/\s(?:-X|--method)[\s=]*(?!POST\b)\w+/i.test(` ${command}`)
+	);
+}
 
 /** Literal shell arguments in codemode, not prose in other tool calls. Never evaluate script source. */
 export function nestedShellCommands(code: string): unknown[] {
@@ -133,7 +147,12 @@ export function githubPosting(arguments_: unknown): string | undefined {
 	for (const { pattern, what } of POSTING) if (pattern.test(text)) return what;
 	// One `gh api` command at a time: a write flag plus a comment/review/merge endpoint.
 	for (const command of text.split(/\n|;|&&|\|\|/)) {
-		if (/\bgh\s+api\b/.test(command) && API_POSTING_PATH.test(command) && API_WRITE.test(` ${command}`))
+		if (
+			/\bgh\s+api\b/.test(command) &&
+			API_POSTING_PATH.test(command) &&
+			API_WRITE.test(` ${command}`) &&
+			!thumbsUpReaction(command)
+		)
 			return "post through the GitHub API";
 	}
 	return undefined;

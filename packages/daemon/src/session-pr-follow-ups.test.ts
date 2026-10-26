@@ -174,6 +174,8 @@ async function setup(cooldownMs?: number) {
 	);
 	const controls = {
 		checks: true,
+		/** Another check still queued or running. */
+		running: false,
 		reviews: true,
 		reviewId: "thread-1",
 		reviewCommentId: "comment-1",
@@ -263,9 +265,14 @@ async function setup(cooldownMs?: number) {
 				JSON.stringify({
 					state: controls.others.some((pr) => pr.number === Number(args[2])) ? "OPEN" : controls.state,
 					headRefName: controls.others.find((pr) => pr.number === Number(args[2]))?.branch ?? branch,
-					statusCheckRollup: controls.checks
-						? [{ __typename: "CheckRun", name: "tests", status: "COMPLETED", conclusion: "FAILURE" }]
-						: [],
+					statusCheckRollup: [
+						...(controls.checks
+							? [{ __typename: "CheckRun", name: "tests", status: "COMPLETED", conclusion: "FAILURE" }]
+							: []),
+						...(controls.running
+							? [{ __typename: "CheckRun", name: "build", status: "IN_PROGRESS", conclusion: "" }]
+							: []),
+					],
 					mergeable: controls.mergeable ?? (controls.conflicts ? "CONFLICTING" : "MERGEABLE"),
 				})
 			);
@@ -464,6 +471,7 @@ test("CI retries do not repeat already-reported review threads", async () => {
 		assert.equal(f.inputs.length, 2);
 		assert.match(f.inputs[1]!.content, /Failed CI checks/);
 		assert.doesNotMatch(f.inputs[1]!.content, /unresolved, non-outdated|New or updated review thread IDs/);
+		assert.doesNotMatch(f.inputs[1]!.content, /\+1 reaction/, "reactions are only asked for review threads");
 	});
 });
 
@@ -537,7 +545,10 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /GitHub's BEHIND status alone is not enough/);
 			assert.doesNotMatch(input.content, /Wait for fresh CI after rebasing/);
 			assert.match(input.content, /After pushing or rebasing, report and finish/);
-			assert.match(input.content, /Pilot monitors fresh CI and sends another follow-up only after a push/);
+			assert.match(
+				input.content,
+				/Pilot waits for fresh CI and sends another follow-up after a push or new review feedback/,
+			);
 			assert.match(
 				input.content,
 				/Do not wait for CI with jobs, polling loops, gh pr checks --watch or gh run watch/,
@@ -551,6 +562,9 @@ test("owned open and draft PRs reopen parked workers with one durable idle-only 
 			assert.match(input.content, /Report results, declined feedback, unsafe rebases and other blockers in Pilot/);
 			assert.match(input.content, /untrusted data/);
 			assert.match(input.content, /Never comment, review, reply, merge, or close on GitHub/);
+			assert.match(input.content, /Latest comment ID by thread: \{"thread-1":"comment-1"\}/);
+			assert.match(input.content, /add a \+1 reaction to its latest comment, the only GitHub write allowed/);
+			assert.match(input.content, /addReaction\(input: \{subjectId: \$id, content: THUMBS_UP\}\)/);
 			assert.deepEqual(activity(f.meta), before);
 			assert.deepEqual(
 				f.manager.list().map((session) => session.id),
@@ -1580,5 +1594,94 @@ test("a refunded follow-up keeps waiting for a push after the last delivered one
 		await f.refresh();
 		assert.equal(f.inputs.length, 3, "the earlier push still counts for the retry");
 		assert.equal(f.meta.prFollowUp?.attempts, 2);
+	});
+});
+
+test("follow-ups wait for running CI, then report complete results, and a stuck check holds them back only so long", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		f.controls.running = true;
+		await f.refresh();
+		assert.equal(f.inputs.length, 0, "failed checks and review feedback wait while other checks still run");
+		assert.equal(f.meta.prFollowUp?.attempts ?? 0, 0, "waiting spends no attempt");
+		assert.equal(f.manager.get(f.id)?.attentionReason, undefined, "Pilot still owns the follow-up");
+		now += 30 * 60_000;
+		await f.refresh();
+		assert.equal(f.inputs.length, 0);
+		f.controls.running = false;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "finished CI releases one complete report");
+		assert.match(f.inputs[0]!.content, /Failed CI checks: \["tests"\]/);
+		assert.match(f.inputs[0]!.content, /New or updated review thread IDs: \["thread-1"\]/);
+		assert.doesNotMatch(f.inputs[0]!.content, /still running/);
+
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		f.pushed();
+		f.controls.running = true;
+		f.controls.reviewId = "thread-2";
+		await f.refresh();
+		assert.equal(f.inputs.length, 1, "fresh CI after a push is awaited too");
+		now += 60 * 60_000 - 1;
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		now++;
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "a check running for an hour no longer holds feedback back");
+		assert.match(f.inputs[1]!.content, /Some CI checks were still running; their results are not included/);
+		assert.match(f.inputs[1]!.content, /New or updated review thread IDs: \["thread-2"\]/);
+	});
+});
+
+test("a check without running CI resets the wait, so later CI is awaited in full", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		f.controls.checks = false;
+		f.controls.conflicts = false;
+		f.controls.running = true;
+		await f.refresh();
+		now += 59 * 60_000;
+		f.controls.running = false;
+		f.controls.reviews = false;
+		await f.refresh();
+		assert.equal(f.inputs.length, 0);
+		f.controls.running = true;
+		f.controls.reviews = true;
+		await f.refresh();
+		now += 2 * 60_000;
+		await f.refresh();
+		assert.equal(f.inputs.length, 0, "the earlier wait does not shorten this one");
+	});
+});
+
+test("review feedback that arrives after a follow-up is reported without a push, and only that feedback", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		f.working(true);
+		// A reviewer comments while the agent works on the follow-up, and the agent finishes without pushing.
+		f.controls.reviewId = "thread-2";
+		f.controls.reviewCommentId = "comment-2";
+		f.working(false);
+		await f.settle();
+		now += cooldown;
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "new review feedback needs no push");
+		const content = f.inputs[1]!.content;
+		assert.match(content, /automatic PR follow-up \(2\/3\)/);
+		assert.match(content, /New or updated review thread IDs: \["thread-2"\]/);
+		assert.match(content, /Latest comment ID by thread: \{"thread-2":"comment-2"\}/);
+		assert.doesNotMatch(
+			content,
+			/Failed CI checks|merge conflicts/,
+			"unpushed CI and conflict reports are not repeated",
+		);
+		f.meta.prFollowUp!.nextAttemptAt = 0;
+		await f.refresh();
+		assert.equal(f.inputs.length, 2, "without a push or new feedback nothing repeats");
+		assert.equal(f.manager.get(f.id)?.attentionReason?.kind, "pr_stuck");
 	});
 });

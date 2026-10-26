@@ -667,12 +667,14 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 					for (const pr of plan.prs) {
 						const result = await resolve(item.session.cwd, item.repo, pr, plan.branch);
 						const problems = result?.problems;
+						// Running checks are passed on too: the host waits for complete CI before following up.
 						if (
 							problems &&
 							(problems.failedChecks.length ||
 								problems.reviewComments ||
 								problems.mergeConflicts ||
-								problems.divergedFrom)
+								problems.divergedFrom ||
+								problems.checksRunning)
 						)
 							checks.push({ pr, problems });
 					}

@@ -355,7 +355,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	}
 	lines.push(
 		"- Agent messages must use the pilot or mission send tool, which preserves their origin. Never POST to the user-message HTTP endpoint. If no supported send can reach the target, report that limitation instead of impersonating the user.",
-		"- Pilot does not post on GitHub and blocks comments, reviews, replies, merges and closes. Put results, questions and anything you decided not to do in your final answer instead.",
+		"- Pilot does not post on GitHub and blocks comments, reviews, replies, merges and closes. The one exception: after pushing a fix for a PR review comment, add a +1 reaction to it. Put results, questions and anything you decided not to do in your final answer instead.",
 	);
 	return lines.join("\n");
 }

@@ -320,6 +320,7 @@ test("health reports failed checks, live review threads and conflicts, and flags
 		reviewComments: 1,
 		reviewThreads: [{ id: "t1", commentId: "comment-1", updatedAt: Date.parse("2026-01-01T00:00:00Z") }],
 		mergeConflicts: true,
+		checksRunning: true,
 	});
 	assert.deepEqual(results.get(2), { overflow: true });
 	assert.match((results.get(3) as { error: Error }).error.message, /head does not match/);

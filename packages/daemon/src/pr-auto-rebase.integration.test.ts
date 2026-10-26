@@ -240,9 +240,14 @@ for (const scenario of ["clean", "conflict", "moved-head", "reviews"] as const) 
 				assert.equal(git(f.remote, "merge-base", head, f.base), f.base);
 				assert.equal(git(f.remote, "show", `${head}:feature.txt`), "PR change");
 				if (scenario === "reviews") {
-					assert.equal(inputs.length, 1);
-					assert.match(inputs[0]!.content, /1 unresolved, non-outdated review thread/);
-					assert.doesNotMatch(inputs[0]!.content, /Failed CI checks|Automatic rebase skipped|merge conflicts/);
+					assert.equal(inputs.length, 0, "review feedback on a restacked head waits for its fresh CI");
+					await f.follow({ failedChecks: [], reviewComments: 1, mergeConflicts: false, checksRunning: true });
+					assert.equal(f.commands.filter((command) => command.type === "input").length, 0);
+					await f.follow({ failedChecks: [], reviewComments: 1, mergeConflicts: false });
+					const followUps = f.commands.filter((command) => command.type === "input");
+					assert.equal(followUps.length, 1);
+					assert.match(followUps[0]!.content, /1 unresolved, non-outdated review thread/);
+					assert.doesNotMatch(followUps[0]!.content, /Failed CI checks|Automatic rebase skipped|merge conflicts/);
 				} else {
 					assert.equal(inputs.length, 0);
 					const saved = JSON.parse(

@@ -485,6 +485,11 @@ export interface PullRequestProblems {
 	 * Falling behind the stack's root base (for example main) is not divergence requiring a restack.
 	 */
 	divergedFrom?: string;
+	/**
+	 * Some reported checks are still queued or running. Not a problem by itself: automatic follow-ups wait
+	 * for complete CI results. EXPECTED contexts that never reported do not count, so they cannot block forever.
+	 */
+	checksRunning?: true;
 }
 
 const healthWhat = "pull request health";
@@ -531,6 +536,16 @@ export function checksPending(rollup: unknown): boolean {
 		Array.isArray(rollup) &&
 		rollup.some((check) =>
 			check.__typename === "CheckRun" ? check.status !== "COMPLETED" : ["PENDING", "EXPECTED"].includes(check.state),
+		)
+	);
+}
+
+/** Checks that actually reported a queued or running state, from a rollup already validated with failedChecks. */
+export function checksRunning(rollup: unknown): boolean {
+	return (
+		Array.isArray(rollup) &&
+		rollup.some((check) =>
+			check.__typename === "CheckRun" ? check.status !== "COMPLETED" : check.state === "PENDING",
 		)
 	);
 }
@@ -612,6 +627,7 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 	const rollup = commit.statusCheckRollup;
 	let checks: string[] = [];
 	let pending = false;
+	let running = false;
 	if (rollup !== undefined && rollup !== null) {
 		const contexts = object(object(rollup, healthWhat).contexts, healthWhat);
 		const hasNextPage = object(contexts.pageInfo, healthWhat).hasNextPage;
@@ -619,6 +635,7 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 		if (hasNextPage) return { overflow: true };
 		checks = failedChecks(contexts.nodes);
 		pending = checksPending(contexts.nodes);
+		running = checksRunning(contexts.nodes);
 	}
 	const threads = object(pr.reviewThreads, healthWhat);
 	if (!Array.isArray(threads.nodes)) invalid(healthWhat);
@@ -649,6 +666,7 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 		...(reviewThreads.length ? { reviewThreads } : {}),
 		mergeConflicts: pr.mergeable === "CONFLICTING",
 		...(divergedFrom ? { divergedFrom } : {}),
+		...(running ? { checksRunning: true as const } : {}),
 	};
 	return { problems, readiness: mergeReadiness({ state: pr.state, ...pr }, problems, pending) };
 }

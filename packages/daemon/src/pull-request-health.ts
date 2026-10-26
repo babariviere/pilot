@@ -6,6 +6,7 @@
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
 	checksPending,
+	checksRunning,
 	failedChecks,
 	githubRepository,
 	type HealthResult,
@@ -182,6 +183,7 @@ export async function discoverPullRequestHealth(
 		mergeConflicts,
 		...(reviewThreads.length ? { reviewThreads } : {}),
 		...(divergedFrom ? { divergedFrom } : {}),
+		...(checksRunning(view.statusCheckRollup) ? { checksRunning: true as const } : {}),
 	});
 	let reviewComments = 0;
 	const reviewThreads: NonNullable<PullRequestProblems["reviewThreads"]> = [];

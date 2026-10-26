@@ -246,7 +246,19 @@ test("only failed terminal checks and legacy FAILURE/ERROR count, with stable un
 	assert.deepEqual(await discoverPullRequestProblems(session(), responses(view(rollup))), {
 		...healthy,
 		failedChecks: ["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED", "legacy failure", "legacy error"],
+		checksRunning: true,
 	});
+	// EXPECTED contexts that never reported cannot hold automatic follow-ups back.
+	assert.equal(
+		(await discoverPullRequestProblems(session(), responses(view([context("legacy expected", "EXPECTED")]))))
+			.checksRunning,
+		undefined,
+	);
+	assert.equal(
+		(await discoverPullRequestProblems(session(), responses(view([context("legacy pending", "PENDING")]))))
+			.checksRunning,
+		true,
+	);
 });
 
 test("stacked PRs report divergence from their base branch", async () => {

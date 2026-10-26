@@ -366,6 +366,31 @@ test("allows reading, pushing and opening pull requests", () => {
 	assert.equal(githubPosting({ command: "gh run view 42 --log-failed" }), undefined);
 });
 
+test("allows only a +1 reaction on a fixed comment", () => {
+	const api = (args: string) => `gh api ${args}`;
+	const comment = "repos/o/r/pulls/" + "comments/7";
+	for (const command of [
+		api(`-X POST ${comment}/reactions -f content=+1`),
+		api(`${comment}/reactions --method POST --field 'content=+1'`),
+		api(`/repos/o/r/issues/${comment.slice(16)}/reactions -f content=+1`),
+		api(
+			"graphql -f query='mutation($id: ID!) { addReaction(input: {subjectId: $id, content: THUMBS_UP}) { clientMutationId } }' -f id=PRRC_1",
+		),
+	])
+		assert.equal(githubPosting({ command }), undefined, command);
+	for (const command of [
+		api(`-X POST ${comment}/reactions -f content=heart`),
+		api(`-X POST ${comment}/reactions -f content=+1 -f body=hi`),
+		api(`-X DELETE ${comment}/reactions/9`),
+		api(`-X PATCH ${comment}/reactions -f content=+1`),
+		api(`${comment}/reactions -f content=+1 --input body.json`),
+		api(`${comment} -f content=+1 -X PATCH`),
+		api("repos/o/r/issues/3/" + "comments/reactions -f content=+1"),
+	])
+		assert.ok(githubPosting({ command }), command);
+	assert.match(pilotPrompt({}), /add a \+1 reaction to it/);
+});
+
 test("blocks stack merging and branch-rewriting commands, including in codemode", () => {
 	for (const subcommand of ["merge", "submit", "push", "sync", "rebase", "modify", "unstack"]) {
 		const command = `gh stack ${subcommand} 12`;
