@@ -33,4 +33,6 @@ export interface DaemonCapabilities {
 	usageQueries?: 1;
 	/** Existing-chat conversion rejects changed membership atomically. Missing on older runtimes. */
 	guardedMissionConversion?: true;
+	/** Status-only mission lifecycle with durable chat/wake suppression. */
+	passiveMissionLifecycle?: true;
 }

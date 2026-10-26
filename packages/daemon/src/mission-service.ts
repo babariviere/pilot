@@ -10,6 +10,7 @@ import type {
 	MissionDetail,
 	MissionEvent,
 	MissionEventKind,
+	MissionLifecycleRequest,
 	MissionResource,
 	MissionTask,
 	MissionTaskWrite,
@@ -211,6 +212,7 @@ export class MissionService {
 				return missionId && home ? { homeId: home.daemonId, lineageId: home.lineageId, missionId } : undefined;
 			},
 			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
+			passiveMissionLifecycle: (missionId) => store.passiveLifecycle(missionId),
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);
 				if (membership?.coordinator && store.require(membership.missionId).title !== title)
@@ -280,18 +282,26 @@ export class MissionService {
 			this.contexts.set(sessionId, JSON.stringify(context ?? null));
 			sessions.missionChanged(sessionId, context);
 		});
-		store.onChange((missionId) => {
+		store.onChange((missionId, passive) => {
 			if (!store.get(missionId)) return;
-			sessions.refreshMissionPullRequests();
-			sessions.requestMainRefresh(store.require(missionId).projectId);
+			if (!passive) {
+				sessions.refreshMissionPullRequests();
+				sessions.requestMainRefresh(store.require(missionId).projectId);
+			}
 			for (const sessionId of store.members(missionId)) {
 				const context = this.context(sessionId);
 				const key = JSON.stringify(context ?? null);
 				if (this.contexts.get(sessionId) === key) continue;
 				this.contexts.set(sessionId, key);
-				sessions.missionChanged(sessionId, context);
+				sessions.missionChanged(sessionId, context, passive);
 			}
 		});
+	}
+
+	/** Synchronous admission/commit excludes a previously admitted chat-archive write. */
+	lifecycle(id: string, write: MissionLifecycleRequest) {
+		this.sessions.assertPassiveLifecycleReady(this.store.members(id));
+		return this.store.lifecycle(id, write.projectId, write.expectedStatus, write.action);
 	}
 
 	/** Resolve only persisted links. Never scan member stores or trust a worker-supplied owner/path. */

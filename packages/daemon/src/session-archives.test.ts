@@ -164,7 +164,7 @@ async function coordinatorFixture(t: TestContext) {
 	store.join(id, mission.id);
 	store.update(mission.id, { coordinatorSessionId: id });
 	await f.sessions["coordinatorUnbindings"].get(id);
-	return { ...f, store, mission, id, meta: f.sessions["metas"].get(id)! };
+	return { ...f, service, store, mission, id, meta: f.sessions["metas"].get(id)! };
 }
 
 test("archiving a mission immediately archives its idle coordinator, even pinned, but not its members", async (t) => {
@@ -1425,5 +1425,174 @@ test("renames persist, broadcast, keep activity and win over a pending generated
 		assert.equal((await manager()).get(ids[1]!)?.title, "Chosen");
 	} finally {
 		await cleanup();
+	}
+});
+
+test("passive lifecycle preserves coordinator, members, scratch and mounted work through restart", async (t) => {
+	const f = await coordinatorFixture(t);
+	const member = f.ids[1]!;
+	f.store.join(member, f.mission.id);
+	const scratch = join(f.home, "sessions", f.id, "scratch", "keep.txt");
+	await mkdir(join(scratch, ".."), { recursive: true });
+	await writeFile(scratch, "retained");
+	const worker = new FakeWorker();
+	f.sessions["workers"].set(f.id, worker);
+	f.meta.working = true;
+	worker.state = "working";
+	f.store.lifecycle(f.mission.id, f.first.id, "active", "archive");
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+	assert.deepEqual(worker.commands, []);
+	f.meta.working = false;
+	worker.state = "idle";
+	f.sessions["emit"](f.meta);
+	await f.sessions["archiveInactiveSessions"]();
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+	assert.equal(f.sessions.get(member)?.archivedAt, undefined);
+	assert.equal(await readFile(scratch, "utf8"), "retained");
+	f.store.lifecycle(f.mission.id, f.first.id, "archived", "reopen");
+	assert.equal(f.store.require(f.mission.id).status, "active");
+	assert.equal(f.sessions["starting"].size, 0);
+	assert.deepEqual(worker.commands, []);
+	f.meta.pending = [
+		{ type: "input", requestId: "mission-notice:held", content: "held", mode: "followUp", onlyIfIdle: true },
+	];
+	await f.sessions["save"](f.meta);
+	await f.sessions.shutdown();
+	const reopened = await f.manager(f.sessions["missions"]!);
+	await reopened["archiveInactiveSessions"]();
+	assert.equal(reopened["metas"].get(f.id)?.pending?.[0]?.requestId, "mission-notice:held");
+	assert.equal(reopened.get(f.id)?.archivedAt, undefined);
+	assert.equal(reopened["workers"].size, 0);
+	assert.equal(await readFile(scratch, "utf8"), "retained");
+});
+
+test("passive lifecycle rejects an already-admitted archive before changing the mission", async (t) => {
+	const f = await coordinatorFixture(t);
+	const entered = deferred();
+	const gate = deferred();
+	const save = f.sessions["save"].bind(f.sessions);
+	f.sessions["save"] = async (meta, archive, pin) => {
+		if (archive) {
+			entered.resolve();
+			await gate.promise;
+		}
+		return save(meta, archive, pin);
+	};
+	const archive = f.sessions.archive(f.id);
+	try {
+		await entered.promise;
+		assert.throws(
+			() =>
+				f.service.lifecycle(f.mission.id, {
+					operationId: randomUUID(),
+					home: { daemonId: "daemon", lineageId: "lineage" },
+					projectId: f.first.id,
+					expectedStatus: "active",
+					action: "archive",
+				}),
+			/already in progress/,
+		);
+		assert.equal(f.store.require(f.mission.id).status, "active");
+		assert.equal(f.store.passiveLifecycle(f.mission.id), false);
+	} finally {
+		gate.resolve();
+		await archive;
+		f.sessions["save"] = save;
+	}
+});
+
+test("passive lifecycle HTTP pins home, holds ACK for durability and exposes post-commit errors", async (t) => {
+	const f = await coordinatorFixture(t);
+	const hello = {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "1.0.0",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin" as const,
+		arch: "arm64" as const,
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: false,
+			coordinatorIsolation: false,
+			independentExecution: true,
+		},
+	};
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(join(f.home, "agent")),
+		terminals,
+		{ service: f.service, store: f.store },
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		hello,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const value = {
+		operationId: randomUUID(),
+		home: { daemonId: "daemon", lineageId: "lineage" },
+		projectId: f.first.id,
+		expectedStatus: "active",
+		action: "archive",
+	};
+	const post = (v: unknown) =>
+		fetch(`${base}/api/missions/${f.mission.id}/lifecycle`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(v),
+		});
+	const gate = deferred();
+	const entered = deferred();
+	const durable = f.store.durable.bind(f.store);
+	try {
+		const wrong = await post({ ...value, home: { daemonId: "other", lineageId: "lineage" } });
+		assert.equal(wrong.status, 409);
+		await wrong.arrayBuffer();
+		assert.equal(f.store.require(f.mission.id).status, "active");
+		const original = t.mock.method(f.store, "durable", async () => {
+			entered.resolve();
+			await gate.promise;
+			await durable();
+		});
+		let answered = false;
+		const pending = post(value).then((r) => {
+			answered = true;
+			return r;
+		});
+		await entered.promise;
+		assert.equal(answered, false);
+		assert.equal(f.store.require(f.mission.id).status, "archived");
+		gate.resolve();
+		const response = await pending;
+		assert.equal(response.status, 200);
+		const ack = (await response.json()) as { operationId: string; mission: { passiveLifecycle?: boolean } };
+		assert.equal(ack.operationId, value.operationId);
+		assert.equal(ack.mission.passiveLifecycle, true);
+		original.mock.restore();
+		const unsubscribe = f.store.onChange(() => {
+			throw new Error("after commit");
+		});
+		const failed = await post({ ...value, operationId: randomUUID(), expectedStatus: "archived", action: "reopen" });
+		assert.equal(failed.status, 400);
+		await failed.arrayBuffer();
+		unsubscribe();
+		assert.equal(f.store.require(f.mission.id).status, "active");
+		assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+		assert.equal(f.sessions["workers"].size, 0);
+	} finally {
+		gate.resolve();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await terminals.shutdown();
 	}
 });

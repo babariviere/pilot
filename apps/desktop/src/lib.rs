@@ -230,3 +230,13 @@ mod task_edit_transport;
 mod task_edit_view;
 #[cfg(feature = "native-probes")]
 pub use task_edit_probe::run_task_edit_probe;
+
+mod mission_lifecycle;
+#[cfg(any(test, feature = "native-probes"))]
+mod mission_lifecycle_fixture;
+#[cfg(feature = "native-probes")]
+mod mission_lifecycle_probe;
+mod mission_lifecycle_transport;
+mod mission_lifecycle_view;
+#[cfg(feature = "native-probes")]
+pub use mission_lifecycle_probe::run_mission_lifecycle_probe;

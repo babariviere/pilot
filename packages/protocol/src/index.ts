@@ -885,6 +885,8 @@ export interface Mission {
 	title: string;
 	goal: string;
 	status: MissionStatus;
+	/** Status-only lifecycle keeps chats intact and automatic coordinator notices paused. */
+	passiveLifecycle?: boolean;
 	/** Chat holding the coordinator role. Omitted: the user coordinates. */
 	coordinatorSessionId?: string;
 	/** The coordinator may start chats for unblocked tasks without being asked. */
@@ -1890,3 +1892,16 @@ export type * from "./telemetry.ts";
 export type * from "./tracking.ts";
 export type * from "./transfers.ts";
 export type * from "./usage-history.ts";
+
+/** Explicit status-only lifecycle, distinct from legacy PATCH side effects. No replay key. */
+export interface MissionLifecycleRequest {
+	operationId: string;
+	home: { daemonId: string; lineageId: string };
+	projectId: string;
+	expectedStatus: MissionStatus;
+	action: "archive" | "reopen";
+}
+export interface MissionLifecycleResponse {
+	operationId: string;
+	mission: Mission;
+}

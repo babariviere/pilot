@@ -79,6 +79,7 @@ import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import { buildMissionCatalog, type MissionCatalogSources } from "./mission-catalog.ts";
+import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
@@ -703,7 +704,11 @@ export function createDaemonServer(
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, {
 				...hello,
-				capabilities: { ...hello.capabilities, guardedMissionConversion: missions ? true : undefined },
+				capabilities: {
+					...hello.capabilities,
+					guardedMissionConversion: missions ? true : undefined,
+					passiveMissionLifecycle: missions ? true : undefined,
+				},
 			});
 		}
 		if (parts[1] === "machine" && parts.length === 2) {
@@ -965,6 +970,17 @@ export function createDaemonServer(
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");
+		}
+		if (
+			missions &&
+			parts[1] === "missions" &&
+			parts.length === 4 &&
+			parts[3] === "lifecycle" &&
+			req.method === "POST"
+		) {
+			const write = parseMissionLifecycle(await readJson(req), catalogHost);
+			const mission = missions.service.lifecycle(parts[2]!, write);
+			return json(res, 200, { operationId: write.operationId, mission });
 		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "projects" && parts[3] === "databases" && parts.length === 4) {

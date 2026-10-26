@@ -487,7 +487,7 @@ export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
 	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
 	private db: DatabaseSync;
-	private readonly listeners = new Set<(missionId: string) => void>();
+	private readonly listeners = new Set<(missionId: string, passive?: boolean) => void>();
 	private readonly linearSyncListeners = new Set<() => void>();
 	private readonly linearSyncChanged = new Set<string>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
@@ -691,6 +691,8 @@ export class MissionStore {
 				"CREATE INDEX IF NOT EXISTS resources_by_linear_key ON resources(mission_id, linear_key, task_id)",
 			);
 		});
+		if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "passive_lifecycle"))
+			this.db.exec("ALTER TABLE missions ADD COLUMN passive_lifecycle INTEGER NOT NULL DEFAULT 0");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "linear_sync"))
@@ -1246,7 +1248,7 @@ export class MissionStore {
 	}
 
 	/** Called after every committed change of a mission, including membership and deletion. */
-	onChange(listener: (missionId: string) => void): () => void {
+	onChange(listener: (missionId: string, passive?: boolean) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -1267,7 +1269,7 @@ export class MissionStore {
 		return () => this.memberListeners.delete(listener);
 	}
 
-	private changed(missionId: string, sessions: string[] = []): void {
+	private changed(missionId: string, sessions: string[] = [], passive = false): void {
 		if (this.batchedChanges) {
 			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
 			for (const session of sessions) pending.add(session);
@@ -1276,7 +1278,7 @@ export class MissionStore {
 		}
 		if (this.referenceBatch === missionId) return;
 		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
-		for (const listener of this.listeners) listener(missionId);
+		for (const listener of this.listeners) listener(missionId, passive);
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
 
@@ -1775,7 +1777,8 @@ export class MissionStore {
 	/** Freeze both the cutoff and payload before IPC, so an uncertain acknowledgement has a stable retry. */
 	prepareNotice(id: string, sessionId: string, now: number): MissionNotice | undefined {
 		const mission = this.require(id);
-		if (mission.status !== "active" || mission.coordinatorSessionId !== sessionId) return undefined;
+		if (mission.status !== "active" || this.passiveLifecycle(id) || mission.coordinatorSessionId !== sessionId)
+			return undefined;
 		return this.transaction(() => {
 			this.run("DELETE FROM notices WHERE delivered_at <= ?", now - NOTICE_WINDOW_MS);
 			if (!this.noticeDeadlines(now, id).some((deadline) => deadline.at <= now)) return undefined;
@@ -1847,7 +1850,7 @@ export class MissionStore {
 
 	noticeAllowed(sessionId: string, requestId: string): boolean {
 		return !!this.one(
-			"SELECT n.request_id FROM notices n JOIN missions m ON m.id = n.mission_id JOIN members member ON member.mission_id = m.id AND member.session_id = n.session_id WHERE n.request_id = ? AND n.session_id = ? AND n.delivered_at IS NULL AND m.status = 'active' AND m.coordinator_session_id = n.session_id",
+			"SELECT n.request_id FROM notices n JOIN missions m ON m.id = n.mission_id JOIN members member ON member.mission_id = m.id AND member.session_id = n.session_id WHERE n.request_id = ? AND n.session_id = ? AND n.delivered_at IS NULL AND m.status = 'active' AND m.passive_lifecycle = 0 AND m.coordinator_session_id = n.session_id",
 			requestId,
 			sessionId,
 		);
@@ -2197,6 +2200,38 @@ export class MissionStore {
 			for (const listener of this.completionListeners) listener(mission.projectId, id, mission.completedAt ?? now);
 		this.changed(id, this.members(id));
 		return this.require(id);
+	}
+
+	/** Explicit status-only lifecycle. No task reconciliation, role transitions, chat archival or wake. */
+	lifecycle(id: string, projectId: string, expected: MissionStatus, action: "archive" | "reopen"): Mission {
+		if (this.batchedChanges) throw new Conflict("Lifecycle changes cannot be batched");
+		const mission = this.require(id);
+		if (mission.projectId !== projectId || mission.status !== expected)
+			throw new Conflict("The confirmed mission has changed; review it again");
+		if (
+			(action !== "archive" && action !== "reopen") ||
+			(action === "archive" ? expected === "archived" : expected === "active")
+		)
+			throw new Conflict("That lifecycle transition is unavailable");
+		const status = action === "archive" ? "archived" : "active";
+		const now = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=NULL,archived_at=? WHERE id=?",
+				status,
+				now,
+				status === "archived" ? now : null,
+				id,
+			);
+			this.event(id, "status", `Mission marked ${status} without chat lifecycle actions`, USER, { at: now });
+		});
+		this.changed(id, [], true);
+		return this.require(id);
+	}
+
+	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices or archival. */
+	passiveLifecycle(id: string): boolean {
+		return this.one("SELECT passive_lifecycle FROM missions WHERE id=?", id)?.passive_lifecycle === 1;
 	}
 
 	/** Detaches member chats; they keep their history. */
@@ -4565,6 +4600,7 @@ function missionFrom(row: Row): Mission {
 		title: str(row.title!),
 		goal: str(row.goal!),
 		status: str(row.status!) as MissionStatus,
+		...(row.passive_lifecycle === 1 ? { passiveLifecycle: true } : {}),
 		...(row.coordinator_session_id ? { coordinatorSessionId: str(row.coordinator_session_id) } : {}),
 		...(row.autopilot ? { autopilot: true } : {}),
 		phaseGating: row.phase_gating === 1,

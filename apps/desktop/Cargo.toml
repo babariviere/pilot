@@ -284,3 +284,9 @@ name = "context_usage"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "mission_lifecycle"
+harness = false
+test = false
+required-features = ["native-probes"]

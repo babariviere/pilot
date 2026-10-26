@@ -24,6 +24,7 @@ export class MissionNotices {
 				const chat = mission?.coordinatorSessionId ? sessions.get(mission.coordinatorSessionId) : undefined;
 				return !!(
 					mission?.status === "active" &&
+					!store.passiveLifecycle(missionId) &&
 					chat &&
 					chat.archivedAt === undefined &&
 					chat.state !== "working" &&
@@ -148,7 +149,7 @@ export class MissionNotices {
 	private async deliver(missionId: string, now: number): Promise<void> {
 		const mission = this.store.require(missionId);
 		const id = mission.coordinatorSessionId;
-		if (mission.status !== "active" || !id) return;
+		if (mission.status !== "active" || this.store.passiveLifecycle(missionId) || !id) return;
 		// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
 		const retry = this.store.pendingNotice(missionId);
 		if (!this.sessions.canSendNotice(id, retry?.requestId)) return;

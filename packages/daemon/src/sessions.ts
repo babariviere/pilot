@@ -155,6 +155,7 @@ import { UpdateGate } from "./update-gate.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerStarts } from "./worker-starts.ts";
+import { workspaceCommandEnvironment } from "./workspace-environment.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
@@ -166,7 +167,6 @@ import {
 	workspaceBorrowsObjects,
 	workspaceBranch,
 } from "./workspaces.ts";
-import { workspaceCommandEnvironment } from "./workspace-environment.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -208,6 +208,7 @@ export interface SessionMissionBridge {
 	): NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
 	/** The archive generation lets a later explicit chat restore win, including across daemon restarts. */
 	missionArchivedAt?(missionId: string): number | undefined;
+	passiveMissionLifecycle?(missionId: string): boolean;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
 	renameCoordinator?(sessionId: string, title: string): void;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
@@ -1785,7 +1786,11 @@ export class SessionManager {
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
 			if (this.missions && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
-				this.missionChanged(meta.id);
+				this.missionChanged(
+					meta.id,
+					undefined,
+					!!this.missions.passiveMissionLifecycle?.(this.missions.membership(meta.id)?.missionId ?? ""),
+				);
 		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
 		// A daemon restart invalidates the credential endpoint its workers were given. A session whose
 		// worker failed to start for that reason must not stay broken: this daemon has its own broker.
@@ -2009,6 +2014,7 @@ export class SessionManager {
 				meta.archivedAt !== undefined ||
 				// Chats of an active mission wait for their mission, not a week of inactivity.
 				this.missions?.membership(meta.id)?.active ||
+				this.missions?.passiveMissionLifecycle?.(this.missions.membership(meta.id)?.missionId ?? "") ||
 				Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore
 			)
 				continue;
@@ -2854,16 +2860,31 @@ export class SessionManager {
 		this.pullRequests.focus(ids);
 	}
 
+	/** Refuse preservation while an already-admitted chat archive drains. */
+	assertPassiveLifecycleReady(members: readonly string[]): void {
+		if (members.some((id) => this.archiveTransitions.has(id)))
+			throw new Conflict("A chat archive is already in progress. Wait and review the mission again");
+	}
+
 	/** Membership or mission context changed: republish the summary and update a live kernel's context. */
-	missionChanged(id: string, context = this.missions?.context(id)): void {
+	missionChanged(id: string, context = this.missions?.context(id), passive = false): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
-		if (context?.coordinator === "self" && context.status === "archived")
+		if (
+			context?.coordinator === "self" &&
+			context.status === "archived" &&
+			!this.missions?.passiveMissionLifecycle?.(context.id)
+		)
 			this.coordinatorArchiveMissions.set(id, {
 				id: context.id,
 				archivedAt: this.missions?.missionArchivedAt?.(context.id) ?? 0,
 			});
 		else this.coordinatorArchiveMissions.delete(id);
+		if (passive) {
+			this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
+			this.emit(meta);
+			return;
+		}
 		if (meta.continuedTo || meta.continuationPending) {
 			this.emit(meta);
 			return;
@@ -2929,6 +2950,7 @@ export class SessionManager {
 	}
 
 	private resumeRoleWork(id: string): void {
+		if (this.missions?.passiveMissionLifecycle?.(this.missions.membership(id)?.missionId ?? "")) return;
 		const meta = this.metas.get(id);
 		if (!meta || meta.initializing) return;
 		if (
@@ -3322,7 +3344,11 @@ export class SessionManager {
 		return membership
 			? {
 					missionId: membership.missionId,
-					...(membership.active && membership.coordinator ? { activeMissionCoordinator: true } : {}),
+					...(membership.active &&
+					membership.coordinator &&
+					!this.missions?.passiveMissionLifecycle?.(membership.missionId)
+						? { activeMissionCoordinator: true }
+						: {}),
 					...(membership.coordinator ? { missionCoordinator: true } : {}),
 				}
 			: {};
@@ -3477,6 +3503,7 @@ export class SessionManager {
 		const target = this.coordinatorArchiveMissions.get(meta.id);
 		return !!(
 			target &&
+			!this.missions?.passiveMissionLifecycle?.(target.id) &&
 			(meta.restoredAt === undefined || meta.restoredAt < target.archivedAt) &&
 			!this.closing &&
 			!this.sleepPause &&
@@ -5040,6 +5067,7 @@ export class SessionManager {
 			// A concurrent user drain may have removed this reservation while its save awaited I/O.
 			// Do not mistake an empty new drain for acknowledgement of this input.
 			if (!meta.pending.some((pending) => pending === command)) return false;
+			if (!this.missions?.noticeAllowed?.(id, requestId)) return false;
 			const rejected = await this.start(id, true);
 			const error = rejected.get(requestId);
 			if (error instanceof CommandRejected && error.code === "busy") return false;
@@ -6858,11 +6886,26 @@ export class SessionManager {
 	}
 
 	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
+	/** A durable held mission notice is not permission to launch a kernel during recovery. */
+	private passiveNoticeOnly(meta: SessionMeta): boolean {
+		return !!(
+			meta.pending?.length &&
+			!meta.working &&
+			!this.backgroundWorking(meta) &&
+			!meta.prActivities?.length &&
+			meta.pending.every(
+				(command) =>
+					command.type === "input" && command.onlyIfIdle && command.requestId.startsWith("mission-notice:"),
+			) &&
+			this.missions?.passiveMissionLifecycle?.(this.missions.membership(meta.id)?.missionId ?? "")
+		);
+	}
+
 	private start(id: string, admitted = false): Promise<Map<string, Error>> {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
-		if (meta.control) return Promise.resolve(new Map());
+		if (meta.control || this.passiveNoticeOnly(meta)) return Promise.resolve(new Map());
 		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
 			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
@@ -6939,6 +6982,7 @@ export class SessionManager {
 					}
 				}
 				await this.unparked(id);
+				if (this.passiveNoticeOnly(meta)) return;
 				if (this.isMissionCoordinator(id) || meta.coordinatorView) await this.prepareCoordinatorRole(id);
 				// Do not admit another turn into a workspace whose role switch is waiting on live work.
 				if (this.isMissionCoordinator(id) !== !!meta.coordinatorView && meta.pending?.[0]?.type !== "abort") return;

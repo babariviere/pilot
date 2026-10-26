@@ -84,6 +84,8 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let title: String
     public let goal: String
     public let status: MissionStatus
+    /// Status-only lifecycle retains chats and holds automatic coordinator notices.
+    public var passiveLifecycle: Bool? = nil
     /// Nil: the user coordinates.
     public let coordinatorSessionId: String?
     public let autopilot: Bool?
@@ -785,4 +787,22 @@ public struct JoinMissionRequest: Codable, Sendable {
         self.missionId = missionId
         self.taskId = taskId
     }
+}
+
+/// Status-only lifecycle. Operation ID identifies the response, not a replay key.
+public struct MissionLifecycleRequest: Encodable, Sendable {
+    public struct Home: Encodable, Sendable {
+        public let daemonId: String
+        public let lineageId: String
+    }
+    public let operationId: String
+    public let home: Home
+    public let projectId: String
+    public let expectedStatus: MissionStatus
+    public let action: String
+}
+
+public struct MissionLifecycleResponse: Decodable, Sendable {
+    public let operationId: String
+    public let mission: Mission
 }

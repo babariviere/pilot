@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
+#[path = "mission_lifecycle_browser.rs"]
+mod mission_lifecycle_browser;
 #[path = "mission_metadata_browser.rs"]
 mod mission_metadata_browser;
 #[cfg(test)]
@@ -76,6 +78,7 @@ pub(crate) struct Browser {
     pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
     brief_events: Option<gpui_kit::Subscription>,
     pub(crate) creation: Option<gpui_kit::Entity<crate::mission_create_view::Form>>,
+    pub(crate) lifecycle: Vec<gpui_kit::Entity<crate::mission_lifecycle_view::Form>>,
     pub(crate) metadata: Vec<gpui_kit::Entity<crate::mission_metadata_view::Form>>,
 }
 impl EventEmitter<Event> for Browser {}
@@ -109,6 +112,7 @@ impl Browser {
             brief_events: None,
             creation: None,
             metadata: Vec::new(),
+            lifecycle: Vec::new(),
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
@@ -194,6 +198,11 @@ impl Browser {
             })
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
+        if let Some(f) = self.lifecycle.iter().find(|f| f.read(cx).visible) {
+            let focus = f.read(cx).focus_handle();
+            focus.focus(w, cx);
+            return;
+        }
         if let Some(form) = self.metadata.iter().find(|f| f.read(cx).visible) {
             let focus = form.read(cx).focus_handle(cx);
             focus.focus(w, cx);
@@ -247,6 +256,7 @@ impl Browser {
                 .metadata
                 .iter()
                 .any(|f| f.read(cx).visible && f.read(cx).owns_focus(w, cx));
+            self.hide_lifecycle(w, cx);
             self.hide_metadata(cx);
             if owned {
                 self.focus.focus(w, cx);
@@ -305,6 +315,7 @@ impl Browser {
         let (Some(options), Some(source)) = (self.options.clone(), self.brief_source()) else {
             return;
         };
+        self.hide_lifecycle(w, cx);
         self.hide_metadata(cx);
         if let Some(brief) = &self.brief {
             if !brief.read(cx).matches_options(&options) {
@@ -581,6 +592,7 @@ impl Browser {
         let Some(options) = self.options.clone() else {
             return;
         };
+        self.hide_lifecycle(w, cx);
         self.hide_metadata(cx);
         if let Some(brief) = &self.brief {
             brief.update(cx, |b, cx| b.hide(cx));
@@ -639,6 +651,18 @@ impl Browser {
 }
 impl Render for Browser {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(form) = self.lifecycle.iter().find(|f| f.read(cx).visible) {
+            return div()
+                .id("missions-page")
+                .test_support()
+                .track_focus(&self.focus)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(ui::page().child(form.clone()))
+                .into_any_element();
+        }
         if let Some(form) = self.metadata.iter().find(|f| f.read(cx).visible) {
             return div()
                 .id("missions-page")
@@ -861,6 +885,31 @@ impl Render for Browser {
                         d.key.id, d.key.home.daemon, d.key.home.lineage
                     ),
                 ));
+            for (action, label, id) in [
+                (
+                    crate::mission_lifecycle::Action::Archive,
+                    "Archive mission…",
+                    "mission-archive",
+                ),
+                (
+                    crate::mission_lifecycle::Action::Reopen,
+                    "Reopen mission…",
+                    "mission-reopen",
+                ),
+            ] {
+                if action.allowed(&d.status) {
+                    content = content.child(
+                        ui::action(id, label, Action::Quiet)
+                            .self_start()
+                            .disabled(!self.online || !self.current(generation))
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                if v.generation == generation {
+                                    v.open_lifecycle(action, w, cx);
+                                }
+                            })),
+                    );
+                }
+            }
             let activity_key = d.key.clone();
             content = content.child(
                 ui::action("mission-edit-metadata", "Edit mission", Action::Quiet)
