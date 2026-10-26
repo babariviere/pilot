@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.67.0](https://github.com/babariviere/pilot/compare/v1.66.0...v1.67.0) (2026-10-26)
+
+
+### Features
+
+* **desktop:** add a compact reported context meter ([2a49414](https://github.com/babariviere/pilot/commit/2a4941466e60a9943615e8c355452de96151c159))
+* **desktop:** configure future task model preferences ([3b29f6d](https://github.com/babariviere/pilot/commit/3b29f6d5dd933a0c2854e6ec9bce722dd8df2ad1))
+* **desktop:** edit exact queued messages safely ([eac3d15](https://github.com/babariviere/pilot/commit/eac3d150e7b89c19b1ab0b1d80aa6476c9b70ceb))
+* **desktop:** find literal source in loaded conversations ([8a7dd28](https://github.com/babariviere/pilot/commit/8a7dd285cdb116111aa25c6c98118702e247c7c6))
+* **desktop:** inspect and copy loaded conversation links ([b9e33fb](https://github.com/babariviere/pilot/commit/b9e33fb3e9d4995e6094729b331ab7dfa4062413))
+* **desktop:** inspect canonical workspace changes ([0a5573d](https://github.com/babariviere/pilot/commit/0a5573d6a7aca0dc4ac06f44bd0078ed8f4b45a3))
+* **desktop:** open bounded read-only files from Changes ([ad40e5a](https://github.com/babariviere/pilot/commit/ad40e5a479c9f689c9e334c52c62458eed989523))
+* **desktop:** preview stored conversation images ([31550b6](https://github.com/babariviere/pilot/commit/31550b6f04deceb585e136cd80a5455fb701c24c))
+* **desktop:** preview tool edits from native file chips ([c3b6e27](https://github.com/babariviere/pilot/commit/c3b6e2779acdd7211fc2dbad92decff16e9c30fb))
+* **desktop:** read mission decisions and pending proposals ([1f0e434](https://github.com/babariviere/pilot/commit/1f0e434046e36bb3901812c2b03181045afaf1b3))
+* **desktop:** save failed-chat next-attempt models ([3c671b8](https://github.com/babariviere/pilot/commit/3c671b8e0d430830e3aacccef114f32551d142ff))
+* **desktop:** show read-only chat task progress ([3440096](https://github.com/babariviere/pilot/commit/344009645825a1785041b5280c20b96841aefcfc))
+* **desktop:** show reported chat failure reasons ([50366a9](https://github.com/babariviere/pilot/commit/50366a973a425d5c68779d0bc628a335cb04ae4f))
+
+
+### Bug Fixes
+
+* **daemon:** clear revoked automatic input reservations ([02316bc](https://github.com/babariviere/pilot/commit/02316bc81460731b11a28ff443e132adc57d18f0))
+* **daemon:** dispatch settled updates without idle delay ([b14633d](https://github.com/babariviere/pilot/commit/b14633dfb46a7d8419046bc7f0750ea45e29a673))
+* **desktop:** allow parked chat model changes ([5634b50](https://github.com/babariviere/pilot/commit/5634b508d419f35d61eebcba9babdc3cccd44b75))
+* **desktop:** hide conversation task strips without tasks ([6dde2e7](https://github.com/babariviere/pilot/commit/6dde2e7bfa1f52a85878dbf9c5166b25ae4f6b9b))
+* **desktop:** place context usage in composer controls ([6874ae0](https://github.com/babariviere/pilot/commit/6874ae0a0452e104ab7f29441cf8cfcf95356f3d))
+* **desktop:** show context gauge without a text label ([035ef5e](https://github.com/babariviere/pilot/commit/035ef5e5914af6a60108666f60fc1726cf1755f0))
+* **desktop:** use chevrons for task disclosure ([0231bd0](https://github.com/babariviere/pilot/commit/0231bd055c2bc78770d5dd757393643433c5f2f9))
+* **macos:** allow clearing a new-chat attachment ([d0cd3da](https://github.com/babariviere/pilot/commit/d0cd3daae0233b4acc3c35714976fc3cf74b6f2b))
+
 ## [1.66.0](https://github.com/babariviere/pilot/compare/v1.65.0...v1.66.0) (2026-10-26)
 
 
