@@ -57,6 +57,7 @@ pub(crate) enum EditorEvent {
 
 pub(crate) struct ChatEditor {
     context_entry: Option<gpui_kit::AnyView>,
+    todos_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
     models: Option<model_picker::Models>,
     client: Option<Interaction>,
@@ -126,6 +127,7 @@ impl ChatEditor {
         });
         Self {
             context_entry: None,
+            todos_entry: None,
             questions,
             models: None,
             client,
@@ -160,6 +162,9 @@ impl ChatEditor {
 
     pub(crate) fn set_context_entry(&mut self, entry: gpui_kit::AnyView) {
         self.context_entry = Some(entry);
+    }
+    pub(crate) fn set_todos_entry(&mut self, entry: gpui_kit::AnyView) {
+        self.todos_entry = Some(entry);
     }
     fn prune_cache(&mut self) {
         self.cache.retain(|key, draft| {
@@ -1138,6 +1143,7 @@ impl Render for ChatEditor {
                 let region = region.test_support();
                 shell.child(region)
             })
+            .children((!is_new).then(|| self.todos_entry.clone()).flatten())
             .child(footer)
             .into_any_element()
     }

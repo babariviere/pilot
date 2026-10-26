@@ -24,6 +24,7 @@ enum Scenario {
     Refused,
     Thinking,
     ContextUsage,
+    Todos,
 }
 
 #[tokio::test]
@@ -156,6 +157,16 @@ impl Mock {
                                     if matches!(scenario,Scenario::Resume) {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(7,"before disconnect")}]}).to_string().into())).await.unwrap();
                                         let _=socket.close(Some(CloseFrame{code:CloseCode::Again,reason:"synthetic restart".into()})).await; return;
+                                    }
+                                    if matches!(scenario,Scenario::Todos) {
+                                        let row=json!({"id":"TODO-a","title":"Only public progress","status":"open","createdAt":"2026-10-26","assignedToSession":id});
+                                        // Wrong owner and duplicate sequence must never replace the selected feed.
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":"foreign","seq":2,"events":[{"type":"todos_update","items":[]}]}).to_string().into())).await.unwrap();
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"todos_update","items":[row]}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"todos_update","items":null}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":4,"events":[{"type":"todos_update","items":[]}]}).to_string().into())).await.unwrap();
                                     }
                                     if matches!(scenario,Scenario::Thinking) {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"message_start","message":{"content":[{"type":"thinking","thinking":"synthetic"}]}}]}).to_string().into())).await.unwrap();
@@ -353,3 +364,56 @@ async fn final_close_does_not_automatically_reopen() {
 
 #[path = "context_usage_reader_tests.rs"]
 mod context_usage_reader_tests;
+
+#[tokio::test]
+async fn session_todos_use_only_selected_public_stream_and_retain_bad_replacements() {
+    use crate::session_todos::Phase;
+    let mock = Mock::start(Scenario::Todos).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    until(&rx, |v| v.list_loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 7,
+    });
+    let ready = until(&rx, |v| v.todos.phase == Phase::Ready).await;
+    assert!(ready.todos.visible(Some(&mock.options), Some("a"), 7));
+    let before = ready.todos.snapshot.unwrap();
+    assert_eq!(before.count, 1);
+    assert!(before.rows[0].working);
+    mock.step.send(()).await.unwrap();
+    let bad = until(&rx, |v| v.todos.phase == Phase::Retained).await;
+    assert!(Arc::ptr_eq(&before, bad.todos.snapshot.as_ref().unwrap()));
+    mock.step.send(()).await.unwrap();
+    until(&rx, |v| {
+        v.todos.phase == Phase::Ready && v.todos.snapshot.as_ref().is_some_and(|s| s.count == 0)
+    })
+    .await;
+    client.command(Command::Open {
+        id: "b".into(),
+        generation: 8,
+    });
+    let next = until(&rx, |v| v.generation == 8 && v.todos.phase == Phase::Ready).await;
+    assert!(next.todos.visible(Some(&mock.options), Some("b"), 8));
+    assert!(!next.todos.visible(Some(&mock.options), Some("a"), 7));
+    let requests = mock.requests.lock().unwrap();
+    assert!(requests.iter().all(|r| r.starts_with("GET ")));
+    assert!(requests.iter().all(|r| r.contains("/api/hello ")
+        || r.contains("/api/ws ")
+        || r.contains("/api/sessions/a/ws ")
+        || r.contains("/api/sessions/b/ws ")));
+}
+#[test]
+fn session_todos_source_equality_includes_exact_home_daemon_lineage_port() {
+    let options = LocalOptions::synthetic(123);
+    assert!(options.same_todo_source(&options));
+    for field in 0..4 {
+        let mut other = options.clone();
+        match field {
+            0 => other.port += 1,
+            1 => other.daemon_id = "other".into(),
+            2 => other.lineage_id = "other".into(),
+            _ => other.native_home = Some("/synthetic/other".into()),
+        }
+        assert!(!options.same_todo_source(&other));
+    }
+}

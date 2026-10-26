@@ -47,6 +47,11 @@ impl LocalOptions {
     pub(crate) fn loopback(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
+    pub(crate) fn same_todo_source(&self, other: &Self) -> bool {
+        self.host() == other.host()
+            && self.port == other.port
+            && self.native_home == other.native_home
+    }
     /// Resolve the same Local port/data-home as pilotd, without starting it or writing state.
     pub fn discover() -> Result<Self, &'static str> {
         let port = std::env::var("PILOT_PORT")
@@ -184,6 +189,7 @@ pub(crate) enum Command {
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
     pub(crate) failure_run_serial: u64,
+    pub(crate) todos: crate::session_todos::Feed,
     pub(crate) question: crate::question::Projection,
     pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
@@ -608,12 +614,13 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
+                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
+                    view.todos = crate::session_todos::Feed::new(crate::session_todos::Source::new(options.clone(), id.clone(), generation));
                     selected = Some(id.clone());
                     view.artifacts=Arc::new(Vec::new());
                     view.artifact_metadata=Default::default();
@@ -638,6 +645,7 @@ async fn run(
                 }
                 Ok(Command::Reconnect) => {
                     model.thinking=false;
+                    view.todos.stale();
                     inbox.epoch+=1; fenced=false;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
                     control.abort();
@@ -656,6 +664,7 @@ async fn run(
                 Ok((epoch,_)) if epoch != inbox.epoch => continue,
                 Ok((_,Incoming::Fatal(text))) => {
                     model.stop_thinking();
+                    view.todos.stale();
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
@@ -664,7 +673,7 @@ async fn run(
                 Ok((_, Incoming::Status {generation, chat, text})) => {
                     if !chat || generation == view.generation { model.thinking=false; }
                     if chat { if generation != view.generation { continue; }
-                        if text!="Connected · Local"{view.artifact_metadata.mark_stale();} view.chat_status = text.into(); }
+                        if text!="Connected · Local"{view.artifact_metadata.mark_stale();view.todos.stale();} view.chat_status = text.into(); }
                     else { view.status = text.into(); }
                 }
                 Ok((_, Incoming::Page { generation,before,result })) => {
@@ -675,16 +684,20 @@ async fn run(
                 }
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
                     if is_chat {
-                        if generation != view.generation { continue; }
-                        if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
+                        if generation != view.generation || value["sessionId"].as_str()!=selected.as_deref() { continue; }
+                        if value["type"] == "chat.stream" {view.todos.stream();}
+                        else if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
-                            for event in events { model.apply(event); }
+                            for event in events {
+                                view.todos.apply(event);
+                                if event["type"] != "todos_update" { model.apply(event); }
+                            }
                             // Repeated reasoning deltas only update bounded
                             // counters. Do not publish/clone a transcript or
                             // wake the UI when the activity label is unchanged.
                             if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
-                        } else if value["type"] == "error" { model.stop_thinking(); view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
                     } else if value["type"] == "projects" {
                         match local_model::projects(&value["projects"]) {
                             Ok(projects)=>{view.projects=Arc::new(projects);view.projects_loaded=true;view.projects_error=None;},

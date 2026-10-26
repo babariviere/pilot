@@ -717,6 +717,11 @@ not filesystem polling. The daemon receives an unclosed count without reading to
 Child assignments identify an agent instance; after child-worker replacement, use `force` to reclaim
 or release an old assignment. Assignments are advisory and never prevent updates or closing work.
 
+Pilot Next shows these public chat todos in a compact, read-only strip above the composer.
+Its explicit disclosure keeps the current chat's assignment first, reports bounded/partial coverage,
+and labels retained snapshots when unavailable. It never edits tasks or infers mission tasks from tools.
+See [the native task-strip contract](apps/desktop/docs/session-todos.md).
+
 Lists hold at most 256 items, each with up to 64 KiB of Markdown, and at most 1 MiB in total. Writes
 over these limits fail without losing existing items; delete obsolete items to make room. Historical
 todo document versions are not retained. Existing `.pi/todos` files and `PI_TODO_PATH` are ignored,

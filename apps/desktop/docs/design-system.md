@@ -89,6 +89,16 @@ defaults to small. Caller `.disabled`, `.loading`, `.selected`, `.on_click` and
 accessible-name overrides remain native. Loading disables the actual Kit button,
 not just its paint. Avoid optimistic "Saved" text without a durable receipt.
 
+The specialized `session_todos_view::{summary,rows}` is an app-owned passive
+progress-strip composition, not a checkbox list. `session_todos_tray` supplies
+the real Kit disclosure Button, exact source guards and bounded user intent;
+`ChatEditor` retains the slot above its unchanged76/34 editor/control tray.
+The compiled `session_todos` native gallery exercises zero, unknown, closed,
+active, foreign-assigned, long/capped and retained states through that production
+owner at680/1100 in both themes. See [session todos](session-todos.md) for source
+contracts and precise MonoCode attribution. Do not reuse it for mission tasks,
+infer statuses from tools, add mutation callbacks or auto-fold on stream updates.
+
 `ResourceLabel` is passive, full-width/left-aligned, with a fixed rem glyph slot,
 truncated title/detail and physical Control gap. Give the real owner its full
 accessible name. Its native test parts are resource-icon/title/detail, scoped

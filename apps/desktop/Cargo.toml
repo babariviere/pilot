@@ -344,3 +344,8 @@ required-features = ["native-probes"]
 name = "transcript_find"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "session_todos"
+harness = false
+required-features = ["native-probes"]

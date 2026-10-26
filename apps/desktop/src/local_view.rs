@@ -76,6 +76,11 @@ pub(crate) mod session_failure_probe;
 #[path = "session_failure_view.rs"]
 mod session_failure_view;
 #[cfg(feature = "native-probes")]
+#[path = "session_todos_probe.rs"]
+pub(crate) mod session_todos_probe;
+#[path = "session_todos_tray.rs"]
+mod session_todos_tray;
+#[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
@@ -986,8 +991,10 @@ impl LocalViewer {
         });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let context_entry = context_usage_view::entry(cx);
+        let todos_entry = session_todos_tray::entry(window, cx);
         editor.update(cx, |editor, _| {
-            editor.set_context_entry(context_entry.into())
+            editor.set_context_entry(context_entry.into());
+            editor.set_todos_entry(todos_entry.into());
         });
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
@@ -1382,6 +1389,7 @@ impl LocalViewer {
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
+            self.state.todos = state.todos;
         } else if state.generation == self.generation {
             if self
                 .earlier_request

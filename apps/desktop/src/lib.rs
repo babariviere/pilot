@@ -7,18 +7,22 @@ mod catalog_probe;
 mod chat_actions;
 mod context_meter;
 mod context_usage;
+mod session_todos;
+mod session_todos_view;
+#[cfg(feature = "native-probes")]
+pub use local_view::session_todos_probe::run_session_todos_probe;
 mod conversation_links;
 mod session_failure;
-mod workspace_changes;
-mod workspace_changes_reader;
 mod session_file_view;
 mod session_file_view_reader;
-#[cfg(feature = "native-probes")]
-pub use local_view::run_session_file_view_probe;
+mod workspace_changes;
+mod workspace_changes_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::context_usage_probe::run_context_usage_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::conversation_links_probe::run_conversation_links_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::run_session_file_view_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_failure_probe::run_session_failure_probe;
 #[cfg(feature = "native-probes")]
