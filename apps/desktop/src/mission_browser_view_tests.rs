@@ -74,6 +74,7 @@ fn failed_refresh_keeps_snapshot_but_never_claims_empty_current_or_linkable(
             },
             cx,
         );
+        assert_eq!(v.snapshot_note(), None);
         for error in [
             "Unsupported mission catalog response.",
             "Mission response exceeds the viewer byte limit; no partial JSON was decoded.",
@@ -91,7 +92,10 @@ fn failed_refresh_keeps_snapshot_but_never_claims_empty_current_or_linkable(
             assert!(!v.catalog_current);
             assert!(v.error.is_some());
             assert!(!v.can_open(&f::key("mission-A"), 1));
-            assert!(v.snapshot_note().contains("not a current snapshot"));
+            assert_eq!(
+                v.snapshot_note(),
+                Some("Snapshot unavailable · retained content may be outdated")
+            );
         }
     });
 }
