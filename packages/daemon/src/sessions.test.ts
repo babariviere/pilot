@@ -1279,6 +1279,22 @@ test("a session whose worker failed on a stale credential endpoint recovers on t
 	assert.equal(recovered.kernelRestartPending, true);
 });
 
+test("a chat left broken by a daemon that lost its credential broker recovers on the next daemon", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	await sessions.shutdown();
+	const persisted = await f.stored(created.id);
+	persisted.failure =
+		"Session startup: Kernel failed to start: Credential broker unavailable. Sign in again if a refresh outcome is uncertain.";
+	await writeFile(join(f.home, "sessions", created.id, "meta.json"), JSON.stringify(persisted));
+	const restarted = await f.manager();
+	const recovered = restarted["metas"].get(created.id)!;
+	assert.equal(recovered.failure, undefined, "a chat must not stay broken because its broker was gone");
+	assert.equal(recovered.kernelRestartPending, true);
+});
+
 test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();

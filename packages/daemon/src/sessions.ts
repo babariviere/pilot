@@ -530,6 +530,15 @@ function staleCredentialEndpoint(failure: string): boolean {
 	return failure.includes("Credential broker stale");
 }
 
+/**
+ * The kernel could not reach the credential broker. The broker belongs to this daemon, so the
+ * worker never started and nothing was admitted. Any persisted failure of this kind comes from a
+ * daemon that is gone, and this daemon has a broker of its own.
+ */
+function credentialEndpointFailure(failure: string): boolean {
+	return /Credential broker (stale|unavailable)\b/.test(failure);
+}
+
 function reviewThreadKey(url: string, id: string, commentId: string): string {
 	return createHash("sha256").update(`${url.toLowerCase()}\0${id}\0${commentId}`).digest("hex");
 }
@@ -1779,7 +1788,7 @@ export class SessionManager {
 		// A daemon restart invalidates the credential endpoint its workers were given. A session whose
 		// worker failed to start for that reason must not stay broken: this daemon has its own broker.
 		for (const meta of this.metas.values())
-			if (meta.failure !== undefined && staleCredentialEndpoint(meta.failure)) {
+			if (meta.failure !== undefined && credentialEndpointFailure(meta.failure)) {
 				delete meta.failure;
 				delete meta.inputError;
 				clearOutcome(meta);
@@ -6744,6 +6753,11 @@ export class SessionManager {
 		const temp = `${file}.${randomUUID()}.tmp`;
 		await writeFile(temp, JSON.stringify(value), { mode: 0o600 });
 		await rename(temp, file);
+	}
+
+	/** A shutdown starts here: a worker that fails now must not leave its chat broken. */
+	beginClosing(): void {
+		this.closing = true;
 	}
 
 	async shutdown(): Promise<void> {

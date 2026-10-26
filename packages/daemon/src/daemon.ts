@@ -342,6 +342,8 @@ async function stop(): Promise<void> {
 	if (stopping) return;
 	stopping = true;
 	console.log("pilotd: pausing sessions");
+	// A worker that is starting while this daemon goes away must not leave its chat broken.
+	sessions.beginClosing();
 	watchdog.stop();
 	server.close();
 	await schedules.stop();
