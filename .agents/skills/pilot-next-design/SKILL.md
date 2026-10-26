@@ -60,6 +60,17 @@ font. Familiar icon actions need accessible names and useful shortcut/scope tool
 an unfamiliar action usually needs a label. Keep active filters and selection apparent,
 and restore focus when a menu or disclosure closes.
 
+### Keep copy useful and concise
+
+Labels must identify the object or action, not narrate an obvious control. Remove
+redundant helper sentences, labels, badges and status narration. Prefer concise,
+familiar controls with accessible names; do not turn meaningful unfamiliar actions
+into ambiguous unlabeled icons or conceal failure evidence for brevity.
+
+Put genuinely secondary explanation in discoverable contextual disclosure or help.
+Tooltips are only for nonessential details, never the sole home of essential risk,
+identity, errors, uncertain delivery, permissions, unsaved input or recovery.
+
 ## 3. Compose the native vocabulary
 
 Use [ui.rs](../../../apps/desktop/src/ui.rs),
@@ -90,6 +101,7 @@ Check the actual implementation and retained alternatives first.
 
 | Before | Preferred direction and capability to retain |
 | --- | --- |
+| Scoped-model row: model name, then toggle labeled Include model | Native selection toggle/checkbox immediately LEFT of the model name, using that name as its visible label, with no separate Include model text. Preserve provider groups, folds, search, selected state, keyboard operation and accessible naming. |
 | Prominent Back/Forward text row | Quiet contextual icon actions with names and shortcut hints; retain history, existing keyboard paths and focus restoration. |
 | Permanent Include archived checkbox | A discoverable filter menu with honest active scope/state; archived history remains reachable and read-only where required. |
 | Permanent Earlier and Latest buttons | Scroll-driven history and a contextual recovery/return-to-latest affordance when relevant; keep explicit failure retry, pagination and the reading anchor. |
@@ -107,6 +119,7 @@ these guards or to hide a failed write.
 
 - [ ] State the screen's job, important information and next action in one short paragraph.
 - [ ] Name what was subtracted, retained and revealed, including the alternate keyboard path.
+- [ ] What copy can be removed without losing meaning, discoverability or essential evidence?
 - [ ] Check content before chrome: can the user read, decide and recover without guessing?
 - [ ] Check actual native narrow/wide layouts (680/1100 where used by the existing probes),
       light/dark, long Unicode labels/content, and loading, empty, error, stale, disabled,
