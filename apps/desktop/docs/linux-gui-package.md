@@ -36,10 +36,31 @@ Missing daemon/kernel/skills/generated usage worker/artifact/dependency
 resources are refused. Receipt hashes establish consistency, not publisher
 authentication or proof that an arbitrary supplied producer was trustworthy.
 
+`linux_gui_package_runtime.py` now provides the separate runtime input producer.
+It extracts a named Git commit into a private source tree, uses fresh
+HOME/config/data/cache/tmp directories and the existing Linux production closure
+builder (pinned Node/jj, frozen production dependencies, generated resources,
+every-addon ABI audit and offline faux-provider/PTY smoke). Its legacy headless
+archive and unsigned manifest exist only as temporary staging intermediates,
+never as the GUI distribution, production upload or signed release. No existing
+release workflow is called or modified. The builder's existing ABI ceilings
+remain fail-closed. Header/expanded-byte preflight and safe data extraction
+precede the final bounded inventory. The producer writes exact source/tree,
+producer/builder hashes, runtime metadata and full-inventory receipt. It does not
+enable Linux bundled launch or attest the existing user's runtime.
+
+Use a native build environment with the required static C++ runtime. The
+qualification run uses an unprivileged, digest-recorded Debian11/Python3.13
+container on the native x86_64 host, not host package installation or a
+Homebrew-specific compiler workaround. Missing archives and ABI/relocation
+audit failures remain real build failures, never silently relaxed requirements.
+
 ```sh
+python3 apps/desktop/scripts/linux_gui_package_runtime.py \
+  --source "$SOURCE" --output /fresh/runtime-inputs
 python3 apps/desktop/scripts/linux_gui_package.py assemble \
-  --source "$SOURCE" --runtime /immutable-inputs/runtime \
-  --runtime-receipt /immutable-inputs/runtime-receipt.json \
+  --source "$SOURCE" --runtime /fresh/runtime-inputs/runtime \
+  --runtime-receipt /fresh/runtime-inputs/runtime-receipt.json \
   --executables /matching-linux-binaries --output /fresh/candidate
 python3 apps/desktop/scripts/linux_gui_package.py verify /fresh/candidate
 # Native Linux x86_64 only. Trusted source-built inputs, never downloaded unknown ELF.
@@ -91,27 +112,34 @@ backend. Runtime startup still selects WAYLAND only after a real socket connects
 There is no distro-wide minimum ABI claim: recorded versions are requirements
 of those exact binaries on that exact runner, not the headless runtime's ceiling.
 
-**No native Linux package qualification was executed in this implementation
-environment.** The available host is macOS arm64; its Docker daemon is also
+For explicitly authorized workstation qualification when Weston is unavailable,
+the native probe accepts `--existing-wayland-socket /run/user/UID/wayland-0`.
+This shows a short-lived synthetic window, with its own HOME/config/data, on the
+explicit absolute same-user socket. The probe never starts, stops, owns or
+reconfigures that compositor. The receipt distinguishes this mode from owned
+headless Weston; software rendering is still selected. CI keeps its owned
+compositor default. Neither mode is a live daemon or performance test.
+
+**The initial source-only slice executed no native Linux qualification.** Its
+host was macOS arm64; its Docker daemon was also
 Linux arm64, not the required native x86_64 target. Existing historical Wayland
 evidence is not evidence for these new package bytes. CI registration is not a
 passing CI receipt. A green fixture receipt still is not full runtime evidence.
 
+The later native workstation run is recorded in
+[Linux GUI package evidence](../evidence/linux-gui-package.md). It supersedes the
+environment limitation above for the exact binaries tested there, not for
+unbuilt packages, other distributions or the disabled platform capabilities.
+
 Remaining acceptance gates:
 
-1. Implement/qualify an immutable Linux runtime producer with exact full closure
-   receipt, separate from the retiring headless release path. The current
-   assembler consumes that input contract; it does not fabricate this proof.
-2. Run full candidate relocation/dependency checks on native x86_64 Linux,
-   including Node and **every** addon, generated resources and fixture kernel
-   execution. GUI-only CI cannot establish bundled runtime compatibility.
-3. Separately qualify any Linux bundled-launch/retention/ownership integration
+1. Separately qualify any Linux bundled-launch/retention/ownership integration
    with source-owned fixture profiles, lease contention, compatible reuse,
    legacy refusal and activation uncertainty before changing the platform guard.
-4. Qualify native visual confinement separately. Keep refusal until then.
-5. Real Wayland GPU/distribution, keyboard/IME and frame-pacing acceptance remain
+2. Qualify native visual confinement separately. Keep refusal until then.
+3. Real Wayland GPU/distribution, keyboard/IME and frame-pacing acceptance remain
    outstanding. Headless Weston software buffers do not establish those.
-6. Installer/update design and implementation need separate qualification. Do
+4. Installer/update design and implementation need separate qualification. Do
    not publish/install this candidate or relabel it as a production update.
 
 macOS packaging and retained-runtime integration remain owned by the existing

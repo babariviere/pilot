@@ -1,5 +1,6 @@
 """Synthetic assembly only. Never represents Linux-native qualification."""
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -154,6 +155,119 @@ class PackageTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "source mismatch"):
                 native.probe(self.executables, self.output, self.source)
             spawn.assert_not_called()
+
+    def test_runtime_archive_preflight_refuses_escape_special_and_oversized_entries(self):
+        import io
+        import tarfile
+        import linux_gui_package_runtime as runtime
+        for name, kind, size in (("../../escape", tarfile.REGTYPE, 0),
+                                 ("fifo", tarfile.FIFOTYPE, 0),
+                                 ("large", tarfile.REGTYPE, 256 * 1024**2 + 1)):
+            archive = self.root / "fixture.tar"
+            with tarfile.open(archive, "w") as tar:
+                member = tarfile.TarInfo(name)
+                member.type = kind
+                # A sparse/truncated fixture need not allocate the declared bytes.
+                if size:
+                    member.size = size
+                    tar.fileobj.write(member.tobuf())
+                else:
+                    tar.addfile(member, io.BytesIO())
+            destination = self.root / "extract"
+            destination.mkdir(exist_ok=True)
+            with self.assertRaises((ValueError, tarfile.TarError)):
+                runtime.extract(archive, destination)
+        self.assertFalse((self.root.parent / "escape").exists())
+
+    def test_runtime_archive_relative_links_and_regular_files_extract(self):
+        import io
+        import tarfile
+        import linux_gui_package_runtime as runtime
+        archive = self.root / "fixture.tar"
+        with tarfile.open(archive, "w") as tar:
+            regular = tarfile.TarInfo("runtime/a")
+            regular.size = 2
+            tar.addfile(regular, io.BytesIO(b"ok"))
+            link = tarfile.TarInfo("runtime/link")
+            link.type, link.linkname = tarfile.SYMTYPE, "a"
+            tar.addfile(link)
+        destination = self.root / "extract"
+        destination.mkdir()
+        runtime.extract(archive, destination)
+        self.assertEqual((destination / "runtime/link").read_bytes(), b"ok")
+
+    def test_runtime_hardlinks_become_independent_files_and_count_expanded_bytes(self):
+        import io
+        import tarfile
+        from unittest.mock import patch
+        import linux_gui_package_runtime as runtime
+        archive = self.root / "fixture.tar"
+        with tarfile.open(archive, "w") as tar:
+            regular = tarfile.TarInfo("runtime/a")
+            regular.size = 3
+            tar.addfile(regular, io.BytesIO(b"abc"))
+            link = tarfile.TarInfo("runtime/b")
+            link.type, link.linkname = tarfile.LNKTYPE, "runtime/a"
+            tar.addfile(link)
+        destination = self.root / "extract"
+        destination.mkdir()
+        with patch.object(runtime, "CAP_BYTES", 5):
+            with self.assertRaisesRegex(ValueError, "exceeds"):
+                runtime.extract(archive, destination)
+        self.assertEqual(list(destination.iterdir()), [])
+        runtime.extract(archive, destination)
+        for filename in ("a", "b"):
+            path = destination / "runtime" / filename
+            self.assertEqual(path.read_bytes(), b"abc")
+            self.assertEqual(path.stat().st_nlink, 1)
+        self.assertNotEqual((destination / "runtime/a").stat().st_ino,
+                            (destination / "runtime/b").stat().st_ino)
+
+    def test_runtime_builder_signals_owned_group_before_reaping_on_success_and_timeout(self):
+        from unittest.mock import Mock, patch
+        import subprocess
+        import linux_gui_package_runtime as runtime
+        for ready in (True, False):
+            events = []
+            child = Mock(pid=123, wait=lambda: events.append("wait") or 0)
+            with patch.object(runtime.subprocess, "Popen", return_value=child), \
+                    patch.object(runtime.os, "pidfd_open", return_value=88, create=True), \
+                    patch.object(runtime.select, "select", return_value=([88] if ready else [], [], [])), \
+                    patch.object(runtime.os, "killpg", side_effect=lambda *args: events.append("signal")), \
+                    patch.object(runtime.os, "close"):
+                if ready:
+                    runtime.run_builder(["synthetic"], self.root, {})
+                else:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        runtime.run_builder(["synthetic"], self.root, {})
+            self.assertEqual(events, ["signal", "wait"])
+
+    @unittest.skipUnless(sys.platform == "linux" and hasattr(os, "pidfd_open"), "native Linux pidfd fixture")
+    def test_native_runtime_builder_reaps_real_owned_success_and_timeout(self):
+        import subprocess
+        import linux_gui_package_runtime as runtime
+        runtime.run_builder([sys.executable, "-c", "pass"], self.root, {})
+        with self.assertRaises(subprocess.TimeoutExpired):
+            runtime.run_builder([sys.executable, "-c", "import time; time.sleep(60)"],
+                                self.root, {}, timeout=0.1)
+
+    def test_explicit_existing_compositor_is_never_owned_or_stopped(self):
+        from unittest.mock import patch
+        import socket
+        import linux_gui_package_native as native
+        path = self.root / "wayland-test"
+        with socket.socket(socket.AF_UNIX) as compositor:
+            compositor.bind(str(path))
+            with patch.object(native.subprocess, "Popen") as spawn, patch.object(native, "stop") as stop:
+                with native.compositor_display(self.root, {}, path) as display:
+                    self.assertEqual(display, str(path))
+                spawn.assert_not_called()
+                stop.assert_not_called()
+        ordinary = self.root / "not-a-socket"
+        ordinary.write_text("fixture")
+        with self.assertRaises(ValueError):
+            with native.compositor_display(self.root, {}, ordinary):
+                self.fail("ordinary file admitted")
 
 
 if __name__ == "__main__":
