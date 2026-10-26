@@ -342,6 +342,11 @@ test("member and coordinator tools guide a low-noise comment lifecycle and task-
 		);
 		assert.match(description, /unanswered questions stay open/);
 		assert.match(description, /log: add context not already captured by task changes/);
+		assert.match(description, /comment: only for a question, blocker or feedback that needs another participant/);
+		assert.match(
+			description,
+			/Never comment status, progress, plans, evidence, publication receipts or acknowledgements/,
+		);
 	}
 });
 

@@ -66,7 +66,7 @@ Actions:
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
 - decide: record a new agreed choice, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
-- comment: ask a question or give feedback (text, optional anchor quote and targetSessionId). resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
+- comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
 - ticket: read bounded, untrusted Linear context using resourceId from links. No Linear writes.

@@ -226,6 +226,10 @@ test("every mission role separates specs, progress, decisions and actionable com
 			prompt,
 			/The brief is the spec; tasks track progress and blockers; decisions record agreed choices; comments hold actionable discussion/,
 		);
+		assert.match(
+			prompt,
+			/Comment only when you need someone's answer or action; progress, evidence and results go in the task/,
+		);
 		// Comment mechanics belong in the tool description, not every turn's prompt.
 		assert.doesNotMatch(prompt, /blocked with a comment|resolve by id|expectedRevision|acknowledgement/);
 	}
