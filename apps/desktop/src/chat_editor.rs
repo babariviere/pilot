@@ -20,6 +20,9 @@ use gpui_kit::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "path_completion_view.rs"]
+pub(crate) mod paths;
+
 #[cfg(feature = "native-probes")]
 #[path = "composer_probe.rs"]
 pub(crate) mod composer_probe;
@@ -58,6 +61,7 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct ChatEditor {
+    paths: paths::Paths,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
@@ -118,7 +122,11 @@ impl ChatEditor {
         );
         let text_events =
             cx.subscribe_in(&text, window, |view, _, event, window, cx| match event {
-                InputEvent::Change => view.changed(cx),
+                InputEvent::Change => {
+                    view.changed(cx);
+                    view.path_input_changed(window, cx, true);
+                }
+                InputEvent::Blur => view.close_paths(cx),
                 InputEvent::PressEnter { shift: false, .. } => view.submit(false, window, cx),
                 _ => {}
             });
@@ -127,7 +135,11 @@ impl ChatEditor {
                 view.changed(cx);
             }
         });
+        let path_watch = cx.observe_in(&text, window, |v, _, w, cx| {
+            v.path_input_changed(w, cx, false)
+        });
         Self {
+            paths: Default::default(),
             context_entry: None,
             todos_entry: None,
             questions,
@@ -158,7 +170,7 @@ impl ChatEditor {
             state: WriteState::default(),
             error: None,
             closing: false,
-            _subscriptions: vec![text_events, cwd_events, question_events],
+            _subscriptions: vec![text_events, cwd_events, question_events, path_watch],
         }
     }
 
@@ -192,6 +204,7 @@ impl ChatEditor {
         self.selected.as_deref()
     }
     pub(crate) fn browse_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_paths(cx);
         self.changed(cx);
         self.questions.reset();
         self.selected = None;
@@ -283,6 +296,7 @@ impl ChatEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.close_paths(cx);
         self.changed(cx);
         self.questions.reset();
         self.prune_cache();
@@ -892,9 +906,57 @@ impl Render for ChatEditor {
             .min_w_0()
             .rounded(px(crate::appearance::Radius::CARD))
             .bg(crate::appearance::card(cx))
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::IndentInline, w, cx| {
+                    if v.marked(w, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if v.path_tab(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .capture_action(cx.listener(|v, e: &gpui_kit::base::input::Enter, w, cx| {
+                if v.path_open() && !e.shift {
+                    cx.stop_propagation();
+                    v.path_accept_selected(w, cx);
+                }
+            }))
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
+                if v.path_open() {
+                    cx.stop_propagation();
+                    if !v.marked(w, cx) {
+                        v.close_paths(cx);
+                    }
+                }
+            }))
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::MoveUp, w, cx| {
+                if v.path_open() {
+                    cx.stop_propagation();
+                    if !v.marked(w, cx) {
+                        v.path_move(-1, cx);
+                    }
+                }
+            }))
+            .capture_action(
+                cx.listener(|v, _: &gpui_kit::base::input::MoveDown, w, cx| {
+                    if v.path_open() {
+                        cx.stop_propagation();
+                        if !v.marked(w, cx) {
+                            v.path_move(1, cx);
+                        }
+                    }
+                }),
+            )
             .capture_key_down(
                 cx.listener(|view, event: &gpui_kit::KeyDownEvent, window, cx| {
                     let key = &event.keystroke;
+                    if view.path_open() && key.key == "enter" && !key.modifiers.shift {
+                        cx.stop_propagation();
+                        view.path_accept_selected(window, cx);
+                        return;
+                    }
                     if key.key == "enter"
                         && key.modifiers.alt
                         && !key.modifiers.shift
@@ -1117,6 +1179,8 @@ impl Render for ChatEditor {
                 shell.child(region)
             })
             .children((!is_new).then(|| self.todos_entry.clone()).flatten())
+            .relative()
+            .children(self.path_suggestions(cx))
             .child(footer)
             .into_any_element()
     }

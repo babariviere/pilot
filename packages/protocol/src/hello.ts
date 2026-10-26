@@ -18,6 +18,8 @@ export interface DaemonHello {
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
 export interface DaemonCapabilities {
+	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
+	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */
 	passiveFailedModel?: true;
 	/** Atomic captured-row admission for queue edits/removals. */

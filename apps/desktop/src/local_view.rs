@@ -60,6 +60,9 @@ pub(crate) mod motion_probe;
 pub(crate) mod navigation_probe;
 #[path = "navigation_view.rs"]
 mod navigation_view;
+#[cfg(feature = "native-probes")]
+#[path = "path_completion_probe.rs"]
+pub(crate) mod path_completion_probe;
 #[path = "project_add_navigation.rs"]
 mod project_add_navigation;
 #[cfg(feature = "native-probes")]
@@ -1017,6 +1020,8 @@ impl LocalViewer {
             })
         });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
+        let path_owner = cx.weak_entity();
+        editor.update(cx, |editor, cx| editor.enable_paths(path_owner, window, cx));
         let context_entry = context_usage_view::entry(cx);
         let todos_entry = session_todos_tray::entry(window, cx);
         editor.update(cx, |editor, _| {
@@ -1315,6 +1320,32 @@ impl LocalViewer {
                 view.editor.update(cx, |e, cx| e.invalidate_models(w, cx))
             },
         ));
+    }
+
+    pub(crate) fn path_completion_source(&self) -> Option<crate::chat_editor::paths::Source> {
+        if self.page != Page::Chat
+            || self.state.generation != self.generation
+            || !self.state.loaded
+            || self.state.page_busy
+            || self.refreshing
+            || self.artifacts_open
+        {
+            return None;
+        }
+        let id = self.selected.as_ref()?;
+        let chat = self
+            .state
+            .chats
+            .iter()
+            .find(|c| &c.id == id && !c.local_draft && c.writable && !c.archived)?;
+        Some(crate::chat_editor::paths::Source {
+            options: self.usage_options.clone()?,
+            target: crate::path_completion::Target {
+                chat: id.clone(),
+                cwd: chat.cwd.clone(),
+                generation: self.generation,
+            },
+        })
     }
     fn open(&mut self, chat: Chat, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.prepare_navigation(window, cx) {

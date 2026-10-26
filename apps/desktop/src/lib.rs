@@ -7,6 +7,10 @@ mod catalog_probe;
 mod chat_actions;
 mod context_meter;
 mod context_usage;
+mod path_completion;
+mod path_completion_reader;
+#[cfg(feature = "native-probes")]
+pub use local_view::path_completion_probe::run_path_completion_probe;
 mod session_todos;
 mod session_todos_view;
 #[cfg(feature = "native-probes")]

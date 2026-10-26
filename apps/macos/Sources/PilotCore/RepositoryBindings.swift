@@ -24,6 +24,20 @@ public struct SessionFileContent: Codable, Equatable, Sendable {
     public let binary: Bool
 }
 
+public struct SessionPathCandidates: Codable, Equatable, Sendable {
+    public struct Entry: Codable, Equatable, Sendable {
+        public let path: String
+        public let directory: Bool
+    }
+    public let sessionId: String
+    public let cwd: String
+    public let prefix: String
+    public let daemonId: String
+    public let lineageId: String
+    public let entries: [Entry]
+    public let truncated: Bool
+}
+
 /// Host-local repository placement. Confirming this does not share context, credentials or trust.
 public struct RepositoryMapping: Codable, Equatable, Sendable {
     public let logicalProjectId: String

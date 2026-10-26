@@ -21,6 +21,7 @@ public struct DaemonHello: Codable, Equatable, Sendable {
 }
 
 public struct DaemonCapabilities: Codable, Equatable, Sendable {
+    public let sessionPathCandidates: Int?
     public let powerManagement: Bool
     public let systemSleepEvents: Bool
     public let swiftUIArtifacts: Bool

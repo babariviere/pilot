@@ -13,6 +13,11 @@ required-features = ["native-probes"]
 native-probes = ["gpui-kit/test-support"]
 
 [[test]]
+name = "path_completion"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "session_file_view"
 harness = false
 required-features = ["native-probes"]

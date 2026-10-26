@@ -1,9 +1,107 @@
 # Composer path completion: contract audit
 
-Status: blocked on an absent session-scoped listing/completion API. No composer
-completion UI, filesystem reads, transport routes or input hooks were added.
-This audit covers source at `c3b6e2779acdd7211fc2dbad92decff16e9c30fb`.
-Slash commands are outside this feature.
+The initial audit below found no safe candidate API at
+`c3b6e2779acdd7211fc2dbad92decff16e9c30fb`. The user subsequently authorized
+the narrow read-only session API described here. Slash commands remain outside
+this feature. The client never reads filesystem paths directly.
+
+## Authorized session contract
+
+`GET /api/sessions/:id/path-candidates` requires exact `daemonId`, `lineageId`,
+`cwd` and a literal relative `prefix`. Hello advertises
+`capabilities.sessionPathCandidates: 1`; missing capability means unavailable,
+never a fallback to older routes. The response echoes `sessionId`, `cwd`,
+`prefix`, `daemonId`, `lineageId`, plus `entries: {path, directory}[]` and
+`truncated`. It is a read, not a durable mutation receipt or workspace lock.
+
+The server checks the existing Changes admission before and after enumeration,
+also refusing absent/parked/starting/failed workers, archival and cwd mismatch.
+It never opens a worker, emits session changes or runs commands. Candidates
+come only from that session's cwd. No home/project roots, parent traversal,
+absolute paths, tilde expansion, symlinks or shell/URL interpretation. Hidden
+entries require a dot prefix. Root-relative paths use strict lexical components
+and existing no-symlink `scopedPath`, with canonical directory/device/inode
+revalidation around enumeration. This is not an atomic filesystem snapshot or
+authentication, and candidates may cease to exist immediately after the read.
+
+Limits: two concurrent server enumerations, 512 scanned directory entries,
+eight matches, 1024 UTF-16 prefix units (client also caps UTF-8 at 1024 bytes),
+255-unit entry names. The bounded subset
+is sorted after scanning; `truncated` means coverage is incomplete, not that
+the returned subset is the global alphabetical first eight. Client replies are
+capped at 16 KiB and eight direct-child candidates, with exact response identity
+and a second hello check. Redirects, proxies, retries and alternate-root/host
+fallbacks are disabled. Requests time out after three seconds.
+
+## Native composer behavior
+
+Tab explicitly opens suggestions for a supported collapsed-selection token in
+an existing Local chat. Typing refines the open chooser after a 120 ms debounce;
+replacement cancels the old future, and idle input never polls. Up/Down selects,
+Tab/Enter inserts, Escape closes. Loading/empty/refused results stay quiet and
+never become a send. A source generation/home/daemon/lineage/chat/cwd change,
+selection move or blur invalidates suggestions. New-chat/project-root completion
+is intentionally unavailable, since no admitted session cwd exists yet.
+
+The native completion surface uses existing Kit Buttons/theme tokens above the
+unchanged editor tray. Pointer acceptance prevents sibling blur and checks
+preedit. Native Input action capture precedes Enter/Tab/Escape handling; the
+preedit guard runs before Escape can unmark composition. Acceptance compares
+full text, selected range, token, draft key, edit-intent serial and exact source
+again. It replaces only the captured UTF-16 range through the native input
+handler, not `set_value`; normal undo, Change-driven draft autosave and immutable
+send/queue/steering envelopes remain the owners of their existing behavior.
+Quoted tokens and escaped spaces retain surrounding text; unsupported delimiter
+names are refused rather than silently rewritten. Paths are inserted as text,
+never sent or executed. No automatic single-match insertion occurs.
+The literal prefix must be nonempty: `./R` is supported, bare `./` is not;
+directory tokens such as `src/` can list that subdirectory. The client is not a
+shell parser and does not complete selections, mid-token suffixes or expansions.
+Completion capture is bounded by the existing 32 KiB draft limit before text
+materialization. Tab on an oversized draft neither queries nor mutates it;
+acceptance also refuses a replacement that would exceed that limit.
+
+### Verification scope
+
+The focused checks cover the new pure token/source model, bounded faux-loopback
+reader, actual mounted production LocalViewer/ChatEditor, and backend admission
+and enumeration. Existing composer-controls and new-chat native journeys cover
+the shared Input hook after integrating the separately owned new-chat layout.
+Matching strict Clippy and a normal production-feature build verify both
+feature configurations; no broad desktop suite or Swift rebuild is warranted
+for these bounded input/read additions and type-only Swift mirrors. CI retains
+the full gates. Captures are actual offscreen GPUI rendering at 680/1100 in both
+themes, not a SwiftUI mock. No live daemon data, account or filesystem candidate
+source is used by these fixtures. Full OS IME, performance and Linux acceptance
+remain unverified.
+
+The final focused native batch passed six pure/transport tests and four mounted
+completion flows (680/1100, light/dark), plus the existing `composer_controls`
+and `new_chat_view` targets. The completion flow covers Up/Down, Enter/Tab,
+pointer acceptance, Unicode surrounding text, undo, exact stale callback refusal,
+typing refinement, retained IME/preedit on sibling click and Input Escape, and
+an actual delayed response canceled across source generation change. All
+flows also paste an oversized draft with native Cmd-V and verify Tab makes no
+query or text mutation. All
+completion flows assert no send/create/queue/stop commands. Three backend tests
+cover literal candidates, directory/concurrency caps, symlink cwd refusal,
+daemon/cwd identity and repeated session admission without worker commands.
+The unchanged repository-browser tests also pass. TypeScript typecheck and
+matching strict native Clippy pass; 46 CI registry and 22 scoped-wrapper checks
+pass. Evidence commands:
+
+```sh
+node --test packages/daemon/src/path-completion.test.ts packages/daemon/src/repository-browser.test.ts
+node_modules/.bin/tsgo --noEmit
+cd apps/desktop
+python3 scripts/check-scoped.py --unit path_completion --test path_completion --test composer_controls --test new_chat_view --native-probes --lint
+```
+
+Actual native images are attached to the task. No packaged app was installed,
+launched or restarted. Production-build completion is recorded with the landed
+commit on the task, separate from the native-probes build.
+
+## Initial audit
 
 ## Actual Swift behavior
 
@@ -37,7 +135,7 @@ neither of which is used by `PathCompletion`.
 | `/api/sessions/:id/files?path=…` | Reads one already-known relative regular file under `session.cwd`; 512 KiB text cap, binary/truncation flags, no directory listing. | Cannot discover candidates. Calls `sessions.get`, not workspace write admission; does not inherit the Changes refusal contract. Never probe guessed filenames to simulate completion. |
 | `/api/sessions/:id/changes` | Uses `sessions.changeBase` and its workspace admission, returning repository changes. | Changed files are not a directory/completion inventory. Reusing this would misrepresent coverage and cannot implement the requested path source. |
 
-There is no session-scoped path candidate/listing route in the audited daemon
+There was no session-scoped path candidate/listing route in the audited daemon
 or protocol. Hello identity checks cannot turn the project/home directory API
 into a session-scoped grant. Neither a matching project path nor a successful
 file read establishes the missing completion authority. Do not fall back to
@@ -70,15 +168,15 @@ direct filesystem reads, home/project enumeration, Changes, or guessed paths.
   That is a useful transport pattern, not a candidate API or atomic workspace
   proof. Content equality alone cannot fence an edit-away-and-back intent.
 
-## Blocker and verification boundary
+## Original blocker and verification boundary
 
-The approved scope permits wiring an existing safe contract only. Implementing
-the required session-root candidate source and its refusal semantics would
-require new backend capability and separate authorization. No partial chooser
-is mounted and no empty-result claim hides the missing API. Existing composer,
-draft, send, steering, queue and recovery behavior remains unchanged.
+The original scope permitted wiring an existing safe contract only. The missing
+session-root source blocked implementation; a documentation-only audit was
+published as `f0d7173776868f390b1ea542d755a5f3994a9f5c`. The user's subsequent
+explicit authorization permits only the new bounded API above, not general
+backend capabilities or client filesystem access.
 
-If that capability is separately authorized, retain exact home/daemon/lineage,
+Verification must retain exact home/daemon/lineage,
 chat/cwd, source generation, draft key, edit intent, token, full text and
 selection fences through response publication and pointer/keyboard acceptance.
 Debounce/cancel bounded token reads; no polling. Use native Kit and existing
@@ -86,5 +184,6 @@ theme/geometry, with no layout or send-side-effect changes. Then verify pure
 range/source fences, bounded faux-loopback transport, and the mounted production
 composer at narrow/wide sizes in both themes, including IME, late responses,
 source switches, Escape, typing, undo, pointer acceptance and no-send assertions.
-Those implementation checks were not run or claimed for this documentation-only
-audit; no live API calls, app launches or native rendering were needed.
+The initial documentation-only audit did not claim those implementation checks.
+Implementation evidence is recorded separately on delivery. Synthetic native
+tests do not establish OS IME, performance, Linux support or user acceptance.

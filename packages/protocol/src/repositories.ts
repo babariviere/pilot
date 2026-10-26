@@ -20,3 +20,14 @@ export interface SessionFileContent {
 	truncated: boolean;
 	binary: boolean;
 }
+
+/** Bounded literal candidates under an admitted active Build session cwd. No shell expansion. */
+export interface SessionPathCandidates {
+	sessionId: string;
+	cwd: string;
+	prefix: string;
+	daemonId: string;
+	lineageId: string;
+	entries: { path: string; directory: boolean }[];
+	truncated: boolean;
+}

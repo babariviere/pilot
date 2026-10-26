@@ -4234,6 +4234,23 @@ export class SessionManager {
 	}
 
 	/** Server-side capability check, independent of client controls. */
+	pathCompletionRoot(id: string, expectedCwd: string): string {
+		const { cwd } = this.changeBase(id);
+		const meta = this.require(id);
+		const worker = this.workers.get(id);
+		if (
+			cwd !== expectedCwd ||
+			meta.archivedAt !== undefined ||
+			meta.failure ||
+			this.parking.has(id) ||
+			!worker ||
+			(worker.state !== "idle" && worker.state !== "working")
+		)
+			throw new Conflict("Path completion requires the matching active Build workspace");
+		return cwd;
+	}
+
+	/** Server-side capability check, independent of client controls. */
 	assertWritable(id: string): void {
 		const meta = this.require(id);
 		this.assertNotContinued(meta);

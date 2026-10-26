@@ -89,6 +89,7 @@ import type { ModelCatalog } from "./models.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { OperationJournal, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
+import { PathCompletionReader } from "./path-completion.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -463,6 +464,7 @@ export function createDaemonServer(
 		},
 	});
 	const repositoryChanges = new RepositoryChanges();
+	const pathCompletion = new PathCompletionReader();
 	const repositories = new RepositoryBrowser(projects);
 	const attachments = new AttachmentStore(_config.home);
 	const transfers = new RuntimeAdmission();
@@ -673,6 +675,29 @@ export function createDaemonServer(
 				return json(res, 201, await projects.create({ path, name: body.name }));
 			}
 		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "path-candidates" && req.method === "GET") {
+			if (!hello?.lineageId) throw new ServiceUnavailable("Path completion identity unavailable");
+			if (
+				url.searchParams.get("daemonId") !== hello.daemonId ||
+				url.searchParams.get("lineageId") !== hello.lineageId
+			)
+				throw new Conflict("Path completion daemon identity changed");
+			const id = parts[2]!;
+			const expected = url.searchParams.get("cwd") ?? "";
+			const prefix = url.searchParams.get("prefix") ?? "";
+			const cwd = sessions.pathCompletionRoot(id, expected);
+			const result = await pathCompletion.read(cwd, prefix);
+			if (sessions.pathCompletionRoot(id, expected) !== cwd) throw new Conflict("Path completion workspace changed");
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, {
+				...result,
+				sessionId: id,
+				cwd,
+				prefix,
+				daemonId: hello.daemonId,
+				lineageId: hello.lineageId,
+			});
+		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "files" && req.method === "GET") {
 			const session = sessions.get(parts[2]!);
 			if (!session) throw new NotFound("Unknown session");
@@ -716,6 +741,7 @@ export function createDaemonServer(
 					passiveTaskModel: missions ? true : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
+					sessionPathCandidates: hello.lineageId ? 1 : undefined,
 				},
 			});
 		}
