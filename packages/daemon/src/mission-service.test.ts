@@ -279,24 +279,21 @@ test("a released task continues in the chat that held it instead of opening a du
 	});
 	const first = await f.service.startTask(id, task.id);
 	assert.equal(f.store.task(id, task.id).sessionId, first.id);
-	const chats = f.workers.size;
+	const worker = await until(() => f.workers.get(first.id));
 	// The chat's turn failed, so the coordinator released the claim and started the task again.
 	f.store.releaseTask(id, task.id);
 	const again = await f.service.startTask(id, task.id);
 	assert.equal(again.id, first.id, "a released task continues in the chat that held it");
 	assert.equal(f.store.task(id, task.id).sessionId, first.id);
-	assert.equal(f.workers.size, chats, "a restarted task opens no second chat");
-	const inputs = await until(() => {
-		const worker = f.workers.get(first.id);
-		const found = [...(worker?.requests ?? []), ...(worker?.sent ?? [])]
+	assert.equal(f.workers.get(first.id), worker, "a restarted task opens no second chat");
+	const continuation = await until(() => {
+		const current = f.workers.get(first.id);
+		const inputs = [...(current?.requests ?? []), ...(current?.sent ?? [])]
 			.filter((command) => command.type === "input")
 			.map((command) => (command.type === "input" ? command.content : ""));
-		return found.length ? found : undefined;
+		return inputs.find((content) => content.startsWith("Continue mission task #"));
 	});
-	assert.ok(
-		inputs.some((content) => content.startsWith("Continue mission task #")),
-		"the continued task asks the chat to continue instead of starting over",
-	);
+	assert.ok(continuation, "the continued task asks the chat to continue instead of starting over");
 });
 
 test("session summaries resolve current membership without attention or task-detail reads", async (t) => {

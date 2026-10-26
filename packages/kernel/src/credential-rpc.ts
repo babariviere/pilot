@@ -57,14 +57,17 @@ export class CredentialChannel {
 		this.endpoint = endpoint;
 		this.socket = connect(endpoint.socket);
 		this.socket.setTimeout(310_000, () => this.close());
-		this.socket.on("error", (error) => {
-			// A missing or refused socket means the daemon that issued this endpoint is gone or
-			// restarting. The endpoint is stale, not a broken broker: a fresh one is needed.
-			const code = (error as NodeJS.ErrnoException).code;
-			this.code = code === "ENOENT" || code === "ECONNREFUSED" ? "stale" : undefined;
-			this.close();
+		this.socket.on("error", () => {
+			// The socket failed: the daemon that issued this endpoint is gone, restarting, or its
+			// socket cannot be reached. The endpoint is stale, not a broken broker, and the daemon
+			// issues a fresh one. A broker that answers with a code keeps that code.
+			this.close("stale");
 		});
-		this.socket.on("close", () => this.close());
+		this.socket.on("close", () => {
+			// The peer closed the channel: it exited or restarted, so the endpoint is stale. The
+			// daemon can issue a fresh one, and this worker must not fail the chat for it.
+			this.close("stale");
+		});
 		this.socket.on("data", (bytes) => {
 			this.buffer = Buffer.concat([this.buffer, bytes]);
 			if (this.buffer.length > this.responseLimit) return this.close();
@@ -89,7 +92,8 @@ export class CredentialChannel {
 		});
 	}
 	request(request: CredentialRequest): Promise<unknown> {
-		if (this.closed || this.pending) return Promise.reject(authError(this.code));
+		// A closed channel never answers again: the daemon that issued the endpoint is gone.
+		if (this.closed || this.pending) return Promise.reject(authError(this.code ?? "stale"));
 		this.responseLimit = request.op === "catalog" ? CATALOG_FRAME_LIMIT : AUTH_FRAME_LIMIT;
 		const frame = JSON.stringify({ ...request, token: this.endpoint.token }) + "\n";
 		if (Buffer.byteLength(frame) > AUTH_FRAME_LIMIT) return Promise.reject(authError("invalid"));
@@ -97,15 +101,17 @@ export class CredentialChannel {
 			this.pending = { resolve, reject };
 			this.deadline = setTimeout(() => this.close(), 35_000);
 			this.socket.write(frame, (error) => {
-				if (error) this.close();
+				if (error) this.close("stale");
 			});
 		});
 	}
-	close(): void {
+	/** A channel that closes without a broker reply lost its daemon: the endpoint is stale. */
+	close(code?: string): void {
 		if (this.closed) return;
 		this.closed = true;
 		clearTimeout(this.deadline);
-		this.pending?.reject(authError(this.code));
+		if (code) this.code = code;
+		this.pending?.reject(authError(this.code ?? "stale"));
 		this.pending = undefined;
 		this.socket.destroy();
 	}
