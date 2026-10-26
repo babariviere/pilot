@@ -150,12 +150,30 @@ pub(crate) fn summary(snapshot: &Snapshot, expanded: bool, cx: &App) -> Div {
                         .unwrap_or_default()
                 })),
         )
-        .child(
-            if expanded {
-                AppIcon::Earlier
-            } else {
-                AppIcon::Latest
-            }
-            .inline(),
-        )
+        .child(disclosure_icon(expanded).inline())
+}
+
+fn disclosure_icon(expanded: bool) -> AppIcon {
+    if expanded {
+        AppIcon::Collapse
+    } else {
+        AppIcon::Expand
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::AssetSource;
+    #[test]
+    fn disclosure_uses_loaded_chevrons_not_navigation_arrows() {
+        for (expanded, path) in [
+            (false, "icons/chevron-down.svg"),
+            (true, "icons/chevron-up.svg"),
+        ] {
+            let icon = disclosure_icon(expanded).asset();
+            assert_eq!(icon.path().as_ref(), path);
+            assert!(crate::ChromeAssets.load(path).unwrap().is_some());
+        }
+    }
 }

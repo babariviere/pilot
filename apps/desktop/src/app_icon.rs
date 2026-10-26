@@ -30,6 +30,8 @@ app_icons! {
     Todo => Circle,
     Complete => Check,
     Working => Ellipsis,
+    Expand => ChevronDown,
+    Collapse => ChevronUp,
     Home => House,
     Inbox => Inbox,
     Projects => Folders,
