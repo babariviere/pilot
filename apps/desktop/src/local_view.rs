@@ -39,6 +39,9 @@ pub(crate) mod jump_probe;
 #[cfg(feature = "native-probes")]
 #[path = "mission_browser_probe.rs"]
 pub(crate) mod mission_browser_probe;
+#[cfg(feature = "native-probes")]
+#[path = "mission_decisions_root_probe.rs"]
+pub(crate) mod mission_decisions_root_probe;
 #[path = "mission_inspector_navigation.rs"]
 mod mission_inspector_navigation;
 #[cfg(feature = "native-probes")]

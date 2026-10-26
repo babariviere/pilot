@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
+#[path = "mission_decisions_view.rs"]
+pub(crate) mod mission_decisions_view;
 #[path = "mission_lifecycle_browser.rs"]
 mod mission_lifecycle_browser;
 #[path = "mission_metadata_browser.rs"]
@@ -52,6 +54,7 @@ pub(crate) struct Input {
     pub(crate) loaded: bool,
 }
 pub(crate) struct Browser {
+    decisions: mission_decisions_view::Disclosure,
     pub(crate) generation: u64,
     pub(crate) route: Option<Route>,
     options: Option<LocalOptions>,
@@ -85,6 +88,7 @@ impl EventEmitter<Event> for Browser {}
 impl Browser {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            decisions: Default::default(),
             tasks_browser: cx.new(crate::mission_tasks_view::Pane::new),
             generation: 0,
             route: None,
@@ -252,6 +256,10 @@ impl Browser {
             }
         }
         if self.route != route {
+            if self.decisions.opened && self.focus.contains_focused(w, cx) {
+                self.focus.focus(w, cx);
+            }
+            self.decisions = Default::default();
             let owned = self
                 .metadata
                 .iter()
@@ -406,6 +414,7 @@ impl Browser {
                 self.error = None;
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
+                self.decisions.reconcile(&d);
                 self.detail = Some(d);
                 self.members = m;
                 self.error = None;
@@ -930,6 +939,7 @@ impl Render for Browser {
                     })),
             );
             content = content
+                .child(self.decisions_view(cx))
                 .child(ui::heading("mission-goal-heading", "Goal", Text::Headline))
                 .child(self.plain(
                     "mission-goal",

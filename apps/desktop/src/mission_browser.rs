@@ -173,6 +173,7 @@ pub(crate) struct Task {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Detail {
+    pub(crate) decisions: Result<crate::mission_decisions::Snapshot, &'static str>,
     pub(crate) key: Key,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -237,6 +238,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         Some(clip_text(&v["brief"]["markdown"], 32768, &mut clipped)?)
     };
     Ok(Detail {
+        decisions: crate::mission_decisions::project(v),
         key: key.clone(),
         title: text(&m["title"], 800)?,
         status: text(&m["status"], 40)?,

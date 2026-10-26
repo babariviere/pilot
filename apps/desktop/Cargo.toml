@@ -334,3 +334,8 @@ name = "queued_message"
 path = "tests/queued_message.rs"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "mission_decisions"
+harness = false
+required-features = ["native-probes"]

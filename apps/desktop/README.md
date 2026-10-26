@@ -213,6 +213,12 @@ editing. Per-source drafts survive navigation within the window. Conflicts retai
 text; unknown writes are never settled by later reads or retried automatically.
 This is not restart-durable draft storage. See [brief contracts and limits](docs/mission-brief.md).
 
+**Read decisions** shows current binding decisions with their number and audience,
+separately from pending, unadopted suggestions. Disclose full bounded text, reasons
+and source identity, or copy the displayed wording. Missing targets stay unknown;
+suggestions never replace current decisions. Refresh uses the existing overview
+read only, with no approval or management actions. See [decision reading](docs/mission-decisions.md).
+
 Overview's **Edit mission** opens a retained title/goal form with explicit **Save**
 (⌘Enter). No version check exists, so concurrent edits may be overwritten.
 Closing retains draft text and exact pending/uncertain outcomes within the window;
