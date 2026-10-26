@@ -103,6 +103,63 @@ pub(crate) fn run(
             "opaque/last"
         )
     });
+    let before_fold = cx.update(|cx| (scope.read(cx).selection(cx), scope.read(cx).edited));
+    click(cx, h, "scope-provider-toggle-openai-codex");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("scope-model-opaque/last").is_none());
+        assert_eq!(
+            w.find("scope-provider-toggle-openai-codex").label(),
+            Some("Expand openai-codex, 1 selected")
+        );
+    })
+    .unwrap();
+    if let Some(dir) = std::env::var_os("PILOT_NEXT_SCOPE_DIR") {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(std::path::PathBuf::from(dir).join(format!(
+                "{}-{}-scope-folded.png",
+                width as u32,
+                mode.name()
+            )))
+            .unwrap();
+    }
+    click(cx, h, "scope-provider-toggle-anthropic");
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.try_find("scope-model-opaque/one").is_none());
+        scope
+            .read(cx)
+            .search
+            .clone()
+            .update(cx, |s, cx| s.focus(w, cx));
+        w.press("tab", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(
+            w.find("scope-provider-toggle-anthropic").focused(),
+            Some(true)
+        );
+        w.press("space", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.try_find("scope-model-opaque/one").is_some());
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("scope-model-opaque/one").is_none())
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            (scope.read(cx).selection(cx), scope.read(cx).edited),
+            before_fold
+        )
+    });
     // Focus the actual retained search input, type through native events, then Tab/Space.
     cx.update_window(h, |_, w, cx| {
         scope
@@ -186,6 +243,16 @@ pub(crate) fn run(
     })
     .unwrap();
     settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.try_find("scope-model-opaque/one").is_none(),
+            "clearing search restores the user's folds"
+        );
+        assert!(w.try_find("scope-model-opaque/last").is_none());
+    })
+    .unwrap();
+    click(cx, h, "scope-provider-toggle-anthropic");
+    click(cx, h, "scope-provider-toggle-openai-codex");
     click(cx, h, "scope-model-opaque/one");
     if let Some(dir) = std::env::var_os("PILOT_NEXT_SCOPE_DIR") {
         cx.capture_screenshot(h)

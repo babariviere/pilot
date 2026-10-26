@@ -33,7 +33,14 @@ is labeled “Unspecified provider”; model IDs are never split or relabeled to
 Search retains provider headings for matching results and omits empty sections. The
 existing 30-model display budget applies across the grouped results; Show more reveals
 the next batch without fetching or selecting anything. Provider headings are passive,
-not bulk toggles. Existing per-model checkboxes retain Tab/Space activation and show
+not bulk selection toggles. Click a provider's chevron/header to fold or unfold its
+models; Tab then Space/Return does the same. Fold state is view-local, retained by
+exact provider key across searches and Settings-window reopen, not saved to pi.
+Search temporarily reveals matching sections and disables folding until cleared,
+then restores the user's folds. A folded header retains the number of exactly
+selected catalog models (wildcards/thinking suffixes are not inferred matches).
+Folding never edits selection, saves or changes the CAS baseline, and refuses to
+interrupt marked input. Existing per-model checkboxes retain Tab/Space activation and show
 exact literal membership, not inferred wildcard or thinking-suffix matches.
 
 Grouping only changes presentation. Selection still appends/removes the exact chosen
@@ -161,3 +168,10 @@ Private receipts/captures: `/tmp/scoped-provider-193/check-4.json` and
 and fixture-reset failures remain failed receipts. Relevant checks use the shared
 serial native slot, CPU2/4GiB mbx and private targets. Reconciliation onto `8b0c6b61`
 changed only unrelated daemon task-release code, not any checked desktop input.
+
+Provider folding follow-up uses the same focused command: seven view tests and
+the same four native Settings windows. The expanded probe checks pointer folding,
+Tab/Space/Return disclosure, selected count on a folded header, unchanged literals
+and dirty state, search reveal and restored folds after clearing search. Captures
+`*-scope-folded.png` show actual GPUI in both appearances. No new animation,
+persistence, network or model-selection authority is introduced.

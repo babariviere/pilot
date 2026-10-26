@@ -10,7 +10,8 @@ use gpui_kit::{
     AppContext, Context, Entity, EntityInputHandler, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
-        Disableable, StyledExt,
+        Disableable, Icon, IconName, Sizable, StyledExt,
+        button::{Button, ButtonVariants},
         checkbox::Checkbox,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
     },
@@ -33,6 +34,7 @@ pub(crate) struct ScopedModels {
     unconfirmed: bool,
     advanced: bool,
     shown: usize,
+    folded_providers: std::collections::BTreeSet<String>,
     problem: Option<&'static str>,
     status: &'static str,
     confirm_revert: bool,
@@ -138,6 +140,7 @@ impl ScopedModels {
             unconfirmed: false,
             advanced: false,
             shown: 30,
+            folded_providers: Default::default(),
             problem: None,
             status: "Open Scoped models to read the global pi baseline. Nothing is written on load.",
             confirm_revert: false,
@@ -401,6 +404,15 @@ impl ScopedModels {
             .update(cx, |t, cx| t.set_value(patterns.join("\n"), w, cx));
         cx.notify();
     }
+    fn toggle_provider(&mut self, provider: &str, w: &mut Window, cx: &mut Context<Self>) {
+        if self.marked(w, cx) || !self.search.read(cx).value().is_empty() {
+            return;
+        }
+        if !self.folded_providers.remove(provider) {
+            self.folded_providers.insert(provider.to_owned());
+        }
+        cx.notify();
+    }
 }
 
 #[cfg(feature = "native-probes")]
@@ -427,6 +439,22 @@ impl Render for ScopedModels {
             .as_ref()
             .map(|s| provider_groups(&s.candidates, &query, self.shown))
             .unwrap_or_default();
+        let selected_ids = selection
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .collect::<std::collections::HashSet<_>>();
+        let mut selected_by_provider = std::collections::BTreeMap::<&str, usize>::new();
+        for candidate in self
+            .observed
+            .as_ref()
+            .into_iter()
+            .flat_map(|s| &s.candidates)
+        {
+            if selected_ids.contains(&candidate.id) {
+                *selected_by_provider.entry(&candidate.provider).or_default() += 1;
+            }
+        }
         div().id("scoped-models").test_support().v_flex().gap_3().min_w_0()
             .child(ui::header("scoped-models-title","Scoped models",Text::Title)
                 .child(ui::text(Text::Body,"Choose pi’s global models on this Mac. Changes apply only when you save.")))
@@ -444,17 +472,29 @@ impl Render for ScopedModels {
             .when(!self.all,|this|this
                 .child(FieldRow::new("scope-search-row","Available models",Input::new(&self.search).aria_label("Find authenticated models").disabled(!editable)))
                 .children(groups.into_iter().map(|(provider, candidates)| {
+                    let open = !query.is_empty() || !self.folded_providers.contains(provider);
+                    let label = if provider.is_empty() { "Unspecified provider" } else { provider };
+                    let provider_key = provider.to_owned();
+                    let selected = selected_by_provider.get(provider).copied().unwrap_or(0);
                     div().id(SharedString::from(format!("scope-provider-{provider}"))).test_support().v_flex().gap_3().min_w_0()
-                        .child(ui::heading(SharedString::from(format!("scope-provider-title-{provider}")), SharedString::from(if provider.is_empty() { "Unspecified provider" } else { provider }), Text::Headline))
-                        .children(candidates.into_iter().map(|c|{
+                        .child(Button::new(SharedString::from(format!("scope-provider-toggle-{provider}"))).ghost().small().w_full().justify_start()
+                            .accessibility_label(SharedString::from(format!("{} {label}, {selected} selected", if open { "Collapse" } else { "Expand" })))
+                            .disabled(!query.is_empty())
+                            .tooltip(if query.is_empty() { "Expand or collapse provider" } else { "Search keeps matching providers expanded. Clear search to fold them." })
+                            .child(div().h_flex().items_center().gap_2().w_full().min_w_0()
+                                .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).small())
+                                .child(ui::heading(SharedString::from(format!("scope-provider-title-{provider}")), SharedString::from(label), Text::Headline))
+                                .when(selected > 0, |this| this.child(ui::text(Text::Caption, SharedString::from(format!("{selected} selected"))))))
+                            .on_click(cx.listener(move |v,_,w,cx| v.toggle_provider(&provider_key,w,cx))))
+                        .when(open, |this| this.children(candidates.into_iter().map(|c|{
                     let id=c.id.clone();let checked=selection.as_ref().is_some_and(|p|p.iter().any(|s|s==&id));
                     FieldRow::new(SharedString::from(format!("scope-row-{id}")),SharedString::from(c.name.clone()),
                         Checkbox::new(SharedString::from(format!("scope-model-{id}"))).label("Include model").accessibility_label(SharedString::from(format!("Include {}",id))).checked(checked).disabled(!editable)
                             .on_change(cx.listener(move|v,checked,w,cx|v.choose(&id,*checked,w,cx))))
                         .description(SharedString::from(c.id.clone()))
+                })))
                 }))
-                }))
-                .child(ui::text(Text::Caption,SharedString::from(format!("Showing {} of {matched} authenticated models. Unavailable patterns are preserved.",matched.min(self.shown)))))
+                .child(ui::text(Text::Caption,SharedString::from(format!("{} of {matched} authenticated models loaded. Unavailable patterns are preserved.",matched.min(self.shown)))))
                 .when(matched>self.shown,|this|this.child(ui::action("scope-show-more","Show more models",Action::Quiet).on_click(cx.listener(|v,_,_,cx|{v.shown=(v.shown+30).min(2048);cx.notify();}))))
                 .child(ui::action("scope-advanced",if self.advanced{"Hide literal patterns"}else{"Advanced literal patterns…"},Action::Quiet).on_click(cx.listener(|v,_,w,cx|{if !v.marked(w,cx){v.advanced = !v.advanced;cx.notify();}})))
                 .when(self.advanced,|this|this.child(FieldRow::new("scope-patterns-row","Literal patterns, in order",Textarea::new(&self.patterns).aria_label("Global model patterns").readonly(!editable))

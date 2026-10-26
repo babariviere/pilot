@@ -93,6 +93,41 @@ fn snapshot(patterns: Option<Vec<String>>) -> Snapshot {
     serde_json::from_value(crate::scoped_models_fixture::snapshot(&patterns)).unwrap()
 }
 #[gpui_kit::test]
+fn provider_folds_do_not_edit_scope_and_refuse_search_or_preedit(cx: &mut TestAppContext) {
+    let (h, v) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.apply(
+                snapshot(Some(vec!["p/one".into(), "custom/*:high".into()])),
+                w,
+                cx,
+            );
+            let before = v.selection(cx);
+            v.toggle_provider("p", w, cx);
+            assert!(v.folded_providers.contains("p"));
+            assert!(!v.unsettled(cx));
+            assert_eq!(v.selection(cx), before);
+            v.search.update(cx, |s, cx| s.set_value("p", w, cx));
+            v.toggle_provider("p", w, cx);
+            assert!(v.folded_providers.contains("p"));
+            v.search.update(cx, |s, cx| s.set_value("", w, cx));
+            v.patterns.update(cx, |s, cx| {
+                s.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+            });
+            let marked = v.patterns.read(cx).value();
+            v.toggle_provider("p", w, cx);
+            assert!(v.folded_providers.contains("p"));
+            assert_eq!(v.patterns.read(cx).value(), marked);
+            v.patterns.update(cx, |s, cx| s.unmark_text(w, cx));
+            v.toggle_provider("p", w, cx);
+            assert!(!v.folded_providers.contains("p"));
+            assert!(v.pending.is_none());
+            assert!(v.worker.is_none());
+        })
+    })
+    .unwrap();
+}
+#[gpui_kit::test]
 fn current_values_and_external_check_preserve_literal_edit_and_cas_baseline(
     cx: &mut TestAppContext,
 ) {
