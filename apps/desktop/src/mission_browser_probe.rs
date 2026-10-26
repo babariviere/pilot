@@ -182,6 +182,18 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                 v.missions.read(cx).catalog.is_some() && !v.missions.read(cx).busy
             });
             assert!(commands.try_recv().is_err());
+            cx.update_window(h, |_, w, _| {
+                assert!(
+                    w.try_find("missions-snapshot-note").is_none(),
+                    "current snapshots need no routine narration"
+                );
+                assert!(
+                    w.find("missions-scope").visible(),
+                    "project scope remains explicit"
+                );
+                assert!(w.find("missions-refresh").visible());
+            })
+            .unwrap();
             capture(
                 cx,
                 h,
@@ -319,6 +331,10 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 let _ = cx;
                 assert!(w.try_find("missions-error").is_some());
+                assert!(
+                    w.find("missions-snapshot-note").visible(),
+                    "stale snapshot warning stays visible"
+                );
                 assert_eq!(
                     w.find(format!("mission-row-{}", f::key("mission-A").tag()))
                         .disabled(),
@@ -326,6 +342,12 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                 );
             })
             .unwrap();
+            capture(
+                cx,
+                h,
+                &dir,
+                format!("{}-{}-read-error.png", width as u32, mode.name()),
+            );
             server.reply("/api/mission-catalog", Reply::json(200, f::catalog()));
             cx.update_window(h, |_, w, cx| w.click("missions-refresh", cx))
                 .unwrap();
@@ -350,6 +372,10 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("mission-goal").is_some());
+                assert!(
+                    w.find("missions-snapshot-note").visible(),
+                    "offline warning stays visible"
+                );
                 assert_eq!(w.find("mission-chat-chat-A").disabled(), Some(true));
                 w.click("mission-copy-goal", cx);
                 assert_eq!(

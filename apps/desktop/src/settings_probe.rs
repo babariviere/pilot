@@ -232,6 +232,10 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             cx.update_window(handle, |_, window, cx| {
+                assert!(
+                    window.try_find("settings-status").is_none(),
+                    "saved preferences need no routine status narration"
+                );
                 let detail = window.find("settings-detail").bounds();
                 for id in [
                     "settings-system",
@@ -275,6 +279,10 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                 original_bytes
             );
             cx.update_window(handle, |_, window, cx| {
+                assert!(
+                    window.find("settings-status").visible(),
+                    "unsaved changes stay visible"
+                );
                 window.press("secondary-w", cx);
             })
             .unwrap();
@@ -403,6 +411,12 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                     crate::settings_view::Category::Availability
                 )
             });
+            capture(
+                cx,
+                handle,
+                &captures,
+                &screenshot_name(width, mode, "other-settings"),
+            );
             cx.update_window(handle, |_, window, cx| {
                 window.click("settings-appearance", cx);
             })
@@ -551,6 +565,13 @@ fn state_scenes(
         cx.notify();
     });
     settle(cx, handle);
+    cx.update_window(handle, |_, window, _| {
+        assert!(
+            window.try_find("settings-status").is_none(),
+            "default preferences need no file-provenance narration"
+        );
+    })
+    .unwrap();
     capture(
         cx,
         handle,

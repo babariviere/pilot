@@ -655,15 +655,15 @@ impl Browser {
                 SharedString::from(text),
             ))
     }
-    fn snapshot_note(&self) -> &'static str {
+    fn snapshot_note(&self) -> Option<&'static str> {
         if self.busy {
-            "Loading mission snapshot…"
+            Some("Loading mission snapshot…")
         } else if self.error.is_some() {
-            "Mission read unavailable. Any retained context is not a current snapshot."
+            Some("Snapshot unavailable · retained content may be outdated")
         } else if !self.online {
-            "Offline-safe view · Local is unavailable; chat links are disabled."
+            Some("Offline · showing a previous snapshot")
         } else {
-            "Read-only snapshot · Refresh to update. No agents or tasks are started here."
+            None
         }
     }
 }
@@ -786,11 +786,11 @@ impl Render for Browser {
                         )
                     }),
             )
-            .child(
-                ui::text(Text::Caption, self.snapshot_note())
+            .children(self.snapshot_note().map(|note| {
+                ui::text(Text::Caption, note)
                     .id("missions-snapshot-note")
-                    .test_support(),
-            );
+                    .test_support()
+            }));
         if !self.online {
             content=content.child(Notice::new("Local is unavailable. Retained text is safe to read; chat links require a current Local connection.").tone(Tone::Warning));
         }
@@ -808,7 +808,11 @@ impl Render for Browser {
                 .as_ref()
                 .map(|id| self.project_name(id))
                 .unwrap_or_else(|| "All projects".into());
-            content=content.child(ui::text(Text::Caption,SharedString::from(format!("Browse scope: {scope}. Project evidence filters presentation, never mission identity."))));
+            content = content.child(
+                ui::text(Text::Caption, SharedString::from(scope))
+                    .id("missions-scope")
+                    .test_support(),
+            );
             if let Some(catalog) = &self.catalog {
                 let local = self.local_home();
                 let rows: Vec<_> = catalog
@@ -820,17 +824,15 @@ impl Render for Browser {
                             .is_some_and(|h| r.in_scope(h, self.filter.as_deref()))
                     })
                     .collect();
-                content = content.child(ui::text(
-                    Text::Caption,
-                    SharedString::from(format!(
-                        "{} shown in scope · {} received · {} known globally",
-                        rows.len(),
-                        catalog.rows.len(),
-                        catalog.total
-                    )),
-                ));
                 if catalog.truncated {
-                    content=content.child(Notice::new("Catalog rows or provenance are partial (server limits: 50 rows, 16 sources per row, 24 KB). This API has no pagination; Refresh updates this window, not the full catalog.").tone(Tone::Warning));
+                    content = content.child(
+                        Notice::new(SharedString::from(format!(
+                            "{} of {} missions received. Some project associations may be missing.",
+                            catalog.rows.len(),
+                            catalog.total
+                        )))
+                        .tone(Tone::Warning),
+                    );
                 }
                 if rows.is_empty() {
                     content = content.child(Notice::new(if self.catalog_current {

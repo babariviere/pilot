@@ -475,23 +475,13 @@ impl SettingsView {
         div()
             .v_flex()
             .gap(gpui_kit::px(ui::Space::SECTION))
+            .child(ui::header("settings-page-title", "Appearance", Text::Title))
             .child(
-                ui::header("settings-page-title", "Appearance", Text::Title).child(
-                    ui::text(
-                        Text::Caption,
-                        "Theme for this app. Changes apply only after Save.",
-                    )
-                    .text_color(cx.theme().muted_foreground),
-                ),
-            )
-            .child(
-                FieldRow::new("settings-theme-field", label, controls)
-                    .description("System follows macOS, including its automatic switching.")
-                    .layout(if wide {
-                        FieldLayout::Inline
-                    } else {
-                        FieldLayout::Stacked
-                    }),
+                FieldRow::new("settings-theme-field", label, controls).layout(if wide {
+                    FieldLayout::Inline
+                } else {
+                    FieldLayout::Stacked
+                }),
             )
             .child(
                 div()
@@ -509,10 +499,6 @@ impl SettingsView {
                                 .rounded_lg()
                                 .v_flex()
                                 .gap_3()
-                                .child(
-                                    ui::text(Text::Caption, "Sample conversation")
-                                        .text_color(cx.theme().muted_foreground),
-                                )
                                 .child(
                                     div()
                                         .id("settings-chat-preview")
@@ -580,21 +566,19 @@ impl SettingsView {
         let owner = self.preferences.read(cx);
         let state = &owner.state;
         let status = if owner.source.is_none() {
-            "Synthetic viewer. Preferences are not read or written."
+            Some("Preview only. Preferences cannot be saved.")
         } else if state.loading() {
-            "Loading preferences…"
+            Some("Loading preferences…")
         } else if state.saving() {
-            "Saving preferences…"
+            Some("Saving preferences…")
         } else if state.unconfirmed() {
-            "Save is unconfirmed. Retry before making another save."
+            Some("Save is unconfirmed. Retry before making another save.")
         } else if state.dirty() {
-            "Unsaved changes"
-        } else if state.loaded() && state.committed().is_none() {
-            "Using System by default. No preference file has been written."
-        } else if state.persisted() {
-            "Preferences saved"
+            Some("Unsaved changes")
+        } else if state.persisted() || (state.loaded() && state.committed().is_none()) {
+            None
         } else {
-            "Preferences unavailable"
+            Some("Preferences unavailable")
         };
         let error = state.error();
         let dirty = state.dirty();
@@ -617,12 +601,12 @@ impl SettingsView {
             return div().v_flex().gap_2()
                 .children((close_notice&&models_unsettled).then(||Notice::new("Finish or review your scoped-model changes before closing. No request is resent by closing.").tone(Tone::Warning)));
         }
-        let mut panel = div().v_flex().gap_3().child(
+        let mut panel = div().v_flex().gap_3().children(status.map(|status| {
             ui::text(Text::Caption, status)
                 .id("settings-status")
                 .test_support()
-                .text_color(cx.theme().muted_foreground),
-        );
+                .text_color(cx.theme().muted_foreground)
+        }));
         if let Some(error) = error {
             panel = panel.child(Notice::new(error.message()).tone(Tone::Error));
         }
@@ -724,7 +708,7 @@ impl SettingsView {
             )
             .child(ui::text(
                 Text::Caption,
-                "Save to apply this preference. Checks never authorize installation.",
+                "Installation requires confirmation.",
             ));
         #[cfg(target_os = "macos")]
         {
@@ -756,9 +740,7 @@ impl Render for SettingsView {
             Category::Updates => self.updates(cx).into_any_element(),
             Category::Availability => div().v_flex().gap_4()
                 .child(ui::header("settings-page-title", "Other settings", Text::Title))
-                .child(Notice::new("These settings are not available in this app yet.")
-                    .detail("Notifications, Connections, Diagnostics, Energy and project editing remain in Swift. Scoped models has its own Local category."))
-                .child(Notice::new("Embedded terminal support remains deferred. Project configuration and credentials keep their own authority.").tone(Tone::Quiet)).into_any_element(),
+                .child(Notice::new("Notifications, Connections, Diagnostics, Energy and project settings are available in the Swift app.")).into_any_element(),
         };
         let status = self.status(cx);
         div()
@@ -810,17 +792,7 @@ impl Render for SettingsView {
                     .h_full()
                     .border_r_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        ui::text(Text::Caption, "This app")
-                            .p_3()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                    .child(div().flex_1().min_h_0().child(List::new(&self.categories)))
-                    .child(
-                        ui::text(Text::Small, "This app and Local pi")
-                            .p_3()
-                            .text_color(cx.theme().muted_foreground),
-                    ),
+                    .child(div().flex_1().min_h_0().child(List::new(&self.categories))),
             )
             .child(
                 div()
