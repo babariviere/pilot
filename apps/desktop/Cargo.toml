@@ -302,3 +302,8 @@ name = "mission_lifecycle"
 harness = false
 test = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "conversation_links"
+harness = false
+required-features = ["native-probes"]

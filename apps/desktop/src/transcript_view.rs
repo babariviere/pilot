@@ -52,6 +52,11 @@ pub struct TranscriptView {
 }
 
 impl TranscriptView {
+    /// Cheap Arc-backed capture of the mounted, bounded reader window.
+    pub(crate) fn link_snapshot_rows(&self) -> Vec<Message> {
+        self.transcript.messages().to_vec()
+    }
+
     /// Readiness probe for the bounded offscreen harness, not a render-time gate.
     pub fn text_parsers_ready(&self, cx: &App) -> bool {
         self.work_ui.parsers_ready(cx)

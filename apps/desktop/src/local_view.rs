@@ -18,6 +18,11 @@ mod context_usage_view;
 #[path = "contextual_navigation.rs"]
 mod contextual_navigation;
 #[cfg(feature = "native-probes")]
+#[path = "conversation_links_probe.rs"]
+pub(crate) mod conversation_links_probe;
+#[path = "conversation_links_view.rs"]
+mod conversation_links_view;
+#[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
@@ -313,6 +318,7 @@ impl ListDelegate for ChatList {
 }
 
 pub struct LocalViewer {
+    conversation_links: Option<Entity<conversation_links_view::Pane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
@@ -398,6 +404,12 @@ impl LocalViewer {
                 crate::mission_view::CancelMission,
                 Some("MissionConversion"),
             ),
+            KeyBinding::new(
+                "escape",
+                conversation_links_view::Close,
+                Some("ConversationLinks"),
+            ),
+            KeyBinding::new("secondary-alt-l", conversation_links_view::Toggle, None),
             KeyBinding::new("secondary-k", ToggleJump, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
@@ -1138,6 +1150,7 @@ impl LocalViewer {
             inbox,
             missions,
             mission_context,
+            conversation_links: None,
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -1817,6 +1830,7 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
             .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
+            .on_action(cx.listener(|v,_:&conversation_links_view::Toggle,w,cx|{v.toggle_conversation_links(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
             .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
@@ -1839,6 +1853,7 @@ impl Render for LocalViewer {
                         .child(div().h_flex().items_center().gap_2().min_w_0()
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
                             .child(self.context_usage_action(cx))
+                            .child(self.conversation_links_action(cx))
                             .child(self.mission_context_action(cx))
                             .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
                                 .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
@@ -1860,7 +1875,8 @@ impl Render for LocalViewer {
                         .when(self.state.limited&&!self.details_open,|this|this.child("History window full. Refresh latest to see newer messages."))
                         .when(self.details_open,|this|this.child(SharedString::from(format!("{footer} {}",if self.state.omitted>0{"Some structured entries are shown as placeholders."}else{""})))))
                         .into_any_element();
-                self.mission_companion(conversation, window, cx)
+                let conversation = self.mission_companion(conversation, window, cx);
+                self.conversation_links_companion(conversation, window, cx)
                 }
             )
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))

@@ -122,6 +122,7 @@ impl LocalViewer {
         if self.mission_context.read(cx).visible {
             self.close_mission_context(w, cx);
         } else if self.mission_context.read(cx).source.is_some() {
+            self.close_conversation_links(w, cx);
             self.mission_context.update(cx, |p, cx| p.show(w, cx));
         }
         cx.notify();

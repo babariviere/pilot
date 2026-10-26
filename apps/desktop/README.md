@@ -41,6 +41,13 @@ later titles/GETs never settle them or trigger a replay. Reports are retained on
 in this window, not persisted across app restart. See [chat-rename.md](docs/chat-rename.md).
 
 
+### Loaded conversation links
+
+Use **Links** in a Local chat header (Cmd-Option-L) to inspect a bounded snapshot
+of loaded message text. **Copy link** copies the received URL; **Sources** reveals
+its exact loaded message. **Refresh** captures newer loaded text. This never opens
+a URL or fetches earlier history. See [conversation-links.md](docs/conversation-links.md).
+
 ### Chat context usage
 
 Use **Context…** in a Local chat header for read-only reported context and separate

@@ -6,8 +6,11 @@ pub use bundled_runtime_view::BundledRuntimeView;
 mod catalog_probe;
 mod chat_actions;
 mod context_usage;
+mod conversation_links;
 #[cfg(feature = "native-probes")]
 pub use local_view::context_usage_probe::run_context_usage_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::conversation_links_probe::run_conversation_links_probe;
 mod chat_rename;
 mod chat_rename_view;
 #[cfg(feature = "native-probes")]
