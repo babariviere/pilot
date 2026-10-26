@@ -240,7 +240,10 @@ impl Feed {
         self.source
             .as_ref()
             .is_some_and(|s| s.matches(options, chat, generation))
-            && (self.snapshot.is_some() || self.phase == Phase::Unavailable)
+            // Count is the inspected public total, not the capped display rows
+            // or unfinished count. Keep retained/completed nonzero snapshots;
+            // absent, initial errors and valid empty replacements mount nothing.
+            && self.snapshot.as_ref().is_some_and(|s| s.count > 0)
     }
 }
 

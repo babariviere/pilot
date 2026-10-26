@@ -49,11 +49,14 @@ fn absent_loading_empty_unavailable_and_retained_are_distinct() {
     f.stale();
     assert_eq!(f.phase, Phase::Unavailable);
     assert!(f.snapshot.is_none());
+    assert!(!f.visible(Some(&LocalOptions::synthetic(123)), Some("a"), 7));
     f.apply(&json!({"type":"todos_update","items":[]}));
     assert_eq!(f.phase, Phase::Ready);
     assert_eq!(f.snapshot.as_ref().unwrap().summary(), "No tasks reported");
+    assert!(!f.visible(Some(&LocalOptions::synthetic(123)), Some("a"), 7));
     f.stream();
     assert_eq!(f.phase, Phase::Retained);
+    assert!(!f.visible(Some(&LocalOptions::synthetic(123)), Some("a"), 7));
     f.apply(&json!({"type":"snapshot","entries":[]}));
     assert_eq!(f.phase, Phase::Retained);
     f.apply(&json!({"type":"todos_update","items":[]}));
@@ -94,7 +97,7 @@ fn counts_rows_titles_are_bounded_and_partial_never_all_done() {
 #[test]
 fn source_fences_chat_generation_port_home_and_reconnect() {
     let mut f = feed();
-    f.apply(&json!({"type":"todos_update","items":[]}));
+    f.apply(&json!({"type":"todos_update","items":[row("a","done",None)]}));
     let options = LocalOptions::synthetic(123);
     assert!(f.visible(Some(&options), Some("a"), 7));
     assert!(!f.visible(Some(&options), Some("a"), 8));
@@ -116,4 +119,34 @@ fn private_tools_and_mission_tasks_never_make_a_snapshot() {
         f.apply(&event);
     }
     assert!(f.snapshot.is_none());
+}
+
+#[test]
+fn visibility_follows_known_total_not_rows_completion_or_connection() {
+    let mut f = feed();
+    let visible = |f: &Feed| f.visible(Some(&LocalOptions::synthetic(123)), Some("a"), 7);
+    f.apply(&json!({"type":"todos_update","items":null}));
+    assert!(!visible(&f), "initial errors have no task evidence");
+    f.apply(&json!({"type":"todos_update","items":[row("a","done",None)]}));
+    assert!(visible(&f), "all completed is not zero tasks");
+    f.stream();
+    assert!(visible(&f), "reconnect retains known tasks");
+    f.apply(&json!({"type":"todos_update","items":[{}]}));
+    assert!(visible(&f), "malformed replacement cannot erase tasks");
+    // Visibility uses the inspected total, independently of row capping.
+    Arc::make_mut(f.snapshot.as_mut().unwrap()).rows.clear();
+    assert!(visible(&f));
+    f.apply(&json!({"type":"todos_update","items":[]}));
+    assert!(
+        !visible(&f),
+        "authoritative zero retires the entire surface"
+    );
+    f.stream();
+    f.stale();
+    assert!(
+        !visible(&f),
+        "retained zero does not create error-only chrome"
+    );
+    f.apply(&json!({"type":"todos_update","items":[row("b","open",None)]}));
+    assert!(visible(&f));
 }

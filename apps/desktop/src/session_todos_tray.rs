@@ -77,19 +77,8 @@ impl Render for Entry {
                     cx.stop_propagation();
                 }
             }));
-        let Some(snapshot) = feed.snapshot else {
-            return content
-                .child(
-                    ui::text(
-                        ui::Text::Caption,
-                        "Tasks unavailable. No public snapshot received.",
-                    )
-                    .id("session-todos-unavailable")
-                    .test_support()
-                    .text_color(cx.theme().muted_foreground),
-                )
-                .into_any_element();
-        };
+        // selected() admits only known nonempty snapshots, including retained.
+        let snapshot = feed.snapshot.expect("visible task snapshot");
         let stale = feed.phase == Phase::Retained;
         content = content.child(ui::action("session-todos-toggle", "", Action::Quiet).w_full().min_w_0()
             .accessibility_label(SharedString::from(format!("{} tasks. {}{}", if expanded { "Hide" } else { "Show" }, snapshot.summary(), if stale { ". Retained snapshot, not current" } else { "" })))

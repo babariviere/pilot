@@ -56,10 +56,19 @@ Upstream `hardbeat920/monocode` was inspected locally at exact commit
 
 ## Truth and limits
 
-Loading/absent feeds mount no scaffold. A valid empty replacement is distinct
-and reads “No tasks reported”. Unavailable without a snapshot says so. Invalid
-replacements/disconnection preserve the last snapshot with visible retained
-provenance, even when collapsed. Never call retained data current.
+Loading/absent feeds, initial errors without known tasks and valid empty
+replacements mount no task surface, disclosure or reserved spacing. Visibility
+uses the inspected total, not the capped row count or unfinished count. Completed
+nonzero snapshots remain visible. Invalid replacements/disconnection preserve
+known nonempty tasks with visible retained provenance, even when collapsed;
+retained empty reports stay hidden, not current. Only an authoritative empty
+replacement retires known tasks. Never call retained data current.
+
+When the focused disclosure disappears, the existing source-loss focus path
+restores the mounted composer (or navigation fallback). Disappearance does not
+reset the bounded per-source expansion intent, and reappearance does not steal
+focus. The editor slot returns display-none while hidden; no editor/root change
+is required.
 
 Inspect at most256 rows, count only that inspected portion, retain/render the
 first32 in display order, scroll at four28pt rows. Titles are bounded to240
@@ -102,3 +111,16 @@ Failed intermediate fixture receipts were preserved: they caught pointer-focus
 assumptions, insertion-vs-replacement cleanup, lexical-ID ordering, and faux
 publications omitting rows that the UI drains. Final reader assertions use real
 retained canonical rows, not an empty transcript.
+
+## Empty-surface correction
+
+The focused parser/state/loopback selection now passes10 tests. All4 mounted
+680/1100 light/dark flows pass zero→nonempty→empty, malformed/no-evidence,
+reconnect/retained, all-completed nonzero, capped count, source-switch/return,
+keyboard focus retirement/restoration, preserved disclosure intent, IME,
+reader/draft and composer-control assertions. No-task editor height is exactly
+the76pt tray plus its existing6pt top margin and rem-based `mb_3` bottom margin,
+with no hidden-child gap. No `chat_editor` changes were needed. Strict scoped
+Clippy, changed-file rustfmt and the ordinary production desktop build pass.
+Actual offscreen native captures show the hidden state in both themes; these
+are not OS IME, live data, smoothness/performance or Linux qualification.

@@ -54,6 +54,26 @@ fn publish(
     .unwrap();
     settle(cx, h);
 }
+// Only the 76pt tray and existing 6pt/mb_3 margins remain. Kit spacing is rem
+// based, so derive it rather than assuming a 16pt rem. No hidden-child gap.
+fn assert_no_tasks(w: &mut Window) {
+    for id in [
+        "session-todos-strip",
+        "session-todos-toggle",
+        "session-todos-list",
+        "session-todos-unavailable",
+        "session-todos-retained",
+        "session-todos-coverage",
+    ] {
+        assert!(w.try_find(id).is_none(), "empty feed mounted {id}");
+    }
+    assert_eq!(
+        w.find("conversation-editor").bounds().size.height,
+        px(76. + 6.) + w.rem_size() * 0.75
+    );
+    assert_eq!(w.find("composer-tray").bounds().size.height, px(76.));
+    assert_eq!(w.find("composer-input").bounds().size.height, px(34.));
+}
 pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_TODOS_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
@@ -137,8 +157,7 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             });
             let input = cx.update(|cx| editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("session-todos-strip").is_none());
-                assert_eq!(w.find("composer-tray").bounds().size.height, px(76.));
+                assert_no_tasks(w);
                 input.update(cx, |i, cx| i.focus(w, cx));
                 w.input("Unsent 私 👩‍💻 draft", cx);
                 w.scroll(
@@ -184,8 +203,7 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
-                assert!(w.find("session-todos-unavailable").visible());
-                assert!(w.try_find("session-todos-toggle").is_none());
+                assert_no_tasks(w);
                 assert!(input.focus_handle(cx).is_focused(w));
                 assert_eq!(w.find("composer-tray").bounds().size.height, px(76.));
             })
@@ -207,10 +225,7 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("session-todos-strip").is_none())
-            })
-            .unwrap();
+            cx.update_window(h, |_, w, _| assert_no_tasks(w)).unwrap();
             let variants = vec![
                 ("zero", json!([])),
                 (
@@ -254,6 +269,11 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             for (name, items) in variants {
                 publish(cx, h, &view, items);
                 cx.update_window(h, |_, w, cx| {
+                    if name == "zero" {
+                        assert_no_tasks(w);
+                        assert!(input.focus_handle(cx).is_focused(w));
+                        return;
+                    }
                     assert!(w.find("session-todos-toggle").visible());
                     let current = [
                         "composer-input",
@@ -302,6 +322,19 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
                 settle(cx, h);
+                if name == "zero" {
+                    // Malformed data after a known empty report remains hidden,
+                    // without changing that report into current data.
+                    publish(cx, h, &view, json!([{}]));
+                    cx.update_window(h, |_, w, _| assert_no_tasks(w)).unwrap();
+                    if let Some(p) = &captures {
+                        cx.capture_screenshot(h)
+                            .unwrap()
+                            .save(p.join(format!("todos-zero-{width}-{dark}.png")))
+                            .unwrap();
+                    }
+                    continue;
+                }
                 cx.update_window(h, |_, w, _| {
                     if name != "zero" {
                         assert!(w.find("session-todos-list").bounds().size.height <= px(112.));
@@ -450,6 +483,24 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                     .save(p.join(format!("todos-stale-{width}-{dark}.png")))
                     .unwrap();
             }
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = rows();
+                    state.todos.stream();
+                    v.accept(state, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("session-todos-retained").visible());
+                assert!(
+                    w.try_find("session-todos-list").is_none(),
+                    "reconnect keeps collapsed intent"
+                );
+            })
+            .unwrap();
             // Equal row count, status-only stream: stable draft/entity/focus/reader position.
             publish(
                 cx,
@@ -498,6 +549,38 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("session-todos-list").is_none())
             })
             .unwrap();
+            // Authoritative empty replacement retires a keyboard-focused disclosure.
+            // Keep its expanded intent for this exact source when tasks reappear.
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("session-todos-strip").focused(), Some(true));
+                w.press("space", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            publish(cx, h, &view, json!([]));
+            cx.update_window(h, |_, w, cx| {
+                assert_no_tasks(w);
+                assert!(
+                    input.focus_handle(cx).is_focused(w),
+                    "empty replacement restores editor focus"
+                );
+                assert_eq!(input.read(cx).value().as_ref(), draft);
+            })
+            .unwrap();
+            publish(cx, h, &view, json!([todo("return", "done", None)]));
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.find("session-todos-list").visible(),
+                    "empty replacement preserves disclosure intent"
+                );
+                assert!(
+                    input.focus_handle(cx).is_focused(w),
+                    "reappearing tasks do not steal focus"
+                );
+                w.press("shift-tab", cx);
+            })
+            .unwrap();
+            settle(cx, h);
             // Same chat, new generation cannot display old content. Late replies are fenced.
             cx.update_window(h, |_, w, cx| {
                 view.update(cx, |v, cx| {
@@ -522,6 +605,66 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("session-todos-strip").is_none());
                 assert_eq!(input.read(cx).value().as_ref(), "");
+            })
+            .unwrap();
+            // Same-sized tasks in another source must not inherit expanded intent.
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = rows();
+                    // Faux transport must publish the newly admitted generation,
+                    // not clone the prior chat's deliberately rejected publication.
+                    state.generation = v.generation;
+                    state.todos = Feed::new(Source::new(
+                        v.usage_options.clone().unwrap(),
+                        "synthetic-two".into(),
+                        v.generation,
+                    ));
+                    state.todos.apply(
+                        &json!({"type":"todos_update","items":[todo("other", "done", None)]}),
+                    );
+                    v.accept(state, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.find("session-todos-toggle").visible());
+                assert!(
+                    w.try_find("session-todos-list").is_none(),
+                    "other source starts collapsed"
+                );
+                w.click("chat-row-source", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(matches!(commands.try_recv(),Ok(Command::Open{id,..}) if id=="source"));
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = rows();
+                    // Faux transport must publish the newly admitted generation,
+                    // not clone the prior chat's deliberately rejected publication.
+                    state.generation = v.generation;
+                    state.todos = Feed::new(Source::new(
+                        v.usage_options.clone().unwrap(),
+                        "source".into(),
+                        v.generation,
+                    ));
+                    state.todos.apply(
+                        &json!({"type":"todos_update","items":[todo("return", "done", None)]}),
+                    );
+                    v.accept(state, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.find("session-todos-list").visible(),
+                    "return restores only this source intent"
+                );
+                assert_eq!(input.read(cx).value().as_ref(), draft);
             })
             .unwrap();
             assert!(
