@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.66.0](https://github.com/babariviere/pilot/compare/v1.65.0...v1.66.0) (2026-10-26)
+
+
+### Features
+
+* **desktop:** add bounded Local Usage overview ([eab1e53](https://github.com/babariviere/pilot/commit/eab1e534fd2a2d38c2df8ff7c87a32a66404082a))
+* **desktop:** add conversation font preferences ([3fd5285](https://github.com/babariviere/pilot/commit/3fd52859cfa2d1acd06d6c5a60c0cdf4ec209da3))
+* **desktop:** add exact chat-row action menus ([95a84aa](https://github.com/babariviere/pilot/commit/95a84aa68fb56383c5fe83da293414fc4b777855))
+* **desktop:** add explicit task creation and recovery ([234fc8f](https://github.com/babariviere/pilot/commit/234fc8f2f36e36d39ae49792196c5f14c0f95f5c))
+* **desktop:** answer structured agent questions ([90d2661](https://github.com/babariviere/pilot/commit/90d2661ec9d9a1897ee6e6730bafc573d33785b6))
+* **desktop:** browse bounded Local mission activity ([67ad6c1](https://github.com/babariviere/pilot/commit/67ad6c18b30c1516e81650c12de296e5b50394b3))
+* **desktop:** browse exact task descriptions ([9fb5fa1](https://github.com/babariviere/pilot/commit/9fb5fa1b954ec43d7884b2e0b39db611f5a46b05))
+* **desktop:** confirm exact Local task status changes ([2ac4851](https://github.com/babariviere/pilot/commit/2ac485176a198bf2a6efd198b2a919024444ab1d))
+* **desktop:** create standalone missions without starting agents ([3317d93](https://github.com/babariviere/pilot/commit/3317d939ef0b7ddcd98e0e8eedafbc49792c90c8))
+* **desktop:** edit exact Local mission title and goal ([b16025f](https://github.com/babariviere/pilot/commit/b16025f8637c0409825623917322e1c7f451c472))
+* **desktop:** edit exact Local task title and body ([9574d68](https://github.com/babariviere/pilot/commit/9574d68facf7fd6050b2e6eb5c1b076488f70c97))
+* **desktop:** edit mission briefs with conflict recovery ([af230ba](https://github.com/babariviere/pilot/commit/af230ba6625eb3cb914a968acf4c6fd3c1ff3846))
+* **desktop:** group scoped models by provider ([a8f3432](https://github.com/babariviere/pilot/commit/a8f34326d4ff49ebb58f53769663e9f31028537e))
+* **desktop:** make scoped model providers collapsible ([4f27c39](https://github.com/babariviere/pilot/commit/4f27c39ae036e6df40a1545f57f2b555dd070d55))
+* **desktop:** rename exact Local chats from row menus ([9b9040e](https://github.com/babariviere/pilot/commit/9b9040e83ab298f529f93bcd894bbda2f24793de))
+* **desktop:** safely archive and reopen Local missions ([47197ce](https://github.com/babariviere/pilot/commit/47197ce642f1c1b99cfe567522abf838a8b7405b))
+* **desktop:** show reported chat context usage ([4d21e2d](https://github.com/babariviere/pilot/commit/4d21e2d91d391438449add3e980c37ce141b5341))
+* **desktop:** simplify sending and contextual Stop controls ([766cfcb](https://github.com/babariviere/pilot/commit/766cfcb5a4b49fd79fc921123310805b1b85f8da))
+* **desktop:** submit explicit Local mission activity updates ([6a5a008](https://github.com/babariviere/pilot/commit/6a5a008662a1876bf80d5e86d297a9aceb562b42))
+
+
+### Bug Fixes
+
+* **daemon:** continue a released mission task in the chat that held it ([8b0c6b6](https://github.com/babariviere/pilot/commit/8b0c6b614af26dba5a8209b82d545b787d4ab6df))
+* **daemon:** discard build output that cannot pass the coordinator isolation check ([5e4d77d](https://github.com/babariviere/pilot/commit/5e4d77d458b8b71d9c15e3274a6cee4b8de51a52))
+* **daemon:** ignore every Node watch notice in worker replies ([d720ace](https://github.com/babariviere/pilot/commit/d720ace738178895dd18492cd8824e518a9e3903))
+* **daemon:** keep a chat usable when its credential broker is gone ([c39e556](https://github.com/babariviere/pilot/commit/c39e5565175b4ba258a523d70cafb72e1d291c6d))
+* **daemon:** keep Git credentials working in workspaces ([a139f20](https://github.com/babariviere/pilot/commit/a139f20e5eb5bbeb579e81bc7e52be4a35a509ff))
+* **desktop:** keep Working disclosure user controlled ([843cf8f](https://github.com/babariviere/pilot/commit/843cf8f2e11370acaaba8a7937c21fed3598d2ef))
+* **desktop:** present task editing in a popup dialog ([0f55153](https://github.com/babariviere/pilot/commit/0f5515396a51d9aeb8c449abebf5ef6a8532c1ec))
+* **desktop:** widen chat and move recovery above composer ([80e8f42](https://github.com/babariviere/pilot/commit/80e8f4262da0307d338868dbafb3b101a766bd0e))
+* **kernel:** give mission members direct delivery guidance in projects without PRs ([29d252f](https://github.com/babariviere/pilot/commit/29d252f8d9be2504cb5bad549eda6b20800bab41))
+* **kernel:** keep mission comments for questions and blockers, not progress ([eb75754](https://github.com/babariviere/pilot/commit/eb7575400e07a7d2e44dee4a19dbe1457fbb0a0a))
+* **kernel:** let isolated workers read the published model catalog ([cf8a4f9](https://github.com/babariviere/pilot/commit/cf8a4f962a310c94715f07ccde397402bbaaec1b))
+* **kernel:** report a provider error when an isolated worker cannot write the connectivity hint ([e20027c](https://github.com/babariviere/pilot/commit/e20027c6401d65f8f9fc73091718d9cd27065e21))
+* **kernel:** report a stale credential endpoint instead of a broken broker ([09bbac4](https://github.com/babariviere/pilot/commit/09bbac40c3927376134e2ec64344a14ed40c0d6e))
+* **kernel:** treat a closed credential channel as a stale endpoint ([e4843ef](https://github.com/babariviere/pilot/commit/e4843efaa979c640ca83855b7a0bfdc8d006bc78))
+
 ## [1.65.0](https://github.com/babariviere/pilot/compare/v1.64.0...v1.65.0) (2026-10-26)
 
 
