@@ -2,8 +2,8 @@
 
 The conversation's job is to make an exact published result usable without a
 navigation detour. Native content sits on the conversation surface, with its
-title/revision and quiet Source and Expand actions. Source reveals an exact-copy
-action; errors reveal Reload. There is no diagnostic toolbar or outer card.
+title/revision and quiet Expand action. Source/copy remain in the expanded pane;
+errors reveal Reload. There is no diagnostic toolbar or outer card.
 Legacy HTML/React remain inert stored source, not future rendering fallbacks.
 
 ## Reference audit, retain / adapt / avoid
@@ -57,9 +57,9 @@ permit until their exact metadata arrives; this does not raise image limits.
 scene validator, native renderer, slider pacing and generation/state-version
 fences. The fixed 440pt viewport keeps row geometry stable during load, controls
 and tool events. Content scrolls at actual size rather than shrinking charts.
-Source shows at most 8,192 characters, labels that limit and copies exact source.
-Native source selection/copy stays available. The existing raster renderer and
-off-UI source-copy path are reused when an untyped pin resolves to an image.
+The inline header intentionally has no Source button. The expanded pane retains
+its existing source/provenance, native selection and exact-copy path. The existing
+raster renderer is reused when an untyped pin resolves to an image.
 Pane expansion preserves local state and source mode. Back closes the pane;
 the visible inline reader resumes from that exact revision's remembered state.
 

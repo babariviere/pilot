@@ -305,11 +305,14 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":1"))
             });
-            cx.update_window(h, |_, w, cx| w.click("inline-source", cx))
-                .unwrap();
-            frame(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("inline-source", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("inline-source").is_none(),
+                    "inline header has only Expand"
+                );
+                w.click_at("0.0", point(px(5.), px(5.)), cx);
+            })
+            .unwrap();
             frame(cx, h);
             for _ in 0..12 {
                 let focused = cx
@@ -407,10 +410,18 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("{width}-{dark}-canvas-table.png")))
                     .unwrap();
             }
-            cx.update_window(h, |_, w, cx| w.click("inline-source", cx))
+            let state = cx.update(|cx| p.read(cx).inline_probe_snapshot().state);
+            cx.update_window(h, |_, w, cx| w.click("inline-expand", cx))
                 .unwrap();
             frame(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("inline-copy-source", cx))
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("artifact-detail").bounds().size.width > px(300.));
+            })
+            .unwrap();
+            cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("artifact-copy-source", cx))
                 .unwrap();
             assert_eq!(
                 cx.update(|cx| cx.read_from_clipboard().unwrap().text().unwrap()),
@@ -419,7 +430,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string("selection sentinel".into()));
                 w.click_with_options(
-                    "inline-source-text",
+                    "artifact-source-text",
                     gpui_kit::test::ClickOptions::new()
                         .with_offset(point(px(35.), px(8.)))
                         .with_count(2),
@@ -436,17 +447,10 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     && selected != "selection sentinel",
                 "native source selection/copy remains usable"
             );
-            cx.update_window(h, |_, w, cx| w.click("inline-source", cx))
+            cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
                 .unwrap();
             frame(cx, h);
-            let state = cx.update(|cx| p.read(cx).inline_probe_snapshot().state);
-            cx.update_window(h, |_, w, cx| w.click("inline-expand", cx))
-                .unwrap();
-            frame(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("artifact-detail").bounds().size.width > px(300.));
-            })
-            .unwrap();
+
             assert_eq!(
                 cx.update(|cx| p.read(cx).inline_probe_snapshot().state),
                 state,
@@ -636,16 +640,22 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                 shot.save(dir.join(format!("{width}-{dark}-image.png")))
                     .unwrap();
             }
-            cx.update_window(h, |_, w, cx| w.click("inline-source", cx))
+            cx.update_window(h, |_, w, cx| w.click("inline-expand", cx))
                 .unwrap();
             frame(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("inline-copy-source", cx))
+            cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("artifact-copy-source", cx))
                 .unwrap();
             wait(cx, h, |cx| {
                 cx.read_from_clipboard().and_then(|c| c.text()).as_deref()
                     == Some(server.raster.as_str())
             });
 
+            cx.update_window(h, |_, w, cx| w.click("artifact-gallery", cx))
+                .unwrap();
+            frame(cx, h);
             cx.update(|cx| {
                 t.update(cx, |t, cx| {
                     t.replace_readonly(

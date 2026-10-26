@@ -376,7 +376,7 @@ gallery, then explicitly open a pinned revision. Stored images decode lazily
 for visible tiles; generated sources never run to populate the gallery. See
 [gallery ownership, limits and keyboard paths](docs/artifact-gallery.md).
 Canonical artifact publication entries have exact pinned native visual previews
-inside the conversation, with Source and Expand. At most two painted previews
+inside the conversation, with Expand. Source/copy remain in the expanded pane. At most two painted previews
 run at once; offscreen readers close, and expansion transfers the same reader
 to the pane. Content stays actual size in a bounded scrollable viewport.
 Other kinds retain explicit Open cards; body links/JSON and legacy tool-only

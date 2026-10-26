@@ -133,23 +133,6 @@ impl ArtifactPane {
                         .min_w_0(),
                     )
                     .child(
-                        Button::new("inline-source")
-                            .ghost()
-                            .small()
-                            .label(if self.source { "Preview" } else { "Source" })
-                            .disabled(self.snapshot.revision.is_none())
-                            .on_click(cx.listener(move |v, _, window, cx| {
-                                if v.generation != generation {
-                                    return;
-                                }
-                                window.focus(v.focus.as_ref().unwrap(), cx);
-                                v.source = !v.source;
-                                v.slider_flow.queued = None;
-                                v.cancel_slider_wake();
-                                cx.notify();
-                            })),
-                    )
-                    .child(
                         Button::new("inline-expand")
                             .ghost()
                             .small()
@@ -193,40 +176,7 @@ impl ArtifactPane {
                 .min_w_0()
                 .gap_3()
                 .overflow_y_scroll();
-            if self.source {
-                let source = revision.source.clone();
-                content = content.child(
-                    Button::new("inline-copy-source")
-                        .ghost()
-                        .small()
-                        .label("Copy exact source")
-                        .on_click(cx.listener(move |v, _, window, cx| {
-                            if v.generation == generation {
-                                if v.snapshot
-                                    .revision
-                                    .as_ref()
-                                    .is_some_and(|r| r.reference.kind == "image")
-                                {
-                                    v.copy_image_source(source.clone(), window, cx);
-                                } else {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        (*source).clone(),
-                                    ));
-                                }
-                            }
-                        })),
-                );
-                if revision.source.chars().nth(8192).is_some() {
-                    content = content.child(crate::ui::text(
-                        crate::ui::Text::Caption,
-                        "Showing first 8,192 characters. Copy retains the full source.",
-                    ));
-                }
-                content = content.child(self.text(
-                    "inline-source-text".into(),
-                    revision.source.chars().take(8192).collect(),
-                ));
-            } else if let Some(raster) = &self.snapshot.raster {
+            if let Some(raster) = &self.snapshot.raster {
                 if raster.first_frame {
                     view = view.child(
                         crate::ui::text(crate::ui::Text::Caption, "First frame only")
