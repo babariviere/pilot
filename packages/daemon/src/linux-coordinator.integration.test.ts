@@ -3,6 +3,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +16,7 @@ import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, CHILD_WORKER_ENTRY } from "@pi
 import { CredentialBroker } from "./credential-broker.ts";
 import {
 	forkLinuxCoordinator,
+	prepareCoordinatorWrites,
 	probeLinuxCoordinatorIsolation,
 	validateCoordinatorWrites,
 } from "./linux-coordinator.ts";
@@ -59,6 +61,26 @@ test("private write roots reject symlink roots, protected overlaps, hardlinks, b
 	await symlink(source, join(scratch, "source-alias"));
 	assert.deepEqual(await validateCoordinatorWrites([scratch], [source]), [scratch]);
 	await assert.rejects(validateCoordinatorWrites(["/tmp"], [source]), /private|broad/);
+});
+
+test("disposable build output that cannot pass the isolation check is discarded, and a hardlink outside it is not", async (t) => {
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-isolation-build-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const source = join(root, "source");
+	const scratch = join(root, "scratch");
+	await mkdir(source, { mode: 0o700 });
+	await mkdir(scratch, { mode: 0o700 });
+	await writeFile(join(source, "file"), "source");
+	// A content-addressed installer hardlinks its store into node_modules.
+	const dependencies = join(scratch, "app", "web", "node_modules", ".pnpm", "parse5@8.0.1");
+	await mkdir(dependencies, { recursive: true, mode: 0o700 });
+	await link(join(source, "file"), join(dependencies, "interface.js"));
+	const writable = await prepareCoordinatorWrites([scratch], [source]);
+	assert.deepEqual(writable, [scratch]);
+	assert.equal(existsSync(join(scratch, "app", "web", "node_modules")), false);
+	// A hardlink outside regenerable build output is still refused.
+	await link(join(source, "file"), join(scratch, "alias"));
+	await assert.rejects(prepareCoordinatorWrites([scratch], [source]), /hardlink/);
 });
 
 test("coordinator Worker cannot consume an unrestricted warm process", () => {

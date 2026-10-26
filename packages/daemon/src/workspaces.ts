@@ -125,6 +125,8 @@ export const regenerableDirectories: ReadonlySet<string> = new Set([
 	".next",
 	".nuxt",
 	".svelte-kit",
+	// Rust build output. Its artifacts are hardlinked into the shared target directory.
+	"target",
 ]);
 
 /** Exact generated vendor checkout, not arbitrary Vendor directories or similarly named user inputs. */

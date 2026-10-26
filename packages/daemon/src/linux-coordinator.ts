@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { type CredentialEndpoint, credentialEnvironment } from "@pilot/kernel/credential-client";
 import { credentialRequest } from "@pilot/kernel/credential-rpc";
+import { isRegenerableDirectory } from "./workspaces.ts";
 
 const guard = fileURLToPath(new URL("./linux-coordinator-guard.ts", import.meta.url));
 const execute = promisify(execFile);
@@ -109,6 +110,14 @@ async function bubblewrap(): Promise<string> {
 }
 
 /** Reject broad roots, symlink roots, shared directories and pre-existing hardlink write aliases. */
+export class CoordinatorPrivateStateError extends Error {
+	readonly path: string;
+	constructor(path: string, message: string) {
+		super(message);
+		this.path = path;
+	}
+}
+
 export async function validateCoordinatorWrites(writable: string[], protectedPaths: string[]): Promise<string[]> {
 	await validateOrigins(writable, protectedPaths);
 	const protectedCanonical = await Promise.all(protectedPaths.map((path) => realpath(path)));
@@ -127,7 +136,10 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 	let count = 0;
 	async function inspect(path: string): Promise<void> {
 		if (++count > 50_000)
-			throw new Error("Coordinator private state exceeds the 50,000-entry isolation validation limit");
+			throw new CoordinatorPrivateStateError(
+				path,
+				"Coordinator private state exceeds the 50,000-entry isolation validation limit",
+			);
 		const info = await lstat(path);
 		if (info.isSymbolicLink()) return; // Traversal resolves into the read-only root, not another writable mount.
 		if (info.uid !== process.getuid!())
@@ -139,7 +151,10 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 			// The coordinator's own IPC socket (its todo bridge) lives in its private state. A socket
 			// cannot alias a file's content, so it is not a write escape into the readonly root.
 		} else if (!info.isFile() || info.nlink !== 1)
-			throw new Error(`Coordinator private state contains a hardlink or special file: ${path}`);
+			throw new CoordinatorPrivateStateError(
+				path,
+				`Coordinator private state contains a hardlink or special file: ${path}`,
+			);
 	}
 	for (const path of writable) {
 		const canonical = await realpath(path);
@@ -161,6 +176,57 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 		result.push(canonical);
 	}
 	return result;
+}
+
+/** The first disposable build-output directory in the private state, if any. */
+async function findRegenerableDirectory(root: string): Promise<string | undefined> {
+	const queue = [root];
+	let count = 0;
+	while (queue.length) {
+		const current = queue.shift()!;
+		if (++count > 50_000) return undefined;
+		let children;
+		try {
+			children = await opendir(current);
+		} catch {
+			continue;
+		}
+		for await (const child of children) {
+			const path = join(current, child.name);
+			const info = await lstat(path).catch(() => undefined);
+			if (!info?.isDirectory() || info.isSymbolicLink()) continue;
+			if (isRegenerableDirectory(path)) return path;
+			queue.push(path);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Validate the private state, discarding disposable build output that cannot pass the check.
+ * Content-addressed installers hardlink their store into node_modules, and a hardlink in the
+ * private state would let the coordinator write outside its writable roots. Build output is
+ * regenerable, so it is discarded and the isolation check runs again.
+ */
+export async function prepareCoordinatorWrites(writable: string[], protectedPaths: string[]): Promise<string[]> {
+	for (let attempt = 0; attempt < 4; attempt++) {
+		try {
+			return await validateCoordinatorWrites(writable, protectedPaths);
+		} catch (error) {
+			if (!(error instanceof CoordinatorPrivateStateError)) throw error;
+			let disposable: string | undefined;
+			for (const root of writable) {
+				disposable = await findRegenerableDirectory(root);
+				if (disposable) break;
+			}
+			if (!disposable) throw error;
+			console.warn(
+				`pilotd: discarding disposable build output that cannot pass the coordinator isolation check: ${disposable}`,
+			);
+			await rm(disposable, { recursive: true, force: true });
+		}
+	}
+	throw new Error("Coordinator private state keeps refusing the isolation check");
 }
 
 async function boundary(writable: string[], protectedPaths: string[], sentinel: string) {
@@ -251,10 +317,7 @@ export async function forkLinuxCoordinator(
 		const artifacts = join(sessionDir, "artifacts");
 		await validateOrigins([view.scratch, state.storageDir, artifacts], [...view.protectedPaths, state.agentDir]);
 		for (const path of [state.storageDir, artifacts]) await mkdir(path, { recursive: true, mode: 0o700 });
-		const writable = await validateCoordinatorWrites(
-			[view.scratch, state.storageDir, artifacts],
-			view.protectedPaths,
-		);
+		const writable = await prepareCoordinatorWrites([view.scratch, state.storageDir, artifacts], view.protectedPaths);
 		const sentinel = join(sessionDir, `coordinator-isolation-${randomUUID()}`);
 		const agent = await realpath(state.agentDir);
 		const sources = await Promise.all(view.protectedPaths.map((path) => realpath(path)));
