@@ -26,6 +26,8 @@ import {
 import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@earendil-works/pi-durable";
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
+import { CoordinatorMemoryDoc } from "./coordinator-memory.ts";
+import type { MemoryModel } from "./coordinator-memory-model.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
@@ -37,6 +39,68 @@ import { TOOL_ACTIVITY_FILE } from "./tool-activity.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+for (const existing of [false, true])
+	test(`summary-tree default is wired for ${existing ? "existing" : "new"} coordinators without switching main models`, async (t) => {
+		const f = await fixture(t);
+		t.mock.method(NativeAdapter.prototype, "resolveCoordinatorMemoryModel", async () => f.a.getModel("two"));
+		const mission = {
+			id: "fixture-mission",
+			title: "Offline",
+			goal: "Test memory",
+			status: "active" as const,
+			coordinator: "self" as const,
+			tasks: [],
+			decisions: ["No publishing"],
+		};
+		if (!existing) Object.assign(f.spec, { mission });
+		const session = await f.open();
+		if (existing) session.setMission(mission);
+		f.a.getModel("one")!.contextWindow = 1_000_000;
+		await seedLongConversation(session, Date.now());
+		f.a.setResponses(
+			Array.from({ length: 400 }, () =>
+				fauxAssistantMessage("Historical coordination detail, not current approval."),
+			),
+		);
+		await session.compact();
+		await session.conversation.waitForIdle(context);
+		const state = await session.harness.snapshot(CoordinatorMemoryDoc, session.conversation.id, context);
+		assert.ok(state?.states.length);
+		assert.equal(f.adapters[0]!.model.modelId, "one");
+		assert.ok(
+			(await session.conversation.context(context)).messages.some((m) =>
+				JSON.stringify(m).includes("Coordinator memory v1"),
+			),
+		);
+	});
+
+test("coordinator internal model role can be outside picker scope but cannot switch auth family or bypass availability", async (t) => {
+	const f = await fixture(t);
+	await f.open();
+	const adapter = f.adapters[0]!;
+	const before = adapter.session.settingsManager.getEnabledModels();
+	t.mock.getter(adapter, "model", () => ({ provider: "openai-codex", modelId: "gpt-6.1-sol" }));
+	const base = f.a.getModel(),
+		codex = { ...base, provider: "openai-codex", id: "gpt-6-luna", api: "openai-codex-responses" } as MemoryModel;
+	const available = t.mock.method(adapter.session.modelRuntime, "getAvailable", async () => [codex]);
+	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), codex);
+	await assert.rejects(adapter.resolveModel("openai-codex/gpt-6-luna"), /scope/);
+	const count = available.mock.callCount();
+	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai"), undefined);
+	assert.equal(available.mock.callCount(), count);
+	available.mock.mockImplementation(async () => []);
+	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), undefined);
+	available.mock.mockImplementation(async () => [
+		{ ...codex, provider: "openai", api: "openai-responses" } as MemoryModel,
+	]);
+	assert.equal(await adapter.resolveCoordinatorMemoryModel("openai-codex"), undefined);
+	available.mock.mockImplementation(async () => {
+		throw new Error("authorization unavailable");
+	});
+	await assert.rejects(adapter.resolveCoordinatorMemoryModel("openai-codex"), /authorization/);
+	assert.deepEqual(adapter.session.settingsManager.getEnabledModels(), before);
+});
 
 test("guarded queued text edits are literal and stale capture cannot invoke input extensions", async (t) => {
 	const f = await fixture(t);
@@ -907,8 +971,19 @@ test("kernel coalesces durable progress without losing short final responses", {
 	await session.close();
 	const restored = await f.open();
 	assert.deepEqual(settings, [
-		{ toolExecution: "sequential", steeringMode: "all", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
-		{ toolExecution: "sequential", steeringMode: "all", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
+		// Undefined live getter preserves native defaults for ordinary chats, including reopen.
+		{
+			toolExecution: "sequential",
+			steeringMode: "all",
+			progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+			compaction: undefined,
+		},
+		{
+			toolExecution: "sequential",
+			steeringMode: "all",
+			progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+			compaction: undefined,
+		},
 	]);
 	await restored.close();
 });

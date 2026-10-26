@@ -4,6 +4,7 @@
  * until the provider's prompt cache has expired, so it never throws away a warm cache.
  */
 import type { SessionSummary } from "@pilot/protocol";
+import { COORDINATOR_MEMORY_FOCUS } from "../../kernel/src/coordinator-memory-policy.ts";
 import type { MissionStore } from "./missions.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -13,14 +14,7 @@ export const COORDINATOR_COMPACT_IDLE_MS = 5 * 60_000;
 export const COORDINATOR_COMPACT_FRACTION = 0.4;
 export const COORDINATOR_COMPACT_MAX_TOKENS = 100_000;
 
-export const COORDINATOR_COMPACT_INSTRUCTIONS = [
-	"You coordinate a mission. Keep what the next wake-up needs:",
-	"what the user asked for and questions to them still unanswered;",
-	"commitments and next steps you proposed;",
-	"chats you started or messaged, and what each is doing;",
-	"agreements from this conversation not yet recorded in the mission.",
-	"Leave out what the mission's brief, tasks, decisions and activity already hold; mission get re-reads them.",
-].join(" ");
+export const COORDINATOR_COMPACT_INSTRUCTIONS = COORDINATOR_MEMORY_FOCUS;
 
 export function coordinatorCompactionThreshold(contextWindow: number): number {
 	return Math.min(contextWindow * COORDINATOR_COMPACT_FRACTION, COORDINATOR_COMPACT_MAX_TOKENS);

@@ -69,6 +69,8 @@ import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { memoryCachePayload } from "./coordinator-memory.ts";
+import { coordinatorMemoryModel } from "./coordinator-memory-model.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { DIAGNOSTIC_CONTEXT_TOOL } from "./diagnostic-context-tool.ts";
 import { DIAGNOSTIC_HISTORY_TOOL } from "./diagnostic-history-tool.ts";
@@ -253,6 +255,8 @@ export function createTrackedMcpExtension(
 }
 
 export class NativeAdapter {
+	/** Owner-supplied live role check; never inferred from transcript text. */
+	coordinatorMemoryActive?: () => boolean;
 	readonly models: Models;
 	/** Republish this extension when native tools change (MCP startup or tool_search). */
 	onToolsChanged?: (extension: Extension) => void;
@@ -689,6 +693,14 @@ export class NativeAdapter {
 		if (!choice || !resolved.model || resolved.error || `${resolved.model.provider}/${resolved.model.id}` !== name)
 			throw new Error(`Model is not available in this session's scope: ${name}`);
 		return choice;
+	}
+	/** Explicit internal coordinator role. Like background memory compaction, requires authenticated availability,
+	 * not picker visibility. Never changes enabledModels or switches provider/auth family. */
+	async resolveCoordinatorMemoryModel(provider: string, signal?: AbortSignal) {
+		this.assertOpen();
+		if (provider !== this.model.provider || !["openai", "openai-codex", "anthropic"].includes(provider))
+			return undefined;
+		return coordinatorMemoryModel(provider, await this.session.modelRuntime.getAvailable(provider, { signal }));
 	}
 	async bindHarness(harness: Harness, conversationId: ConversationId): Promise<void> {
 		this.assertOpen();
@@ -1450,7 +1462,7 @@ export class NativeAdapter {
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);
 				timing?.mark("payloadReadyMs");
-				return value;
+				return this.coordinatorMemoryActive?.() ? memoryCachePayload(value, model) : value;
 			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),
