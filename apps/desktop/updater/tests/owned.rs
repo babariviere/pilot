@@ -702,6 +702,22 @@ fn staging_keeps_installed_app_unchanged_and_holds_permanent_target_lock() {
         0o700
     );
 }
+#[cfg(target_os = "linux")]
+#[test]
+fn only_a_service_cgroup_needs_its_own_helper_scope() {
+    let service = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-com.example.next@d4bd.service\n";
+    assert!(helper::in_service_cgroup(service));
+    assert!(!helper::in_service_cgroup(
+        "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.kde.konsole-1.scope/tab(2).scope\n"
+    ));
+    assert!(!helper::in_service_cgroup(
+        "0::/user.slice/user-1000.slice/session-2.scope\n"
+    ));
+    assert!(!helper::in_service_cgroup(
+        "12:pids:/system.slice/x.service\n"
+    ));
+    assert!(!helper::in_service_cgroup(""));
+}
 #[test]
 fn uncommitted_downloads_are_discarded_only_once_their_lock_is_released() {
     let temp = Temp::new();

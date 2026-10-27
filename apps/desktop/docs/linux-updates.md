@@ -85,6 +85,14 @@ admission freeze keeps paused agents paused through the swap; startup ACK
 releases it. No daemon is stopped, restarted, replaced or migrated; no second
 daemon may use its data. Existing history/profile data stays outside replacement.
 
+Desktop launchers such as KDE may run the app as a systemd user service, whose stop
+kills its whole cgroup once the app exits. When the app runs in a `.service` and a
+probe succeeds, the helper starts through `systemd-run --user --scope`, which moves it
+into its own scope and execs it in place (same parent, same inherited descriptors), so
+the helper and the relaunched app survive. Otherwise it starts directly. After startup
+ACK, a daemon swap that fails (for example 503 while the old daemon's freeze lapses)
+is retried every five minutes, up to twelve times.
+
 Relaunch uses the new native executable directly, preserving the desktop-session
 environment and the receipt-bound profile/policy. Spawn success is not startup
 success. Only the GUI's actual durable startup checkpoint acknowledges the

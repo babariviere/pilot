@@ -610,17 +610,22 @@ pub(crate) fn upgrade_daemon_in_background() {
     let _ = std::thread::Builder::new()
         .name("daemon-upgrade".into())
         .spawn(|| {
+            // Right after an update the old daemon may still hold its install freeze
+            // (503) until startup ACK or expiry. Treat failures like Busy, within a bound.
+            let mut failures = 0;
             loop {
                 match upgrade_daemon() {
-                    Ok(pilot_desktop_updater::coordination::Handoff::Busy) => {
-                        std::thread::sleep(Duration::from_secs(300))
-                    }
+                    Ok(pilot_desktop_updater::coordination::Handoff::Busy) => {}
                     Ok(_) => return,
                     Err(error) => {
                         eprintln!("The daemon was not updated: {error}");
-                        return;
+                        failures += 1;
+                        if failures >= 12 {
+                            return;
+                        }
                     }
                 }
+                std::thread::sleep(Duration::from_secs(300));
             }
         });
 }

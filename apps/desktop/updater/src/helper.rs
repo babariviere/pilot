@@ -30,6 +30,79 @@ impl ExitedParent {
     }
 }
 
+#[cfg(target_os = "linux")]
+const SESSION_ENVIRONMENT: [&str; 11] = [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_RUNTIME_DIR",
+    "WAYLAND_DISPLAY",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "LANG",
+    "LIBGL_ALWAYS_SOFTWARE",
+    "WGPU_BACKEND",
+];
+#[cfg(target_os = "linux")]
+fn forward_session_environment(command: &mut Command) {
+    for name in SESSION_ENVIRONMENT {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+const SCOPE_LAUNCHER: &str = "/usr/bin/systemd-run";
+#[cfg(target_os = "linux")]
+const SCOPE_ARGS: [&str; 5] = ["--user", "--scope", "--quiet", "--collect", "--"];
+
+/// True when this process runs in a systemd `.service` unit. Stopping a service kills
+/// its whole cgroup once the main process exits; scopes and plain sessions do not.
+#[cfg(target_os = "linux")]
+pub(crate) fn in_service_cgroup(cgroup: &str) -> bool {
+    cgroup
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .and_then(|path| path.trim_end().rsplit('/').next())
+        .is_some_and(|unit| unit.ends_with(".service"))
+}
+
+/// The scope launcher, only when the app runs in a service and a probe proves it can
+/// create a user scope. Otherwise the helper starts directly, as before.
+#[cfg(target_os = "linux")]
+fn own_scope_launcher() -> Option<&'static str> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    if !in_service_cgroup(&cgroup) || !std::path::Path::new(SCOPE_LAUNCHER).is_file() {
+        return None;
+    }
+    let mut probe = Command::new(SCOPE_LAUNCHER);
+    probe
+        .args(SCOPE_ARGS)
+        .arg("/bin/true")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    forward_session_environment(&mut probe);
+    let mut child = probe.spawn().ok()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success().then_some(SCOPE_LAUNCHER),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 pub struct PreparedExit {
     control: UnixStream,
     child: Child,
@@ -57,7 +130,21 @@ impl PreparedExit {
         let lock_fd = duplicate_high(staged.lock.as_raw_fd())?;
         let control_number = control_fd.as_raw_fd();
         let lock_number = lock_fd.as_raw_fd();
-        let mut command = Command::new(executable);
+        // A desktop launcher may run the app as a systemd service, whose stop kills
+        // every process in its cgroup, including this helper and the app it relaunches.
+        // `systemd-run --scope` moves the helper into its own scope and then execs it in
+        // place, keeping its parent and inherited descriptors.
+        #[cfg(target_os = "linux")]
+        let mut command = match own_scope_launcher() {
+            Some(launcher) => {
+                let mut command = Command::new(launcher);
+                command.args(SCOPE_ARGS).arg(&executable);
+                command
+            }
+            None => Command::new(&executable),
+        };
+        #[cfg(not(target_os = "linux"))]
+        let mut command = Command::new(&executable);
         command
             .arg("--transaction")
             .arg(&staged.root)
@@ -84,23 +171,7 @@ impl PreparedExit {
             });
         }
         #[cfg(target_os = "linux")]
-        for name in [
-            "HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_DATA_HOME",
-            "XDG_STATE_HOME",
-            "XDG_CACHE_HOME",
-            "XDG_RUNTIME_DIR",
-            "WAYLAND_DISPLAY",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "LANG",
-            "LIBGL_ALWAYS_SOFTWARE",
-            "WGPU_BACKEND",
-        ] {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
+        forward_session_environment(&mut command);
         #[cfg(feature = "fixture")]
         if crate::fixture::enabled() {
             command.stderr(Stdio::inherit());
