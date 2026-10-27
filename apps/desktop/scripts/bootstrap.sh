@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+if [[ "${1:-}" == --blaze ]]; then
+  exec bash scripts/bootstrap-blaze.sh
+fi
 root="$PWD"
 export RUSTUP_HOME="$root/.tools/rustup"
 mkdir -p .tools/bin

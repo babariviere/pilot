@@ -165,6 +165,9 @@ steering contract, identity guards and recovery.
 ```sh
 cd apps/desktop
 bash scripts/cargo.sh build --locked
+# Optional local-only Blaze edit loop, never CI or release verification.
+bash scripts/bootstrap.sh --blaze
+bash scripts/cargo.sh --blaze build --locked
 bash scripts/run.sh --local            # visible window; arrange first
 # Optional content-free, bounded read check, no GUI:
 target/dev/debug/pilot-desktop --local-check
@@ -656,6 +659,11 @@ virtualization claim. These cases may stall. Arrange a visible session before
 trying them. Large user pastes are not optimized or production-size hardened.
 
 ## Pins, cache and resource ownership
+
+The optional [Blaze development path](docs/blaze-dev.md) has separate tool pins,
+target files and a private local compiler daemon. It does not enter the shared
+verification-slot queue. Ordinary commands, scoped checks and CI retain the pins
+below; Blaze output is not authoritative verification.
 
 - `rust-toolchain.toml`: Rust **1.98.1**, edition 2024, minimal + rustfmt/clippy.
 - `Cargo.toml` and `Cargo.lock`: **gpui-kit =0.8.0**, matching baseline

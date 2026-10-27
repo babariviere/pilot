@@ -83,6 +83,11 @@ The explicit full `scripts/check.sh` and all CI jobs are unchanged. Run a broade
 local gate only for a concrete cross-cutting risk or an explicitly requested
 integration check, not as the default after every isolated fix.
 
+The separate [local Blaze edit loop](blaze-dev.md) does not use this queue and
+does not replace these checks. Scoped subprocesses explicitly set `MBX_BLAZE=0`;
+they retain Rust1.98.1 and the existing shared verification admission, regardless
+of ambient mbx settings. Blaze is never enabled in CI.
+
 ## Initial measured observation
 
 On a Mac15,6 (36GiB,11 logical CPUs), Rust1.98.1/LLVM22.1.8, unchanged

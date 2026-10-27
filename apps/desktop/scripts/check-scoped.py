@@ -119,7 +119,8 @@ def run(command, root, timeout, records):
         raise RuntimeError("Retaining owned check identity requires default SIGCHLD; no command started")
     print("scoped:", " ".join(command), flush=True)
     started = time.monotonic()
-    process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    process = subprocess.Popen(command, cwd=root, env={**os.environ, "MBX_BLAZE": "0"},
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     output = bytearray()
     compile_end = None
     successful = False
