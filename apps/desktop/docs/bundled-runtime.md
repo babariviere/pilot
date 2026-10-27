@@ -81,6 +81,14 @@ ineligible for later automatic bundled start. A compatible running guarded daemo
 can still be reused. This does not retrofit the contract into old running binaries;
 their unproven profiles/listeners are refused, never stopped or adopted.
 
+Once a packaged app is running (after startup ACK for an update relaunch), it
+replaces a daemon on an older runtime from its own retained store: the lease must
+be held, the record's PID must run that runtime's Node, and `POST /api/update/pause`
+must report the same PID as ready (tools paused). Only then is that process sent
+SIGTERM; the app waits for the lease to be released and starts its own runtime.
+Busy daemons are retried every five minutes. Development, Swift-app and current
+runtime daemons are left alone.
+
 A private0600 owner record contains a per-boot random proof key, nonce, profile
 hash, port and build. A bounded read-only challenge proves live possession of that
 boot key, binds the response to the exact requested profile/build and verifies

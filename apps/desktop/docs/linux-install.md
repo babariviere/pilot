@@ -89,11 +89,13 @@ and check anonymously.
 
 ### Changing versions and the background daemon
 
-The Pilot daemon keeps running after you close the window, and it stays on the
-version that started it. A newer app keeps using that daemon: each Linux release
-accepts the runtimes of the few releases before it. The daemon moves to the new
-version the next time it is not running when the app starts, for example after a
-reboot. The app never stops it for you.
+The Pilot daemon keeps running after you close the window. When a newer app
+finds a daemon from an earlier version, it connects to it first (each Linux
+release accepts the runtimes of the few releases before it), then updates it:
+it waits for running tools to pause, stops that daemon and starts its own.
+Chats continue on the new daemon; the window reconnects by itself. While tools
+keep running, it retries every few minutes. v1.78.0 and earlier leave the daemon
+on its old version until it stops, for example after a reboot.
 
 v1.77.0 and earlier accept no earlier runtime. If one of them refuses to start
 because another version's daemon is running ("The running daemon has no exact

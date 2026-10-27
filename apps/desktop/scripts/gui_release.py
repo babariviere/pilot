@@ -57,8 +57,8 @@ def accepted_capsules(env):
 def previous_linux_capsules(repository, token=None, limit=4, opener=urllib.request.urlopen):
     """Runtime capsule ids (SHA256 of the exact linux-gui-package.json) of the newest published Linux releases.
 
-    Admitting them lets an update keep using a daemon that an earlier release started; the
-    daemon is never stopped or replaced, and the new app checks its protocol on connect.
+    Admitting them lets an update connect to a daemon that an earlier release started until
+    the new app moves it to its own runtime; the new app checks its protocol on connect.
     """
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "pilot-release"}
     if token:

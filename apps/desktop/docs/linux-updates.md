@@ -114,7 +114,10 @@ Native x86_64 Wayland qualification passed all five cases on exact-source builds
 both debug and optimized (`--release`, with the test-only `native-probes`/`fixture`
 features): actual old/new GPUI buffers, signed
 whole-payload exchange after explicit COMMIT and OS parent exit, durable startup
-ACK, retained Unicode draft/history, and one unchanged daemon boot/process/root.
+ACK, retained Unicode draft/history, and one unchanged daemon boot/process/root
+until startup ACK. After the ACK the new app pauses the old daemon's tools
+(`POST /api/update/pause`), stops that exact process and starts its own runtime;
+the success case checks that exactly one daemon, on the new runtime, remains.
 Each invalid candidate affirmatively failed without installation or GUI exit.
 These ran on a temporary filesystem, not distro-wide, power-loss, physical IME
 or production-feed qualification.

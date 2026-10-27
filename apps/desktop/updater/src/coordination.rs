@@ -263,6 +263,106 @@ pub fn selected(location: &Location, current: &Path, trust: &Trust) -> Result<Pa
     validate_capsule(&root, trust, &accepted, Some(&current_id))?;
     Ok(root.to_owned())
 }
+/// Result of asking the profile's daemon to make way for this app's runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Handoff {
+    /// No daemon, this app's runtime, or a daemon the app did not start.
+    Unchanged,
+    /// Tools were still running when the wait ended. The daemon resumes on its own.
+    Busy,
+    /// The older daemon exited; this app can start its own runtime.
+    Stopped,
+}
+/// Stops a daemon running an older retained app runtime from the same store as
+/// `current`, so the updated app can start its own. Running tools are paused
+/// through the daemon's update endpoint first; nothing is interrupted mid-tool.
+pub fn retire_older_owner(
+    location: &Location,
+    current: &Path,
+    wait: Duration,
+) -> Result<Handoff, Error> {
+    let Ok(record) = record(location) else {
+        return Ok(Handoff::Unchanged);
+    };
+    if !owner_live(&location.home) {
+        return Ok(Handoff::Unchanged);
+    }
+    let runtime = Path::new(
+        record["runtimeRoot"]
+            .as_str()
+            .ok_or(Error::RuntimeUnverified)?,
+    );
+    let capsule = capsule_root(runtime)?;
+    if !older_in_same_store(&capsule, current) {
+        return Ok(Handoff::Unchanged);
+    }
+    let pid = record["pid"]
+        .as_i64()
+        .filter(|p| *p > 1 && *p <= i32::MAX as i64)
+        .ok_or(Error::RuntimeUnverified)? as i32;
+    let node = runtime
+        .join("node/bin/node")
+        .canonicalize()
+        .map_err(|_| Error::Identity)?;
+    if crate::helper::process_executable(pid)? != node {
+        return Ok(Handoff::Unchanged);
+    }
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| Error::Native)?;
+    let until = std::time::Instant::now() + wait;
+    loop {
+        // Each call renews the daemon's 30 second admission lease while tools drain.
+        let response = client
+            .post(format!(
+                "http://127.0.0.1:{}/api/update/pause",
+                location.port
+            ))
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .and_then(|r| r.error_for_status())
+            .and_then(|r| r.bytes())
+            .map_err(|_| Error::RuntimeUnverified)?;
+        let paused: Value =
+            serde_json::from_slice(&response).map_err(|_| Error::RuntimeUnverified)?;
+        if paused["processId"].as_i64() != Some(pid.into()) {
+            return Err(Error::Identity);
+        }
+        if paused["ready"] == true {
+            break;
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(Handoff::Busy);
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    if crate::helper::process_executable(pid)? != node {
+        return Err(Error::Identity);
+    }
+    // SAFETY: signals the exact daemon process verified above.
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        return Err(Error::Native);
+    }
+    let until = std::time::Instant::now() + Duration::from_secs(120);
+    // SAFETY: signal 0 only checks that the process still exists.
+    while owner_live(&location.home) || unsafe { libc::kill(pid, 0) } == 0 {
+        if std::time::Instant::now() >= until {
+            return Err(Error::RuntimeUnverified);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(Handoff::Stopped)
+}
+/// Retained capsules live at `<store>/<id>/<root>`.
+fn older_in_same_store(capsule: &Path, current: &Path) -> bool {
+    let store = |root: &Path| root.parent().and_then(Path::parent).map(Path::to_owned);
+    capsule != current && store(capsule).is_some() && store(capsule) == store(current)
+}
 /// Whether a process holds the daemon's SQLite profile lease (`BEGIN EXCLUSIVE`
 /// for the daemon's lifetime). Only queries the lock (F_GETLK); never takes it.
 /// Unknown answers count as live, keeping the existing strict path.
@@ -642,6 +742,19 @@ fn random_operation() -> Result<String, Error> {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
+
+    #[test]
+    fn only_other_capsules_in_this_store_are_older_owners() {
+        let store = Path::new("/data/pilot-next/runtimes");
+        let current = store.join("bbbb/payload");
+        assert!(older_in_same_store(&store.join("aaaa/payload"), &current));
+        assert!(!older_in_same_store(&current, &current));
+        assert!(!older_in_same_store(
+            Path::new("/elsewhere/runtimes/aaaa/payload"),
+            &current
+        ));
+        assert!(!older_in_same_store(Path::new("/payload"), &current));
+    }
 
     #[test]
     fn public_configuration_fingerprint_is_independent_of_json_map_features() {

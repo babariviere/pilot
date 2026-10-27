@@ -383,6 +383,15 @@ fn failure(code: &str) -> Failure {
 
 /// One bounded worker calls this; no environment mutation, shell, PATH lookup or production restart.
 pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::LocalOptions, Failure> {
+    start_runtime(executable, cancel, true)
+}
+
+/// Starts or reuses Local. `pin_update` uses the update relaunch receipt's runtime.
+fn start_runtime(
+    executable: PathBuf,
+    cancel: Arc<AtomicBool>,
+    pin_update: bool,
+) -> Result<crate::LocalOptions, Failure> {
     let deadline = Instant::now() + Duration::from_secs(45);
     if !cfg!(any(
         all(target_os = "macos", target_arch = "aarch64"),
@@ -390,21 +399,11 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
     )) {
         return Err("Bundled runtime requires arm64 macOS or x86_64 Wayland Linux.");
     }
-    #[cfg(not(target_os = "linux"))]
-    let root = executable
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
-        .ok_or("Cannot locate bundled runtime.")?;
-    #[cfg(target_os = "linux")]
-    let root = executable
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("Cannot locate Linux package.")?;
+    let root = package_root(&executable)?;
     #[cfg(not(target_os = "linux"))]
     validate(root, &cancel, deadline)?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let pinned = if let Some(receipt) = update_receipt() {
+    let pinned = if let Some(receipt) = update_receipt().filter(|_| pin_update) {
         let trust = pilot_desktop_updater::helper::compiled_trust()
             .map_err(|_| "Update startup trust is unconfigured.")?;
         Some(pilot_desktop_updater::coordination::Guard::startup_runtime(&receipt,&root.canonicalize().map_err(|_|"Cannot resolve app bundle.")?,&trust)
@@ -412,20 +411,16 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
     } else {
         None
     };
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if let Some((_, location)) = &pinned {
+        let _ = PROFILE.set(location.clone());
+    }
     let runtime_root = root.to_path_buf();
     #[cfg(target_os = "macos")]
     let runtime_root = if let Some((root, _)) = &pinned {
         root.clone()
     } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
-        let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?);
-        let store = home
-            .join("Library/Application Support")
-            .join(pilot_desktop_updater::runtime::STORE_NAME);
-        let canonical = root
-            .canonicalize()
-            .map_err(|_| "Cannot resolve app bundle.")?;
-        let capsule=pilot_desktop_updater::runtime::publish_cancellable(&canonical,&store,&trust,&pilot_desktop_updater::installer::MacPlatform,deadline,&cancel)
-            .map_err(|_|"The immutable runtime capsule could not be verified/published. Existing runtimes were preserved.")?;
+        let capsule = own_capsule(root, &trust, &cancel, deadline)?;
         let location = runtime_location()?;
         pilot_desktop_updater::coordination::selected(&location,&capsule,&trust)
             .map_err(|_|"The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
@@ -436,18 +431,7 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
     let runtime_root = if let Some((root, _)) = &pinned {
         root.clone()
     } else {
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or(
-                PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?)
-                    .join(".local/share"),
-            );
-        let capsule = linux::publish(
-            &runtime_root,
-            &data.join("pilot-next/runtimes"),
-            &cancel,
-            deadline,
-        )?;
+        let capsule = own_capsule(&runtime_root, &cancel, deadline)?;
         if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
             pilot_desktop_updater::coordination::selected(&runtime_location()?, &capsule, &trust)
                 .map_err(|_| "The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
@@ -493,7 +477,7 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         command.env(name, value);
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    if let Some((_, location)) = &pinned {
+    if let Some(location) = PROFILE.get() {
         // A relaunch receipt, not the launch-service environment, owns the exact
         // configured profile and denial policies. Never silently retarget Local.
         command
@@ -517,14 +501,23 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
             .map_err(|_| "Cannot launch bundled Node runtime.")?;
         supervise(&mut child, &cancel, deadline).await?;
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        if let Some((_, location)) = pinned {
-            return crate::LocalOptions::discover_at(location);
+        if let Some(location) = PROFILE.get() {
+            return crate::LocalOptions::discover_at(location.clone());
         }
         crate::LocalOptions::discover()
     })
 }
+/// The profile an update relaunch receipt pinned. Later runtime starts in this
+/// process (moving the daemon to this app's runtime) keep using it.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+static PROFILE: std::sync::OnceLock<pilot_desktop_updater::coordination::Location> =
+    std::sync::OnceLock::new();
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, Failure> {
+    if let Some(location) = PROFILE.get() {
+        return Ok(location.clone());
+    }
     let port = std::env::var("PILOT_PORT")
         .unwrap_or_else(|_| "4319".into())
         .parse::<u16>()
@@ -555,6 +548,107 @@ fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, F
         policy: pilot_desktop_updater::coordination::captured_policy()
             .map_err(|_| "Configured runtime policy is invalid.")?,
     })
+}
+
+fn package_root(executable: &Path) -> Result<&Path, Failure> {
+    #[cfg(not(target_os = "linux"))]
+    return executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .ok_or("Cannot locate bundled runtime.");
+    #[cfg(target_os = "linux")]
+    executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("Cannot locate Linux package.")
+}
+
+/// This app's runtime in the retained store, published on first use.
+#[cfg(target_os = "macos")]
+fn own_capsule(
+    root: &Path,
+    trust: &pilot_desktop_updater::manifest::Trust,
+    cancel: &AtomicBool,
+    deadline: Instant,
+) -> Result<PathBuf, Failure> {
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?);
+    let store = home
+        .join("Library/Application Support")
+        .join(pilot_desktop_updater::runtime::STORE_NAME);
+    let canonical = root
+        .canonicalize()
+        .map_err(|_| "Cannot resolve app bundle.")?;
+    pilot_desktop_updater::runtime::publish_cancellable(
+        &canonical,
+        &store,
+        trust,
+        &pilot_desktop_updater::installer::MacPlatform,
+        deadline,
+        cancel,
+    )
+    .map_err(|_| "The immutable runtime capsule could not be verified/published. Existing runtimes were preserved.")
+}
+
+/// This app's runtime in the retained store, published on first use.
+#[cfg(target_os = "linux")]
+fn own_capsule(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<PathBuf, Failure> {
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or(
+            PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?)
+                .join(".local/share"),
+        );
+    linux::publish(root, &data.join("pilot-next/runtimes"), cancel, deadline)
+}
+
+/// Once this app is running, replace a daemon still on an older app runtime with
+/// this app's runtime. Waits for running tools to pause and retries while busy;
+/// the Local client reconnects to the new daemon on its own.
+pub(crate) fn upgrade_daemon_in_background() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let _ = std::thread::Builder::new()
+        .name("daemon-upgrade".into())
+        .spawn(|| {
+            loop {
+                match upgrade_daemon() {
+                    Ok(pilot_desktop_updater::coordination::Handoff::Busy) => {
+                        std::thread::sleep(Duration::from_secs(300))
+                    }
+                    Ok(_) => return,
+                    Err(error) => {
+                        eprintln!("The daemon was not updated: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn upgrade_daemon() -> Result<pilot_desktop_updater::coordination::Handoff, Failure> {
+    use pilot_desktop_updater::coordination::{self, Handoff};
+    let executable = std::env::current_exe().map_err(|_| "Cannot locate this app executable.")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let root = package_root(&executable)?;
+    #[cfg(target_os = "macos")]
+    let capsule = {
+        let trust = pilot_desktop_updater::helper::compiled_trust()
+            .map_err(|_| "Update trust is unconfigured.")?;
+        own_capsule(root, &trust, &cancel, deadline)?
+    };
+    #[cfg(target_os = "linux")]
+    let capsule = own_capsule(root, &cancel, deadline)?;
+    let handoff =
+        coordination::retire_older_owner(&runtime_location()?, &capsule, Duration::from_secs(30))
+            .map_err(
+            |_| "The running daemon could not be stopped for the update. It was left running.",
+        )?;
+    if handoff == Handoff::Stopped {
+        start_runtime(executable, cancel, false)?;
+    }
+    Ok(handoff)
 }
 
 // Preserve explicit denial and retention policy without forwarding broker authority,

@@ -36,6 +36,11 @@ impl BundledRuntimeView {
                 let reply = std::env::current_exe()
                     .map_err(|_| "Cannot locate this app executable.")
                     .and_then(|executable| bundled_runtime::start(executable, worker_cancel));
+                // An update relaunch upgrades the daemon after acknowledging startup instead.
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                if reply.is_ok() && bundled_runtime::update_receipt().is_none() {
+                    bundled_runtime::upgrade_daemon_in_background();
+                }
                 let _ = send.send_blocking(reply);
             });
         let error = started
@@ -89,9 +94,27 @@ impl Render for BundledRuntimeView {
         }
         let content = ui::page()
             .child(ui::heading("runtime-title", "Pilot Next", Text::Title))
-            .child(gpui_kit::div().id("runtime-status").test_support().child(Notice::new(self.error.unwrap_or("Starting Local…")).tone(if self.error.is_some() { Tone::Error } else { Tone::Quiet })))
-            .child(ui::text(Text::Caption, "Existing work and drafts stay with their Local profile. No existing daemon is stopped or replaced.").id("runtime-detail").test_support())
-            .child(ui::action("runtime-close", "Close", ui::Action::Quiet).on_click(|_, _, cx| cx.quit()));
+            .child(gpui_kit::div().id("runtime-status").test_support().child(
+                Notice::new(self.error.unwrap_or("Starting Local…")).tone(
+                    if self.error.is_some() {
+                        Tone::Error
+                    } else {
+                        Tone::Quiet
+                    },
+                ),
+            ))
+            .child(
+                ui::text(
+                    Text::Caption,
+                    "Existing work and drafts stay with their Local profile.",
+                )
+                .id("runtime-detail")
+                .test_support(),
+            )
+            .child(
+                ui::action("runtime-close", "Close", ui::Action::Quiet)
+                    .on_click(|_, _, cx| cx.quit()),
+            );
         ui::surface(ui::Surface::Page, cx)
             .id("runtime-startup-root")
             .test_support()

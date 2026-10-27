@@ -146,6 +146,9 @@ impl Updates {
                 .await
                 .unwrap_or(Err(Error::RecoveryRequired));
             let _ = owner.update(cx, |owner, cx| {
+                if result.is_ok() {
+                    crate::bundled_runtime::upgrade_daemon_in_background();
+                }
                 owner.startup = Some(result);
                 owner.filter_recovery();
                 owner.schedule(cx);
@@ -455,7 +458,7 @@ impl Render for Updates {
         if self.startup_started {
             let status = match self.startup {
                 Some(Ok(())) => {
-                    "App startup and retained runtime were acknowledged. The running daemon was not updated or restarted."
+                    "App startup was acknowledged. The daemon updates once running tools pause."
                 }
                 Some(Err(_)) => {
                     "App startup acknowledgement failed. Recovery evidence and retained bundles were preserved; no rollback or cleanup was attempted."

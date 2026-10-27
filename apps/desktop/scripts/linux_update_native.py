@@ -113,6 +113,16 @@ def qualify(old, new, wayland, case="success", install_name="Pilot Next"):
                     raise RuntimeError("Lost owned descendant admission")
                 adopted[pid] = descriptor
 
+    def reap():
+        for pid, descriptor in list(adopted.items()):
+            try:
+                done = os.waitpid(pid, os.WNOHANG)[0]
+            except ChildProcessError:
+                done = pid
+            if done:
+                os.close(descriptor)
+                del adopted[pid]
+
     def owner_ready():
         adopt()
         try:
@@ -160,9 +170,15 @@ def qualify(old, new, wayland, case="success", install_name="Pilot Next"):
         transaction = until(acknowledged, seconds=240)
         assert gui.wait(timeout=5) == 0, "Old GUI must exit only after its real checkpoint and COMMIT"
         gui = None
-        second = until(owner_ready, seconds=10)
-        assert (profile / ".daemon-owner.json").read_bytes() == original
-        assert (second["boot"], second["pid"], second["runtimeRoot"]) == (first["boot"], first["pid"], first["runtimeRoot"])
+        def upgraded():
+            reap()
+            value = owner_ready()
+            return value if value and value["runtimeRoot"] != first["runtimeRoot"] else None
+
+        # After acknowledging startup, the new app pauses the old daemon's tools, stops it and starts its own runtime.
+        second = until(upgraded, seconds=180)
+        assert second["pid"] != first["pid"] and first["pid"] not in adopted
+        assert Path(second["runtimeRoot"]).parent.parent.name == package.digest(new / package.MANIFEST)
         assert (profile / "fixture-history-marker").read_text() == "retained owned history"
         state = package.read_json(root / "state/pilot-next/state-v1.json")
         assert state["drafts"]["new:update-fixture"]["text"] == DRAFT and not state["pending"]
@@ -174,14 +190,15 @@ def qualify(old, new, wayland, case="success", install_name="Pilot Next"):
         for log in (root / "old-wayland.log", root / "relaunch-wayland.log"):
             until(lambda: log.exists() and b"wl_surface" in log.read_bytes() and b".attach(" in log.read_bytes(), seconds=10)
         adopt()
-        node_entry = str(Path(first["runtimeRoot"]) / "packages/daemon/src/main.ts").encode()
+        reap()
         daemons = [pid for pid in adopted if Path(f"/proc/{pid}/cmdline").exists()
-                   and node_entry in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")]
-        assert daemons == [first["pid"]], "No second daemon may use the fixture profile"
-        receipt.update(passed=True, daemonUnchanged=True, transaction=str(transaction), capsule=capsule_id,
+                   and any(str(Path(run["runtimeRoot"]) / "packages/daemon/src/main.ts").encode()
+                           in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") for run in (first, second))]
+        assert daemons == [second["pid"]], "Exactly one daemon, on the new runtime, may use the fixture profile"
+        receipt.update(passed=True, daemonUpgraded=True, transaction=str(transaction), capsule=capsule_id,
                        oldGuiSha256=package.digest(old / "libexec/pilot-desktop"), newGuiSha256=package.digest(new / "libexec/pilot-desktop"))
         receipt["events"] += ["real-draft-checkpoint-and-explicit-COMMIT", "OS-parent-exit-and-verified-whole-payload-exchange",
-                               "actual-new-GPUI-Wayland-buffer-and-durable-startup-ACK", "retained-draft-history-and-single-unchanged-daemon"]
+                               "actual-new-GPUI-Wayland-buffer-and-durable-startup-ACK", "retained-draft-history-and-daemon-upgraded-to-new-runtime"]
         print(json.dumps(receipt))
     finally:
         (root / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
