@@ -596,19 +596,40 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("{width}-{dark}-loaded.png")))
                     .unwrap();
             }
+            let natural = cx
+                .update_window(h, |_, w, _| w.find("inline-visual").bounds().size.height)
+                .unwrap();
+            assert_eq!(
+                cx.update(|cx| t
+                    .read(cx)
+                    .inline_visuals
+                    .heights
+                    .values()
+                    .copied()
+                    .collect::<Vec<_>>()),
+                vec![f32::from(natural)],
+                "the laid-out height is reported, remeasured and remembered for its revision"
+            );
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("inline-visual").bounds();
                 assert!(b.size.width > px(300.) && b.right() <= px(width));
+                // Natural height: no inner viewport, every node inside the visual,
+                // and the conversation row remeasured to hold all of it.
                 assert!(
-                    (f32::from(b.size.height) - crate::artifact_view::inline_visual::HEIGHT).abs()
-                        < 1.
+                    b.size.height > px(crate::artifact_view::inline_visual::HEIGHT),
+                    "loaded visual is not capped at the loading reserve: {b:?}"
                 );
+                let content = w.find("inline-visual-content").bounds();
+                assert!(content.bottom() <= b.bottom() + px(1.));
+                assert!(w.find("0.5").bounds().bottom() <= content.bottom() + px(1.));
                 assert!(!w.find("0.1.0").disabled().unwrap_or(false));
                 w.click_at("0.1.0", point(px(7.), px(7.)), cx);
             })
             .unwrap();
             wait(cx, h, |cx| {
+                // Controls re-enable once the reader is idle, not at the version bump.
                 p.read(cx).inline_probe_snapshot().version > initial.version
+                    && p.read(cx).inline_probe_idle()
             });
             assert!(cx.update(|cx| {
                 p.read(cx)
@@ -625,6 +646,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("Month"))
+                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| w.click("0.1.2", cx))
                 .unwrap();
@@ -634,6 +656,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":1"))
+                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 assert!(
@@ -671,6 +694,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":2"))
+                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 w.click("0.3-plus", cx);
@@ -682,6 +706,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"n\":5"))
+                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 let thumb = w.within("0.3-slider").find(("slider-thumb", 0u32)).bounds();

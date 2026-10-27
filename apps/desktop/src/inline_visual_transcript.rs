@@ -40,6 +40,7 @@ struct Entry {
     pane: Entity<ArtifactPane>,
     row: Option<u64>,
     _expand: Subscription,
+    _resize: Subscription,
     _admission: Subscription,
 }
 #[derive(Default)]
@@ -59,6 +60,9 @@ pub(super) struct State {
     /// Decoded size of each exact revision seen on this host. Revisions are
     /// immutable, so a re-read after cache eviction reserves the same geometry.
     sizes: HashMap<(String, String, u32), RasterSize>,
+    /// Natural laid-out height of each exact visual revision, reserved by its
+    /// row while unloaded so scrolling back or re-reading does not jump.
+    heights: HashMap<(String, String, u32), f32>,
 }
 fn size_key(r: &Reference) -> (String, String, u32) {
     (r.session.clone(), r.id.clone(), r.revision)
@@ -123,6 +127,7 @@ impl TranscriptView {
             != options.as_ref().map(crate::LocalOptions::host);
         if host_changed {
             self.inline_visuals.sizes.clear();
+            self.inline_visuals.heights.clear();
         }
         let changed = self.inline_visuals.owner != owner || host_changed;
         if changed {
@@ -293,6 +298,28 @@ impl TranscriptView {
                             cx.emit(ArtifactOpen(event.0.clone()))
                         },
                     );
+                    let resize = cx.subscribe(
+                        &pane,
+                        |view, pane, event: &crate::artifact_view::inline_visual::Resized, cx| {
+                            let Some(entry) =
+                                view.inline_visuals.entries.iter().find(|e| e.pane == pane)
+                            else {
+                                return;
+                            };
+                            if pane.read(cx).inline_scene_ready() {
+                                view.inline_visuals
+                                    .heights
+                                    .insert(size_key(&entry.reference), event.0);
+                            }
+                            if let Some(id) = entry.row
+                                && let Some(ix) =
+                                    view.transcript.messages().iter().position(|r| r.id() == id)
+                            {
+                                view.scroller
+                                    .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+                            }
+                        },
+                    );
                     let admission = cx.observe_in(&pane, window, |view, pane, window, cx| {
                         if let Some(size) = pane.read(cx).inline_raster_size()
                             && let Some(entry) =
@@ -337,6 +364,7 @@ impl TranscriptView {
                         pane,
                         row: Some(id),
                         _expand: expand,
+                        _resize: resize,
                         _admission: admission,
                     });
                     changed = true;
@@ -365,11 +393,16 @@ impl TranscriptView {
                 .find(|r| r.id() == id)
                 .and_then(|r| r.artifact_size());
             let reserve = self.inline_reserve(&reference, hint);
+            let height = self
+                .inline_visuals
+                .heights
+                .get(&size_key(&reference))
+                .copied();
             let entry = &mut self.inline_visuals.entries[index];
             entry.row = Some(id);
-            entry
-                .pane
-                .update(cx, |p, cx| p.open_inline(reference, reserve, window, cx));
+            entry.pane.update(cx, |p, cx| {
+                p.open_inline(reference, reserve, height, window, cx)
+            });
         }
         if changed {
             cx.notify();
@@ -517,6 +550,12 @@ impl TranscriptView {
                 cx,
             ));
         }
+        let height = self
+            .inline_visuals
+            .heights
+            .get(&size_key(&reference))
+            .copied()
+            .unwrap_or(crate::artifact_view::inline_visual::HEIGHT);
         row = row.child(
             Button::new(("open-artifact", id))
                 .ghost()
@@ -529,12 +568,10 @@ impl TranscriptView {
                 }),
         );
         if candidate && self.inline_visuals.enabled {
-            row = row
-                .h(px(crate::artifact_view::inline_visual::HEIGHT))
-                .child(
-                    crate::ui::text(crate::ui::Text::Caption, "Loading native preview…")
-                        .text_color(cx.theme().muted_foreground),
-                );
+            row = row.h(px(height)).child(
+                crate::ui::text(crate::ui::Text::Caption, "Loading native preview…")
+                    .text_color(cx.theme().muted_foreground),
+            );
         }
         row
     }

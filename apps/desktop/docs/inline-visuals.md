@@ -23,8 +23,8 @@ Read `docs/native/visuals.md`, `crates/monocode-gpui/src/visuals.rs`,
   Pilot keeps its stricter exact revision and hello identity checks. Expansion
   transfers the same reader entity to the existing pane, not a cloned VM.
   Existing Kit buttons, checkbox, slider, charts and canvas retain their typed
-  event/version checks. Preview height is bounded with scrolling and deliberate
-  expansion, not arbitrary full-tree transcript growth or scale-to-fit text.
+  event/version checks. Visuals take their natural height in the conversation,
+  never scale-to-fit text.
 * Avoid: MonoCode's synchronous in-process `VisualRuntime::new` / dispatch,
   source-based document identity, hand-built control styling and 3D scene/orbit
   handling. `scene.rs` was audited as a boundary, not adopted. No browser,
@@ -35,8 +35,8 @@ and renderer. No MonoCode source was copied or translated.
 
 Swift reference: `ArtifactCard` uses visibility-driven `ArtifactContent`, pinned
 `latest: false`, and remembered inline size. `VisualArtifactContent` grows the
-native tree with the transcript; Next deliberately retains a bounded viewport
-for this first slice rather than adopting uncapped layout work.
+native tree with the transcript; Next does the same, with no height cap or inner
+scroll viewport.
 
 ## Ownership and bounds
 
@@ -67,8 +67,12 @@ permit until their exact metadata arrives; this does not raise image limits.
 
 `inline_visual.rs` is presentation on `ArtifactPane`, reusing its off-UI worker,
 scene validator, native renderer, slider pacing and generation/state-version
-fences. Native visuals retain the fixed 440pt viewport during load, controls
-and tool events. Their content scrolls at actual size rather than shrinking charts.
+fences. A loaded native visual has its natural height, with no inner scrolling:
+it reads like the rest of the conversation, which scrolls instead. When its laid-
+out height changes (load, a control re-rendering a taller view), the pane emits
+`Resized` and the transcript remeasures that row. Each exact revision's natural
+height is remembered per host, so its placeholder and loading reader reserve it
+when scrolled back or re-read. A revision never seen reserves 440pt while loading.
 Decoded raster artifacts instead hug their aspect-fitted natural size, constrained
 by the conversation width and Swift's 720pt image ceiling (48pt minimum target).
 Small images no longer sit inside a 440pt blank box. Raster completion remeasures

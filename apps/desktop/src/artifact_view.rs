@@ -49,6 +49,10 @@ pub(crate) struct ArtifactPane {
     inline: bool,
     /// Raster geometry an inline preview reserves while its revision loads.
     inline_reserve: Option<crate::artifact_model::RasterSize>,
+    /// Natural height an inline visual reserves while its revision loads, if known.
+    inline_height: Option<f32>,
+    /// Last laid-out inline height, so the conversation row remeasures on change.
+    inline_measured: Rc<std::cell::Cell<f32>>,
     gallery: gallery::State,
     focus: Option<gpui_kit::FocusHandle>,
     options: Option<LocalOptions>,
@@ -105,6 +109,8 @@ impl ArtifactPane {
         Self {
             inline: false,
             inline_reserve: None,
+            inline_height: None,
+            inline_measured: Rc::new(std::cell::Cell::new(-1.)),
             gallery: gallery::State::default(),
             focus: None,
             options: None,
@@ -283,6 +289,7 @@ impl ArtifactPane {
         self.busy = false;
         self.source = false;
         self.zoom = Default::default();
+        self.inline_measured.set(-1.);
     }
     fn flush_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(image) = self.retired_image.take() {

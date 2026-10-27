@@ -1,11 +1,15 @@
 //! Conversation presentation of the existing exact-revision reader, not a second runtime.
 use super::*;
 use crate::artifact_model::RasterSize;
-use gpui_kit::component::scroll::ScrollableElement;
 
+/// Height reserved while a visual of unknown size loads. Loaded visuals take
+/// their natural height, like the rest of the conversation.
 pub(crate) const HEIGHT: f32 = 440.;
 pub(crate) struct Expand(pub(crate) Reference);
 impl gpui_kit::EventEmitter<Expand> for ArtifactPane {}
+/// The inline reader's laid-out height changed, so its conversation row must remeasure.
+pub(crate) struct Resized(pub(crate) f32);
+impl gpui_kit::EventEmitter<Resized> for ArtifactPane {}
 
 /// Title row shared by the pre-admission placeholder and the inline reader.
 pub(crate) fn header(label: String, expand: Button) -> gpui_kit::Div {
@@ -65,6 +69,10 @@ pub(crate) fn raster_loading(cx: &gpui_kit::App) -> AnyElement {
 impl ArtifactPane {
     pub(crate) fn inline_raster_ready(&self) -> bool {
         self.snapshot.raster.is_some()
+    }
+    /// A native scene is shown, so the measured height is its natural height.
+    pub(crate) fn inline_scene_ready(&self) -> bool {
+        self.snapshot.scene.is_some()
     }
     pub(crate) fn inline_raster_size(&self) -> Option<RasterSize> {
         self.snapshot.raster.as_ref().map(|r| RasterSize {
@@ -139,6 +147,7 @@ impl ArtifactPane {
         &mut self,
         reference: Reference,
         reserve: Option<RasterSize>,
+        height: Option<f32>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -153,6 +162,7 @@ impl ArtifactPane {
         self.flush_image(window, cx);
         self.reference = Some(reference);
         self.inline_reserve = reserve;
+        self.inline_height = height;
         self.busy = true;
         self.begin_after_drain(window, cx);
         cx.notify();
@@ -169,7 +179,7 @@ impl ArtifactPane {
         let generation = self.generation;
         let Some(reference) = self.reference.clone() else {
             return div()
-                .h(px(HEIGHT))
+                .h(px(self.inline_height.unwrap_or(HEIGHT)))
                 .child("Preview paused")
                 .into_any_element();
         };
@@ -182,9 +192,9 @@ impl ArtifactPane {
             .id("inline-visual")
             .test_support()
             .track_focus(&focus)
+            .relative()
             .v_flex()
             .w_full()
-            .h(px(HEIGHT))
             .min_w_0()
             .gap_2()
             .on_action(
@@ -224,7 +234,7 @@ impl ArtifactPane {
                         if v.generation == generation && !v.busy {
                             let reference = v.reference.clone().unwrap();
                             v.close();
-                            v.open_inline(reference, v.inline_reserve, window, cx);
+                            v.open_inline(reference, v.inline_reserve, v.inline_height, window, cx);
                         }
                     })),
             );
@@ -255,42 +265,44 @@ impl ArtifactPane {
         if self.busy && self.snapshot.revision.is_none() {
             view = view.child("Loading native preview…");
         }
+        if self.busy && self.snapshot.scene.is_none() && self.snapshot.error.is_none() {
+            view = view.min_h(px(self.inline_height.unwrap_or(HEIGHT)));
+        }
         if let Some(revision) = self.snapshot.revision.clone() {
+            // Natural height: the conversation scrolls, the visual does not.
             let mut content = div()
-                .id("inline-visual-scroll-body")
+                .id("inline-visual-content")
+                .test_support()
                 .v_flex()
-                .size_full()
-                .min_h_0()
+                .w_full()
                 .min_w_0()
-                .gap_3()
-                .overflow_y_scroll();
+                .gap_3();
             if !revision.visual_supported {
                 content = content.child(crate::ui::text(crate::ui::Text::Caption, "No native inline preview for this artifact. Source is retained; Expand opens its detail."));
             } else if let Some(scene) = self.snapshot.scene.clone() {
                 content = content.child(self.node(&scene.root, "0", &mut 4096, cx));
             }
-            view = view.child(
-                div()
-                    .id("inline-visual-content")
-                    .test_support()
-                    .flex_1()
-                    .min_h_0()
-                    .min_w_0()
-                    .child(
-                        content
-                            .overflow_y_scrollbar()
-                            .id(SharedString::from(format!(
-                                "inline-scroll:{}:{}:{}:{}",
-                                revision.reference.session,
-                                revision.reference.id,
-                                revision.reference.revision,
-                                self.source
-                            )))
-                            .scroll_bounce(false),
-                    ),
-            );
+            view = view.child(content);
         }
-        view.into_any_element()
+        let measured = self.inline_measured.clone();
+        let weak = cx.weak_entity();
+        view.child(
+            gpui_kit::canvas(
+                move |bounds, window, cx| {
+                    let height = f32::from(bounds.size.height);
+                    if (height - measured.get()).abs() >= 0.5 {
+                        measured.set(height);
+                        window.defer(cx, move |_, cx| {
+                            let _ = weak.update(cx, |_, cx| cx.emit(Resized(height)));
+                        });
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        )
+        .into_any_element()
     }
 }
 
