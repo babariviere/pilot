@@ -627,9 +627,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             wait(cx, h, |cx| {
-                // Controls re-enable once the reader is idle, not at the version bump.
                 p.read(cx).inline_probe_snapshot().version > initial.version
-                    && p.read(cx).inline_probe_idle()
             });
             assert!(cx.update(|cx| {
                 p.read(cx)
@@ -646,8 +644,9 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("Month"))
-                    && p.read(cx).inline_probe_idle()
             });
+            // The visible canvas is redrawing for the new state now. Controls stay
+            // enabled; this click queues and dispatches when the draw finishes.
             cx.update_window(h, |_, w, cx| w.click("0.1.2", cx))
                 .unwrap();
             wait(cx, h, |cx| {
@@ -656,7 +655,6 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":1"))
-                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 assert!(
@@ -694,7 +692,6 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":2"))
-                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 w.click("0.3-plus", cx);
@@ -706,7 +703,6 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .state
                     .as_ref()
                     .is_some_and(|s| s.contains("\"n\":5"))
-                    && p.read(cx).inline_probe_idle()
             });
             cx.update_window(h, |_, w, cx| {
                 let thumb = w.within("0.3-slider").find(("slider-thumb", 0u32)).bounds();

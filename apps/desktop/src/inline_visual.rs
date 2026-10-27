@@ -2,9 +2,15 @@
 use super::*;
 use crate::artifact_model::RasterSize;
 
-/// Height reserved while a visual of unknown size loads. Loaded visuals take
-/// their natural height, like the rest of the conversation.
+/// Height a pin of unknown kind reserves while it loads (it may be a legacy raster).
+/// Loaded visuals take their natural height, like the rest of the conversation.
 pub(crate) const HEIGHT: f32 = 440.;
+/// Height a not-yet-loaded inline reader reserves: the revision's remembered
+/// natural height, else 440pt for pins that may be legacy rasters. A visual of
+/// unknown size reserves nothing and grows once, when it loads.
+pub(crate) fn loading_reserve(kind: &str, remembered: Option<f32>) -> Option<f32> {
+    remembered.or((kind != "visual").then_some(HEIGHT))
+}
 pub(crate) struct Expand(pub(crate) Reference);
 impl gpui_kit::EventEmitter<Expand> for ArtifactPane {}
 /// The inline reader's laid-out height changed, so its conversation row must remeasure.
@@ -183,6 +189,7 @@ impl ArtifactPane {
                 .child("Preview paused")
                 .into_any_element();
         };
+        let kind = reference.kind.clone();
         let title = self
             .snapshot
             .revision
@@ -265,8 +272,12 @@ impl ArtifactPane {
         if self.busy && self.snapshot.revision.is_none() {
             view = view.child("Loading native preview…");
         }
-        if self.busy && self.snapshot.scene.is_none() && self.snapshot.error.is_none() {
-            view = view.min_h(px(self.inline_height.unwrap_or(HEIGHT)));
+        if self.busy
+            && self.snapshot.scene.is_none()
+            && self.snapshot.error.is_none()
+            && let Some(reserve) = loading_reserve(&kind, self.inline_height)
+        {
+            view = view.min_h(px(reserve));
         }
         if let Some(revision) = self.snapshot.revision.clone() {
             // Natural height: the conversation scrolls, the visual does not.
@@ -310,6 +321,13 @@ impl ArtifactPane {
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
+    #[test]
+    fn only_unknown_or_raster_pins_reserve_a_guess_while_loading() {
+        assert_eq!(loading_reserve("visual", None), None);
+        assert_eq!(loading_reserve("visual", Some(581.)), Some(581.));
+        assert_eq!(loading_reserve("unknown", None), Some(HEIGHT));
+        assert_eq!(loading_reserve("image", Some(200.)), Some(200.));
+    }
     fn reference(revision: u32) -> Reference {
         Reference {
             id: "study".into(),

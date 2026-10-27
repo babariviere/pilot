@@ -550,12 +550,13 @@ impl TranscriptView {
                 cx,
             ));
         }
-        let height = self
-            .inline_visuals
-            .heights
-            .get(&size_key(&reference))
-            .copied()
-            .unwrap_or(crate::artifact_view::inline_visual::HEIGHT);
+        let height = crate::artifact_view::inline_visual::loading_reserve(
+            &reference.kind,
+            self.inline_visuals
+                .heights
+                .get(&size_key(&reference))
+                .copied(),
+        );
         row = row.child(
             Button::new(("open-artifact", id))
                 .ghost()
@@ -568,7 +569,10 @@ impl TranscriptView {
                 }),
         );
         if candidate && self.inline_visuals.enabled {
-            row = row.h(px(height)).child(
+            if let Some(height) = height {
+                row = row.h(px(height));
+            }
+            row = row.child(
                 crate::ui::text(crate::ui::Text::Caption, "Loading native preview…")
                     .text_color(cx.theme().muted_foreground),
             );

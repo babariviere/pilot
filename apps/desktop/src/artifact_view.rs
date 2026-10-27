@@ -64,6 +64,11 @@ pub(crate) struct ArtifactPane {
     updates: Option<Task<()>>,
     generation: u64,
     busy: bool,
+    /// The in-flight command is a canvas draw, not a control event. Controls
+    /// stay enabled; a control event waits in `queued_event` until it finishes.
+    drawing: bool,
+    /// Latest control event made during a draw: generation, version, id, value.
+    queued_event: Option<(u64, u64, String, Value)>,
     source: bool,
     zoom: crate::reader_zoom::Zoom,
     retired_image: Option<Arc<gpui_kit::RenderImage>>,
@@ -122,6 +127,8 @@ impl ArtifactPane {
             updates: None,
             generation: 0,
             busy: false,
+            drawing: false,
+            queued_event: None,
             source: false,
             zoom: Default::default(),
             retired_image: None,
@@ -287,6 +294,8 @@ impl ArtifactPane {
         self.snapshot = Snapshot::default();
         self.generation += 1;
         self.busy = false;
+        self.drawing = false;
+        self.queued_event = None;
         self.source = false;
         self.zoom = Default::default();
         self.inline_measured.set(-1.);
@@ -433,6 +442,14 @@ impl ArtifactPane {
         self.slider_flow.finish(snapshot.version, healthy);
         self.snapshot = snapshot;
         self.busy = self.slider_flow.flight.is_some();
+        self.drawing = false;
+        // A control used during a draw dispatches now, still fenced by its
+        // generation, version and control type.
+        if !self.busy
+            && let Some((generation, version, id, value)) = self.queued_event.take()
+        {
+            self.event(generation, version, id, value, cx);
+        }
         self.pump_slider(cx);
         cx.notify();
     }
@@ -470,6 +487,8 @@ impl ArtifactPane {
         self.updates = None;
         self.generation += 1;
         self.busy = false;
+        self.drawing = false;
+        self.queued_event = None;
         self.slider_flow.clear();
         self.cancel_slider_wake();
         self.sliders.clear();
@@ -543,7 +562,8 @@ impl ArtifactPane {
         let canonical = self.snapshot.scene.as_ref().unwrap().sliders[&intent.id].1;
         let offer = self.slider_flow.offer(
             &intent,
-            self.busy,
+            // A draw in flight queues the intent; pump_slider sends it after.
+            self.busy && !self.drawing,
             canonical,
             cx.background_executor().now(),
         );
@@ -716,6 +736,7 @@ impl ArtifactPane {
             })
         }) {
             self.busy = true;
+            self.drawing = true;
             cx.notify();
         }
     }
@@ -727,6 +748,10 @@ impl ArtifactPane {
         value: Value,
         cx: &mut Context<Self>,
     ) {
+        if self.drawing && generation == self.generation && version == self.snapshot.version {
+            self.queued_event = Some((generation, version, id, value));
+            return;
+        }
         if generation != self.generation
             || self.source
             || self.busy
@@ -921,7 +946,8 @@ impl ArtifactPane {
         let version = self.snapshot.version;
         let generation = self.generation;
         let inline = self.inline;
-        let enabled = self.snapshot.live && !self.busy;
+        // Controls stay usable while a canvas redraws; their events queue.
+        let enabled = self.snapshot.live && (!self.busy || self.drawing);
         match kind {
             "column" | "row" | "grid" => {
                 let mut box_ = div()
@@ -1128,7 +1154,10 @@ impl ArtifactPane {
                                         crate::visual_chart_view::number(n),
                                         binding.spec.unit
                                     ))
-                                    .disabled(!self.snapshot.live || (self.busy && !own_flight))
+                                    .disabled(
+                                        !self.snapshot.live
+                                            || (self.busy && !own_flight && !self.drawing),
+                                    )
                                     .w_full(),
                             ),
                     );
@@ -1751,6 +1780,50 @@ mod tests {
             title: "Synthetic".into(),
             kind: "visual".into(),
         }
+    }
+    #[gpui_kit::test]
+    fn controls_used_during_a_canvas_draw_queue_until_it_finishes(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::init_appearance(cx);
+        });
+        let pane = cx.update(|cx| cx.new(|_| ArtifactPane::new()));
+        let (worker, commands) = Worker::synthetic();
+        pane.update(cx, |p, cx| {
+            p.reference = Some(reference(1));
+            p.generation = 3;
+            p.worker = Some(worker);
+            let mut s = snapshot(reference(1));
+            s.scene = Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"column","children":[{"type":"toggle","id":"0.0","label":"Forecast","value":false},{"type":"canvas","id":"0.1","height":120,"animated":false}]}})).unwrap()));
+            p.snapshot = s.clone();
+            p.draw(3, 7, "0.1".into(), 320., 120., cx);
+            assert!(matches!(commands.try_recv(), Ok(Command::Draw { version: 7, .. })));
+            assert!(p.busy && p.drawing);
+            // Stale or retired callbacks are never queued.
+            p.event(2, 7, "0.0".into(), json!(true), cx);
+            p.event(3, 6, "0.0".into(), json!(true), cx);
+            assert!(p.queued_event.is_none());
+            p.event(3, 7, "0.0".into(), json!(false), cx);
+            p.event(3, 7, "0.0".into(), json!(true), cx);
+            assert!(commands.try_recv().is_err(), "nothing races the draw");
+            // The draw's reply dispatches the latest control use.
+            p.accept(3, &reference(1), s.clone(), cx);
+            assert!(matches!(
+                commands.try_recv(),
+                Ok(Command::Event { version: 7, value: Value::Bool(true), .. })
+            ));
+            assert!(p.busy && !p.drawing && p.queued_event.is_none());
+            // An event in flight still blocks further control events.
+            p.event(3, 7, "0.0".into(), json!(false), cx);
+            assert!(commands.try_recv().is_err() && p.queued_event.is_none());
+            // A queued event whose type no longer matches fails closed.
+            p.busy = false;
+            p.draw(3, 7, "0.1".into(), 320., 120., cx);
+            let _ = commands.try_recv();
+            p.event(3, 7, "0.0".into(), json!("wrong"), cx);
+            p.accept(3, &reference(1), s, cx);
+            assert!(commands.try_recv().is_err() && !p.busy);
+        });
     }
     fn snapshot(reference: Reference) -> Snapshot {
         Snapshot{drawings:Default::default(),revision:Some(Arc::new(crate::artifact_model::Revision{reference,source:Arc::new("synthetic source never evaluated".into()),data:Value::Null,visual_supported:true,created_at:1.,updated_at:2.})),scene:Some(Arc::new(crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"toggle","id":"0","label":"Synthetic","value":false}})).unwrap())),state:Some("[]".into()),version:7,live:true,error:None,..Default::default()}

@@ -72,7 +72,14 @@ it reads like the rest of the conversation, which scrolls instead. When its laid
 out height changes (load, a control re-rendering a taller view), the pane emits
 `Resized` and the transcript remeasures that row. Each exact revision's natural
 height is remembered per host, so its placeholder and loading reader reserve it
-when scrolled back or re-read. A revision never seen reserves 440pt while loading.
+when scrolled back or re-read. A visual revision never seen reserves nothing and
+grows once when it loads; pins of unknown kind (possibly legacy rasters) keep the
+440pt loading reserve.
+
+Controls stay enabled while a visible canvas redraws. A control used during a
+draw queues (latest wins) and dispatches when the draw's reply arrives, still
+fenced by generation, state version and control type; a slider intent waits in
+its existing pacing queue. Only an in-flight control event disables controls.
 Decoded raster artifacts instead hug their aspect-fitted natural size, constrained
 by the conversation width and Swift's 720pt image ceiling (48pt minimum target).
 Small images no longer sit inside a 440pt blank box. Raster completion remeasures
