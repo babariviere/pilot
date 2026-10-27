@@ -93,7 +93,9 @@ authentication for the ordinary loopback API.
 
 Recovery metadata is read-only, with details and copyable retained paths. Failed
 swap leaves the old app; failed relaunch/startup keeps both bundles and reports
-uncertainty. Transactions and backups are not blindly retried or deleted. Two
+uncertainty. Transactions and backups are not blindly retried or deleted; the one
+exception is a download never committed (phase `Ready`), which startup removes once
+no session or helper holds the target lock. Two
 retained transactions per install parent are the admission limit. Automatic
 rollback, cleanup and privilege elevation are not implemented.
 

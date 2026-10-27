@@ -703,6 +703,47 @@ fn staging_keeps_installed_app_unchanged_and_holds_permanent_target_lock() {
     );
 }
 #[test]
+fn uncommitted_downloads_are_discarded_only_once_their_lock_is_released() {
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    let (root, target) = (staged.root().to_owned(), staged.target.clone());
+    assert_eq!(
+        installer::discard_uncommitted(&target, &trust()).unwrap(),
+        0,
+        "a live session or prepared helper still owns its stage"
+    );
+    assert!(root.exists());
+    drop(staged);
+    assert_eq!(
+        installer::discard_uncommitted(&target, &trust()).unwrap(),
+        1
+    );
+    assert!(!root.exists());
+    assert!(installer::recoveries(&target, &trust()).unwrap().is_empty());
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "100.1",
+        "the installed app is untouched"
+    );
+}
+#[test]
+fn committed_transactions_survive_uncommitted_cleanup() {
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    staged.mark_committed().unwrap();
+    let (root, target) = (staged.root().to_owned(), staged.target.clone());
+    drop(staged);
+    assert_eq!(
+        installer::discard_uncommitted(&target, &trust()).unwrap(),
+        0
+    );
+    assert_eq!(
+        installer::recovery_phase(&root).unwrap(),
+        installer::Phase::Committed
+    );
+    assert_eq!(installer::recoveries(&target, &trust()).unwrap().len(), 1);
+}
+#[test]
 fn ordinary_quit_eof_never_commits_or_replaces_the_bundle() {
     let temp = Temp::new();
     let staged = fixture_stage(&temp);

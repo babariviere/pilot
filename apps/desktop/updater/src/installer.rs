@@ -460,6 +460,45 @@ impl Staged {
 pub fn recovery_phase(root: &Path) -> Result<Phase, Error> {
     Ok(read_journal(root)?.phase)
 }
+/// Startup cleanup of downloads that were verified but never committed (phase Ready),
+/// so a previous session's staged update does not block the next check as "recovery".
+/// Nothing was installed: COMMIT is the only path past Ready. A live prepared helper
+/// holds the target lock, so a busy lock leaves everything in place. Other phases,
+/// unreadable journals and unexpected names are left for `recoveries` to report.
+/// Returns how many stages were removed.
+pub fn discard_uncommitted(target: &Path, trust: &Trust) -> Result<usize, Error> {
+    validate_target(target, trust)?;
+    let lock = match lock_target(target) {
+        Ok(lock) => lock,
+        Err(Error::Busy) => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let parent = target.parent().ok_or(Error::Identity)?;
+    let mut stale = Vec::new();
+    for (count, entry) in fs::read_dir(parent)
+        .map_err(|_| Error::Filesystem)?
+        .enumerate()
+    {
+        if count >= 4096 {
+            break;
+        }
+        let Ok(entry) = entry else { continue };
+        let root = entry.path();
+        if validate_root(&root, target).is_ok() && matches!(recovery_phase(&root), Ok(Phase::Ready))
+        {
+            stale.push(root);
+        }
+    }
+    for root in &stale {
+        fs::remove_dir_all(root).map_err(|_| Error::Filesystem)?;
+    }
+    if !stale.is_empty() {
+        sync_directory(parent)?;
+    }
+    drop(lock);
+    Ok(stale.len())
+}
+
 /// Read-only bounded startup inspection. Unknown/corrupt transactions are never
 /// retried, deleted, adopted or treated as successful installation.
 pub fn recoveries(target: &Path, trust: &Trust) -> Result<Vec<(PathBuf, Phase)>, Error> {

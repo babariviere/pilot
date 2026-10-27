@@ -89,7 +89,9 @@ Relaunch uses the new native executable directly, preserving the desktop-session
 environment and the receipt-bound profile/policy. Spawn success is not startup
 success. Only the GUI's actual durable startup checkpoint acknowledges the
 transaction. Interrupted/uncertain installs preserve journals and both payloads
-for contextual recovery inspection. There is no automatic rollback or cleanup.
+for contextual recovery inspection. There is no automatic rollback or cleanup,
+except that startup removes downloads never committed (journal phase `Ready`)
+once no session or helper holds the target lock; nothing was installed from them.
 
 ## Native fixtures
 

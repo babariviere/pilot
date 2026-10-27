@@ -64,7 +64,11 @@ impl Worker {
             .spawn(move || {
                 let recovery = NativePlatform
                     .verify(&target, &trust, &trust.current_build, None)
-                    .and_then(|()| installer::recoveries(&target, &trust));
+                    .and_then(|()| {
+                        // A failed cleanup changes nothing; `recoveries` still reports it.
+                        let _ = installer::discard_uncommitted(&target, &trust);
+                        installer::recoveries(&target, &trust)
+                    });
                 if recovery_send.send(recovery).is_err() {
                     return;
                 }

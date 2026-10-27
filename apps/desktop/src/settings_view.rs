@@ -715,9 +715,9 @@ impl SettingsView {
                 view = view.child(updater);
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            view=view.child(Notice::new("Updates are available only for verified macOS arm64 bundles. No installer is enabled on this platform."));
+            view=view.child(Notice::new("Updates are available only for verified macOS arm64 and Linux x86-64 bundles. No installer is enabled on this platform."));
         }
         view
     }
