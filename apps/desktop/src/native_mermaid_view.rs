@@ -231,16 +231,31 @@ impl View {
 }
 impl Render for View {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The reader toolbar already names the artifact. This diagram's own
+        // source toggle and copy are quiet icons, revealed on hover, while its
+        // source is shown, or when the diagram failed to render.
+        let group = SharedString::from(format!("{}-group", self.id));
+        let pinned = self.source || self.prepared.diagram.is_err();
         let mut header = div()
+            .absolute()
+            .top_1()
+            .right_1()
             .h_flex()
             .items_center()
-            .gap_2()
-            .child(ui::text(ui::Text::Caption, "Mermaid").flex_1())
+            .gap_1()
+            .when(!pinned, |h| {
+                h.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
+            })
             .when(self.prepared.diagram.is_ok(), |header| {
                 header.child(
-                    ui::action(
+                    ui::icon_action(
                         self.key("source"),
-                        if self.source { "Diagram" } else { "Source" },
+                        if self.source {
+                            "Show diagram"
+                        } else {
+                            "Show Mermaid source"
+                        },
+                        crate::app_icon::AppIcon::Source,
                         ui::Action::Quiet,
                     )
                     .on_click(cx.listener(|v, _, w, cx| {
@@ -251,13 +266,17 @@ impl Render for View {
                 )
             })
             .child(
-                ui::action(self.key("copy"), "Copy source", ui::Action::Quiet).on_click(
-                    cx.listener(|v, _, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(
-                            v.prepared.source.to_string(),
-                        ))
-                    }),
-                ),
+                ui::icon_action(
+                    self.key("copy"),
+                    "Copy Mermaid source",
+                    crate::app_icon::AppIcon::Copy,
+                    ui::Action::Quiet,
+                )
+                .on_click(cx.listener(|v, _, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        v.prepared.source.to_string(),
+                    ))
+                })),
             );
         if self.prepared.diagram.is_ok() && !self.reader {
             header = header.child(
@@ -277,14 +296,15 @@ impl Render for View {
         let mut root = div()
             .id(self.id.clone())
             .test_support()
+            .group(group)
+            .relative()
             .track_focus(&self.focus)
             .tab_stop(true)
             .w_full()
             .min_w_0()
             .v_flex()
             .gap_2()
-            .text_color(cx.theme().foreground)
-            .child(header);
+            .text_color(cx.theme().foreground);
         let body = match &self.prepared.diagram {
             Ok(diagram) if !self.source => div()
                 .id(self.key("viewport"))
@@ -324,10 +344,11 @@ impl Render for View {
             } else {
                 ui::Tone::Error
             };
-            root=root.child(div().id(self.key("error")).test_support().aria_label(reason.heading())
-                .child(ui::Notice::new(reason.heading()).tone(tone).detail(SharedString::from(format!("{} Exact source is retained for inspection/copy, not a rendered fallback. No browser fallback.",reason.detail())))));
+            root=root.child(div().id(self.key("error")).test_support().aria_label(reason.heading()).pr(px(72.))
+                .child(ui::Notice::new(reason.heading()).tone(tone).detail(SharedString::from(format!("{} Its source is shown below.",reason.detail())))));
         }
-        root.child(body)
+        // Header last so it paints over the diagram's top-right corner.
+        root.child(body).child(header)
     }
 }
 
