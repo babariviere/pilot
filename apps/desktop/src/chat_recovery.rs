@@ -22,12 +22,10 @@ impl ChatEditor {
                     .trigger(
                         crate::ui::action(
                             "composer-recovery",
-                            "Recovery…",
+                            "Resolve…",
                             crate::ui::Action::Quiet,
                         )
-                        .tooltip(
-                            "Inspect or manage this draft's unresolved delivery and recovered text",
-                        ),
+                        .tooltip("Check, send again or discard this draft"),
                     )
                     .content(move |_, _, cx| {
                         editor
@@ -86,7 +84,9 @@ impl ChatEditor {
                                 Button::new("check-delivery")
                                     .small()
                                     .w_full()
+                                    .ghost()
                                     .label("Check")
+                                    .tooltip("Ask whether this message arrived. Nothing is sent.")
                                     .icon(AppIcon::Retry.asset())
                                     .disabled(intent.operation.is_none())
                                     .on_click(cx.listener(move |view, _, _, _| {
@@ -102,8 +102,10 @@ impl ChatEditor {
                                 Button::new("retry-delivery")
                                     .small()
                                     .w_full()
-                                    .label("Retry same intent")
-                                    .icon(AppIcon::Retry.asset())
+                                    .ghost()
+                                    .label("Send again")
+                                    .tooltip("Try sending the same message again.")
+                                    .icon(AppIcon::Send.asset())
                                     .disabled(
                                         intent.operation.is_none() || intent.state == "pending",
                                     )
@@ -122,7 +124,9 @@ impl ChatEditor {
                             Button::new("dismiss-stop")
                                 .small()
                                 .w_full()
-                                .label("Acknowledge Stop uncertainty")
+                                .ghost()
+                                .label("Dismiss")
+                                .tooltip("Hide this notice. Use Stop again if the agent is still working.")
                                 .icon(AppIcon::Info.asset())
                                 .disabled(intent.operation.is_some())
                                 .on_click(cx.listener(move |view, _, _, _| {
@@ -143,6 +147,7 @@ impl ChatEditor {
                 Button::new("open-created")
                     .small()
                     .w_full()
+                    .ghost()
                     .label("Open created chat")
                     .icon(AppIcon::Chats.asset())
                     .on_click(cx.listener(move |_, _, _, cx| {
@@ -166,6 +171,7 @@ impl ChatEditor {
                         Button::new("copy-recovered")
                             .small()
                             .w_full()
+                            .ghost()
                             .label("Copy recovered text")
                             .icon(AppIcon::Copy.asset())
                             .on_click(cx.listener(move |view, _, _, cx| {
@@ -180,6 +186,7 @@ impl ChatEditor {
                         Button::new("remove-recovered")
                             .small()
                             .w_full()
+                            .ghost()
                             .label("Remove recovered text")
                             .icon(AppIcon::Close.asset())
                             .on_click(cx.listener(move |view, _, _, _| {

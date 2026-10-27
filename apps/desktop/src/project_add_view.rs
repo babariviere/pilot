@@ -202,7 +202,7 @@ impl ProjectAdd {
             self.result = Some(Ok(Outcome::Pending));
         } else {
             self.result = Some(Err(
-                "Local writer unavailable. No registration was queued; reopen to retry.",
+                "Can't add projects right now. Nothing was sent; close and try again.",
             ));
         }
         cx.notify();
@@ -225,25 +225,24 @@ impl ProjectAdd {
                 .is_none_or(|a| a.created.as_deref() != Some(id))
         })
     }
-    fn known_detail(&self, id: &str) -> String {
+    fn known_detail(&self) -> String {
         format!(
-            "Project {id}. Select it explicitly after refreshing.{}{}{}",
+            "Choose it from the project list.{}{}{}",
             if self.private_receipt_unconfirmed() {
-                " Its private receipt write is unconfirmed. Do not resubmit."
+                " This window couldn't record it, so don't add it again."
             } else {
-                " No chat was created or changed."
+                ""
             },
-            self.state_error
-                .map_or(String::new(), |e| format!(" Private state problem: {e}")),
+            self.state_error.map_or(String::new(), |e| format!(" {e}")),
             self.catalog_error.map_or(String::new(), |e| format!(
-                " Project list refresh failed: {e}"
+                " Couldn't refresh projects: {e}"
             ))
         )
     }
     fn notice(&self) -> Notice {
-        if let Some(id) = self.known() {
-            return Notice::new("Project added to Local.")
-                .detail(SharedString::from(self.known_detail(id)))
+        if self.known().is_some() {
+            return Notice::new("Project added.")
+                .detail(SharedString::from(self.known_detail()))
                 .tone(
                     if self.private_receipt_unconfirmed() || self.state_error.is_some() {
                         Tone::Warning
@@ -259,33 +258,32 @@ impl ProjectAdd {
             return Notice::new(error).tone(Tone::Error);
         }
         if let Some(error) = self.catalog_error {
-            return Notice::new(error).detail("Previous project choices retained. Refresh is read-only; it never proves an earlier registration succeeded.").tone(Tone::Error);
+            return Notice::new(error)
+                .detail("Showing the last list of projects.")
+                .tone(Tone::Error);
         }
         if self.choosing {
-            return Notice::new("Choosing a Local folder…").tone(Tone::Quiet);
+            return Notice::new("Choosing a folder…").tone(Tone::Quiet);
         }
         if self.pending {
-            return Notice::new("Waiting for Local…")
-                .detail("Closing does not undo registration. It is never automatically resent.")
+            return Notice::new("Adding project…")
+                .detail("Closing won't cancel or resend it.")
                 .tone(Tone::Quiet);
         }
         if self.attempt().is_some() {
             let title = match &self.result {
                 Some(Ok(Outcome::Unknown(reason))) => *reason,
-                _ => "Registration is unconfirmed. Do not resend this folder.",
+                _ => "Couldn't confirm the project was added. Don't add this folder again.",
             };
-            return Notice::new(title).detail("Refresh projects to inspect current availability, not to prove creation. Other folders require a separate explicit confirmation.").tone(Tone::Warning);
+            return Notice::new(title)
+                .detail("Refresh projects to check whether it appears.")
+                .tone(Tone::Warning);
         }
         match &self.result {
             Some(Err(error)) => Notice::new(*error).tone(Tone::Error),
             Some(Ok(Outcome::Unknown(reason))) => Notice::new(*reason).tone(Tone::Warning),
-            Some(Ok(Outcome::Read)) => {
-                Notice::new("Project list refreshed. No registration was sent.").tone(Tone::Quiet)
-            }
-            _ => Notice::new(
-                "Register an existing Local folder. Nothing is cloned and no chat is started.",
-            )
-            .tone(Tone::Quiet),
+            Some(Ok(Outcome::Read)) => Notice::new("Project list refreshed.").tone(Tone::Quiet),
+            _ => Notice::new("Nothing is copied and no chat starts.").tone(Tone::Quiet),
         }
     }
 }
@@ -293,24 +291,113 @@ impl Render for ProjectAdd {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.mutable();
         let confirm = enabled && self.path.is_some() && self.attempt().is_none();
-        div().id("add-project-form").test_support().track_focus(&self.focus).key_context("AddProject")
-            .v_flex().size_full().min_h_0().gap_3()
-            .capture_action(cx.listener(|v,_:&gpui_kit::base::input::Escape,_,cx|{v.close(cx);cx.stop_propagation();}))
-            .on_action(cx.listener(|v,_:&CancelProject,_,cx|{v.close(cx);cx.stop_propagation();}))
-            .on_action(cx.listener(|v,_:&ConfirmProject,_,cx|{v.confirm(cx);cx.stop_propagation();}))
-            .child(ui::header("add-project-title","Add project",Text::Title))
-            .child(div().id("add-project-body").test_support().v_flex().flex_1().min_h_0().gap_3().overflow_y_scroll()
-                .child(ui::text(Text::Body,"Choose an existing folder on this Mac, then confirm its registration with Local."))
-                .child(ui::action("choose-project-folder","Choose folder…",Action::Secondary).disabled(!enabled).on_click(cx.listener(|v,_,w,cx|v.choose(w,cx))))
-                .child(div().id("project-folder-path").test_support().min_w_0().child(ui::text(Text::Body,SharedString::from(self.path.clone().unwrap_or("No folder chosen".into())))))
-                .child(self.notice()))
-            .children(self.book.as_ref().filter(|b|b.project_registrations.values().any(|a|a.created.is_none())).map(|_|ui::text(Text::Caption,"Unconfirmed registrations are retained across restart. Choosing one of those folders never resends it.")))
-            .child(ui::rule(window,cx))
-            .child(div().h_flex().justify_end().items_center().gap_2()
-                .child(ui::action("add-project-close",if self.path.is_some()||self.pending{"Close"}else{"Cancel"},Action::Secondary).on_click(cx.listener(|v,_,_,cx|v.close(cx))))
-                .child(ui::action("refresh-projects","Refresh projects",Action::Quiet).disabled(!enabled).on_click(cx.listener(|v,_,_,cx|v.refresh(cx))))
-                .child(ui::action("confirm-add-project","Add project ⌘↩",Action::Primary).disabled(!confirm).on_click(cx.listener(|v,_,_,cx|v.confirm(cx)))))
-            .focus_trap("add-project-trap",&self.focus)
+        // Refresh helps only once there is something to check.
+        let refresh = self.attempt().is_some()
+            || self.catalog_error.is_some()
+            || matches!(
+                self.result,
+                Some(Ok(Outcome::Unknown(_)) | Ok(Outcome::Read))
+            );
+        div()
+            .id("add-project-form")
+            .test_support()
+            .track_focus(&self.focus)
+            .key_context("AddProject")
+            .v_flex()
+            .size_full()
+            .min_h_0()
+            .gap_3()
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, _, cx| {
+                v.close(cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|v, _: &CancelProject, _, cx| {
+                v.close(cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|v, _: &ConfirmProject, _, cx| {
+                v.confirm(cx);
+                cx.stop_propagation();
+            }))
+            .child(ui::header("add-project-title", "Add project", Text::Title))
+            .child(
+                div()
+                    .id("add-project-body")
+                    .test_support()
+                    .v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_3()
+                    .overflow_y_scroll()
+                    .child(ui::text(
+                        Text::Body,
+                        "Choose a folder on this Mac to add it as a project.",
+                    ))
+                    .child(
+                        ui::action("choose-project-folder", "Choose folder…", Action::Secondary)
+                            .disabled(!enabled)
+                            .on_click(cx.listener(|v, _, w, cx| v.choose(w, cx))),
+                    )
+                    .child(
+                        div()
+                            .id("project-folder-path")
+                            .test_support()
+                            .min_w_0()
+                            .child(ui::text(
+                                Text::Body,
+                                SharedString::from(
+                                    self.path.clone().unwrap_or("No folder chosen".into()),
+                                ),
+                            )),
+                    )
+                    .child(self.notice()),
+            )
+            .children(
+                self.book
+                    .as_ref()
+                    .filter(|b| {
+                        b.project_registrations
+                            .values()
+                            .any(|a| a.created.is_none())
+                    })
+                    .map(|_| {
+                        ui::text(
+                            Text::Caption,
+                            "Folders that may already have been added won't be sent again.",
+                        )
+                    }),
+            )
+            .child(ui::rule(window, cx))
+            .child(
+                div()
+                    .h_flex()
+                    .justify_end()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        ui::action(
+                            "add-project-close",
+                            if self.path.is_some() || self.pending {
+                                "Close"
+                            } else {
+                                "Cancel"
+                            },
+                            Action::Secondary,
+                        )
+                        .on_click(cx.listener(|v, _, _, cx| v.close(cx))),
+                    )
+                    .children(refresh.then(|| {
+                        ui::action("refresh-projects", "Refresh projects", Action::Quiet)
+                            .disabled(!enabled)
+                            .on_click(cx.listener(|v, _, _, cx| v.refresh(cx)))
+                    }))
+                    .child(
+                        ui::action("confirm-add-project", "Add project ⌘↩", Action::Primary)
+                            .disabled(!confirm)
+                            .on_click(cx.listener(|v, _, _, cx| v.confirm(cx))),
+                    ),
+            )
+            .focus_trap("add-project-trap", &self.focus)
     }
 }
 

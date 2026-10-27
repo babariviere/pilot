@@ -391,7 +391,7 @@ impl ChatEditor {
                                 m.reader = None;
                                 if let Some(p) = &mut m.picker {
                                     p.loading = false;
-                                    p.error = Some("Model reader stopped. Refresh explicitly.");
+                                    p.error = Some("Couldn't load models. Refresh to try again.");
                                 }
                             }
                             cx.notify();
@@ -411,7 +411,7 @@ impl ChatEditor {
             target,
         }) {
             p.loading = false;
-            p.error = Some("Model reader unavailable. Refresh explicitly.");
+            p.error = Some("Models aren't available right now. Refresh to try again.");
         }
         cx.notify();
     }
@@ -926,7 +926,7 @@ impl ChatEditor {
                         .menu_max_h(px(260.))
                         .placeholder(model_label.clone())
                         .search_placeholder("Find a scoped model…")
-                        .accessibility_label("Model for this Local chat draft"),
+                        .accessibility_label("Model for this new chat"),
                 )
             }))
             .children(p.map(|p| {

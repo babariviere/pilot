@@ -166,9 +166,9 @@ pub(crate) async fn set(
         };
         return match response.status() {
             reqwest::StatusCode::OK => Outcome::Acknowledged,
-            reqwest::StatusCode::CONFLICT => Outcome::Rejected(
-                "This chat cannot retry its startup now. Check Local and try again.",
-            ),
+            reqwest::StatusCode::CONFLICT => {
+                Outcome::Rejected("This chat can't restart right now. Try again in a moment.")
+            }
             _ => Outcome::Unknown,
         };
     }

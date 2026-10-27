@@ -222,7 +222,7 @@ async fn get(
         .get(format!("{}{path}", options.loopback()))
         .send()
         .await
-        .map_err(|_| "Local brief read failed. Retry explicitly.")?;
+        .map_err(|_| "Couldn't load the brief. Refresh to try again.")?;
     match response.status().as_u16() {
         200 => body(response, cap).await.map(Some),
         404 => Ok(None),

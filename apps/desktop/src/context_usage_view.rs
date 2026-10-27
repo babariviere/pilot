@@ -96,13 +96,16 @@ impl Render for Entry {
                 .as_ref()
                 .and_then(|id| v.state.chats.iter().find(|c| &c.id == id && !c.local_draft))
         });
-        let meter = chat.and_then(|c| crate::context_meter::Meter::reported(&c.context_usage));
-        let description = meter
-            .as_ref()
-            .map(|m| m.description.clone())
-            .unwrap_or_else(|| {
-                "Context details. Comparable reported usage unknown. Freshness unknown.".into()
-            });
+        // Unknown usage is an empty gauge, never a different icon.
+        let meter =
+            chat.and_then(|c| crate::context_meter::Meter::reported(&c.context_usage))
+                .unwrap_or_else(|| crate::context_meter::Meter {
+                    ratio: 0.,
+                    description:
+                        "Context usage unknown until the agent reports it. Open Context details."
+                            .into(),
+                });
+        let description = meter.description.clone();
         let mut button = Button::new("context-usage")
             .ghost()
             .small()
@@ -111,11 +114,7 @@ impl Render for Entry {
             .accessibility_label(SharedString::from(description.clone()))
             .tooltip(SharedString::from(description))
             .disabled(chat.is_none());
-        if let Some(meter) = meter {
-            button = button.child(meter.ring(cx));
-        } else {
-            button = button.icon(AppIcon::Info.asset());
-        }
+        button = button.child(meter.ring(cx));
         // Guard before a sibling pointer event can commit/clear editor preedit.
         div()
             .flex_none()

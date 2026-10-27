@@ -538,7 +538,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             } else {
                                 tokio::select! {
                                     result=submit_answer(&client,&options,store,AnswerSubmission {key:&key,draft:&draft,question:&question},&mut delivery_report,|store| {
-                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Question reply intent saved. Waiting for Local delivery.";publish(&updates,&replace,status.clone());
+                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Reply saved. Sending…";publish(&updates,&replace,status.clone());
                                     })=>result,
                                     _=close.recv()=>{closing=true;Ok("Closing. Any interrupted reply remains unconfirmed.")}
                                 }
@@ -991,9 +991,7 @@ async fn reconcile(
     }
     if receipt["state"] == "unknown" {
         diagnostic.category = Category::Unknown;
-        return Ok(
-            "Delivery is unknown. Check or explicitly retry this same operation; do not create a fresh one.",
-        );
+        return Ok("Couldn't confirm this was sent. Use Resolve to check or send it again.");
     }
     if receipt["operationId"] != op.operation_id
         || receipt["payloadHash"] != op.payload_hash

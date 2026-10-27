@@ -148,7 +148,7 @@ No provider response body, rejection text, prompt, path or full operation is log
 Private receipt-adoption failures keep known Local acknowledgment separate from local
 uncertainty. If diagnostic persistence is unconfirmed, the UI says so; memory-only
 details are not promised across restart. Opening the app never checks or resends an
-operation automatically. Existing **Check** and **Retry same intent** stay explicit.
+operation automatically. Existing **Check** and **Send again** stay explicit.
 A new-chat slot or an unresolved delivery can be **Discard draft**ed: the text is copied
 to the clipboard, the row is removed and the pending intent is abandoned, never retried.
 See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifecycle.
@@ -305,8 +305,9 @@ Its reserved slot keeps Send and the 76pt tray/34pt editor stable across work
 transitions. Pending actions disable both actions with visible waiting feedback;
 errors and Unknown delivery recovery remain beside the original draft.
 See [composer controls](docs/composer-controls.md) for the source audit and checks.
-Ordinary drafts have no Discard/recovery toolbar. **Recovery…** appears only for
-unresolved delivery, an unadopted created chat, a rejected result or recovered text.
+Ordinary drafts have no Discard/recovery toolbar. **Resolve…** appears only for
+unresolved delivery, an unadopted created chat, a rejected result or recovered text,
+on the same row as its plain status line.
 It reveals the relevant explicit actions in a native popover; error and Unknown
 status remain visible while it is closed. Opening it never checks, retries or
 discards anything automatically.

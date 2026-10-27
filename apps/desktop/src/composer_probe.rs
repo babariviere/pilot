@@ -236,7 +236,7 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
                 editor.update(cx, |e, cx| e.focus(w, cx));
                 w.render_frame(cx);
                 let handler = ElementInputHandler::new(
-                    w.find_by_label("Local chat message").bounds(),
+                    w.find_by_label("Message to Pilot").bounds(),
                     editor.read(cx).text.clone(),
                 );
                 TestInput::new(handler, w).compose_text(None, "にほん", Some(3..3), cx);

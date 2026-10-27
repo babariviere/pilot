@@ -147,7 +147,7 @@ impl Actions {
         let result = self
             .worker
             .as_ref()
-            .ok_or("Local chat actions are unavailable.")
+            .ok_or("Chat actions aren't available right now.")
             .and_then(|worker| worker.set(evidence.clone(), action));
         let rx = match result {
             Ok(rx) => rx,

@@ -83,12 +83,12 @@ pub(super) fn states(
                 );
             }
             bounds = Some(control.bounds());
-            assert!(control.label().unwrap().contains("Freshness unknown"));
-            assert_eq!(
+            assert!(
                 w.try_find("context-meter-ring").is_some(),
-                expected.is_some()
+                "known and unknown usage share one gauge"
             );
             if let Some(percent) = expected {
+                assert!(control.label().unwrap().contains("Freshness unknown"));
                 assert!(control.label().unwrap().contains(percent));
                 let ring = w.find("context-meter-ring").bounds();
                 assert_eq!(ring.size, size(px(14.), px(14.)));

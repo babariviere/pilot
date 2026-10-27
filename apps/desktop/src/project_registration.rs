@@ -69,7 +69,7 @@ pub(crate) async fn catalog(
         .get(format!("{}/api/projects", options.loopback()))
         .send()
         .await
-        .map_err(|_| "Local projects unavailable; refresh explicitly to retry.")?;
+        .map_err(|_| "Couldn't load projects. Refresh to try again.")?;
     if response.status() != reqwest::StatusCode::OK {
         return Err("Local project list refused; no redirect or authentication fallback.");
     }
@@ -91,7 +91,7 @@ pub(crate) async fn register(
     // never a receipt proving that a previous Unknown request succeeded.
     let projects = catalog(client, options).await?;
     if projects.iter().any(|p| p.path == path) {
-        return Err("This folder is already listed. Refresh projects and select it explicitly.");
+        return Err("This folder is already a project. Refresh projects to see it.");
     }
     let payload = serde_json::to_vec(&serde_json::json!({"path":path}))
         .map_err(|_| "Cannot encode project registration.")?;

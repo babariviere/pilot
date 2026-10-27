@@ -436,7 +436,8 @@ impl SettingsView {
         let current = owner.state.current().appearance;
         let writable = owner.writable();
         let disabled = !writable || owner.state.unconfirmed();
-        let label = "Appearance";
+        // The page is already titled Appearance; the row names its choice.
+        let label = "Theme";
         #[cfg(feature = "native-probes")]
         let label = if self.long_labels {
             "Appearance for conversations, code and every app-owned surface, including a deliberately long translated label 資料 👩‍💻"

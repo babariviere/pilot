@@ -409,7 +409,6 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                 goal.update(cx, |i, cx| i.focus(w, cx));
                 w.input("Keep the original conversation", cx);
                 w.click("mission-coordinator", cx);
-                w.click("mission-draft", cx);
             })
             .unwrap();
             settle(cx, h);

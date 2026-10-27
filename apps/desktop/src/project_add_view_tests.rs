@@ -195,10 +195,7 @@ fn known_non_io_receipt_survives_closed_reopen_and_refresh_but_not_a_new_owner(
             assert!(f.state_error.is_none());
             assert_eq!(f.known(), Some("canonical-id"));
             assert!(f.private_receipt_unconfirmed());
-            assert!(
-                f.known_detail("canonical-id")
-                    .contains("private receipt write is unconfirmed")
-            );
+            assert!(f.known_detail().contains("couldn't record it"));
             f.confirm(cx);
             f.refresh(cx);
             let read_id = f.request.clone();
@@ -227,14 +224,8 @@ fn known_non_io_receipt_survives_closed_reopen_and_refresh_but_not_a_new_owner(
             state.error = Some("Unrelated later write error");
             f.accept(&state, cx);
             assert!(!f.private_receipt_unconfirmed());
-            assert!(
-                f.known_detail("canonical-id")
-                    .contains("Private state problem: Unrelated later write error")
-            );
-            assert!(
-                !f.known_detail("canonical-id")
-                    .contains("receipt write is unconfirmed")
-            );
+            assert!(f.known_detail().contains("Unrelated later write error"));
+            assert!(!f.known_detail().contains("couldn't record it"));
         })
     })
     .unwrap();

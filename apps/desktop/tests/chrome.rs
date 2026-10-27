@@ -60,7 +60,7 @@ fn main() {
                     assert!(conversation.right() <= px(width + 1.));
                     assert!(conversation.size.width > px(320.));
                     if !matches!(state, PreviewState::Empty) {
-                        let composer = window.find_by_label("Local chat message").bounds();
+                        let composer = window.find_by_label("Message to Pilot").bounds();
                         assert!(composer.size.width > px(240.));
                         assert!(composer.right() <= px(width + 1.));
                         assert!(window.find("local-send").disabled().unwrap_or(false));

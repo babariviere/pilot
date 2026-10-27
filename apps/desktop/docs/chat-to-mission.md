@@ -2,8 +2,9 @@
 
 Use **Make a mission…** in an eligible Local chat. Review the prefilled title,
 optional goal and two explicit choices, then confirm with **Cmd-Return** or the
-button. Return in the goal inserts a newline. Both choices default on, matching
-Swift:
+button. Return in the goal inserts a newline. Coordination defaults on, matching
+Swift. Drafting defaults off (Swift defaults it on) because it sends a message
+and may start agent work, so it is an explicit choice:
 
 - **Use this chat as coordinator** assigns the existing mission role. It does not
   promote the chat's permissions or start a separate coordinator session.
@@ -66,7 +67,7 @@ navigation, interrupted close and restart never resend an unknown attempt.
 - Lost/invalid replies and **all non-201 responses remain uncertain**. In
   particular, observer or response durability errors can happen after COMMIT and
   may map to a generic HTTP400. Non2xx is not generic proof of non-creation.
-- **Check Local** reads the exact source and its mission detail. It shows latest
+- **Check again** reads the exact source and its mission detail. It shows latest
   observed membership only. GET/WS membership is not a durable creation receipt
   or attribution to an unknown request. An unknown attempt remains non-retriable
   even when no current association is found.

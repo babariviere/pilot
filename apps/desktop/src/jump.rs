@@ -199,7 +199,7 @@ impl Catalog {
                 Destination::Home,
                 Kind::Page,
                 "Home".into(),
-                "All projects · overview".into(),
+                "Everything at a glance".into(),
                 vec!["overview".into()],
                 true,
             ),
@@ -208,7 +208,7 @@ impl Catalog {
                 Destination::Inbox,
                 Kind::Page,
                 "Inbox".into(),
-                "Loaded Local attention".into(),
+                "What needs you".into(),
                 vec!["attention".into(), "needs you".into()],
                 true,
             ),
@@ -217,7 +217,7 @@ impl Catalog {
                 Destination::Chats,
                 Kind::Page,
                 "All chats".into(),
-                "Global loaded chat browser".into(),
+                "Every chat, newest first".into(),
                 vec!["conversations".into()],
                 true,
             ),
@@ -233,7 +233,7 @@ impl Catalog {
                 Destination::Overview(p.id.clone()),
                 Kind::Page,
                 format!("{} overview", p.name),
-                "Current project overview".into(),
+                "This project".into(),
                 vec!["project".into()],
                 true,
             ));
@@ -249,7 +249,7 @@ impl Catalog {
                 Destination::Project(p.id.clone()),
                 Kind::Project,
                 p.name.clone(),
-                "Switch project scope".into(),
+                "Show this project's chats".into(),
                 vec!["project".into()],
                 true,
             ));
@@ -271,7 +271,8 @@ impl Catalog {
             } else if !c.writable {
                 "Read-only"
             } else {
-                c.signal_label()
+                // Same words as sidebar rows: a plain idle chat says nothing.
+                c.row_reason().unwrap_or("")
             };
             let suggested =
                 !c.archived && c.writable && s.selected.as_ref() != Some(&c.id) && recent < 3;
@@ -281,7 +282,11 @@ impl Catalog {
                 Destination::Chat(c.id.clone()),
                 Kind::Chat,
                 c.title.clone(),
-                format!("{project} · {state}"),
+                if state.is_empty() {
+                    project.to_string()
+                } else {
+                    format!("{project} · {state}")
+                },
                 vec![project.into(), state.into()],
                 suggested,
             );

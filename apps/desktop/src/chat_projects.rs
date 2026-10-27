@@ -113,7 +113,7 @@ impl ChatEditor {
     }
     pub(super) fn project_problem(&self, draft: &Draft) -> Option<&'static str> {
         if !self.project_catalog.loaded {
-            return Some("Loading Local projects…");
+            return Some("Loading projects…");
         }
         if self.project_catalog.error.is_some() {
             return Some("Local projects are unavailable. Draft and selection are retained.");

@@ -427,7 +427,12 @@ impl Render for WorkView {
                 SharedString::from(format!("work-toggle-{}", self.data.id)),
                 Caption {
                     verb: verb.into(),
-                    subject: subject.into(),
+                    // "Worked · read 1 file", not "Worked read 1 file".
+                    subject: if subject.is_empty() {
+                        String::new()
+                    } else {
+                        format!("· {subject}")
+                    },
                     status,
                     error: self.data.failures > 0,
                     ..Default::default()
@@ -594,8 +599,12 @@ impl StepView {
                         Button::new(SharedString::from(format!("copy-{id}-{label}")))
                             .ghost()
                             .small()
-                            .label("Copy shown text")
                             .icon(AppIcon::Copy.asset())
+                            .accessibility_label(SharedString::from(format!(
+                                "Copy {}",
+                                label.to_lowercase()
+                            )))
+                            .tooltip(SharedString::from(format!("Copy {}", label.to_lowercase())))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
                                     source.as_ref().clone(),

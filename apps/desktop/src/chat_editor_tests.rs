@@ -64,7 +64,7 @@ fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAp
         });
         window.render_frame(cx);
         let handler = ElementInputHandler::new(
-            window.find_by_label("Local chat message").bounds(),
+            window.find_by_label("Message to Pilot").bounds(),
             view.read(cx).text.clone(),
         );
         TestInput::new(handler, window).compose_text(None, "にほん", Some(3..3), cx);
@@ -859,7 +859,7 @@ fn readonly_and_marked_text_cannot_send_from_keyboard_or_pointer(cx: &mut TestAp
         window.render_frame(cx);
         window.input("prefix ", cx);
         let handler = ElementInputHandler::new(
-            window.find_by_label("Local chat message").bounds(),
+            window.find_by_label("Message to Pilot").bounds(),
             view.read(cx).text.clone(),
         );
         let mut input = TestInput::new(handler, window);

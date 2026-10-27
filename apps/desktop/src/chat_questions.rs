@@ -683,15 +683,14 @@ impl ChatEditor {
                     .justify_between()
                     .gap_2()
                     .child(
-                        ui::text(
-                            Text::Caption,
-                            if self.question_accepted() {
-                                "Reply accepted. Waiting for the conversation."
-                            } else {
-                                "Message draft kept separately."
-                            },
-                        )
-                        .text_color(cx.theme().muted_foreground),
+                        // Routine draft handling stays silent; only a sent reply speaks.
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .children(self.question_accepted().then(|| {
+                                ui::text(Text::Caption, "Reply sent. Waiting for the agent.")
+                                    .text_color(cx.theme().muted_foreground)
+                            })),
                     )
                     .child(
                         ui::action("answer-question", "Reply", Action::Primary)

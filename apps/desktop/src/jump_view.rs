@@ -385,11 +385,11 @@ impl Render for JumpPalette {
                     .child(if !self.ready {
                         "Updating matches…"
                     } else if self.source.projects_error {
-                        "Project list unavailable · showing loaded resources"
+                        "Couldn't refresh projects · showing the last list"
                     } else if !self.source.loaded {
-                        "Chat list loading · showing loaded resources"
+                        "Loading chats…"
                     } else {
-                        "↑↓ choose · Enter open · Esc close · Loaded Local resources only"
+                        "↑↓ to move · Return to open · Esc to close"
                     }),
             )
             .focus_trap("jump-palette", &self.focus)

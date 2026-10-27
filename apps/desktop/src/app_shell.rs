@@ -27,6 +27,8 @@ pub(crate) enum ShellEvent {
     Project(String),
     Chat(String),
     AllChats,
+    NewChat,
+    AddProject,
 }
 pub(crate) struct OverviewInput {
     pub(crate) projects: Arc<Vec<Project>>,
@@ -96,7 +98,7 @@ impl ProjectList {
     pub(crate) fn new() -> Self {
         Self {
             all: Arc::new(Vec::new()),
-            empty_label: "Loading Local projects…",
+            empty_label: "Loading projects…",
             selected: None,
             index: None,
         }
@@ -365,11 +367,22 @@ impl Overview {
                     .text_size(px(TextRole::BODY))
                     .text_color(cx.theme().muted_foreground)
                     .child(if !self.projects_loaded {
-                        "Loading Local projects…"
+                        "Loading projects…"
                     } else {
-                        "No projects configured. Existing chats remain in All chats."
+                        "No projects yet. Add a folder to group its chats."
                     }),
             );
+            if self.projects_loaded {
+                section = section.child(
+                    crate::ui::action(
+                        "home-add-project",
+                        "Add project…",
+                        crate::ui::Action::Secondary,
+                    )
+                    .self_start()
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellEvent::AddProject))),
+                );
+            }
         }
         for ix in &self.project_rows {
             let p = &self.projects[*ix];
@@ -405,7 +418,7 @@ impl Overview {
                 div()
                     .text_size(px(TextRole::CAPTION))
                     .text_color(cx.theme().muted_foreground)
-                    .child("All projects are available from the sidebar scope chooser."),
+                    .child("Choose any project from the sidebar."),
             );
         }
         section
@@ -443,13 +456,23 @@ impl Overview {
                     .text_size(px(TextRole::BODY))
                     .text_color(cx.theme().muted_foreground)
                     .child(if !self.chats_loaded {
-                        "Loading Local chats…"
+                        "Loading chats…"
                     } else if working {
-                        "No working chats in this view."
+                        "Nothing is running."
+                    } else if self.project.is_some() {
+                        "No chats in this project yet."
                     } else {
-                        "No loaded chats in this view."
+                        "No chats yet."
                     }),
             );
+            // An empty Home leads to its one primary action.
+            if !working && self.chats_loaded && self.chats.is_empty() {
+                section = section.child(
+                    crate::ui::action("home-new-chat", "New chat", crate::ui::Action::Primary)
+                        .self_start()
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellEvent::NewChat))),
+                );
+            }
         }
         for ix in &rows {
             section = section.child(
@@ -512,14 +535,14 @@ impl Render for Overview {
                 .text_color(cx.theme().muted_foreground)
                 .tooltip(|w, cx| {
                     gpui_kit::component::tooltip::Tooltip::new(
-                        "Loaded Local chat summaries, not full dashboard totals.",
+                        "Counts cover the chats loaded in this window.",
                     )
                     .build(w, cx)
                 })
                 .child(if self.chats_loaded {
                     counts.line()
                 } else {
-                    "Loading Local chats…".into()
+                    "Loading chats…".into()
                 })
                 .test_support(),
         );
@@ -534,7 +557,15 @@ impl Render for Overview {
         }
         let mut body = crate::ui::page().child(header);
         if self.project.is_some() && project.is_none() {
-            body=body.child(div().text_size(px(TextRole::BODY)).child(if self.projects_loaded {"This project is not in the current catalog. Its folder and chats are unchanged."}else{"Waiting for the Local project catalog…"}));
+            body = body.child(
+                div()
+                    .text_size(px(TextRole::BODY))
+                    .child(if self.projects_loaded {
+                        "This project is no longer listed. Its folder and chats are unchanged."
+                    } else {
+                        "Loading projects…"
+                    }),
+            );
         } else {
             if self.project.is_none() {
                 body = body.child(self.projects_section(w, cx));
@@ -543,7 +574,11 @@ impl Render for Overview {
                 .child(self.chat_section(w, true, cx))
                 .child(self.chat_section(w, false, cx));
         }
-        body=body.child(crate::ui::action("home-all-chats", "All chats", crate::ui::Action::Quiet).self_start().on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))));
+        body = body.child(
+            crate::ui::action("home-all-chats", "All chats", crate::ui::Action::Quiet)
+                .self_start()
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellEvent::AllChats))),
+        );
         div()
             .v_flex()
             .size_full()
@@ -752,7 +787,11 @@ mod workbench_tests {
             "unknown/quiet fallback is not an invented completion"
         );
         chat.state = "idle".into();
-        assert_eq!(chat_row_detail(&chat, &projects, false), "", "plain idle says nothing");
+        assert_eq!(
+            chat_row_detail(&chat, &projects, false),
+            "",
+            "plain idle says nothing"
+        );
     }
     #[gpui_kit::test]
     fn home_row_context_preserves_mounted_frame_and_exact_pointer_activation(

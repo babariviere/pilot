@@ -142,7 +142,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                 let status = w.find("delivery-recovery-status");
                 assert_eq!(
                     status.label(),
-                    Some("Delivery unknown. Check before retrying.")
+                    Some("Couldn't confirm this message was sent.")
                 );
                 assert!(status.bounds().bottom() < tray.top());
                 assert_eq!(w.find("local-send").disabled(), Some(true));
@@ -351,7 +351,7 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     } else {
                         assert_eq!(
                             w.find("delivery-recovery-status").label(),
-                            Some("Delivery rejected. Edit the draft before trying again.")
+                            Some("This message wasn't sent. Edit it and send again.")
                         );
                         assert!(w.find("composer-recovery").visible());
                         assert_eq!(

@@ -407,7 +407,8 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                         "A goal captured from the live native editor."
                     );
                     assert_eq!(s.posts[0]["coordinator"], mode != ThemeMode::Dark);
-                    assert_eq!(s.posts[0]["draft"], mode != ThemeMode::Dark);
+                    // Drafting is opt-in; dark mode toggles it on.
+                    assert_eq!(s.posts[0]["draft"], mode == ThemeMode::Dark);
                 }
                 settle(cx, handle);
                 cx.update_window(handle, |_, w, cx| {

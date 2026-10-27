@@ -24,14 +24,11 @@ const SUMMARY_CAP: usize = 1000;
 fn empty_copy(loaded: bool) -> (&'static str, &'static str) {
     if loaded {
         (
-            "Nothing to act on in these chats",
-            "No supported attention in the loaded Local chats for this scope.",
+            "Nothing needs you",
+            "Chats that fail, ask a question or are ready to merge show up here.",
         )
     } else {
-        (
-            "Loading Local chats",
-            "Supported chat attention will appear here when summaries arrive.",
-        )
+        ("Loading chats…", "")
     }
 }
 pub(crate) struct InboxInput {
@@ -182,6 +179,10 @@ impl ListDelegate for InboxList {
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
         let (title, detail) = empty_copy(self.loaded);
+        let mut notice = Notice::new(title).tone(Tone::Quiet);
+        if !detail.is_empty() {
+            notice = notice.detail(detail);
+        }
         div()
             .id("inbox-empty-state")
             .test_support()
@@ -191,7 +192,7 @@ impl ListDelegate for InboxList {
             .p(px(Space::SIDEBAR))
             .text_color(cx.theme().muted_foreground)
             .child(AppIcon::Inbox.icon())
-            .child(Notice::new(title).detail(detail).tone(Tone::Quiet))
+            .child(notice)
     }
     fn render_item(
         &mut self,
@@ -472,21 +473,19 @@ impl Render for Inbox {
                 .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()
                 // Coverage caveat lives in the title tooltip, not as permanent copy.
                 .child(div().id("inbox-scope-note").test_support().flex_1().min_w_0()
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Loaded Local chats and ready primary PRs. Opening a chat does not mark it reviewed.").build(w, cx))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Chats that need you and pull requests ready to merge. Opening a chat doesn't mark it reviewed.").build(w, cx))
                     .child(ui::heading("inbox-title", "Inbox", Text::Title)))
                 // Select's refinement sizes the inner input, not its Base wrapper.
                 // Bound both so native hit testing matches the visible control.
                 .child(div().w(px(220.)).min_w(px(220.)).max_w(px(220.)).child(Select::new(&self.picker).id("inbox-project-filter").small().w_full().focus_ring(false).menu_max_h(px(300.)).accessibility_label("Inbox project filter").search_placeholder("Find a project…")))))
-            .when(missing || self.projects_error, |this| this.child(
+            // A failed project refresh is reported once, beside the sidebar's
+            // project chooser. Only a filter whose project vanished is page-specific.
+            .when(missing, |this| this.child(
                 div().id("inbox-project-notice").test_support().h_flex().items_start().gap(px(Space::CONTROL))
                     .child(AppIcon::Error.inline().text_color(cx.theme().danger))
                     .child(div().v_flex().min_w_0().gap(px(Space::META))
-                        .child(Notice::new(if missing { "Project unavailable" } else { "Couldn't refresh projects" }).tone(Tone::Error))
-                        .child(ui::text(Text::Caption, if missing {
-                            "This exact filter is retained. Choose another project to change scope."
-                        } else {
-                            "Last received names and exact filters are retained. Loaded chats remain available."
-                        }).text_color(cx.theme().muted_foreground)))))
+                        .child(Notice::new("This project is no longer available").tone(Tone::Error))
+                        .child(ui::text(Text::Caption, "Choose another project to see its chats.").text_color(cx.theme().muted_foreground)))))
             .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list)))
     }
 }
@@ -498,8 +497,7 @@ mod tests {
     #[test]
     fn empty_and_loading_copy_keep_the_loaded_scope_boundary() {
         assert_ne!(empty_copy(true), empty_copy(false));
-        assert!(empty_copy(true).0.contains("these chats"));
-        assert!(empty_copy(true).1.contains("loaded Local chats"));
+        assert!(empty_copy(true).0.contains("Nothing needs you"));
         assert!(empty_copy(false).0.contains("Loading"));
         assert!(!empty_copy(true).0.contains("caught up"));
     }
@@ -577,7 +575,10 @@ mod tests {
                 let filter = w.find("inbox-project-filter").bounds();
                 let note = w.find("inbox-scope-note").bounds();
                 assert_eq!(filter.size.width, px(220.));
-                assert!(w.try_find("inbox-availability-note").is_none(), "no permanent coverage footer");
+                assert!(
+                    w.try_find("inbox-availability-note").is_none(),
+                    "no permanent coverage footer"
+                );
                 for bounds in [filter, note] {
                     assert!(bounds.left() >= pane.left() && bounds.right() <= pane.right());
                     assert!(bounds.bottom() <= pane.bottom());

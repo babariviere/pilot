@@ -57,7 +57,7 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
     {
         return (signal == Some(Signal::Ready)).then(|| Attention {
             kind: Kind::Ready,
-            label: "Ready to merge · reported by GitHub".into(),
+            label: "Ready to merge".into(),
         });
     }
     let detail = first_line(&value["attentionReason"]["detail"]);
@@ -99,7 +99,7 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
             with_detail("Mission", "A question or blocked task is waiting on you"),
         ),
         "limit" => (Kind::Other, "Limit reached".into()),
-        "not_reviewed" => (Kind::Other, "Not reviewed · reported by Local".into()),
+        "not_reviewed" => (Kind::Other, "Not reviewed".into()),
         _ => (Kind::Other, String::new()),
     };
     if live {
@@ -116,7 +116,7 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
         Some(Signal::Ready) => {
             return Some(Attention {
                 kind: Kind::Ready,
-                label: "Ready to merge · reported by GitHub".into(),
+                label: "Ready to merge".into(),
             });
         }
         _ if !label.is_empty() => explicit_kind,

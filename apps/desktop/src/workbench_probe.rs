@@ -451,12 +451,12 @@ fn chooser_checks(
     fixture: (Arc<Vec<crate::local_model::Project>>, Arc<Vec<Chat>>),
 ) {
     for (loaded, error, label) in [
-        (false, None, "Loading Local projects…"),
-        (true, None, "No configured projects"),
+        (false, None, "Loading projects…"),
+        (true, None, "No projects yet"),
         (
             true,
             Some("Synthetic project error"),
-            "Project list unavailable",
+            "Couldn't load projects",
         ),
     ] {
         cx.update_window(h, |_, w, cx| {

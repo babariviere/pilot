@@ -87,6 +87,8 @@ pub(crate) struct ChatEditor {
     error: Option<&'static str>,
     closing: bool,
     update_checkpoint: Option<u64>,
+    /// The editor's current placeholder, so render updates it only on change.
+    placeholder: &'static str,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<EditorEvent> for ChatEditor {}
@@ -99,7 +101,7 @@ impl ChatEditor {
     ) -> Self {
         let text = cx.new(|cx| {
             let mut state = TextareaState::new(window, cx)
-                .placeholder("Message Local chat…")
+                .placeholder("Reply to Pilot…")
                 .auto_grow(1, 6);
             state.set_submit_on_enter(true, cx);
             state
@@ -165,6 +167,7 @@ impl ChatEditor {
             error: None,
             closing: false,
             update_checkpoint: None,
+            placeholder: "Reply to Pilot…",
             _subscriptions: vec![text_events, cwd_events, question_events, path_watch],
         }
     }
@@ -263,7 +266,7 @@ impl ChatEditor {
                     if draft.created.is_some() {
                         "Created chat, draft kept".into()
                     } else if preview.is_empty() {
-                        "New Local chat draft".into()
+                        "New chat".into()
                     } else {
                         preview
                     },
@@ -666,7 +669,7 @@ impl ChatEditor {
         .rounded_full()
         .size_6()
         .tooltip(if self.waiting() {
-            "Waiting for Local action. Stop is unavailable."
+            "Waiting for the last action to finish. Stop is unavailable until then."
         } else {
             "Stop current work. Withdrawn queued text is kept for recovery."
         })
@@ -960,9 +963,24 @@ impl Render for ChatEditor {
             }
             return empty.into_any_element();
         };
+        let is_new = key.starts_with("new:");
+        // The placeholder states what typing does here, including read-only.
+        let placeholder = if !self.writable {
+            "This chat is read-only."
+        } else if is_new {
+            "Describe the task…"
+        } else if self.busy {
+            "Steer the agent…"
+        } else {
+            "Reply to Pilot…"
+        };
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            self.text
+                .update(cx, |text, cx| text.set_placeholder(placeholder, window, cx));
+        }
         let blank = Draft::default();
         let draft = self.draft().unwrap_or(&blank);
-        let is_new = key.starts_with("new:");
         let can_edit = self.writable && self.state.book.is_some() && !self.closing;
         let blocked = !self.ready() || !self.writable || self.waiting() || self.error.is_some();
         let submitting = self.pending.contains_key(&key);
@@ -1075,7 +1093,7 @@ impl Render for ChatEditor {
                     .appearance(false)
                     .bordered(false)
                     .readonly(!can_edit)
-                    .aria_label("Local chat message"),
+                    .aria_label("Message to Pilot"),
             );
         #[cfg(any(test, feature = "native-probes"))]
         let input = input.test_support();
@@ -1108,12 +1126,11 @@ impl Render for ChatEditor {
                     .text_color(cx.theme().muted_foreground)
                     .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
                     // Routine autosave is silent; only states that block sending speak.
-                    .children((submitting || (self.models.is_none() && (self.closing || !self.writable))).then_some(if submitting {
-                        "Waiting for Local action…"
-                    } else if self.closing {
-                        "Saving before closing…"
+                    // Read-only is said by the placeholder, not repeated here.
+                    .children((submitting || (self.models.is_none() && self.closing)).then_some(if submitting {
+                        "Sending…"
                     } else {
-                        "This chat is read-only."
+                        "Saving before closing…"
                     })),
             )
             .child(
@@ -1180,29 +1197,34 @@ impl Render for ChatEditor {
             );
         }
         let delivery_status = if let Some(intent) = pending {
-            Some(if intent.state == "pending" {
-                "Delivery pending."
+            Some(if intent.operation.is_none() {
+                "Couldn't confirm that Stop reached the agent."
+            } else if intent.state == "pending" {
+                "Sending…"
             } else {
-                "Delivery unknown. Check before retrying."
+                "Couldn't confirm this message was sent."
             })
         } else if draft
             .last
             .as_ref()
             .is_some_and(|last| last.state == "rejected")
         {
-            Some("Delivery rejected. Edit the draft before trying again.")
+            Some("This message wasn't sent. Edit it and send again.")
         } else {
             None
         };
-        if let Some(message) = delivery_status {
+        // The message and its Resolve menu share one row, so the action reads
+        // as belonging to the message rather than as a separate toolbar.
+        let status = delivery_status.map(|message| {
             let status = div()
                 .id("delivery-recovery-status")
+                .min_w_0()
                 .aria_label(message)
                 .child(crate::ui::text(crate::ui::Text::Caption, message));
             #[cfg(any(test, feature = "native-probes"))]
             let status = status.test_support();
-            recovery.push(status.into_any_element());
-        }
+            status
+        });
         // Reports remain retained; transport and receipt detail is available
         // only inside contextual Recovery, never as successful-send chatter.
         let delivery_id = draft
@@ -1227,15 +1249,30 @@ impl Render for ChatEditor {
                     .into_any_element(),
             );
         }
-        if draft.pending.is_some()
+        let show_menu = draft.pending.is_some()
             || draft.created.is_some()
             || !draft.recovered.is_empty()
             || draft
                 .last
                 .as_ref()
-                .is_some_and(|last| last.state == "rejected")
-        {
-            recovery.push(self.recovery_menu(&key, window, cx).into_any_element());
+                .is_some_and(|last| last.state == "rejected");
+        let menu = if show_menu {
+            Some(self.recovery_menu(&key, window, cx).into_any_element())
+        } else {
+            None
+        };
+        if status.is_some() || menu.is_some() {
+            recovery.push(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .min_w_0()
+                    .children(status)
+                    .children(menu)
+                    .into_any_element(),
+            );
         }
         let mut shell = div().v_flex().min_w_0().gap_1().mx_3().mb_3().mt(px(6.));
         if is_new {
@@ -1266,7 +1303,8 @@ impl Render for ChatEditor {
                     .v_flex()
                     .min_w_0()
                     // Same inset as the working line, so recovery reads as one column.
-                    .px(px(10.))
+                    // New chat has no working line: align with its setup text instead.
+                    .px(px(if is_new { 0. } else { 10. }))
                     .gap_2()
                     .children(recovery);
                 #[cfg(any(test, feature = "native-probes"))]

@@ -11,7 +11,7 @@ There is no new typography, theme, per-control timer or alternate persistence la
 
 Settings… or Cmd-comma retains the active chat, reader and composer. Scoped models loads
 on explicit category selection. Cmd-S invokes the same guarded Save as its button;
-Check Local is read-only. A confirmed Use current pi values discards the unsaved selection
+Check again is read-only. A confirmed Use current pi values discards the unsaved selection
 and adopts the last observed list without writing or asserting an earlier write failed.
 Unsaved/pending/unconfirmed changes block managed close and quit. Native marked text
 guards Save, Check, adoption, category/close and pointer paths. The model owner and inputs

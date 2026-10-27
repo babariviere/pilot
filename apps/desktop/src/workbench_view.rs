@@ -202,7 +202,7 @@ impl LocalViewer {
                         .on_click(cx.listener(|v,_,w,cx|v.show_home(w,cx))))
                     .child(crate::ui::icon_action("new-local-chat","New chat (⌘N)",AppIcon::NewChat,crate::ui::Action::Quiet)
                         .size_8().flex_shrink_0().disabled(!self.editor.read(cx).ready())
-                        .tooltip("New Local chat (⌘N). Choose its working folder explicitly; browse scope never chooses it.")
+                        .tooltip("New chat (⌘N)")
                         .on_click(cx.listener(|v,_,w,cx|v.new_chat(w,cx)))))
                 .child(sidebar_row("nav-inbox","Inbox",AppIcon::Inbox).selected(matches!(self.page,Page::Inbox(_)))
                     .on_click(cx.listener(|v,_,w,cx|v.show_inbox(v.project_scope.clone(),w,cx))))
@@ -212,15 +212,15 @@ impl LocalViewer {
             .child(div().v_flex().px(px(Space::SIDEBAR)).pt_3().gap_0p5().flex_shrink_0()
                 .child(Button::new("project-scope").ghost().small().w_full().min_w_0().h_8().px_2().justify_start()
                     .selected(self.projects_open)
-                    .accessibility_label(SharedString::from(format!("Project scope: {scope}. Choose projects or Add project")))
-                    .tooltip("Choose a browse scope. Open, then Tab for Add project. Escape closes choices. New-chat folders are separate.")
+                    .accessibility_label(SharedString::from(format!("Showing {scope}. Choose a project or add one")))
+                    .tooltip("Choose which project's chats to show")
                     .child(nav_label("project-scope-title", SharedString::from(scope),if self.project_scope.is_some(){AppIcon::Project}else{AppIcon::Projects})
                         .child(gpui_kit::component::Icon::new(if self.projects_open{IconName::ChevronUp}else{IconName::ChevronDown}).small().flex_shrink_0()))
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_projects(w,cx))))
                 .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0().py_1()
                     .child(div().h(px((self.state.projects.len().min(5)as f32*28.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects)))
                     .child(sidebar_row("add-project","Add project…",AppIcon::AddProject)
-                        .tooltip("Add a Local project. Choose a folder, then explicitly confirm. Opening this form never creates a project.")
+                        .tooltip("Add a folder as a project")
                         .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|{
                             if !v.project_choices_ready(w,cx){return;}
                             // The selector list unmounts as the sheet opens.
@@ -228,7 +228,11 @@ impl LocalViewer {
                             v.chats.update(cx,|l,cx|l.focus(w,cx));
                             v.open_add_project(w,cx);
                         })))))
-                .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().px_2().py_1().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Project list unavailable · last loaded choices retained")))
+                // The one place a failed project refresh is reported.
+                .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().id("projects-refresh-problem").h_flex().gap_1().px_2().py_1().min_w_0()
+                    .text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground)
+                    .child(AppIcon::Error.inline().text_color(cx.theme().danger))
+                    .child(div().min_w_0().truncate().child("Couldn't refresh projects"))))
                 .when(self.project_scope.is_some(),|this|this.child(sidebar_row("project-overview","Overview",AppIcon::Overview)
                     .selected(matches!(&self.page,Page::Project(id) if self.project_scope.as_ref()==Some(id)))
                     .on_click(cx.listener(|v,_,w,cx|{if let Some(id)=v.project_scope.clone(){v.show_project(id,w,cx);}}))))
@@ -243,7 +247,10 @@ impl LocalViewer {
             .child(self.chat_actions.clone())
             // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()
-                .child(sidebar_row("sidebar-jump","Jump to…",AppIcon::Search).flex_1().tooltip("Jump to a page, project or chat (⌘K)")
+                // A narrow sidebar with history has no room for the words: keep
+                // the glyph rather than truncating the label to a bare ellipsis.
+                .child(sidebar_row("sidebar-jump",if width<px(200.)&&(self.navigation.can_move(false)||self.navigation.can_move(true)){""}else{"Jump to…"},AppIcon::Search)
+                    .flex_1().accessibility_label("Jump to…").tooltip("Jump to a page, project or chat (⌘K)")
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
                 .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()
                     .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))

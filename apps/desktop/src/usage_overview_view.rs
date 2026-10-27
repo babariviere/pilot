@@ -67,7 +67,7 @@ impl Usage {
                     self.reader = Some(reader);
                     self.updates=Some(cx.spawn_in(w,async move |view,cx|{
                         while let Ok(response)=output.recv().await {if view.update(cx,|v,cx|v.accept(response,cx)).is_err(){return;}}
-                        let _=view.update(cx,|v,cx|{v.reader=None;v.state.serial+=1;v.state.busy=false;v.state.error=Some("Local usage reader stopped. Any retained values are a dated snapshot. Refresh to retry.");cx.notify();});
+                        let _=view.update(cx,|v,cx|{v.reader=None;v.state.serial+=1;v.state.busy=false;v.state.error=Some("Couldn't update usage. Showing the last values; refresh to try again.");cx.notify();});
                     }));
                 }
             }

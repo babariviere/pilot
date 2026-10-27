@@ -318,7 +318,10 @@ impl ListDelegate for ChatList {
                                         .group_hover("chat-row", |s| s.opacity(1.))
                                         .child(
                                             crate::ui::icon_action(
-                                                SharedString::from(format!("chat-menu-{}", chat.id)),
+                                                SharedString::from(format!(
+                                                    "chat-menu-{}",
+                                                    chat.id
+                                                )),
                                                 "Chat actions",
                                                 AppIcon::More,
                                                 crate::ui::Action::Quiet,
@@ -337,28 +340,38 @@ impl ListDelegate for ChatList {
                                         ),
                                 ),
                         )
-                        .when(!detail.is_empty(), |row| row.child(
-                            div()
-                                .id("sidebar-chat-detail")
-                                .test_support()
-                                .h_flex()
-                                .min_w_0()
-                                // Text lane: the line fades out before the state corner.
-                                .when(has_corner, |d| d.pr(px(appearance::Space::SECTION)))
-                                .text_size(px(appearance::TextRole::CAPTION))
-                                .text_color(cx.theme().muted_foreground)
-                                // A long project name yields before the state reason.
-                                .children(project.map(|p| {
-                                    div()
-                                        .min_w_0()
-                                        .flex_shrink(16.)
-                                        .truncate()
-                                        .child(SharedString::from(if state.is_empty() { p } else { format!("{p} · ") }))
-                                }))
-                                .when(!state.is_empty(), |d| {
-                                    d.child(div().flex_shrink_0().max_w(gpui_kit::relative(0.7)).truncate().child(SharedString::from(state.clone())))
-                                }),
-                        ))
+                        .when(!detail.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .id("sidebar-chat-detail")
+                                    .test_support()
+                                    .h_flex()
+                                    .min_w_0()
+                                    // Text lane: the line fades out before the state corner.
+                                    .when(has_corner, |d| d.pr(px(appearance::Space::SECTION)))
+                                    .text_size(px(appearance::TextRole::CAPTION))
+                                    .text_color(cx.theme().muted_foreground)
+                                    // A long project name yields before the state reason.
+                                    .children(project.map(|p| {
+                                        div().min_w_0().flex_shrink(16.).truncate().child(
+                                            SharedString::from(if state.is_empty() {
+                                                p
+                                            } else {
+                                                format!("{p} · ")
+                                            }),
+                                        )
+                                    }))
+                                    .when(!state.is_empty(), |d| {
+                                        d.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .max_w(gpui_kit::relative(0.7))
+                                                .truncate()
+                                                .child(SharedString::from(state.clone())),
+                                        )
+                                    }),
+                            )
+                        })
                         .context_menu(move |menu, w, cx| {
                             LocalViewer::chat_actions_menu(
                                 menu_owner.clone(),
@@ -407,7 +420,7 @@ impl ListDelegate for ChatList {
                     .child(if !self.loaded {
                         "Loading chats…"
                     } else if self.all.is_empty() {
-                        "No Local chats yet."
+                        "No chats yet."
                     } else {
                         "No matching chats."
                     }),
@@ -1110,6 +1123,12 @@ impl LocalViewer {
                 |view, _, event, window, cx| match event {
                     ShellEvent::Project(id) => view.show_project(id.clone(), window, cx),
                     ShellEvent::AllChats => view.show_chats(window, cx),
+                    ShellEvent::NewChat => view.new_chat(window, cx),
+                    ShellEvent::AddProject => {
+                        if view.writer.is_some() {
+                            view.open_add_project(window, cx);
+                        }
+                    }
                     ShellEvent::Chat(id) => {
                         if let Some(chat) = view.state.chats.iter().find(|c| &c.id == id).cloned() {
                             view.open(chat, window, cx);
@@ -1487,7 +1506,7 @@ impl LocalViewer {
             self.page = Page::Chat;
             self.nav_error = None;
             self.clear_chat(cx);
-            self.title = "New Local chat draft".into();
+            self.title = "New chat".into();
             self.editor.update(cx, |editor, cx| {
                 editor.select(chat.id, true, false, window, cx)
             });
@@ -1930,11 +1949,11 @@ impl LocalViewer {
             });
         }
         let empty_label = if self.state.projects_error.is_some() {
-            "Project list unavailable"
+            "Couldn't load projects"
         } else if !self.state.projects_loaded {
-            "Loading Local projects…"
+            "Loading projects…"
         } else {
-            "No configured projects"
+            "No projects yet"
         };
         let projects_changed = !Arc::ptr_eq(&self.nav_projects, &self.state.projects)
             || self.projects.read(cx).delegate().selected != self.project_scope;
@@ -2069,7 +2088,10 @@ impl Render for LocalViewer {
             .map(|p| p.name.clone());
         let header_meta = project
             .into_iter()
-            .chain((!history_status.is_empty() && history_status != "Connected · Local").then(|| history_status.to_owned()))
+            .chain(
+                (!history_status.is_empty() && history_status != "Connected · Local")
+                    .then(|| history_status.to_owned()),
+            )
             .collect::<Vec<_>>()
             .join(" · ");
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()

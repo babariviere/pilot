@@ -45,9 +45,11 @@ impl LocalViewer {
                     .chat_actions
                     .read(cx)
                     .target(chat.clone())
-                    .ok_or("Local chat actions are unavailable.")?;
+                    .ok_or("Chat actions aren't available right now.")?;
                 if !v.chat_action_ready(&target, w, cx) {
-                    return Err("Chat actions are unavailable. Check Local and reopen this menu.");
+                    return Err(
+                        "Chat actions aren't available right now. Reopen this menu to try again.",
+                    );
                 }
                 let known_ack = v.chat_actions.read(cx).inspection_ack(&target.chat.id);
                 let rx = v
@@ -55,7 +57,7 @@ impl LocalViewer {
                     .read(cx)
                     .worker
                     .as_ref()
-                    .ok_or("Local chat actions are unavailable.")?
+                    .ok_or("Chat actions aren't available right now.")?
                     .inspect(target)?;
                 Ok((rx, known_ack))
             })
@@ -68,7 +70,7 @@ impl LocalViewer {
             let result = rx
                 .recv()
                 .await
-                .unwrap_or(Err("Local chat actions are unavailable."));
+                .unwrap_or(Err("Chat actions aren't available right now."));
             let _ = popup.update_in(cx, |popup, w, cx| {
                 popup.rebuild(w, cx, |menu, _, cx| match result {
                     Err(error) => menu.item(PopupMenuItem::new(error).disabled(true)),

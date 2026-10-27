@@ -130,7 +130,7 @@ pub(crate) async fn read(
         .get(format!("{}/api/model-scope", options.loopback()))
         .send()
         .await
-        .map_err(|_| "Local scoped models unavailable. Check Local explicitly to retry.")?;
+        .map_err(|_| "Couldn't load scoped models. Check again to retry.")?;
     if r.status() != reqwest::StatusCode::OK {
         return Err(status(r.status().as_u16()));
     }
@@ -154,14 +154,12 @@ fn status(code: u16) -> Failure {
         403 => {
             "Scoped-model changes are read-only or require native authorization. No fallback is used."
         }
-        409 => {
-            "Changed in pi. Your selection is retained; Check Local and review before saving again."
-        }
+        409 => "Changed elsewhere. Your selection is kept; check again and review before saving.",
         400 => "Local rejected the literal model selection. Review it before saving again.",
         422 | 503 => {
-            "Global pi settings could not be read or changed. Check Local; the write outcome may be unconfirmed."
+            "Couldn't read or save scoped models. Check again; the last save may not have applied."
         }
-        _ => "Local model-scope request failed. Check Local; no automatic write retry.",
+        _ => "Couldn't save scoped models. Check again before saving.",
     }
 }
 pub(crate) async fn save(client: &reqwest::Client, options: &LocalOptions, request: Save) -> Reply {
@@ -204,17 +202,13 @@ pub(crate) async fn save(client: &reqwest::Client, options: &LocalOptions, reque
         .send()
         .await;
     let problem = match response {
-        Err(_) => Some(
-            "Scoped-model response was lost. Check Local to verify the current value; no write is automatically retried.",
-        ),
+        Err(_) => Some("Couldn't confirm the save. Check again to see the current value."),
         Ok(response) if response.status() != reqwest::StatusCode::OK => {
             Some(status(response.status().as_u16()))
         }
         Ok(response) => match body(response).await {
             Ok(v) if v["changed"].is_boolean() && v["scopeHash"].as_str().is_some() => None,
-            _ => {
-                Some("Scoped-model acknowledgment was incomplete. Check Local before another save.")
-            }
+            _ => Some("Couldn't confirm the save. Check again before saving."),
         },
     };
     // Both changed:true and changed:false require literal GET readback. Even

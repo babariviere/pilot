@@ -30,9 +30,10 @@ ordinary Option-Return handler is scoped only to the ordinary textarea.
 
 Ordinary unsent drafts have no Discard or recovery toolbar. Only an unresolved
 delivery, unadopted created chat, rejected result or separately recovered text
-reveals a quiet **Recovery…** entry. Errors and Unknown delivery status remain
-visible without opening it. The native popover contains only relevant explicit
-actions: Check/Retry for operation-backed delivery, acknowledgment for uncertain
+reveals a quiet **Resolve…** entry on the same row as its plain status line
+("Couldn't confirm this message was sent."). Errors and Unknown delivery status
+remain visible without opening it. The native popover contains only relevant explicit
+actions: Check and Send again for operation-backed delivery, Dismiss for uncertain
 Stop, open a created chat, copy/remove recovered text, and guarded ordinary-draft
 Discard. Opening/dismissing it never executes an operation. Tab/Space opens it;
 Escape restores the previous mounted focus. Actions keep the original captured

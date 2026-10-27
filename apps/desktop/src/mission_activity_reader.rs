@@ -143,13 +143,13 @@ async fn get(
         .get(format!("{}{path}", options.loopback()))
         .send()
         .await
-        .map_err(|_| "Mission read failed. Check Local availability and retry.")?;
+        .map_err(|_| "Couldn't load this mission. Refresh to try again.")?;
     match r.status().as_u16() {
         200 => {}
         404 | 405 => {
             return Err("This mission read is unavailable or unsupported by the Local daemon.");
         }
-        503 => return Err("Local mission service is unavailable. Retry explicitly."),
+        503 => return Err("Missions aren't available right now. Refresh to try again."),
         _ => {
             return Err(
                 "Mission read refused. No authentication, redirect or host fallback was attempted.",

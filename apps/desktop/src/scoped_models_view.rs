@@ -311,8 +311,7 @@ impl ScopedModels {
             Err(error) => {
                 self.problem = Some(error);
                 self.unconfirmed |= reply.attempted;
-                self.status =
-                    "Current scope could not be verified. Edits are retained; no automatic retry.";
+                self.status = "Couldn't confirm the current models. Your edits are kept.";
             }
             Ok(snapshot) => {
                 let matches = self
@@ -463,7 +462,7 @@ impl Render for ScopedModels {
             .child(ui::text(Text::Caption,"Project overrides, default models, sign-ins and running chats remain unchanged."))
             .child(div().h_flex().gap_2().flex_wrap()
                 .child(ui::action("scope-save","Save changes",Action::Primary).disabled(!editable || !self.unsettled(cx) || error.is_some()).on_click(cx.listener(|v,_,w,cx|v.save(w,cx))))
-                .child(ui::action("scope-check","Check Local",Action::Quiet).disabled(self.source.is_none()||self.busy).on_click(cx.listener(|v,_,w,cx|v.check(w,cx))))
+                .child(ui::action("scope-check","Check again",Action::Quiet).disabled(self.source.is_none()||self.busy).on_click(cx.listener(|v,_,w,cx|v.check(w,cx))))
                 .child(ui::action("scope-revert",if self.confirm_revert{"Confirm use current pi values"}else{"Use current pi values"},Action::Secondary).disabled(self.observed.is_none()||self.busy).on_click(cx.listener(|v,_,w,cx|v.revert(w,cx)))))
             .child(Notice::new(self.status).tone(if self.unconfirmed{Tone::Warning}else{Tone::Quiet}))
             .children(self.problem.map(|error|Notice::new(error).tone(Tone::Error)))

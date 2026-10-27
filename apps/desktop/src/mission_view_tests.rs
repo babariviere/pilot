@@ -92,8 +92,11 @@ fn explicit_form_captures_native_text_choices_and_double_confirm_once(cx: &mut T
     let (handle, form, commands) = setup(cx);
     cx.update_window(handle, |_, w, cx| {
         w.render_frame(cx);
+        assert!(
+            !form.read(cx).draft,
+            "Drafting sends a message, so it is opt-in"
+        );
         w.click("mission-coordinator", cx);
-        w.click("mission-draft", cx);
         let title = form.read(cx).title.clone();
         title.update(cx, |input, cx| input.focus(w, cx));
         w.press("secondary-a", cx);

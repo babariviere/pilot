@@ -50,30 +50,23 @@ impl LocalViewer {
         let disconnected =
             self.state.status != "Connected · Local" && !self.state.status.starts_with("Synthetic");
         let title = if historical {
-            "Previously reported failure"
+            "Earlier failure"
         } else if failure.startup {
-            "Chat could not start"
+            "This chat couldn't start"
         } else {
-            "Last reported failure"
+            "This chat failed"
         };
-        let provenance = format!(
-            "{}{}{}",
-            failure.source,
-            if failure.at.is_none() {
-                " · completion time not reported"
-            } else {
-                " · reported completion"
-            },
-            if disconnected {
-                " · disconnected, retained report"
-            } else if historical {
-                " · not a current-run error"
-            } else {
-                ""
-            }
-        );
+        // Only say where the report came from when it may not be current.
+        let provenance = if disconnected {
+            Some("Last report before the connection dropped")
+        } else if historical {
+            Some("From an earlier run")
+        } else {
+            None
+        };
         let metadata = SharedString::from(format!(
-            "Completion version (epoch ms): {}\nActive attempt from summary: {}. This is not a run ID.",
+            "Source: {}\nReported at (epoch ms): {}\nAttempt: {}",
+            failure.source,
             failure
                 .at
                 .map(|n| n.to_string())
@@ -95,7 +88,9 @@ impl LocalViewer {
                 if !v.project_choices_ready(w, cx) { cx.stop_propagation(); }
             }))
             .child(div().h_flex().items_center().gap_2()
-                .child(ui::text(Text::Label, title).text_color(if historical {cx.theme().muted_foreground} else {cx.theme().danger}).flex_1().min_w_0())
+                .child(div().id("session-failure-title").flex_1().min_w_0()
+                    .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(metadata.clone()).build(w, cx))
+                    .child(ui::text(Text::Label, title).text_color(if historical {cx.theme().muted_foreground} else {cx.theme().danger})))
                 .child(ui::action("session-failure-copy", "Copy reason", Action::Quiet).icon(AppIcon::Copy.asset())
                     .accessibility_label("Copy reported failure reason")
                     .on_click(cx.listener(move |v, _, w, cx| {
@@ -104,15 +99,12 @@ impl LocalViewer {
                             cx.write_to_clipboard(ClipboardItem::new_string(text));
                         }
                     }))))
-            .child(ui::text(Text::Caption, SharedString::from(provenance)).id("session-failure-provenance").test_support().text_color(cx.theme().muted_foreground).tooltip(move |w, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(metadata.clone()).build(w, cx)
-            }))
+            .children(provenance.map(|text| ui::text(Text::Caption, text).id("session-failure-provenance").test_support().text_color(cx.theme().muted_foreground)))
             .child(div().id(("session-failure-scroll", tag)).test_support().overflow_y_scroll().max_h_32().min_w_0().w_full()
                 .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(|v, _, w, cx| v.session_failure_focus.focus(w, cx)))
                 .child(div().id("session-failure-reason").test_support().w_full().min_w_0().text_size(px(appearance::TextRole::BODY))
                     .child(SelectableText::new(SharedString::from(format!("session-failure-text-{tag}")), SharedString::from(failure.reason.clone())))))
-            .when(failure.reason.len() > 400 || failure.reason.lines().count() > 4, |d| d.child(ui::text(Text::Caption, "Scroll details to read more, or Copy reason.")))
-            .when(failure.truncated, |d| d.child(ui::text(Text::Caption, "Display limit reached (8 KiB). Remaining reported text omitted; Copy includes this notice.")))
+            .when(failure.truncated, |d| d.child(ui::text(Text::Caption, "Only the start of this long report is available.")))
             .into_any_element())
     }
 }

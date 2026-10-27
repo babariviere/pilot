@@ -14,7 +14,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window,
     base::FocusTrapElement,
     component::{
-        ActiveTheme, Disableable, StyledExt,
+        Disableable, StyledExt,
         checkbox::Checkbox,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
     },
@@ -91,7 +91,8 @@ impl MissionForm {
             goal,
             focus: cx.focus_handle(),
             coordinator: true,
-            draft: true,
+            // Drafting sends a message and may start agent work: opt in.
+            draft: false,
             request: 0,
             applied_request: 0,
             applied_result: None,
@@ -170,7 +171,7 @@ impl MissionForm {
         let request = self.attempt().map(|attempt| attempt.request.clone());
         let (title, goal, coordinator, draft) = match request {
             Some(r) => (r.title, r.goal, r.coordinator, r.draft),
-            None => (bounded_title(title), String::new(), true, true),
+            None => (bounded_title(title), String::new(), true, false),
         };
         self.title
             .update(cx, |v, cx| v.set_value(title, window, cx));
@@ -307,19 +308,19 @@ impl MissionForm {
     }
     fn status(&self) -> Notice {
         if let Some(error) = self.state_error {
-            return if let Some(mission_id) = self.created_id() {
-                Notice::new(error).detail(SharedString::from(format!("Known created mission: {mission_id}. Its private receipt could not be confirmed. Do not resubmit."))).tone(Tone::Error)
+            return if self.created_id().is_some() {
+                Notice::new(error).detail("The mission was made, but this window couldn't record it. Don't make it again.").tone(Tone::Error)
             } else {
                 Notice::new(error).tone(Tone::Error)
             };
         }
         if self.pending {
             return Notice::new(if self.attempt().is_some() {
-                "Waiting for Local…"
+                "Making the mission…"
             } else {
                 "Checking this chat…"
             })
-            .detail("Closing this sheet does not cancel a submitted request. It is never resent automatically.")
+            .detail("Closing this sheet won't cancel or resend it.")
             .tone(Tone::Quiet);
         }
         if let Some(Err(error)) = &self.result {
@@ -330,30 +331,46 @@ impl MissionForm {
             let membership = match &self.result {
                 Some(Ok(Inspection::Membership {
                     mission_id: Some(current),
-                })) => format!(" Latest observed membership: {current}."),
+                })) if current.as_str() != id => " This chat now shows a different mission.",
                 Some(Ok(Inspection::Membership { mission_id: None })) => {
-                    " No current mission membership was found.".into()
+                    " This chat isn't shown as a member yet."
                 }
-                _ => String::new(),
+                _ => "",
             };
-            return Notice::new("Mission created.")
-                .detail(SharedString::from(format!(
-                    "Mission {id}.{membership} Drafting delivery is not independently confirmed."
-                )))
-                .tone(Tone::Success);
+            let drafting = if self.draft {
+                " The drafting request may still be on its way."
+            } else {
+                ""
+            };
+            let detail = format!("{}{drafting}", membership.trim_start());
+            let notice = Notice::new("Mission created.").tone(Tone::Success);
+            return if detail.trim().is_empty() {
+                notice
+            } else {
+                notice.detail(SharedString::from(detail.trim().to_string()))
+            };
         }
         if let Some(Ok(Inspection::Membership { mission_id })) = &self.result {
-            return Notice::new(if mission_id.is_some(){"Current mission membership confirmed."}else{"No current mission membership found."})
-                .detail(SharedString::from(mission_id.as_ref().map_or_else(||"The earlier request remains unconfirmed. It will not be resent.".into(),|id|format!("Mission {id}. This confirms current association, not whether this request created it. It will not be resent."))));
+            return Notice::new(if mission_id.is_some() {
+                "This chat is part of a mission."
+            } else {
+                "This chat isn't part of a mission yet."
+            })
+            .detail(if mission_id.is_some() {
+                "We couldn't confirm whether this request made it, so it won't be sent again."
+            } else {
+                "The earlier request is still unconfirmed and won't be sent again."
+            });
         }
         if self.attempt().is_some() || matches!(self.result, Some(Ok(Inspection::Uncertain))) {
-            return Notice::new("Conversion is unconfirmed. Do not submit it again.")
+            return Notice::new("Couldn't confirm the mission was made. Don't make it again.")
                 .detail(
-                    "Check current membership. Closing or restarting never resends this request.",
+                    "Check again to see whether this chat joined a mission. Closing never resends it.",
                 )
                 .tone(Tone::Warning);
         }
-        Notice::new("Keep the same conversation, drafts and chat permissions.").tone(Tone::Quiet)
+        Notice::new("The conversation, its drafts and permissions stay as they are.")
+            .tone(Tone::Quiet)
     }
 }
 
@@ -388,11 +405,6 @@ impl Render for MissionForm {
                 Some(Ok(Inspection::Membership { mission_id })) => mission_id.clone(),
                 _ => None,
             });
-        let context = self
-            .target
-            .as_ref()
-            .map(|target| format!("Local chat {} · Project {}", target.source, target.project))
-            .unwrap_or_default();
         div().id("mission-form").test_support().track_focus(&self.focus).key_context("MissionConversion")
             .size_full().v_flex().min_h_0().gap_3()
             .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if v.marked(w,cx){cx.stop_propagation();}}))
@@ -400,17 +412,16 @@ impl Render for MissionForm {
             .capture_action(cx.listener(|v,_:&gpui_kit::base::input::Enter,w,cx|{if v.marked(w,cx){cx.stop_propagation();}}))
             .on_action(cx.listener(|v,_:&CancelMission,w,cx|{v.close(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&ConfirmMission,w,cx|{v.confirm(w,cx);cx.stop_propagation();}))
-            .child(ui::header("mission-form-title","Make a mission",Text::Title)
-                .child(ui::text(Text::Caption,SharedString::from(context)).text_color(cx.theme().muted_foreground)))
+            .child(ui::header("mission-form-title","Make a mission",Text::Title))
             .child(div().id("mission-form-body").test_support().v_flex().gap_3().flex_1().min_h_0().overflow_y_scroll()
                 .child(FieldRow::new("mission-title-row","Title",Input::new(&self.title).aria_label("Mission title").disabled(!editable)))
-                .child(FieldRow::new("mission-goal-row","Goal",Textarea::new(&self.goal).aria_label("Mission goal").readonly(!editable)).description("Optional. You can ask this chat to draft it below."))
+                .child(FieldRow::new("mission-goal-row","Goal",Textarea::new(&self.goal).aria_label("Mission goal").readonly(!editable)).description("Optional. This chat can draft it for you."))
                 .child(FieldRow::new("mission-coordinator-row","Coordination",Checkbox::new("mission-coordinator").label("Use this chat as coordinator").checked(self.coordinator).disabled(!editable)
                     .on_change(cx.listener(|v,checked,w,cx|{if v.editable()&&!v.marked(w,cx){v.coordinator = *checked;cx.notify();}})))
-                    .description("Give this chat the mission’s coordinator role. Chat permissions stay unchanged."))
+                    .description("This chat plans the mission and hands out its tasks."))
                 .child(FieldRow::new("mission-draft-row","Drafting",Checkbox::new("mission-draft").label("Ask this chat to draft the mission").checked(self.draft).disabled(!editable)
                     .on_change(cx.listener(|v,checked,w,cx|{if v.editable()&&!v.marked(w,cx){v.draft = *checked;cx.notify();}})))
-                    .description("Sends a follow-up in this chat and may start a reply. Creating the mission does not confirm message delivery."))
+                    .description("Sends this chat a message asking it to write the goal and tasks. The agent may start working."))
                 )
             .child(div().id("mission-status").test_support().child(notice))
             .child(ui::rule(window,cx))
@@ -418,7 +429,7 @@ impl Render for MissionForm {
                 .child(ui::action("mission-cancel",if has_attempt||self.pending{"Close"}else{"Cancel"},Action::Secondary).on_click(cx.listener(|v,_,w,cx|v.close(w,cx))))
                 .when_some(known_id,|this,id|this.child(ui::action("mission-copy-id","Copy mission ID",Action::Quiet)
                     .on_click(move|_,_,cx|cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(id.clone())))))
-                .when(!self.ready||has_attempt,|this|this.child(ui::action("mission-check","Check Local",Action::Quiet).disabled(self.pending||self.state_error.is_some())
+                .when(!self.ready||has_attempt,|this|this.child(ui::action("mission-check","Check again",Action::Quiet).disabled(self.pending||self.state_error.is_some())
                     .on_click(cx.listener(|v,_,w,cx|{if !v.marked(w,cx){v.check(cx);}}))))
                 .when(!has_attempt,|this|this.child(ui::action("mission-confirm","Make a mission ⌘↩",Action::Primary).disabled(!editable||!valid).on_click(cx.listener(|v,_,w,cx|v.confirm(w,cx))))))
             .focus_trap("mission-form",&self.focus)

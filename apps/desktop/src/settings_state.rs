@@ -115,7 +115,7 @@ impl SettingsError {
             }
             Self::Busy => "Preferences storage is busy. Retry after the other operation finishes.",
             Self::RecoveryRequired => {
-                "An interrupted preferences save needs inspection. Its data is preserved."
+                "Settings may not have saved. Your changes are kept; save again or reload."
             }
             Self::Conflict => "Preferences changed elsewhere. Reopen and review before saving.",
             Self::Io => {

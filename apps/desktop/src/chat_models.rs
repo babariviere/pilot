@@ -303,7 +303,7 @@ pub(crate) async fn catalog(
         .query(&[("cwd", path)])
         .send()
         .await
-        .map_err(|_| "Scoped models unavailable. Refresh explicitly; no fallback is used.")?;
+        .map_err(|_| "Couldn't load scoped models. Refresh to try again.")?;
     if r.status() != reqwest::StatusCode::OK {
         return Err("Scoped models unavailable for this Local directory.");
     }
