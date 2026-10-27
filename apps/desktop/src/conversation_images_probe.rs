@@ -70,7 +70,6 @@ fn sized_source(
     let mut source = crate::conversation_images::Source::read(
         0,
         &serde_json::json!({"mimeType":"image/png","data":STANDARD.encode(bytes.into_inner())}),
-        &mut crate::conversation_images::INLINE_CAP.clone(),
     );
     source.owner = base.owner.clone();
     source
@@ -412,7 +411,70 @@ fn composer_reader_guards(
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
 }
+// Six real PNG sources exceed the old aggregate limit. They remain readable
+// through the production Local reduction, virtualization and native decode path.
+fn large_sources(cx: &mut HeadlessAppContext) {
+    let data = crate::conversation_images::fixture::large_png();
+    let server = crate::conversation_images::fixture::Server::start(data.clone());
+    let capture = crate::local_client::read_local_capture(server.options.clone(), "owner").unwrap();
+    let base = capture
+        .state
+        .rows
+        .iter()
+        .find_map(|r| r.image_data())
+        .unwrap();
+    assert_eq!(base.data.as_deref().unwrap().as_str(), data);
+    assert!(base.problem.is_none());
+    let rows: Vec<_> = (0..6)
+        .map(|n| {
+            Message::image(100 + n, "Large stored image".into(), (**base).clone())
+                .anchored(crate::model::ReaderKey::model(n + 1, 0, Some(1)))
+        })
+        .collect();
+    assert!(rows.iter().map(Message::retained_bytes).sum::<usize>() > 8 * 1024 * 1024);
+    let (h, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(680.), px(900.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                cx.new(|cx| {
+                    let mut view = TranscriptView::readonly(w, cx);
+                    view.history_scope(1);
+                    view.replace_readonly(rows.clone(), true, cx);
+                    view
+                })
+            },
+        )
+        .unwrap()
+    });
+    for index in 0..6 {
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.scroller
+                    .update(cx, |s, cx| s.scroll_to_item(index, cx));
+            })
+        });
+        wait(cx, h, |cx| {
+            view.read(cx)
+                .images
+                .entries
+                .get(&(100 + index as u64))
+                .is_some_and(|entry| entry.raster.is_some() && entry.error.is_none())
+        });
+    }
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
+}
 pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
+    large_sources(cx);
     let server = crate::conversation_images::fixture::Server::start(encoded([24, 110, 220]));
     let capture = crate::local_client::read_local_capture(server.options.clone(), "owner").unwrap();
     let original = capture.state.rows;
@@ -641,7 +703,6 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             let mut source = crate::conversation_images::Source::read(
                 0,
                 &serde_json::json!({"mimeType":"image/png","data":encoded([220,90,30])}),
-                &mut crate::conversation_images::INLINE_CAP.clone(),
             );
             source.owner = base.owner.clone();
             changed[0] = Message::image(100, "Changed".into(), source)
@@ -702,7 +763,6 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                 let mut s = crate::conversation_images::Source::read(
                     0,
                     &serde_json::json!({"mimeType":mime,"data":data}),
-                    &mut crate::conversation_images::INLINE_CAP.clone(),
                 );
                 s.owner = base.owner.clone();
                 cx.update(|cx| {

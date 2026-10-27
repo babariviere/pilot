@@ -25,6 +25,8 @@ enum Scenario {
     Thinking,
     ContextUsage,
     Todos,
+    LargeFrame,
+    LargeFragmentedMessage,
 }
 
 #[tokio::test]
@@ -156,6 +158,25 @@ impl Mock {
                                 } else {
                                     let mut head=entry(5,&format!("{id} tail")); head["head"]=json!(5);
                                     socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":1,"events":[{"type":"snapshot","entries":[head]}]}).to_string().into())).await.unwrap();
+                                    if matches!(scenario,Scenario::LargeFrame | Scenario::LargeFragmentedMessage) {
+                                        let payload=json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(6,&large_stream_text())}]}).to_string();
+                                        assert!(payload.len()>8*1024*1024);
+                                        if matches!(scenario,Scenario::LargeFragmentedMessage) {
+                                            use tokio_tungstenite::tungstenite::protocol::frame::{Frame as RawFrame, coding::{Data, OpCode}};
+                                            let chunks:Vec<_>=payload.as_bytes().chunks(3*1024*1024).collect();
+                                            for (index,chunk) in chunks.iter().enumerate() {
+                                                socket.send(Frame::Frame(RawFrame::message(
+                                                    chunk.to_vec(),
+                                                    OpCode::Data(if index==0 {Data::Text} else {Data::Continue}),
+                                                    index+1==chunks.len(),
+                                                ))).await.unwrap();
+                                            }
+                                        } else {
+                                            socket.send(Frame::Text(payload.into())).await.unwrap();
+                                        }
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"entry_appended","entry":entry(7,"after large message")}]}).to_string().into())).await.unwrap();
+                                    }
                                     if matches!(scenario,Scenario::Resume) {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(7,"before disconnect")}]}).to_string().into())).await.unwrap();
                                         let _=socket.close(Some(CloseFrame{code:CloseCode::Again,reason:"synthetic restart".into()})).await; return;
@@ -418,4 +439,77 @@ fn session_todos_source_equality_includes_exact_home_daemon_lineage_port() {
         }
         assert!(!options.same_todo_source(&other));
     }
+}
+
+fn large_stream_text() -> String {
+    // UTF-8 exactness as well as size. Greater than the removed 8 MiB limit.
+    "Exact 日本語 🦀\n".repeat(500_000)
+}
+
+async fn large_stream_is_intact(scenario: Scenario) {
+    let mock = Mock::start(scenario).await;
+    let (client, updates) = LocalClient::start(mock.options.clone());
+    until(&updates, |view| !view.chats.is_empty()).await;
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 1
+    }));
+    let loaded = until(&updates, |view| {
+        view.rows
+            .iter()
+            .any(|row| row.reader_key() == Some(crate::model::ReaderKey::model(6, 0, Some(0))))
+    })
+    .await;
+    let source = loaded
+        .rows
+        .iter()
+        .find(|row| row.reader_key() == Some(crate::model::ReaderKey::model(6, 0, Some(0))))
+        .unwrap()
+        .shared_source();
+    assert!(source.len() > 8 * 1024 * 1024);
+    assert_eq!(source.as_str(), large_stream_text());
+    mock.step.send(()).await.unwrap();
+    let continued = until(&updates, |view| {
+        view.rows
+            .iter()
+            .any(|row| row.source() == "after large message")
+    })
+    .await;
+    assert_eq!(
+        continued
+            .rows
+            .iter()
+            .find(|row| row.reader_key() == Some(crate::model::ReaderKey::model(6, 0, Some(0))))
+            .unwrap()
+            .source(),
+        source.as_str()
+    );
+    assert_eq!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.contains("/api/sessions/a/ws"))
+            .count(),
+        1,
+        "same subscription survives"
+    );
+    drop(client);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while mock.sockets.load(Ordering::SeqCst) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("large subscription cancels");
+}
+
+#[tokio::test]
+async fn websocket_single_frame_above_eight_mib_preserves_source_and_continues() {
+    large_stream_is_intact(Scenario::LargeFrame).await;
+}
+
+#[tokio::test]
+async fn websocket_fragmented_message_above_eight_mib_preserves_source_and_continues() {
+    large_stream_is_intact(Scenario::LargeFragmentedMessage).await;
 }

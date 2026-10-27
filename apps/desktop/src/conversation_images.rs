@@ -3,8 +3,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
-// Preserve the reader's existing per-message and aggregate source budgets.
-pub(crate) const INLINE_CAP: usize = crate::local_model::MESSAGE_CAP;
 #[derive(Clone)]
 pub(crate) struct Source {
     pub(crate) owner: Option<(crate::delivery_store::Host, String)>,
@@ -25,7 +23,7 @@ impl PartialEq for Source {
 }
 impl Eq for Source {}
 impl Source {
-    pub(crate) fn read(block: usize, value: &Value, remaining: &mut usize) -> Self {
+    pub(crate) fn read(block: usize, value: &Value) -> Self {
         let mime = value["mimeType"].as_str().unwrap_or("");
         let data = value["data"].as_str();
         let mut result = Self {
@@ -45,12 +43,6 @@ impl Source {
                 Some("Stored image has no supported inline bytes. Paths and URLs are not loaded.");
             return result;
         };
-        if data.len() > INLINE_CAP || data.len() > *remaining {
-            result.problem = Some(
-                "Image exceeds the loaded conversation source budget. Source remains in Local history.",
-            );
-            return result;
-        }
         // Both metadata and the exact stored bytes qualify source identity.
         let mut digest = Sha256::new();
         digest.update(mime.as_bytes());
@@ -63,7 +55,6 @@ impl Source {
             _ => Some("Unsupported stored image format. No external image is loaded."),
         };
         if result.problem.is_none() {
-            *remaining -= data.len();
             result.data = Some(Arc::new(data.into()));
         }
         result

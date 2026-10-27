@@ -19,7 +19,8 @@ This does not enable rendering legacy HTML.
 
 - `ReadRoute` has only hello, history and artifact variants. Session/project
   summaries and active transcript snapshots arrive over WebSockets, not this
-  HTTP helper. Their 8 MiB frame policy is unchanged.
+  HTTP helper. Frame and whole-message byte caps are disabled explicitly in
+  the WebSocket configuration, including the library defaults.
 - `server.ts` history accepts an entry-count limit (up to 500); the client
   continues requesting 24. `SessionHistoryPage` contains full `EntryRecord[]`
   and `more`, including inline base64 image blocks in `entry.model`.
@@ -64,3 +65,10 @@ identity changes before/after reads, artifact pins and existing socket paging,
 switch-generation and cancellation tests. Matching production Clippy/build uses
 the shared verification slot, CPU2/4GiB wrapper and private outputs. No live
 actions, app launch or performance/visual acceptance is implied.
+
+
+WebSocket regressions send exact Unicode content above 8 MiB both as one frame
+and as a fragmented whole message. They verify exact retained bytes, a subsequent
+event on the same subscription and cancellation. Existing bounded channels,
+projection coalescing, protocol/identity checks, and error handling remain.
+Capacity errors identify a WebSocket failure, not a nonexistent 8 MiB policy.

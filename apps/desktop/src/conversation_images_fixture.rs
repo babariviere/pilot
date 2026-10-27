@@ -117,3 +117,24 @@ impl Drop for Server {
         self.thread.take().unwrap().join().unwrap();
     }
 }
+
+/// Real, deterministic PNG over the old 1 MiB inline limit, not invalid padding.
+pub(crate) fn large_png() -> String {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut state = 42u32;
+    let pixels = image::RgbImage::from_fn(640, 640, |_, _| {
+        image::Rgb(std::array::from_fn(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        }))
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(pixels)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let data = STANDARD.encode(bytes.into_inner());
+    assert!(data.len() > 1024 * 1024);
+    data
+}

@@ -537,7 +537,8 @@ Only complete projections are coalesced, never deltas; UI delivery is capped at
 about 31 updates/s. Old chat generations and reconnect epochs cannot replace
 new data. Drop aborts sockets, pending reads and timers without joining on UI.
 
-HTTP bodies: 4 MiB. WS messages/frames: 8 MiB. Request/upgrade timeout: 5 s
+Hello/history HTTP bodies have no size cap; artifact envelopes retain their
+44 MiB limit. WebSocket messages/frames have no byte cap. Request/upgrade timeout: 5 s
 (connect 2 s). Protocol ping every 30 s; no received frame for 90 s triggers a reconnect,
 not a quiet chat alone. Bounded exponential reconnects, up to
 8 consecutive failures, then explicit Reconnect. 44xx refusal and size/protocol
@@ -545,15 +546,17 @@ errors stop rather than spin. Resume uses the last accepted stream sequence;
 replacement split snapshots retain the last visible projection until complete.
 
 List: at most 1,000 summaries. Transcript: 256 entries, at most 512 rows before
-work folding, up to 32 running progress slots, 8 MiB projected source budget (including live/tool reserve),
-1 MiB per message and 64 KiB per running tool output. Oversize messages get an
-explicit placeholder; capacity stops further entry/history admission without
+work folding, up to 32 running progress slots and 64 KiB per running tool output.
+Loaded message text and inline images have no per-message or aggregate source-byte
+limit. Entry/row capacity still stops further entry/history admission without
 silently evicting selected rows. Initial oversized histories show a bounded
-suffix and a capacity warning. These are prototype limits, not production parity.
+suffix and a capacity warning. These count limits are prototype limits, not
+production parity. Image decoder compressed/pixel/allocation limits remain
+separate from retained sources.
 Escaped display strings, parser graphs, raw in-flight JSON, saved split-snapshot
-history, queued projections and GPU allocations are additional memory; the
-source budget is not an RSS guarantee. One retained parser per admitted row is
-bounded, but not an LRU solution for arbitrary history.
+history, queued projections and GPU allocations are additional memory. Memory
+scales with retained source; no RSS ceiling is claimed. One retained parser per
+admitted row is count-bounded, but not an LRU solution for arbitrary history.
 
 Tool detail reserve: at most 256 retained call identities and 2 MiB aggregate,
 including 12 KiB arguments, 40 KiB output and 12 KiB diff per call plus metadata.

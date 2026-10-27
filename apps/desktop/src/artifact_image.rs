@@ -85,7 +85,7 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
 pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'static str> {
     cancelled(&stop)?;
     if source.len() > SOURCE_CAP {
-        return Err("Image source exceeds the stored-image limit.");
+        return Err("Image exceeds the 16 MiB compressed preview limit (base64 envelope).");
     }
     let (prefix, text) = source
         .split_once(',')

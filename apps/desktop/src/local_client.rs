@@ -13,7 +13,6 @@ use tokio_tungstenite::{
     tungstenite::{Message as Frame, protocol::WebSocketConfig},
 };
 
-const FRAME_CAP: usize = 8 * 1024 * 1024;
 type Failure = &'static str;
 #[path = "model_scope_access.rs"]
 mod model_scope_access;
@@ -479,8 +478,8 @@ fn socket_task(
                     ))
                     .await?;
                     let config = WebSocketConfig::default()
-                        .max_message_size(Some(FRAME_CAP))
-                        .max_frame_size(Some(FRAME_CAP));
+                        .max_message_size(None)
+                        .max_frame_size(None);
                     client_async_with_config(
                         format!("ws://127.0.0.1:{}{path}", options.port),
                         stream,
@@ -589,7 +588,7 @@ fn socket_task(
                                 break;
                             }
                             Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
-                                let _ = inbox.send(status("Stream exceeds the 8 MiB viewer frame limit; subscription stopped.")).await;
+                                let _ = inbox.send(status("Local WebSocket capacity error; subscription stopped. Use Reconnect to retry.")).await;
                                 return;
                             }
                             Some(Ok(Frame::Ping(_) | Frame::Pong(_))) => {}
@@ -833,7 +832,7 @@ pub fn check_local_read(options: LocalOptions) -> Result<(), &'static str> {
             client.command(Command::Earlier{before,generation:1});
             view=wait(&updates,|v|v.page_revision>revision).await?; paged=true;
         }
-        let bytes:usize=view.rows.iter().map(|r|r.source().len()).sum();
+        let bytes:usize=view.rows.iter().map(crate::model::Message::retained_bytes).sum();
         println!("Local identity verified before sockets. {} summaries; one chat opened; {} rows; {bytes} projected source bytes; {} event batches; history request: {paged}. No content/IDs/titles logged.",list.chats.len(),view.rows.len(),view.batches);
         Ok(())
     })

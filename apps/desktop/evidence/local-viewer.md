@@ -1,5 +1,8 @@
 # Pilot Next, read-only Local viewer
 
+Historical verification snapshot. Conversation source-byte limits described below
+have since been removed; see [current image contract](../docs/conversation-images.md).
+
 Historical read-only checkpoint evidence. The current Local client adds explicit
 create/send/Stop and private drafts; see `local-interaction.md` for that boundary.
 

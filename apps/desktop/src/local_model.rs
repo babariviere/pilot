@@ -7,8 +7,6 @@ use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const ENTRY_CAP: usize = 256;
 pub(crate) const ROW_CAP: usize = 512;
-pub(crate) const SOURCE_CAP: usize = 8 * 1024 * 1024;
-pub(crate) const MESSAGE_CAP: usize = 1024 * 1024;
 pub(crate) const SESSION_CAP: usize = 1000;
 pub(crate) const PROJECT_CAP: usize = 256;
 
@@ -254,10 +252,9 @@ pub(crate) struct LiveTranscript {
     entries: BTreeMap<u64, Vec<Message>>,
     aliases: HashMap<(u64, usize), u64>,
     live: Option<Value>,
-    // Presentation-only activity and byte accounting. Never retain reasoning
+    // Presentation-only activity. Never retain reasoning
     // bodies in the UI projection; canonical daemon history is untouched.
     pub(crate) thinking: bool,
-    reasoning_bytes: Vec<usize>,
     thinking_suppressed: bool,
     pub(crate) presentation_dirty: bool,
     #[cfg(test)]
@@ -363,7 +360,7 @@ impl LiveTranscript {
         {
             return Vec::new();
         }
-        let value = slim_message(value, 0);
+        let value = slim_message(value);
         self.register_calls(&value);
         let Some(blocks) = value["content"].as_array() else {
             return vec![message(key, &value, "assistant")];
@@ -414,15 +411,7 @@ impl LiveTranscript {
                 },
             );
             if row.source() != "[No text content]" {
-                rows.push(canonical_row(
-                    row,
-                    entry,
-                    if value["viewerCollapsed"] == true {
-                        None
-                    } else {
-                        Some(block_ix)
-                    },
-                ));
+                rows.push(canonical_row(row, entry, Some(block_ix)));
             }
         }
         rows
@@ -560,34 +549,13 @@ impl LiveTranscript {
                             .any(|block| block["type"] == "image")
                     })
                 {
-                    let retained: usize = self
-                        .entries
-                        .values()
-                        .flatten()
-                        .map(Message::retained_bytes)
-                        .sum();
-                    let added: usize = rows.iter().map(Message::retained_bytes).sum();
-                    let mut remaining =
-                        (SOURCE_CAP - MESSAGE_CAP - 32 * 65536).saturating_sub(retained + added);
-                    // Reserve small identity/placeholder rows, and include text in
-                    // the unchanged per-message source budget.
-                    remaining =
-                        remaining
-                            .saturating_sub(64 * 1024)
-                            .min(MESSAGE_CAP.saturating_sub(
-                                rows[first_row..].iter().map(Message::retained_bytes).sum(),
-                            ));
                     for (block_ix, block) in blocks
                         .iter()
                         .take(256)
                         .enumerate()
                         .filter(|(_, b)| b["type"] == "image")
                     {
-                        let mut image = crate::conversation_images::Source::read(
-                            block_ix,
-                            block,
-                            &mut remaining,
-                        );
+                        let mut image = crate::conversation_images::Source::read(block_ix, block);
                         image.owner = self.image_owner.clone();
                         // A separate presentation allocation, never a guessed canonical ID.
                         let row_key = self.block_key(key, block_ix + 256, Some((id, ix)));
@@ -615,16 +583,7 @@ impl LiveTranscript {
                 "[Structured entry. This viewer does not render its actions, attachments or metadata.]".into()));
         }
         let retained_rows: usize = self.entries.values().map(Vec::len).sum();
-        let retained_bytes: usize = self
-            .entries
-            .values()
-            .flatten()
-            .map(Message::retained_bytes)
-            .sum();
-        let added_bytes: usize = rows.iter().map(Message::retained_bytes).sum();
-        if retained_rows + rows.len() > ROW_CAP - 33
-            || retained_bytes + added_bytes > SOURCE_CAP - MESSAGE_CAP - 32 * 65536
-        {
+        if retained_rows + rows.len() > ROW_CAP - 33 {
             self.limited = true;
             return;
         }
@@ -851,17 +810,7 @@ impl LiveTranscript {
                     continue;
                 }
                 let count: usize = self.entries.values().map(Vec::len).sum();
-                let bytes: usize = self
-                    .entries
-                    .values()
-                    .flatten()
-                    .chain(rows.iter())
-                    .map(|r| r.source().len())
-                    .sum();
-                if self.entries.len() < ENTRY_CAP
-                    && count + rows.len() < ROW_CAP - 33
-                    && bytes <= SOURCE_CAP - MESSAGE_CAP - 32 * 65536
-                {
+                if self.entries.len() < ENTRY_CAP && count + rows.len() < ROW_CAP - 33 {
                     self.entries.entry(id).or_insert(rows);
                 } else {
                     self.limited = true;
@@ -871,26 +820,6 @@ impl LiveTranscript {
     }
 
     fn set_live(&mut self, value: Value) {
-        self.reasoning_bytes = value["content"]
-            .as_array()
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .take(256)
-                    .map(|block| {
-                        if block["type"] == "thinking" {
-                            block["thinking"]
-                                .as_str()
-                                .unwrap_or("")
-                                .len()
-                                .min(MESSAGE_CAP + 1)
-                        } else {
-                            0
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         if value.is_null() {
             self.live = None;
             return;
@@ -899,7 +828,7 @@ impl LiveTranscript {
             self.live_key = self.key();
             self.live_block_keys.clear();
         }
-        let slim = slim_message(&value, 0);
+        let slim = slim_message(&value);
         self.register_calls(&slim);
         self.live = Some(slim);
     }
@@ -925,8 +854,6 @@ impl LiveTranscript {
         else {
             return;
         };
-        self.reasoning_bytes
-            .resize(self.reasoning_bytes.len().max(ix + 1), 0);
         match kind {
             "thinking_delta" => {
                 if live["content"]
@@ -937,12 +864,7 @@ impl LiveTranscript {
                     return;
                 }
                 self.thinking = true;
-                self.reasoning_bytes[ix] = self.reasoning_bytes[ix]
-                    .saturating_add(change["delta"].as_str().unwrap_or("").len())
-                    .min(MESSAGE_CAP + 1);
                 // No invisible body buffer, Markdown, row or layout work.
-                // Enforce the aggregate source budget on the next visible
-                // change, without rebuilding existing visible text here.
                 return;
             }
             "thinking_end" | "text_end" | "toolcall_end" => self.thinking = false,
@@ -950,11 +872,6 @@ impl LiveTranscript {
                 if kind == "thinking_start" || change["block"]["type"] == "thinking" =>
             {
                 self.thinking = true;
-                self.reasoning_bytes[ix] = change["block"]["thinking"]
-                    .as_str()
-                    .unwrap_or("")
-                    .len()
-                    .min(MESSAGE_CAP + 1);
                 change_message(
                     live,
                     &serde_json::json!({"type":"block","contentIndex":ix,"block":{"type":"thinking"}}),
@@ -967,13 +884,10 @@ impl LiveTranscript {
                 ) {
                     self.thinking = false;
                 }
-                if matches!(kind, "text_start" | "toolcall_start" | "block") {
-                    self.reasoning_bytes[ix] = 0;
-                }
                 change_message(live, change);
             }
         }
-        *live = slim_message(live, self.reasoning_bytes.iter().sum());
+        *live = slim_message(live);
     }
 
     pub(crate) fn page(&mut self, before: u64, value: &Value) {
@@ -1018,13 +932,10 @@ fn canonical_row(row: Message, entry: Option<(u64, usize)>, block: Option<usize>
         row
     }
 }
-fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
+fn slim_message(value: &Value) -> Value {
     let mut content = Vec::new();
-    let mut bytes = omitted_reasoning_bytes;
-    let mut collapsed = value["viewerCollapsed"] == true;
     if let Some(text) = value["content"].as_str() {
-        collapsed |= text.len() > MESSAGE_CAP;
-        content.push(serde_json::json!({"type":"text","text":if text.len()<=MESSAGE_CAP {text} else {"[Message exceeds 1 MiB viewer limit]"}}));
+        content.push(serde_json::json!({"type":"text","text":text}));
     } else if let Some(blocks) = value["content"].as_array() {
         for block in blocks.iter().take(256) {
             let kind = match block["type"].as_str() {
@@ -1040,7 +951,6 @@ fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
                 "text"
             };
             let text = block[field].as_str().unwrap_or("");
-            bytes += text.len();
             if kind == "thinking" {
                 content.push(serde_json::json!({"type":"thinking"}));
                 continue;
@@ -1052,26 +962,13 @@ fn slim_message(value: &Value, omitted_reasoning_bytes: usize) -> Value {
                 } else {
                     serde_json::json!({"viewerOmitted":"Arguments exceed the 12 KiB viewer limit"})
                 };
-                bytes += encoded.len().min(crate::tool_presentation::ARG_CAP);
-                if bytes <= MESSAGE_CAP {
-                    content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
-                    continue;
-                }
-            }
-            if bytes > MESSAGE_CAP {
-                collapsed = true;
-                content.clear();
-                content.push(serde_json::json!({"type":"text","text":"[Message exceeds 1 MiB viewer limit]"}));
-                break;
+                content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
+                continue;
             }
             content.push(serde_json::json!({"type":kind,field:text}));
         }
     }
-    let mut result = serde_json::json!({"role":"assistant","timestamp":value["timestamp"].as_u64(),"content":content});
-    if collapsed {
-        result["viewerCollapsed"] = serde_json::Value::Bool(true);
-    }
-    result
+    serde_json::json!({"role":"assistant","timestamp":value["timestamp"].as_u64(),"content":content})
 }
 
 fn message(id: u64, value: &Value, label: &str) -> Message {
@@ -1089,13 +986,7 @@ fn message(id: u64, value: &Value, label: &str) -> Message {
                 "image" => {}
                 _ => source.push_str("\n\n[Unsupported content block]\n\n"),
             }
-            if source.len() > MESSAGE_CAP {
-                break;
-            }
         }
-    }
-    if source.len() > MESSAGE_CAP {
-        source = "[Message exceeds the viewer’s 1 MiB source limit. Open it in Swift.]".into();
     }
     if source.is_empty() {
         source = "[No text content]".into();
@@ -1133,12 +1024,7 @@ fn change_message(message: &mut Value, change: &Value) {
             };
             if let Some(text) = blocks[ix][field].as_str() {
                 let delta = change["delta"].as_str().unwrap_or("");
-                if text.len() + delta.len() <= MESSAGE_CAP {
-                    blocks[ix][field] = Value::String(format!("{text}{delta}"));
-                } else {
-                    blocks[ix][field] =
-                        Value::String("[Streaming block exceeds 1 MiB viewer limit]".into());
-                }
+                blocks[ix][field] = Value::String(format!("{text}{delta}"));
             }
         }
         "toolcall_delta" => {
@@ -1361,7 +1247,6 @@ mod tests {
             assert!(model.thinking);
             assert!(!model.presentation_dirty);
         }
-        assert_eq!(model.reasoning_bytes, vec![MESSAGE_CAP + 1]);
         assert_eq!(
             model.live.as_ref().unwrap()["content"],
             json!([{"type":"thinking"}])
@@ -1372,10 +1257,7 @@ mod tests {
         model.apply(&json!({"type":"message_update","changes":[{"type":"text_start","contentIndex":1,"block":{"type":"text","text":"answer"}}]}));
         assert!(!model.thinking);
         assert!(model.presentation_dirty);
-        assert!(
-            model.rows()[0].source().contains("limit"),
-            "omitted reasoning still counts against aggregate source limits"
-        );
+        assert_eq!(model.rows()[0].source(), "answer");
     }
 
     #[test]
@@ -1574,23 +1456,20 @@ mod tests {
     }
 
     #[test]
-    fn live_state_drops_arguments_and_bounds_aggregate_not_just_individual_blocks() {
+    fn live_state_bounds_tool_arguments_but_retains_all_text_blocks() {
         let mut model = LiveTranscript::default();
-        model.apply(&json!({"type":"message_start","message":{"content":[{"type":"toolCall","arguments":{"secret":"x".repeat(2*MESSAGE_CAP)}}]}}));
+        model.apply(&json!({"type":"message_start","message":{"content":[{"type":"toolCall","arguments":{"secret":"x".repeat(2*1024*1024)}}]}}));
         assert!(
             serde_json::to_vec(model.live.as_ref().unwrap())
                 .unwrap()
                 .len()
                 < 1024
         );
-        model.apply(&json!({"type":"message_update","changes":[{"type":"block","contentIndex":1,"block":{"type":"text","text":"x".repeat(MESSAGE_CAP)}},{"type":"block","contentIndex":2,"block":{"type":"text","text":"y".repeat(MESSAGE_CAP)}}]}));
-        assert!(
-            serde_json::to_vec(model.live.as_ref().unwrap())
-                .unwrap()
-                .len()
-                < MESSAGE_CAP
-        );
-        assert!(model.rows()[0].source().contains("exceeds"));
+        model.apply(&json!({"type":"message_update","changes":[{"type":"block","contentIndex":1,"block":{"type":"text","text":"x".repeat(1024*1024)}},{"type":"block","contentIndex":2,"block":{"type":"text","text":"y".repeat(1024*1024)}}]}));
+        let rows = model.rows();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[1].source(), "x".repeat(1024 * 1024));
+        assert_eq!(rows[2].source(), "y".repeat(1024 * 1024));
     }
 
     #[test]
@@ -1606,14 +1485,10 @@ mod tests {
         assert!(model.limited);
         assert!(model.rows().len() <= ROW_CAP);
         let giant = crate::giant_fixture();
-        let row = message(1, &json!({"content":giant}), "assistant");
-        assert_eq!(row.source().len(), MESSAGE_CAP);
-        let row = message(
-            1,
-            &json!({"content":"x".repeat(MESSAGE_CAP+1)}),
-            "assistant",
-        );
-        assert!(row.source().contains("exceeds"));
+        let row = message(1, &json!({"content":&giant}), "assistant");
+        assert_eq!(row.source().len(), giant.len());
+        let row = message(1, &json!({"content":"x".repeat(1024*1024+1)}), "assistant");
+        assert_eq!(row.source(), "x".repeat(1024 * 1024 + 1));
         println!(
             "Synthetic 6,000-entry projection bounded to {ENTRY_CAP} entries: {:?}; not a render benchmark",
             started.elapsed()
@@ -1621,15 +1496,16 @@ mod tests {
     }
 
     #[test]
-    fn initial_capacity_admission_keeps_the_newest_rows_not_the_oldest_suffix() {
+    fn initial_admission_retains_all_rows_above_the_old_aggregate_byte_limit() {
         let mut model = LiveTranscript::default();
         let entries: Vec<_> = (1..=100)
             .map(|id| entry(id, &"x".repeat(100_000)))
             .collect();
         model.apply(&json!({"type":"snapshot","entries":entries}));
-        assert!(model.limited);
+        assert!(!model.limited);
+        assert_eq!(model.entries.len(), 100);
         assert!(model.entries.contains_key(&100));
-        assert!(!model.entries.contains_key(&1));
+        assert!(model.entries.contains_key(&1));
     }
 
     #[test]

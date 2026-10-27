@@ -1,5 +1,8 @@
 # Tool/work presentation
 
+Historical verification snapshot. Conversation source-byte limits described below
+have since been removed; see [current image contract](../docs/conversation-images.md).
+
 A user-provided real-chat screenshot exposed poor centered alignment, overly
 long script subjects and latest-window capacity behavior. The follow-up adds
 read-only production-view capture, leading-aligned controls, compact generic
