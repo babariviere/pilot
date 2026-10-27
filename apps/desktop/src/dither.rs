@@ -159,7 +159,8 @@ fn coverage(signal: Signal, background: bool, u: f64, v: f64, frame: usize, rece
                     * (0.5
                         + 0.5 * (distance * 10. - std::f64::consts::TAU * frame as f64 / 72.).sin())
             }
-            Signal::Working => 0.42 + 0.26 * (0.5 + 0.5 * (distance * 14. - phase).sin()),
+            // A gentle ripple: several working rows should not make the list busy.
+            Signal::Working => 0.44 + 0.16 * (0.5 + 0.5 * (distance * 14. - phase).sin()),
             Signal::NeedsYou => 0.5 + 0.22 * (0.5 + 0.5 * phase.sin()),
             Signal::Failed => 0.68,
             Signal::Ready => 0.55,

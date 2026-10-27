@@ -177,7 +177,6 @@ impl LocalViewer {
             232.
         });
         let archived = self.chats.read(cx).delegate().archived;
-        let count = self.chats.read(cx).delegate().filtered.len();
         let scope = self
             .project_scope
             .as_ref()
@@ -237,22 +236,22 @@ impl LocalViewer {
                     .on_click(cx.listener(|v,_,w,cx|v.show_chats(w,cx))))
                 .child(div().h_flex().min_w_0().pl_2().pt_2().items_center().gap_1()
                     .child(div().id("sidebar-chat-count").test_support().flex_1().min_w_0().truncate().text_size(px(TextRole::LABEL)).text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from(format!("Chats · {count} shown"))))
+                        .child("Chats"))
                     .child(self.chat_filter(cx)))
                 .when(archived,|this|this.child(div().id("archives-active").test_support().px_2().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
             .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
             .child(self.chat_actions.clone())
-            .child(div().id("sidebar-footer").test_support().v_flex().px(px(Space::SIDEBAR)).pb_2().pt_1().gap_0p5().flex_shrink_0()
-                .child(div().h_flex().min_w_0()
-                    .child(sidebar_row("sidebar-jump","Jump to…",AppIcon::Search).flex_1().tooltip("Jump to a page, project or chat (⌘K)")
-                        .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
-                    .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()
-                        .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))
-                        .child(crate::ui::icon_action("nav-back","Back (⌘[)",AppIcon::Back,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(false)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(false,w,cx))))
-                        .child(crate::ui::icon_action("nav-forward","Forward (⌘])",AppIcon::Forward,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx)))))))
-                .child(sidebar_row("open-usage", "Usage…", AppIcon::Usage).accessibility_label("Open Local Usage")
+            // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
+            .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()
+                .child(sidebar_row("sidebar-jump","Jump to…",AppIcon::Search).flex_1().tooltip("Jump to a page, project or chat (⌘K)")
+                    .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
+                .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()
+                    .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))
+                    .child(crate::ui::icon_action("nav-back","Back (⌘[)",AppIcon::Back,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(false)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(false,w,cx))))
+                    .child(crate::ui::icon_action("nav-forward","Forward (⌘])",AppIcon::Forward,crate::ui::Action::Quiet).size_8().disabled(!self.navigation.can_move(true)).on_click(cx.listener(|v,_,w,cx|v.move_navigation(true,w,cx))))))
+                .child(crate::ui::icon_action("open-usage","Usage",AppIcon::Usage,crate::ui::Action::Quiet).size_8().flex_shrink_0().accessibility_label("Open Local Usage")
                     .on_click(cx.listener(|view,_,window,cx|view.open_usage(window,cx))))
-                .child(sidebar_row("open-settings", "Settings…", AppIcon::Settings).accessibility_label("Settings (Command-comma)")
+                .child(crate::ui::icon_action("open-settings","Settings (⌘,)",AppIcon::Settings,crate::ui::Action::Quiet).size_8().flex_shrink_0().accessibility_label("Settings (Command-comma)")
                     .on_click(cx.listener(|view,_,window,cx|view.open_settings(window,cx)))))
             .when_some(self.nav_error,|this,error|this.child(div().p(px(Space::SIDEBAR)).text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(error)))
             .children((!healthy).then(||div().id("sidebar-connection").test_support().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL)).flex_shrink_0().border_t(appearance::hairline(w)).border_color(cx.theme().border)

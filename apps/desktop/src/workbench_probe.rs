@@ -69,8 +69,6 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                             "nav-home-title-icon",
                             "nav-inbox-title-icon",
                             "nav-all-chats-title-icon",
-                            "open-usage-title-icon",
-                            "open-settings-title-icon",
                         ]
                         .map(|id| (id, w.find(id).bounds()))
                     })
@@ -370,8 +368,6 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
         "nav-inbox",
         "nav-missions",
         "nav-all-chats",
-        "open-usage",
-        "open-settings",
         "sidebar-jump",
     ] {
         let row = w.find(id).bounds();
@@ -429,6 +425,17 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
     );
     for bounds in [compose, filter, menu] {
         assert_eq!(bounds.size, size(w.rem_size() * 2., w.rem_size() * 2.));
+    }
+    // Usage and Settings are footer icon actions in Jump to…'s row.
+    let footer = w.find("sidebar-footer").bounds();
+    for id in ["open-usage", "open-settings"] {
+        let b = w.find(id).bounds();
+        assert_eq!(
+            b.size,
+            size(w.rem_size() * 2., w.rem_size() * 2.),
+            "{id} target"
+        );
+        assert!(b.top() >= footer.top() && b.bottom() <= footer.bottom() && b.right() <= right);
     }
     println!(
         "{}",

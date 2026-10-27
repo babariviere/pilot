@@ -176,6 +176,7 @@ struct ChatList {
     opened: Option<String>,
     loaded: bool,
     project: Option<String>,
+    projects: Arc<Vec<crate::local_model::Project>>,
     corners: HashMap<String, Entity<CornerView>>,
 }
 impl ChatList {
@@ -221,6 +222,32 @@ impl ListDelegate for ChatList {
             .clone();
         corner.update(cx, |view, cx| view.configure(spec, cx));
         let has_corner = corner.read(cx).has_corner(cx);
+        // RowLine: project (only across all projects), then the state reason.
+        // Quiet chats say nothing rather than a raw "idle".
+        let project = self
+            .project
+            .is_none()
+            .then_some(chat.project_id.as_ref())
+            .flatten()
+            .and_then(|id| self.projects.iter().find(|p| &p.id == id))
+            .map(|p| p.name.clone());
+        let reason = chat
+            .attention
+            .as_ref()
+            .map(|a| a.label.clone())
+            .or_else(|| chat.signal.map(|_| chat.signal_label().to_owned()));
+        let state = reason
+            .into_iter()
+            .chain(chat.archived.then(|| "Archived".to_owned()))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let detail = project
+            .iter()
+            .cloned()
+            .chain((!state.is_empty()).then(|| state.clone()))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let menu_shown = self.selected == Some(ix) || self.opened.as_ref() == Some(&chat.id);
         let owner = self.action_owner.clone();
         let menu_owner = owner.clone();
         let button_owner = owner.clone();
@@ -232,18 +259,18 @@ impl ListDelegate for ChatList {
                 .pr_0()
                 .py_0()
                 .rounded(px(appearance::Radius::ROW))
-                .accessibility_label(SharedString::from(format!(
-                    "{} · {}{}",
-                    chat.title,
-                    chat.signal_label(),
-                    if chat.archived { " · Archived" } else { "" }
-                )))
+                .accessibility_label(SharedString::from(if detail.is_empty() {
+                    chat.title.clone()
+                } else {
+                    format!("{} · {detail}", chat.title)
+                }))
                 .hover_fill(!has_corner)
                 .confirmed(self.opened.as_ref() == Some(&chat.id))
                 .child(
                     div()
                         .id(SharedString::from(format!("chat-row-{}", chat.id)))
                         .test_support()
+                        .group("chat-row")
                         .capture_any_mouse_down(move |_, w, cx| {
                             if !owner
                                 .update(cx, |v, cx| v.chat_row_guard(w, cx))
@@ -287,41 +314,55 @@ impl ListDelegate for ChatList {
                                         .child(SharedString::from(chat.title.clone())),
                                 )
                                 .child(
-                                    crate::ui::icon_action(
-                                        SharedString::from(format!("chat-menu-{}", chat.id)),
-                                        "Chat actions",
-                                        AppIcon::More,
-                                        crate::ui::Action::Quiet,
-                                    )
-                                    .size_8()
-                                    .disabled(chat.local_draft)
-                                    .dropdown_menu(
-                                        move |menu, w, cx| {
-                                            LocalViewer::chat_actions_menu(
-                                                button_owner.clone(),
-                                                button_chat.clone(),
-                                                menu,
-                                                w,
-                                                cx,
+                                    // Revealed on hover, keyboard selection or the open row; the
+                                    // right-click menu and Tab reach it regardless.
+                                    div()
+                                        .flex_none()
+                                        .opacity(if menu_shown { 1. } else { 0. })
+                                        .group_hover("chat-row", |s| s.opacity(1.))
+                                        .child(
+                                            crate::ui::icon_action(
+                                                SharedString::from(format!("chat-menu-{}", chat.id)),
+                                                "Chat actions",
+                                                AppIcon::More,
+                                                crate::ui::Action::Quiet,
                                             )
-                                        },
-                                    ),
+                                            .size_8()
+                                            .disabled(chat.local_draft)
+                                            .dropdown_menu(move |menu, w, cx| {
+                                                LocalViewer::chat_actions_menu(
+                                                    button_owner.clone(),
+                                                    button_chat.clone(),
+                                                    menu,
+                                                    w,
+                                                    cx,
+                                                )
+                                            }),
+                                        ),
                                 ),
                         )
-                        .child(
+                        .when(!detail.is_empty(), |row| row.child(
                             div()
                                 .id("sidebar-chat-detail")
                                 .test_support()
+                                .h_flex()
                                 .min_w_0()
-                                .truncate()
+                                // Text lane: the line fades out before the state corner.
+                                .when(has_corner, |d| d.pr(px(appearance::Space::SECTION)))
                                 .text_size(px(appearance::TextRole::CAPTION))
                                 .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(format!(
-                                    "{}{}",
-                                    chat.signal_label(),
-                                    if chat.archived { " · Archived" } else { "" }
-                                ))),
-                        )
+                                // A long project name yields before the state reason.
+                                .children(project.map(|p| {
+                                    div()
+                                        .min_w_0()
+                                        .flex_shrink(16.)
+                                        .truncate()
+                                        .child(SharedString::from(if state.is_empty() { p } else { format!("{p} · ") }))
+                                }))
+                                .when(!state.is_empty(), |d| {
+                                    d.child(div().flex_shrink_0().max_w(gpui_kit::relative(0.7)).truncate().child(SharedString::from(state.clone())))
+                                }),
+                        ))
                         .context_menu(move |menu, w, cx| {
                             LocalViewer::chat_actions_menu(
                                 menu_owner.clone(),
@@ -998,6 +1039,7 @@ impl LocalViewer {
                     opened: None,
                     loaded: false,
                     project: None,
+                    projects: Arc::new(Vec::new()),
                     corners: HashMap::new(),
                 },
                 window,
@@ -1976,6 +2018,7 @@ impl LocalViewer {
             delegate.opened = opened;
             delegate.loaded = self.state.list_loaded;
             delegate.project = self.project_scope.clone();
+            delegate.projects = self.state.projects.clone();
             delegate.filter();
             let selected = selected
                 .and_then(|id| {
