@@ -271,6 +271,9 @@ private func json(_ value: some Encodable) throws -> [String: Any] {
     #expect(release["sessionId"] is NSNull, "releasing sends null, not an omitted key")
     #expect(try json(MissionTaskWrite(sessionId: .set("s1")))["sessionId"] as? String == "s1")
     #expect(try json(MissionTaskWrite(title: "Auth")).keys.sorted() == ["title"])
+    let reassigned = try json(MissionTaskWrite(sessionId: .set("s1"), overrideRetirement: true))
+    #expect(reassigned["overrideRetirement"] as? Bool == true)
+    #expect(reassigned.keys.sorted() == ["overrideRetirement", "sessionId"])
 
     let handBack = try json(UpdateMissionRequest(coordinatorSessionId: .clear))
     #expect(handBack.keys.sorted() == ["coordinatorSessionId"])

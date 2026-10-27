@@ -367,6 +367,7 @@ public struct MissionTaskWrite: Encodable, Sendable {
     public var milestone: String?
     public var phaseId: NullableUpdate<String>? = nil
     public var overridePhaseGating: Bool? = nil
+    public var overrideRetirement: Bool? = nil
     public var dependsOn: [String]?
     public var decisionIds: [String]?
     public var sessionId: NullableUpdate<String>?
@@ -377,7 +378,7 @@ public struct MissionTaskWrite: Encodable, Sendable {
         title: String? = nil, body: String? = nil, status: MissionTaskStatus? = nil, order: Double? = nil,
         milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: NullableUpdate<String>? = nil,
         preferredModel: NullableUpdate<String>? = nil, preferredThinking: NullableUpdate<String>? = nil,
-        phaseId: NullableUpdate<String>? = nil, overridePhaseGating: Bool? = nil
+        phaseId: NullableUpdate<String>? = nil, overridePhaseGating: Bool? = nil, overrideRetirement: Bool? = nil
     ) {
         self.title = title
         self.body = body
@@ -391,11 +392,12 @@ public struct MissionTaskWrite: Encodable, Sendable {
         self.preferredThinking = preferredThinking
         self.phaseId = phaseId
         self.overridePhaseGating = overridePhaseGating
+        self.overrideRetirement = overrideRetirement
     }
 
     private enum CodingKeys: String, CodingKey {
         case title, body, status, order, milestone, dependsOn, decisionIds, sessionId
-        case preferredModel, preferredThinking, phaseId, overridePhaseGating
+        case preferredModel, preferredThinking, phaseId, overridePhaseGating, overrideRetirement
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -407,6 +409,7 @@ public struct MissionTaskWrite: Encodable, Sendable {
         try container.encodeIfPresent(milestone, forKey: .milestone)
         try container.encodeUpdate(phaseId, forKey: .phaseId)
         try container.encodeIfPresent(overridePhaseGating, forKey: .overridePhaseGating)
+        try container.encodeIfPresent(overrideRetirement, forKey: .overrideRetirement)
         try container.encodeIfPresent(dependsOn, forKey: .dependsOn)
         try container.encodeIfPresent(decisionIds, forKey: .decisionIds)
         try container.encodeUpdate(sessionId, forKey: .sessionId)

@@ -270,6 +270,19 @@ CREATE TABLE IF NOT EXISTS pending_notices (
 	text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pending_notices_by_mission ON pending_notices (mission_id, event_id);
+CREATE TABLE IF NOT EXISTS task_completions (
+	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+	record TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS retired_members (
+	session_id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	retired_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS urgent_notices (
+	event_id INTEGER PRIMARY KEY REFERENCES pending_notices(event_id) ON DELETE CASCADE,
+	immediate INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS pending_notice_summaries (
 	event_id INTEGER NOT NULL REFERENCES pending_notices(event_id) ON DELETE CASCADE,
 	group_key TEXT NOT NULL,
@@ -1206,6 +1219,7 @@ export class MissionStore {
 			{
 				...(task ? { taskId: task.id } : {}),
 				wake: event.kind !== "progress",
+				urgent: event.kind === "question" || event.kind === "result",
 				noticeText: text,
 				noticeSummaries: [
 					{
@@ -1342,6 +1356,8 @@ export class MissionStore {
 			health?: MissionHealth;
 			at?: number;
 			wake?: boolean;
+			urgent?: boolean;
+			settled?: boolean;
 			noticeText?: string;
 			noticeSummaries?: { key: string; text: string; state?: string }[];
 			userNote?: boolean;
@@ -1398,6 +1414,7 @@ export class MissionStore {
 					at,
 					extra.noticeText ?? eventText,
 				);
+				if (extra.urgent) this.run("INSERT INTO urgent_notices VALUES (?, ?)", eventId, extra.settled ? 0 : 1);
 				for (const summary of remaining)
 					this.run(
 						"INSERT INTO pending_notice_summaries (event_id, group_key, text, state) VALUES (?, ?, ?, ?)",
@@ -1678,6 +1695,7 @@ export class MissionStore {
 			);
 			this.run("DELETE FROM member_runs WHERE session_id = ?", session.id);
 			if (ownedTasks.length && !tasks.length) return;
+			if (session.outcome === "done" && tasks.length && tasks.every((task) => this.completion(id, task.id))) return;
 			// Startup is recovery, not a replay of all historical outcomes of newly attached chats.
 			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
 			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
@@ -1707,6 +1725,8 @@ export class MissionStore {
 				{ sessionId: session.id },
 				{
 					wake: true,
+					urgent: session.outcome === "question" || session.outcome === "failed" || session.outcome === "done",
+					settled: session.outcome === "done",
 					noticeSummaries: tasks.length
 						? tasks.map((task) => ({
 								key: `task:${task.id}`,
@@ -1743,7 +1763,15 @@ export class MissionStore {
 				SELECT mission_id, delivered_at, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY delivered_at DESC) AS rank
 				FROM notices WHERE delivered_at > ?
 			)
-			SELECT p.*, n.request_id, a.busy, a.idle_at, r.delivered_at AS capped_at FROM pending p
+			SELECT p.*, n.request_id, a.busy, a.idle_at, r.delivered_at AS capped_at,
+			(SELECT MAX(u.immediate) FROM urgent_notices u
+			 JOIN pending_notices pn ON pn.event_id=u.event_id
+			 JOIN pending_notice_summaries summary ON summary.event_id=u.event_id
+			 WHERE pn.mission_id=p.mission_id AND NOT EXISTS (
+			 SELECT 1 FROM pending_notice_summaries newer JOIN pending_notices np ON np.event_id=newer.event_id
+			 WHERE np.mission_id=p.mission_id AND newer.group_key=summary.group_key AND newer.event_id>summary.event_id
+			 )) AS urgent
+			FROM pending p
 			LEFT JOIN notice_activity a ON a.mission_id = p.mission_id
 			LEFT JOIN notices n ON n.mission_id = p.mission_id AND n.delivered_at IS NULL
 			LEFT JOIN recent r ON r.mission_id = p.mission_id AND r.rank = ?`,
@@ -1755,18 +1783,21 @@ export class MissionStore {
 			const missionId = str(row.mission_id!);
 			return {
 				missionId,
-				at: noticeDeadline(
-					{
-						firstAt: num(row.first_at!),
-						lastAt: num(row.last_at!),
-						idleAt: num(row.idle_at ?? 0),
-						busy: row.busy === 1,
-						immediateWhenIdle: row.busy === 0,
-						retry: !!row.request_id,
-						cappedAt: row.capped_at === null ? undefined : num(row.capped_at!),
-					},
-					now,
-				),
+				at:
+					row.urgent !== null && (row.busy !== 1 || row.urgent === 1)
+						? now
+						: noticeDeadline(
+								{
+									firstAt: num(row.first_at!),
+									lastAt: num(row.last_at!),
+									idleAt: num(row.idle_at ?? 0),
+									busy: row.busy === 1,
+									immediateWhenIdle: false,
+									retry: !!row.request_id,
+									cappedAt: row.capped_at === null ? undefined : num(row.capped_at!),
+								},
+								now,
+							),
 			};
 		});
 	}
@@ -2773,9 +2804,13 @@ export class MissionStore {
 			fields.order ??
 			num(this.one("SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM tasks WHERE mission_id = ?", id)!.n!);
 		const status = fields.status ?? "todo";
+		if (status === "done" && actor.sessionId) throw new Error("Create an unfinished task, then use complete");
 		const taskId = randomUUID();
 		const owner = write.sessionId ?? null;
-		if (owner !== null) this.assertMember(id, owner);
+		if (owner !== null) {
+			this.assertMember(id, owner);
+			this.assertFreshMember(owner);
+		}
 		this.run(
 			"INSERT INTO tasks (id, mission_id, number, title, body, status, sort, milestone, depends_on, session_id, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			taskId,
@@ -2796,6 +2831,7 @@ export class MissionStore {
 			taskId,
 			at: now,
 			wake: status === "blocked",
+			urgent: status === "blocked",
 			noticeText: `#${number} ${title} blocked${fields.body ? `: ${fields.body}` : ""}`,
 		});
 		if (fields.decisionIds !== undefined)
@@ -2925,6 +2961,91 @@ export class MissionStore {
 		return this.task(id, taskId);
 	}
 
+	/** One immutable, task-owned handoff. Retries return it, never add another event. */
+	completeTask(id: string, ref: unknown, sessionId: string, value: unknown) {
+		this.assertMember(id, sessionId);
+		const task = this.resolveTask(id, ref);
+		if (task.sessionId !== sessionId) throw new Conflict("Only the task owner can complete it");
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("completion is required");
+		const input = value as Record<string, unknown>;
+		if (Object.keys(input).sort().join(",") !== "checks,commit,issues")
+			throw new Error("completion requires commit, checks and issues only");
+		const record = {
+			commit: text(input.commit, "commit", 40)!,
+			checks: text(input.checks, "checks", 2000)!,
+			issues: text(input.issues, "issues", 1000, { empty: true })!,
+		};
+		if (!/^[a-f0-9]{40}$/.test(record.commit)) throw new Error("commit must be a landed 40-character commit hash");
+		const encoded = JSON.stringify(record);
+		const previous = this.completion(id, task.id);
+		if (previous) {
+			if (JSON.stringify(previous) !== encoded) throw new Conflict("Task already has a completion record");
+			return previous;
+		}
+		this.batchChanges(() => {
+			this.run("INSERT INTO task_completions VALUES (?, ?)", task.id, encoded);
+			this.updateTask(id, task.id, { status: "done" }, { sessionId });
+			if (task.status === "done")
+				this.event(
+					id,
+					"task",
+					`Task #${task.number} completion recorded`,
+					{ sessionId },
+					{
+						taskId: task.id,
+						wake: true,
+						urgent: true,
+						noticeSummaries: [
+							{
+								key: `task:${task.id}`,
+								text: `Task #${task.number} done. Read the task for details.`,
+								state: "done",
+							},
+						],
+					},
+				);
+			if (this.require(id).coordinatorSessionId !== sessionId)
+				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", sessionId, id, Date.now());
+			this.changed(id, [sessionId]);
+		});
+		return record;
+	}
+
+	completion(id: string, taskId: string): { commit: string; checks: string; issues: string } | undefined {
+		this.task(id, taskId);
+		const row = this.one("SELECT record FROM task_completions WHERE task_id = ?", taskId);
+		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	memberRetiredAt(sessionId: string): number | undefined {
+		const row = this.one("SELECT retired_at FROM retired_members WHERE session_id = ?", sessionId);
+		return row ? num(row.retired_at!) : undefined;
+	}
+
+	retiredMember(sessionId: string): boolean {
+		return !!this.one("SELECT 1 FROM retired_members WHERE session_id = ?", sessionId);
+	}
+
+	memberRetirementReady(sessionId: string): boolean {
+		const membership = this.membership(sessionId);
+		if (
+			!membership ||
+			membership.coordinator ||
+			!this.retiredMember(sessionId) ||
+			this.passiveLifecycle(membership.missionId)
+		)
+			return false;
+		const tasks = this.tasks(membership.missionId).filter((task) => task.sessionId === sessionId);
+		return tasks.length > 0 && tasks.every((task) => task.status === "done" || task.status === "dropped");
+	}
+
+	private assertFreshMember(sessionId: string): void {
+		if (this.retiredMember(sessionId))
+			throw new Conflict(
+				"This member has delivered and is retired. Start a new chat, or ask the user to override retirement.",
+			);
+	}
+
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
 		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
 			return this.releaseTask(id, taskId, actor);
@@ -2937,10 +3058,15 @@ export class MissionStore {
 			if (actor.sessionId) throw new Error("Chats claim tasks with the claim action; only the user assigns them");
 			if (write.sessionId !== null) this.assertMember(id, write.sessionId);
 			owner = write.sessionId;
+			if (owner && owner !== before.sessionId && write.overrideRetirement !== true) this.assertFreshMember(owner);
 		}
 		const status = fields.status ?? before.status;
+		if (status === "done" && before.status !== "done" && actor.sessionId && !this.completion(id, before.id))
+			throw new Error("Use complete with commit, checks and issues to finish a task");
 		const now = Date.now();
 		this.transaction(() => {
+			if (owner && owner !== before.sessionId && !actor.sessionId && write.overrideRetirement === true)
+				this.run("DELETE FROM retired_members WHERE session_id = ?", owner);
 			const phase = this.taskPhase(id, fields, actor);
 			if (fields.status !== undefined && fields.status === before.status)
 				this.run("UPDATE shared_task_definitions SET revision=revision+1 WHERE id=?", before.id);
@@ -2990,8 +3116,21 @@ export class MissionStore {
 				this.event(id, "task", `Task #${before.number} ${statusLabel(status)}: ${title}`, actor, {
 					taskId: before.id,
 					at: now,
-					wake: status === "blocked",
-					noticeText: `#${before.number} ${title} blocked${(fields.body ?? before.body) ? `: ${fields.body ?? before.body}` : ""}`,
+					wake: status === "blocked" || (status === "done" && !!this.completion(id, before.id)),
+					urgent: status === "blocked" || status === "done",
+					settled: false,
+					noticeText: `Task #${before.number} ${status}. Read the task for details.`,
+					...(status === "done"
+						? {
+								noticeSummaries: [
+									{
+										key: `task:${before.id}`,
+										text: `Task #${before.number} done. Read the task for details.`,
+										state: "done",
+									},
+								],
+							}
+						: {}),
 				});
 			else if (title !== before.title)
 				this.event(id, "task", `Task #${before.number} renamed: ${title}`, actor, { taskId: before.id, at: now });
@@ -3275,6 +3414,7 @@ export class MissionStore {
 		overridePhaseGating = false,
 	): MissionTask {
 		if (task.sessionId === sessionId) return task;
+		this.assertFreshMember(sessionId);
 		this.assertPhaseAdmission(task, overridePhaseGating && !actor.sessionId);
 		task = this.rawTask(task);
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
@@ -3554,10 +3694,19 @@ export class MissionStore {
 
 	// Comments
 
-	addComment(id: string, write: MissionCommentWrite, actor: MissionActor = USER): MissionComment {
+	addComment(
+		id: string,
+		write: MissionCommentWrite & { notification?: "action" | "informational" | "ack" | "urgent" },
+		actor: MissionActor = USER,
+	): MissionComment {
 		const mission = this.require(id);
 		if (!write || typeof write !== "object") throw new Error("Expected a comment object");
 		const commentText = text(write.text, "text", MAX_TEXT)!;
+		if (
+			write.notification !== undefined &&
+			!["action", "informational", "ack", "urgent"].includes(write.notification)
+		)
+			throw new Error("Invalid comment notification");
 		const anchor = text(write.anchor, "anchor", MAX_TEXT, { optional: true, empty: true }) || undefined;
 		if (write.targetSessionId !== undefined) this.assertMember(id, write.targetSessionId);
 		const now = Date.now();
@@ -3583,7 +3732,12 @@ export class MissionStore {
 			);
 			this.event(id, "comment", `Comment: ${comment.text}`, actor, {
 				at: now,
-				wake: !write.targetSessionId || write.targetSessionId === mission.coordinatorSessionId,
+				wake:
+					(!write.notification || write.notification === "action" || write.notification === "urgent") &&
+					!/^(ack|acknowledged|thanks|thank you|noted|received)[.!]?$/i.test(comment.text.trim()) &&
+					(!write.targetSessionId || write.targetSessionId === mission.coordinatorSessionId),
+				urgent: write.notification === "urgent",
+				noticeSummaries: [{ key: `comment:${comment.id}`, text: `Comment ${comment.id}: ${comment.text}` }],
 			});
 		});
 		this.changed(id);
@@ -4504,6 +4658,7 @@ export class MissionStore {
 			this.run("UPDATE tasks SET session_id = ? WHERE session_id = ?", to, from);
 			this.run("UPDATE missions SET coordinator_session_id = ? WHERE coordinator_session_id = ?", to, from);
 			this.run("UPDATE member_runs SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE retired_members SET session_id = ? WHERE session_id = ?", to, from);
 			this.run("UPDATE notices SET session_id = ? WHERE session_id = ? AND delivered_at IS NULL", to, from);
 			this.run(
 				"UPDATE comments SET target_session_id = ? WHERE target_session_id = ? AND resolved_at IS NULL",

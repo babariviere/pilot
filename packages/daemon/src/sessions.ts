@@ -211,6 +211,8 @@ export interface SessionMissionBridge {
 	/** The archive generation lets a later explicit chat restore win, including across daemon restarts. */
 	missionArchivedAt?(missionId: string): number | undefined;
 	passiveMissionLifecycle?(missionId: string): boolean;
+	retiredMember?(sessionId: string): boolean;
+	memberRetiredAt?(sessionId: string): number | undefined;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
 	renameCoordinator?(sessionId: string, title: string): void;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
@@ -3494,6 +3496,35 @@ export class SessionManager {
 		}
 	}
 
+	/** Automatic retirement never stops live work, pending deliveries, jobs or child agents. */
+	async retireMissionMember(id: string): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			return await this.setArchived(id, true, undefined, undefined, undefined, true);
+		} finally {
+			end();
+		}
+	}
+
+	private memberRetirementReady(meta: SessionMeta): boolean {
+		return (
+			!!this.missions?.retiredMember?.(meta.id) &&
+			meta.outcome === "done" &&
+			!meta.failure &&
+			(meta.restoredAt === undefined || meta.restoredAt < (this.missions?.memberRetiredAt?.(meta.id) ?? 0)) &&
+			!this.closing &&
+			!this.sleepPause &&
+			!this.updateGate.paused &&
+			!meta.working &&
+			!meta.pending?.length &&
+			!meta.initializing &&
+			!meta.preparing &&
+			!meta.kernelRestartPending &&
+			!this.backgroundWorking(meta) &&
+			!this.hasWorkspaceProcess(meta.id)
+		);
+	}
+
 	async restore(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
@@ -3550,6 +3581,7 @@ export class SessionManager {
 		autoArchivedPullRequest?: string,
 		staleBefore?: number,
 		coordinatorMissionId?: string,
+		retiredMember = false,
 	): Promise<SessionSummary> {
 		this.assertHistoryWritable(this.require(id));
 
@@ -3567,6 +3599,10 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				if (retiredMember) {
+					await this.missions?.whenDurable?.();
+					if (!this.memberRetirementReady(meta)) return this.summary(meta);
+				}
 				if (coordinatorMissionId !== undefined) {
 					await this.missions?.whenDurable?.();
 					// Restoration, reassignment or new work while the commit drained cancels this attempt.

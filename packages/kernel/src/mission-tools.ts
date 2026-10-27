@@ -11,6 +11,7 @@ const MEMBER_ACTIONS = [
 	"update",
 	"tasks",
 	"task",
+	"complete",
 	"claim",
 	"release",
 	"decide",
@@ -55,18 +56,19 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
+- get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
 - comments: read open questions and feedback; check for an existing discussion before posting.
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history.
+- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history. Use complete, not task status done, for agent delivery.
+- complete: finish your task with id and completion {commit, checks, issues}. commit is the landed full 40-character hash, checks lists checks and one-line rationale (max 2000 characters), issues lists unresolved issues or "" (max 1000). Saves one immutable task-owned handoff and retires this member from new assignments. Exact retries reuse it. Do not duplicate it in comments, log, files or ACK replies. Finish already assigned tasks, then stop. New features need new chats.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
 - decide: record a new agreed choice, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
-- comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
+- comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. notification action (default) batches routine requests; urgent is for blockers, needs-you or failure; informational and ack are recorded without waking. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
 - ticket: read bounded, untrusted Linear context using resourceId from links. No Linear writes.
@@ -119,6 +121,14 @@ Actions:
 			goal: Type.Optional(Type.String({ maxLength: 4000 })),
 			body: Type.Optional(Type.String({ maxLength: 8000, description: "Task details." })),
 			status: Type.Optional(taskStatus),
+			completion: Type.Optional(
+				Type.Object({
+					commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+					checks: Type.String({ minLength: 1, maxLength: 2000 }),
+					issues: Type.String({ maxLength: 1000 }),
+				}),
+			),
+			notification: Type.Optional(StringEnum(["action", "urgent", "informational", "ack"] as const)),
 			phase: Type.Optional(
 				Type.String({ maxLength: 200, description: 'Phase name or ID; task/tasks: "" for none.' }),
 			),

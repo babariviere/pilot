@@ -1071,6 +1071,8 @@ export interface MissionTaskWrite {
 	phaseId?: string | null;
 	/** Explicit user-only bypass when assigning a gated task to a chat. */
 	overridePhaseGating?: boolean;
+	/** Explicit user assignment to a delivered member; never granted to agent claims. */
+	overrideRetirement?: boolean;
 	dependsOn?: string[];
 	/** Decisions pinned to this task, sent in full to its chat. */
 	decisionIds?: string[];

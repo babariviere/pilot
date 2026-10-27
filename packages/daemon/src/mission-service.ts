@@ -213,6 +213,8 @@ export class MissionService {
 			},
 			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
 			passiveMissionLifecycle: (missionId) => store.passiveLifecycle(missionId),
+			retiredMember: (sessionId) => store.memberRetirementReady(sessionId),
+			memberRetiredAt: (sessionId) => store.memberRetiredAt(sessionId),
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);
 				if (membership?.coordinator && store.require(membership.missionId).title !== title)
@@ -1216,6 +1218,8 @@ export class MissionService {
 						.map((task) => view.task(task, true)),
 				};
 			}
+			case "complete":
+				return this.store.completeTask(missionId, args.id, sessionId, args.completion);
 			case "task": {
 				const write = {
 					...(args.title !== undefined ? { title: args.title } : {}),
@@ -1278,6 +1282,7 @@ export class MissionService {
 					missionId,
 					{
 						text: str("text") as string,
+						notification: args.notification as "action" | "urgent" | "informational" | "ack" | undefined,
 						...(str("anchor") ? { anchor: str("anchor") } : {}),
 						...(str("targetSessionId") ? { targetSessionId: str("targetSessionId") } : {}),
 					},
@@ -1344,6 +1349,7 @@ export class MissionService {
 			...view.task(task, true),
 			id: task.id,
 			body: task.body ?? "",
+			completion: this.store.completion(missionId, task.id) ?? null,
 			dependsOn: view.dependencies(task),
 			dependents: detail.tasks.filter((item) => item.dependsOn?.includes(task.id)).map((item) => item.number),
 			assignee: task.sessionId

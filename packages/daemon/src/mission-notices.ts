@@ -11,6 +11,8 @@ export class MissionNotices {
 	}
 	private readonly dispatcher: NoticeDispatcher;
 	private stopped = true;
+	private readonly retiring = new Set<Promise<void>>();
+	private readonly retirementIds = new Set<string>();
 	private readonly seen = new Map<string, string>();
 	private readonly unsubscribe: (() => void)[];
 	private readonly store: MissionStore;
@@ -40,6 +42,7 @@ export class MissionNotices {
 				if (!preferenceOnly) this.schedule();
 			}),
 			sessions.onChange((session) => this.observe(session)),
+			store.onMembershipChange((id) => this.retire(id)),
 		];
 	}
 
@@ -99,6 +102,7 @@ export class MissionNotices {
 		]);
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
+		this.retire(session.id);
 		// An unanswered question is a result for the mission even while the chat's jobs keep running.
 		const question = session.outcome === "question" && !session.working;
 		if (
@@ -109,6 +113,30 @@ export class MissionNotices {
 		else if (session.outcome) this.store.recordMemberCompletion(session, recovering);
 		if (!recovering) this.refreshActivity(session.missionId);
 		this.schedule();
+	}
+
+	private retire(id: string): void {
+		if (this.stopped || this.retirementIds.has(id) || !this.store.memberRetirementReady(id)) return;
+		const chat = this.sessions.get(id);
+		if (
+			!chat ||
+			chat.archivedAt !== undefined ||
+			chat.working ||
+			chat.state !== "idle" ||
+			chat.runningJobs?.length ||
+			chat.outcome !== "done"
+		)
+			return;
+		this.retirementIds.add(id);
+		const work = this.sessions
+			.retireMissionMember(id)
+			.then(() => {})
+			.catch((error) => console.warn(`pilotd: member retirement failed: ${error}`))
+			.finally(() => {
+				this.retiring.delete(work);
+				this.retirementIds.delete(id);
+			});
+		this.retiring.add(work);
 	}
 
 	private ownedPrs(missionId: string) {
@@ -175,6 +203,7 @@ export class MissionNotices {
 		this.stopped = true;
 		for (const unsubscribe of this.unsubscribe) unsubscribe();
 		await this.dispatcher.stop();
+		await Promise.all(this.retiring);
 		this.seen.clear();
 	}
 }

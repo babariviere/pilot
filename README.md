@@ -124,6 +124,13 @@ unchanged; outstanding accounting memory and release verification is documented 
   artifacts and activity, with an optional coordinator agent. One logical mission list stays visible regardless
   of a chat's stored execution identity. Synced mission evidence retains its canonical identity; disconnected or
   replica-only summaries remain read-only until current details can be loaded from the mission's home.
+  Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
+  open issues), readable through `mission get` with the task ID. Delivered members cannot claim new
+  tasks and archive after their existing tasks and live work settle. A user can explicitly assign with
+  `overrideRetirement: true`; new tasks normally start fresh chats. Legacy task records remain unchanged.
+  Routine comments batch for 30 seconds, including when idle. ACK-only and explicitly informational
+  comments do not wake the coordinator. Blockers, needs-you, failures and structured task delivery
+  bypass settlement; coordinator self-writes never wake it. Notices retain durable retry identities.
 - **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
   memory for later chats, rather than task status or secrets. A note can replace an outdated one, and
   duplicates are refused. Background summaries use byte-validated submissions, never hard truncation;

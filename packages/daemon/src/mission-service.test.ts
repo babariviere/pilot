@@ -779,6 +779,75 @@ test("compact get stays within estimated token budgets on a large fixture, with 
 	await assert.rejects(f.service.call(worker.id, "tasks", { filter: "bogus" }), /filter must be/);
 });
 
+test("delivered members archive after settlement, retain handoff, and new tasks start fresh chats", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { id } = f.store.create({
+		projectId: f.project.id,
+		title: "Synthetic delivery",
+		tasks: [{ title: "One" }, { title: "Two" }],
+	});
+	f.service.join(member.id, { missionId: id, taskId: "1" });
+	f.service.notices.start();
+	const worker = f.workers.get(member.id)!;
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	const record = { commit: "a".repeat(40), checks: "Unit tests, changed behavior covered.", issues: "" };
+	await f.service.call(member.id, "complete", { id: "1", completion: record });
+	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined, "completion cannot stop its own live turn");
+	await assert.rejects(f.service.call(member.id, "claim", { id: "2" }), /retired/);
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	await until(() => f.sessions.get(member.id)!.archivedAt);
+	const detail = (await f.service.call(member.id, "get", { id: "1" })) as { completion: unknown };
+	assert.deepEqual(detail.completion, record);
+	const next = await f.service.startTask(id, "2");
+	assert.notEqual(next.id, member.id);
+	assert.equal(f.store.resolveTask(id, "2").sessionId, next.id);
+	await f.sessions.restore(member.id);
+	await f.sessions.retireMissionMember(member.id);
+	assert.equal(
+		f.sessions.get(member.id)!.archivedAt,
+		undefined,
+		"explicit restoration wins over automatic retirement",
+	);
+});
+
+test("member retirement rechecks jobs, children, delivery and user override after persistence", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { id } = f.store.create({
+		projectId: f.project.id,
+		title: "Synthetic guards",
+		tasks: [{ title: "One" }, { title: "Two" }],
+	});
+	f.service.join(member.id, { missionId: id, taskId: "1" });
+	await f.service.call(member.id, "complete", {
+		id: "1",
+		completion: { commit: "b".repeat(40), checks: "Tests passed, scoped coverage.", issues: "" },
+	});
+	const worker = f.workers.get(member.id)!;
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	const meta = f.sessions["require"](member.id);
+	const background = t.mock.method(f.sessions, "backgroundWorking" as never, () => true);
+	await f.sessions.retireMissionMember(member.id);
+	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined);
+	background.mock.restore();
+	const durable = t.mock.method(f.store, "whenDurable", () => {
+		f.store.updateTask(id, "2", { sessionId: member.id, overrideRetirement: true });
+		return Promise.resolve();
+	});
+	await f.sessions.retireMissionMember(member.id);
+	assert.equal(
+		f.sessions.get(member.id)!.archivedAt,
+		undefined,
+		"new assignment during persistence cancels retirement",
+	);
+	assert.equal(meta.working, false);
+	durable.mock.restore();
+});
+
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
 	state: SessionState = "idle";
@@ -2049,7 +2118,7 @@ test("a member resuming during notice persistence revokes admission until all me
 			f.workers.get(member.id)!.onPacket({ type: "working", working: true });
 		}
 	});
-	const now = Date.now() + 30_000;
+	let now = Date.now() + 30_000;
 	t.mock.method(Date, "now", () => now);
 	await f.service.notices.flush(now);
 	const requests = f.workers.get(lead.id)!.requests;
@@ -2061,6 +2130,7 @@ test("a member resuming during notice persistence revokes admission until all me
 	assert.deepEqual(f.sessions["require"](lead.id).pending, [], "member activity revokes the session reservation");
 	f.workers.get(member.id)!.state = "idle";
 	f.workers.get(member.id)!.onPacket({ type: "working", working: false });
+	now += 30_000;
 	await f.service.notices.flush(now);
 	assert.equal(
 		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
@@ -2302,7 +2372,10 @@ test("multi-task creation and discovery require explicit attribution across serv
 	f.sessions["missions"]!.pullRequestCreated!(chat.id, first);
 	assert.equal(f.store.detail(id).resources.length, 0, "multiple claims are ambiguous");
 	await f.service.call(chat.id, "link", { url: first, taskId: "1" });
-	await f.service.call(chat.id, "task", { id: "1", status: "done" });
+	await f.service.call(chat.id, "complete", {
+		id: "1",
+		completion: { commit: "a".repeat(40), checks: "Scoped unit tests, covers changed behavior.", issues: "" },
+	});
 	f.sessions["missions"]!.pullRequestCreated!(chat.id, second);
 	assert.equal(f.store.detail(id).resources.length, 1, "a completed claim does not imply the next PR's task");
 	await f.service.call(chat.id, "link", { url: second, taskId: "2" });

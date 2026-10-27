@@ -256,6 +256,7 @@ test("pending updates stay unsettled between job exit and follow-up admission", 
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 0, "the job-exit gap is still busy");
 		f.change({ working: false });
+		t.mock.timers.tick(30_000);
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 1);
 		assert.match(f.sent[0]!, /A real update/);
@@ -558,7 +559,7 @@ test("30-second settle merges bursts, with a single 30-minute safety cap", (t) =
 		assert.equal(store.prepareNotice(id, "lead", 1_000 + NOTICE_MAX_DELAY_MS - 1), undefined);
 		const notice = store.prepareNotice(id, "lead", 1_000 + NOTICE_MAX_DELAY_MS)!;
 		assert.ok(notice);
-		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 6);
 		store.acknowledgeNotice(notice, 121_000);
 		assert.deepEqual(store.noticeDeadlines(121_000), []);
 	} finally {
@@ -618,22 +619,23 @@ test("active-role guards preserve events and revoke a frozen notice when the rol
 	}
 });
 
-test("all-idle immediate delivery still respects the rolling hourly cap and exact window boundary", (t) => {
+test("all-idle debounced delivery respects the rolling hourly cap and exact window boundary", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	try {
 		store.setNoticeActivity(id, false, Date.now());
 		for (let index = 0; index < 20; index++) {
 			store.addComment(id, { text: `notice ${index}` });
+			t.mock.timers.tick(30_000);
 			const notice = store.prepareNotice(id, "lead", Date.now())!;
 			assert.ok(notice, `notice ${index} admitted`);
 			store.acknowledgeNotice(notice, Date.now());
 		}
 		store.addComment(id, { text: "over cap" });
 		assert.equal(store.prepareNotice(id, "lead", Date.now()), undefined);
-		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, 1_000 + NOTICE_WINDOW_MS);
-		assert.equal(store.prepareNotice(id, "lead", 1_000 + NOTICE_WINDOW_MS - 1), undefined);
-		const resumed = store.prepareNotice(id, "lead", 1_000 + NOTICE_WINDOW_MS)!;
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, 31_000 + NOTICE_WINDOW_MS);
+		assert.equal(store.prepareNotice(id, "lead", 31_000 + NOTICE_WINDOW_MS - 1), undefined);
+		const resumed = store.prepareNotice(id, "lead", 31_000 + NOTICE_WINDOW_MS)!;
 		assert.match(resumed.content, /over cap/);
 	} finally {
 		store.close();
@@ -711,14 +713,16 @@ test("deleting a mission removes its pending batch and completion dedupe state",
 	}
 });
 
-test("large bursts collapse to one latest note without repeated delivery", () => {
+test("large bursts retain distinct comments in a bounded notice without repeated delivery", () => {
 	const { store, id } = setup();
 	try {
 		for (let index = 0; index < 250; index++) store.addComment(id, { text: `comment ${index}` });
 		const now = Date.now() + 30_000;
 		const notice = store.prepareNotice(id, "lead", now)!;
-		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
-		assert.match(notice.content, /comment 249/);
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 101);
+		assert.match(notice.content, /comment 0/);
+		assert.match(notice.content, /150 additional groups/);
+		assert.equal(store.detail(id).comments.length, 250);
 		store.acknowledgeNotice(notice, now);
 		assert.deepEqual(store.noticeDeadlines(now), []);
 	} finally {
@@ -777,7 +781,7 @@ test("the timer delivers promptly when members are idle and shutdown drains admi
 	try {
 		store.addComment(id, { text: "first event" });
 		await Promise.resolve();
-		t.mock.timers.tick(999);
+		t.mock.timers.tick(29_999);
 		assert.equal(admissions, 0);
 		t.mock.timers.tick(1);
 		assert.equal(admissions, 1);
@@ -842,7 +846,7 @@ test("one working or starting member holds notices; the last settlement makes th
 		t.mock.timers.tick(120_000);
 		await delivery.flush();
 		assert.equal(notices.length, 0);
-		change("second", "failed", "failed");
+		change("second", "idle", "done");
 		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now());
 		change("second", "working");
 		t.mock.timers.tick(2_000);
