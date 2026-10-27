@@ -39,6 +39,22 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
+      - name: Load current GUI packaging tools
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .pilot-release-tools
+          sparse-checkout: apps/desktop/scripts
+      - name: Apply current packaging helpers to the tagged source
+        # A retried draft keeps its tagged app source (packaging snapshots it with git archive)
+        # but runs today's orchestration fixes, like the Swift release job.
+        run: |
+          set -euo pipefail
+          for helper in gui_release.py bundle_runtime.py linux_gui_package_native.py linux_gui_package_runtime.py; do
+            cp ".pilot-release-tools/apps/desktop/scripts/$helper" "apps/desktop/scripts/$helper"
+          done
+          rm -rf .pilot-release-tools
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0

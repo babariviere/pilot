@@ -4,11 +4,11 @@ import argparse
 import os
 from pathlib import Path, PurePosixPath
 import shutil
-import select
 import signal
 import subprocess
 import tarfile
 import tempfile
+import time
 
 import linux_gui_package as package
 from bundle_runtime import CAP_BYTES, CAP_FILES
@@ -19,11 +19,16 @@ ROOT = Path(__file__).resolve().parents[3]
 def run_builder(command, cwd, env, timeout=1800):
     """Keep the owned leader unreaped until its build process group is drained."""
     child = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
-    descriptor = None
     timed_out = False
     try:
-        descriptor = os.pidfd_open(child.pid)
-        timed_out = not bool(select.select([descriptor], [], [], timeout)[0])
+        # WNOWAIT observes the exit without reaping. Polling instead of pidfd_open
+        # because the manylinux builder's Python is compiled without it.
+        deadline = time.monotonic() + timeout
+        while os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None:
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+            time.sleep(0.2)
     finally:
         # Even a failed/finished shell can leave a compiler or package helper.
         # Its unreaped leader reserves this group identity until wait below.
@@ -33,8 +38,6 @@ def run_builder(command, cwd, env, timeout=1800):
             pass
         finally:
             code = child.wait()
-            if descriptor is not None:
-                os.close(descriptor)
     if timed_out:
         raise subprocess.TimeoutExpired(command, timeout)
     if code:

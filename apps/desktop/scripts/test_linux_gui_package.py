@@ -260,18 +260,17 @@ class PackageTests(unittest.TestCase):
             events = []
             child = Mock(pid=123, wait=lambda: events.append("wait") or 0)
             with patch.object(runtime.subprocess, "Popen", return_value=child), \
-                    patch.object(runtime.os, "pidfd_open", return_value=88, create=True), \
-                    patch.object(runtime.select, "select", return_value=([88] if ready else [], [], [])), \
-                    patch.object(runtime.os, "killpg", side_effect=lambda *args: events.append("signal")), \
-                    patch.object(runtime.os, "close"):
+                    patch.object(runtime.os, "waitid", return_value=object() if ready else None), \
+                    patch.object(runtime.time, "sleep"), \
+                    patch.object(runtime.os, "killpg", side_effect=lambda *args: events.append("signal")):
                 if ready:
                     runtime.run_builder(["synthetic"], self.root, {})
                 else:
                     with self.assertRaises(subprocess.TimeoutExpired):
-                        runtime.run_builder(["synthetic"], self.root, {})
+                        runtime.run_builder(["synthetic"], self.root, {}, timeout=0)
             self.assertEqual(events, ["signal", "wait"])
 
-    @unittest.skipUnless(sys.platform == "linux" and hasattr(os, "pidfd_open"), "native Linux pidfd fixture")
+    @unittest.skipUnless(sys.platform == "linux", "native Linux process-group fixture")
     def test_native_runtime_builder_reaps_real_owned_success_and_timeout(self):
         import subprocess
         import linux_gui_package_runtime as runtime

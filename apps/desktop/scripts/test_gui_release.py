@@ -83,6 +83,11 @@ class GuiReleaseTests(unittest.TestCase):
         self.assertIn("linux_gui_package_runtime.py", package)
         self.assertIn("seal-linux", package)
         self.assertNotIn("publish-release.sh", package)
+        # Retried drafts keep tagged app source but run current packaging helpers.
+        self.assertIn("ref: ${{ github.sha }}", package)
+        for helper in ("gui_release.py", "bundle_runtime.py", "linux_gui_package_runtime.py"):
+            self.assertTrue((root / "apps/desktop/scripts" / helper).is_file())
+            self.assertIn(helper, package.split("Apply current packaging helpers")[1].split("- uses:")[0])
 
 
 if __name__ == "__main__":
