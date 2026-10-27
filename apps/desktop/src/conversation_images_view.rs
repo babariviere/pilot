@@ -200,7 +200,7 @@ impl TranscriptView {
     pub(super) fn render_image(
         &self,
         row: &Message,
-        _cx: &App,
+        cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
     ) -> AnyElement {
         let source = row.image_data().unwrap();
@@ -243,8 +243,10 @@ impl TranscriptView {
         let painted = self.images.painted.clone();
         let identity = Button::new(("conversation-image-source", id))
             .ghost()
-            .small()
-            .label("Copy source identity")
+            .xsmall()
+            .icon(crate::app_icon::AppIcon::Copy.asset())
+            .accessibility_label("Copy source identity")
+            .tooltip("Copy source identity")
             .on_click(move |_, _, cx| {
                 let _ = copy_owner.update(cx, |v, cx| {
                     if v.history_scope == scope
@@ -261,13 +263,21 @@ impl TranscriptView {
         let supported =
             source.data.is_some() && source.owner.is_some() && row.reader_key().is_some();
         let expand_owner = owner.clone();
-        let mut actions = div().h_flex().gap_1().child(identity);
+        // Image actions appear on hover; the image itself stays the content.
+        let mut actions = div()
+            .h_flex()
+            .gap_1()
+            .opacity(0.)
+            .group_hover("conversation-image", |s| s.opacity(1.))
+            .child(identity);
         if supported {
             actions = actions.child(
                 Button::new(("conversation-image-expand", id))
                     .ghost()
-                    .small()
-                    .label("Expand")
+                    .xsmall()
+                    .icon(crate::app_icon::AppIcon::Enlarge.asset())
+                    .accessibility_label("Expand")
+                    .tooltip("Expand")
                     .disabled(entry.and_then(|e| e.raster.as_ref()).is_none())
                     .on_click(move |_, w, cx| {
                         let _ = expand_owner.update(cx, |v, cx| {
@@ -279,6 +289,7 @@ impl TranscriptView {
         let mut content = div()
             .id(("conversation-image", id))
             .test_support()
+            .group("conversation-image")
             .relative()
             .v_flex()
             .w_full()
@@ -307,12 +318,12 @@ impl TranscriptView {
                     .justify_between()
                     .gap_2()
                     .child(
-                        crate::ui::text(
-                            crate::ui::Text::Caption,
-                            format!("{} · {}", row.display_label(), source.mime),
-                        )
-                        .flex_1()
-                        .min_w_0(),
+                        crate::ui::text(crate::ui::Text::Caption, row.display_label().to_owned())
+                            .text_color(
+                                gpui_kit::component::ActiveTheme::theme(cx).muted_foreground,
+                            )
+                            .flex_1()
+                            .min_w_0(),
                     )
                     .child(actions),
             );

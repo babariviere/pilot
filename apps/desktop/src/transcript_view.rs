@@ -752,59 +752,51 @@ impl TranscriptView {
         let source = row.shared_source();
         let user = row.label().starts_with("You");
         let found = self.find_context(row);
-        div()
-            .id(("message", row.id()))
-            .v_flex()
-            .rounded(px(crate::appearance::Radius::BUBBLE))
-            .when(user, |this| this.bg(cx.theme().muted).p_3())
-            .gap_2()
-            .w_full()
-            .min_w_0()
+        // You/Assistant are implied by the layout; other row kinds keep their label.
+        let label = (!user && row.display_label() != "Assistant")
+            .then(|| SharedString::from(row.display_label().to_owned()));
+        let copy_label = if self.folds.long(row) {
+            "Copy full source"
+        } else {
+            "Copy source"
+        };
+        // Exact copy stays one click away, revealed on hover at a fixed corner
+        // so streaming text never moves it.
+        let copy = div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .rounded(px(crate::appearance::Radius::CONTROL))
+            .bg(crate::appearance::card(cx))
+            .opacity(0.)
+            .group_hover("message", |s| s.opacity(1.))
             .child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .when(found.is_none(), |d| d.truncate())
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(if let Some(text) = found {
-                                div()
-                                    .id(("find-target", row.id()))
-                                    .test_support()
-                                    .aria_label(text.clone())
-                                    .whitespace_normal()
-                                    .child(text)
-                                    .into_any_element()
-                            } else {
-                                div()
-                                    .child(SharedString::from(row.display_label().to_owned()))
-                                    .into_any_element()
-                            }),
-                    )
-                    .child(
-                        Button::new(("copy-source", row.id()))
-                            .ghost()
-                            .small()
-                            .label(if self.folds.long(row) {
-                                "Copy full source"
-                            } else {
-                                "Copy source"
-                            })
-                            .when(self.folds.long(row), |b| {
-                                b.tooltip("Copies the exact loaded source, not content omitted by viewer limits.")
-                            })
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    source.as_ref().clone(),
-                                ))
-                            }),
-                    ),
-            )
+                Button::new(("copy-source", row.id()))
+                    .ghost()
+                    .xsmall()
+                    .icon(crate::app_icon::AppIcon::Copy.asset())
+                    .accessibility_label(copy_label)
+                    .tooltip(if self.folds.long(row) {
+                        "Copy full source. Includes the exact loaded source, not content omitted by viewer limits."
+                    } else {
+                        "Copy source"
+                    })
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(source.as_ref().clone()))
+                    }),
+            );
+        let body = div()
+            .v_flex()
+            .gap_2()
+            .min_w_0()
+            .when(user, |b| {
+                b.max_w(gpui_kit::relative(0.78))
+                    .bg(cx.theme().muted)
+                    .rounded(px(crate::appearance::Radius::BUBBLE))
+                    .px(px(14.))
+                    .py(px(10.))
+            })
+            .when(!user, |b| b.w_full())
             .child(match &self.text_states[ix] {
                 Some(state) => crate::typography::rich(
                     TextView::new(state),
@@ -826,7 +818,48 @@ impl TranscriptView {
                     .child(SharedString::from(row.source().to_string()))
                     .into_any_element(),
             })
-            .children(self.fold_controls(row, cx, owner))
+            .children(self.fold_controls(row, cx, owner));
+        div()
+            .id(("message", row.id()))
+            .group("message")
+            .relative()
+            .v_flex()
+            .gap_2()
+            .w_full()
+            .min_w_0()
+            .when(found.is_some() || label.is_some(), |m| {
+                m.child(
+                    div()
+                        .min_w_0()
+                        .pr_8()
+                        .when(found.is_none(), |d| d.truncate())
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if let Some(text) = found {
+                            div()
+                                .id(("find-target", row.id()))
+                                .test_support()
+                                .aria_label(text.clone())
+                                .whitespace_normal()
+                                .child(text)
+                                .into_any_element()
+                        } else {
+                            div().children(label).into_any_element()
+                        }),
+                )
+            })
+            .child(if user {
+                div()
+                    .h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .justify_end()
+                    .child(body)
+                    .into_any_element()
+            } else {
+                body.into_any_element()
+            })
+            .child(copy)
     }
 }
 
