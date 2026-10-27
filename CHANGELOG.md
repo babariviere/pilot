@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.79.0](https://github.com/babariviere/pilot/compare/v1.78.0...v1.79.0) (2026-10-27)
+
+
+### Features
+
+* **daemon:** abandon superseded originals during shared repo maintenance ([dbdd2fa](https://github.com/babariviere/pilot/commit/dbdd2fad8656dc8007793ea14f8ad733bfd80b63))
+* **daemon:** forget merged task bookmarks during shared repo maintenance ([318ab24](https://github.com/babariviere/pilot/commit/318ab240dd842eb54ff9d89a6a06963698fd9d3a))
+* **desktop:** move an older daemon to the updated app's runtime ([d343beb](https://github.com/babariviere/pilot/commit/d343beb694ff16b90fd7664b431b2f78fd8e9935))
+
+
+### Bug Fixes
+
+* **daemon:** keep only the newest base import bookmark in shared jj repos ([964ecec](https://github.com/babariviere/pilot/commit/964ecec0927284d8a79f0afb9b3e5da6b7e8fde9))
+* **daemon:** maintain busy shared repos after three days ([df16fe7](https://github.com/babariviere/pilot/commit/df16fe712508faf2f06e3afb3669eca690249df4))
+* **desktop:** install the Pilot icon as PNGs for the Linux menu entry ([eefc9a4](https://github.com/babariviere/pilot/commit/eefc9a4a728eb6b3c8da8e0aa30f1a0902ff579e))
+
 ## [1.78.0](https://github.com/babariviere/pilot/compare/v1.77.0...v1.78.0) (2026-10-27)
 
 
