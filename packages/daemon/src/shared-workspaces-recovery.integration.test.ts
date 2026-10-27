@@ -118,7 +118,7 @@ test("empty saved change remains jj-resolvable and restores exact IDs after both
 	}
 });
 
-test("daily maintenance abandons unreferenced originals of commits that landed rewritten elsewhere", async () => {
+test("daily maintenance forgets merged bookmarks and abandons originals of commits that landed rewritten elsewhere", async () => {
 	const f = fixture();
 	try {
 		const w = await f.store.create(f.source, f.path());
@@ -142,13 +142,16 @@ test("daily maintenance abandons unreferenced originals of commits that landed r
 		jj(w.path, "commit", "-m", "two");
 		const two = head();
 		const twoChange = jj(w.path, "log", "--no-graph", "-r", two, "-T", "change_id");
-		git(repository, "push", "--quiet", f.source, `${rewrite(one)}:refs/heads/landed-one`);
+		jj(w.path, "bookmark", "create", "feat/one", "-r", one);
+		git(f.source, "checkout", "--quiet", "--detach");
+		git(repository, "push", "--quiet", f.source, `${rewrite(one)}:refs/heads/main`);
 		git(repository, "push", "--quiet", f.source, `${rewrite(two)}:refs/heads/landed-two`);
 		// The local "two" is amended after landing, so its diff no longer matches the landed copy.
 		jj(w.path, "edit", two);
 		writeFileSync(join(w.path, "two.txt"), "two amended\n");
 		jj(w.path, "new", w.base);
 		const amended = jj(w.path, "log", "--no-graph", "-r", `change_id(${twoChange})`, "-T", "commit_id");
+		jj(w.path, "bookmark", "create", "feat/two", "-r", amended);
 		jj(w.path, "git", "fetch", "--remote", "origin");
 		const divergent = () =>
 			jj(w.path, "log", "--no-graph", "-r", "divergent()", "-T", 'commit_id ++ "\\n"').split("\n").sort();
@@ -158,6 +161,12 @@ test("daily maintenance abandons unreferenced originals of commits that landed r
 		assert.equal(left.length, 2, "only the amended change stays divergent");
 		assert.ok(left.includes(amended));
 		assert.equal(jj(w.path, "log", "--no-graph", "-r", `${one} & ::visible_heads()`, "-T", "commit_id"), "");
+		assert.deepEqual(
+			jj(w.path, "bookmark", "list", "-T", 'if(remote, "", name ++ "\\n")').split("\n"),
+			["feat/two"],
+			"the merged bookmark is forgotten; the amended one stays",
+		);
+		assert.match(jj(w.path, "bookmark", "list", "--all", "-T", 'name ++ "@" ++ remote ++ "\\n"'), /^main@origin$/m);
 	} finally {
 		f.close();
 	}

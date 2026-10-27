@@ -218,7 +218,8 @@ export class SharedWorkspaceStore {
 	/**
 	 * Daemon Git commands disable automatic GC. At most once a day, `jj util gc` drops jj data no operation still
 	 * references and runs `git gc`, which packs loose objects and prunes unreachable ones older than two weeks.
-	 * Superseded local copies of landed commits are abandoned first, so their data can be collected too.
+	 * Merged task bookmarks are forgotten and superseded local copies of landed commits abandoned first, so their
+	 * data can be collected too.
 	 */
 	async maintain(repository: string, now = Date.now()): Promise<boolean> {
 		const attempted = this.maintained.get(repository);
@@ -238,7 +239,7 @@ export class SharedWorkspaceStore {
 			}
 			await atomicJson(marker, { at: now });
 			try {
-				await this.abandonSuperseded(repository, await this.control(repository));
+				await this.cleanupLanded(repository, await this.control(repository));
 			} catch (error) {
 				console.warn(`pilotd: could not clean up superseded commits in ${repository}: ${error}`);
 			}
@@ -254,11 +255,14 @@ export class SharedWorkspaceStore {
 
 	/**
 	 * A commit rewritten outside this repository (PR auto-rebase, another checkout) keeps its change ID, so once
-	 * fetched from origin the local original turns divergent and stays visible. Abandon such originals when no
-	 * workspace, bookmark, tag or remote bookmark reaches them, they have no other descendants, and their diff
-	 * matches a landed copy exactly. Amended or still-used originals stay.
+	 * fetched from origin the local original turns divergent and stays visible. An original is superseded when a
+	 * landed copy has exactly the same diff.
+	 *
+	 * Forget local bookmarks whose every target is on trunk or superseded by a trunk copy: their work merged, and
+	 * forgetting, unlike deleting, never pushes a branch deletion. Then abandon superseded originals that no
+	 * workspace, bookmark, tag or remote bookmark reaches and nothing else builds on. Amended originals stay.
 	 */
-	private async abandonSuperseded(repository: string, control: string) {
+	private async cleanupLanded(repository: string, control: string) {
 		const rows = async (revset: string) =>
 			(
 				await this.jj(
@@ -279,11 +283,6 @@ export class SharedWorkspaceStore {
 				.split("\n")
 				.filter(Boolean)
 				.map((line) => line.split("\t") as [string, string, string]);
-		const loose = await rows("divergent() ~ ::(working_copies() | bookmarks() | remote_bookmarks() | tags())");
-		if (!loose.length) return;
-		const landed = new Map<string, string[]>();
-		for (const [change, commit, parents] of await rows('divergent() & ::remote_bookmarks(remote=exact:"origin")'))
-			if (parents === "1") landed.set(change, [...(landed.get(change) ?? []), commit]);
 		const fingerprints = new Map<string, string | undefined>();
 		const fingerprint = async (commit: string) => {
 			if (!fingerprints.has(commit))
@@ -299,20 +298,65 @@ export class SharedWorkspaceStore {
 				);
 			return fingerprints.get(commit);
 		};
-		const superseded: string[] = [];
-		for (const [change, commit, parents] of loose) {
-			const copies = landed.get(change);
-			if (parents !== "1" || !copies || !fullCommit.test(commit)) continue;
-			const own = await fingerprint(commit);
-			for (const copy of copies) {
-				if (own && own === (await fingerprint(copy))) {
-					superseded.push(commit);
-					break;
+		const superseded = async (originals: [string, string, string][], landedRevset: string) => {
+			const landed = new Map<string, string[]>();
+			for (const [change, commit, parents] of await rows(`divergent() & ${landedRevset}`))
+				if (parents === "1") landed.set(change, [...(landed.get(change) ?? []), commit]);
+			const result = new Set<string>();
+			for (const [change, commit, parents] of originals) {
+				const copies = landed.get(change);
+				if (parents !== "1" || !copies || !fullCommit.test(commit)) continue;
+				const own = await fingerprint(commit);
+				for (const copy of copies) {
+					if (own && own === (await fingerprint(copy))) {
+						result.add(commit);
+						break;
+					}
 				}
 			}
+			return result;
+		};
+		const bookmarks = (
+			await this.jj(
+				[
+					"--ignore-working-copy",
+					"bookmark",
+					"list",
+					"-T",
+					'if(remote, "", name ++ "\\t" ++ self.added_targets().map(|c| c.commit_id()).join(",") ++ "\\n")',
+				],
+				control,
+			)
+		)
+			.split("\n")
+			.map((line) => line.split("\t"))
+			.map(([name = "", targets = ""]) => ({ name, targets: targets.split(",").filter(Boolean) }))
+			.filter(({ name, targets }) => targets.length && !["main", "master", "trunk"].includes(name));
+		const targets = [...new Set(bookmarks.flatMap((bookmark) => bookmark.targets))];
+		if (targets.length && targets.every((target) => fullCommit.test(target))) {
+			// trunk() needs origin/HEAD, which an independent clone may lack.
+			const trunk =
+				'::(trunk() | remote_bookmarks(exact:"main", remote=exact:"origin") | ' +
+				'remote_bookmarks(exact:"master", remote=exact:"origin"))';
+			const set = `(${targets.join(" | ")})`;
+			const merged = new Set((await rows(`${set} & ${trunk}`)).map(([, commit]) => commit));
+			for (const commit of await superseded(await rows(`(${set} ~ ${trunk}) & divergent()`), trunk))
+				merged.add(commit);
+			const names = bookmarks
+				.filter((bookmark) => bookmark.targets.every((target) => merged.has(target)))
+				.map((bookmark) => `exact:${bookmark.name}`);
+			if (names.length) {
+				await this.jj(["--ignore-working-copy", "bookmark", "forget", ...names], control);
+				// The control workspace is not colocated. Export now, or the next import in an agent's colocated
+				// workspace would restore the bookmarks from their stale Git refs.
+				await this.jj(["--ignore-working-copy", "git", "export"], control);
+			}
 		}
-		if (!superseded.length) return;
-		const set = `(${superseded.join(" | ")})`;
+		const loose = await rows("divergent() ~ ::(working_copies() | bookmarks() | remote_bookmarks() | tags())");
+		if (!loose.length) return;
+		const originals = [...(await superseded(loose, '::remote_bookmarks(remote=exact:"origin")'))];
+		if (!originals.length) return;
+		const set = `(${originals.join(" | ")})`;
 		// Abandoning rebases descendants, so keep any original that something else builds on.
 		const safe = (await rows(`${set} ~ ::((${set}::) ~ ${set})`)).map(([, commit]) => commit);
 		if (safe.length) await this.jj(["--ignore-working-copy", "abandon", ...safe], control);
