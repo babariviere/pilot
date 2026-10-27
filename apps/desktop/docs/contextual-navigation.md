@@ -12,8 +12,9 @@ commands remain reachable without a permanent row of text buttons.
   included remains visible beside the list when active. Filtering keeps the
   canonical list selection where still visible and never navigates or retargets
   a conversation. Scope/search restoration remains owned by the existing cache.
-- Chat history replaces the permanent Earlier/Latest header buttons. It exposes
-  Load earlier messages (including explicit retry) and Return to latest.
+- The header's More (…) menu replaces the permanent Earlier/Latest and Make a
+  mission… buttons. It exposes Load earlier messages (including explicit retry),
+  Return to latest and Make a mission… (also in the chat row menu).
   Native arrow/Enter selection and Escape dismissal remain available.
 - A single contextual Latest action appears inside the transcript when reading
   away, refreshing a bounded window, or recovering an unavailable reader mark.

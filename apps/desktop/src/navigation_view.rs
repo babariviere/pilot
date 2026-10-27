@@ -349,9 +349,8 @@ impl LocalViewer {
             .transcript
             .update(cx, |v, cx| v.restore_reading(mark, cx))
         {
-            self.nav_error = Some(
-                "Previous read position is outside the loaded page. Use Chat history or Latest.",
-            );
+            self.nav_error =
+                Some("Previous read position is outside the loaded page. Use More or Latest.");
         }
     }
 }

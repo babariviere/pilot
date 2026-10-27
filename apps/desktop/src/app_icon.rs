@@ -9,7 +9,7 @@ use gpui_kit::{
 // The full catalog enum is larger than Kit's default asset bundle. Only embed
 // the additional glyphs used here; preserve default icons for Kit controls.
 icon_assets!(pub(crate) AppIconAssets, [
-    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity,
+    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare,
 ]);
 
 macro_rules! app_icons {
@@ -51,6 +51,8 @@ app_icons! {
     Send => ArrowUp,
     Stop => Square,
     Artifacts => Layers,
+    Links => Link,
+    Changes => GitCompare,
     Source => CodeXml,
     Earlier => ArrowUp,
     Latest => ArrowDown,

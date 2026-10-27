@@ -434,10 +434,14 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(h, |_, w, cx| w.click("mission-cancel", cx))
                     .unwrap();
                 settle(cx, h);
-                cx.update_window(h, |_, w, cx| {
+                cx.update_window(h, |_, _, cx| {
                     assert!(!view.read(cx).mission_open);
                     assert!(view.read(cx).mission.read(cx).pending());
-                    w.click("make-mission", cx); // Selected OTHER chat cannot replace pending SOURCE.
+                })
+                .unwrap();
+                // Selected OTHER chat cannot replace pending SOURCE through the … menu.
+                super::contextual_navigation::probe_make_mission(cx, h);
+                cx.update_window(h, |_, w, cx| {
                     assert!(!view.read(cx).mission_open);
                     w.right_click("chat-row-source", cx);
                 })

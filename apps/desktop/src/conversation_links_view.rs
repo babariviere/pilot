@@ -360,15 +360,20 @@ impl LocalViewer {
                     }
                 }))
                 .child(
-                    ui::action("conversation-links-toggle", "Links", Action::Quiet)
-                        .disabled(
-                            self.selected.is_none()
-                                || !self.state.loaded
-                                || self.state.generation != self.generation
-                                || self.artifacts_open,
-                        )
-                        .selected(self.conversation_links.is_some())
-                        .on_click(cx.listener(|v, _, w, cx| v.toggle_conversation_links(w, cx))),
+                    ui::icon_action(
+                        "conversation-links-toggle",
+                        "Links (⌘⌥L)",
+                        crate::app_icon::AppIcon::Links,
+                        Action::Quiet,
+                    )
+                    .disabled(
+                        self.selected.is_none()
+                            || !self.state.loaded
+                            || self.state.generation != self.generation
+                            || self.artifacts_open,
+                    )
+                    .selected(self.conversation_links.is_some())
+                    .on_click(cx.listener(|v, _, w, cx| v.toggle_conversation_links(w, cx))),
                 )
         })
     }

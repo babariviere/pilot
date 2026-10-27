@@ -431,10 +431,15 @@ impl LocalViewer {
                     }
                 }))
                 .child(
-                    ui::action("workspace-changes-toggle", "Changes", Action::Quiet)
-                        .disabled(!self.state.loaded || self.state.generation != self.generation)
-                        .selected(self.workspace_changes.is_some())
-                        .on_click(cx.listener(|v, _, w, cx| v.toggle_workspace_changes(w, cx))),
+                    ui::icon_action(
+                        "workspace-changes-toggle",
+                        "Changes",
+                        crate::app_icon::AppIcon::Changes,
+                        Action::Quiet,
+                    )
+                    .disabled(!self.state.loaded || self.state.generation != self.generation)
+                    .selected(self.workspace_changes.is_some())
+                    .on_click(cx.listener(|v, _, w, cx| v.toggle_workspace_changes(w, cx))),
                 )
         })
     }

@@ -76,6 +76,17 @@ impl LocalViewer {
             && !self.state.page_busy
             && !self.refreshing
             && self.earlier_request.is_none();
+        // Make a mission… lives here (and in the chat row menu), not as a permanent button.
+        let can_mission = self.can_make_mission(cx);
+        let mission_label = if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.mission.read(cx).has_attempt(id))
+        {
+            "Mission…"
+        } else {
+            "Make a mission…"
+        };
         div()
             .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
                 if !v.project_choices_ready(w, cx) {
@@ -85,7 +96,7 @@ impl LocalViewer {
             .child(
                 crate::ui::icon_action(
                     "history-menu",
-                    "Chat history",
+                    "More",
                     AppIcon::More,
                     crate::ui::Action::Quiet,
                 )
@@ -94,6 +105,7 @@ impl LocalViewer {
                     let old_source = source.clone();
                     let b = weak.clone();
                     let new_source = source.clone();
+                    let c = weak.clone();
                     menu.item(
                         PopupMenuItem::new("Load earlier messages")
                             .disabled(!older)
@@ -120,9 +132,48 @@ impl LocalViewer {
                             });
                         }),
                     )
+                    .item(
+                        PopupMenuItem::new(mission_label)
+                            .disabled(!can_mission)
+                            .on_click(move |_, w, cx| {
+                                let _ = c.update(cx, |v, cx| v.open_mission(w, cx));
+                            }),
+                    )
                 }),
             )
     }
+}
+/// Open the header … menu and choose Make a mission… through the real native menu.
+#[cfg(feature = "native-probes")]
+pub(super) fn probe_make_mission(
+    cx: &mut gpui_kit::HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+) {
+    use gpui_kit::test::TestWindowExt;
+    let settle = |cx: &mut gpui_kit::HeadlessAppContext| {
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_millis(16));
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+        }
+    };
+    cx.update_window(h, |_, w, cx| w.click("history-menu", cx))
+        .unwrap();
+    settle(cx);
+    cx.update_window(h, |_, w, cx| w.within("popup-menu").click(2usize, cx))
+        .unwrap();
+    settle(cx);
+    // A guarded (disabled) choice leaves the menu open; dismiss it like a user would.
+    if cx
+        .update_window(h, |_, w, _| w.try_find("popup-menu").is_some())
+        .unwrap()
+    {
+        cx.update_window(h, |_, w, cx| w.press("escape", cx))
+            .unwrap();
+        settle(cx);
+    }
+}
+impl LocalViewer {
     pub(super) fn sync_history_controls(&mut self, cx: &mut Context<Self>) {
         let presentation = crate::transcript_view::HistoryControls {
             limited: self.state.limited,

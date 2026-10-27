@@ -214,8 +214,7 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                         v.transcript.read(cx).history_probe_anchor(cx),
                     )
                 });
-                cx.update_window(handle, |_, w, cx| w.click("make-mission", cx))
-                    .unwrap();
+                super::contextual_navigation::probe_make_mission(cx, handle);
                 until(cx, handle, &view, |v, cx| {
                     let s = v.mission.read(cx).probe_state();
                     s.0 || s.3
@@ -331,11 +330,7 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                                 )
                             }
                         });
-                        cx.update_window(handle, |_, w, cx| {
-                            assert_ne!(w.find("make-mission").disabled(), Some(true));
-                            w.click("make-mission", cx);
-                        })
-                        .unwrap();
+                        super::contextual_navigation::probe_make_mission(cx, handle);
                         settle(cx, handle);
                         assert_eq!(
                             server.seen.lock().unwrap().posts.len(),
@@ -360,8 +355,7 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                             cx.update_window(handle, |_, w, cx| w.click("mission-cancel", cx))
                                 .unwrap();
                             settle(cx, handle);
-                            cx.update_window(handle, |_, w, cx| w.click("make-mission", cx))
-                                .unwrap();
+                            super::contextual_navigation::probe_make_mission(cx, handle);
                             settle(cx, handle);
                             cx.update_window(handle, |_, w, cx| {
                                 w.click("mission-copy-id", cx);

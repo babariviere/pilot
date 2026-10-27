@@ -104,7 +104,8 @@ fn contextual_scrollbar(
                 ScrollDelta::Pixels(point(px(0.), px(delta))),
                 cx,
             );
-            w.hover("history-menu", cx);
+            // Outside the track and away from trailing header tooltips.
+            w.hover("chat-header", cx);
         })
         .unwrap();
         settle(cx, handle);

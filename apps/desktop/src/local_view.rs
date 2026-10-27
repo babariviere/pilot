@@ -2020,6 +2020,19 @@ impl Render for LocalViewer {
         } else {
             self.state.chat_status.as_str()
         };
+        // One quiet meta line: project, then only non-routine transport status.
+        let project = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            .and_then(|c| c.project_id.as_ref())
+            .and_then(|id| self.state.projects.iter().find(|p| &p.id == id))
+            .map(|p| p.name.clone());
+        let header_meta = project
+            .into_iter()
+            .chain((!history_status.is_empty() && history_status != "Connected · Local").then(|| history_status.to_owned()))
+            .collect::<Vec<_>>()
+            .join(" · ");
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
@@ -2107,21 +2120,24 @@ impl Render for LocalViewer {
                         .into_any_element()
                 } else {
                 let conversation = div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
-                    .child(div().v_flex().px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
-                        .child(div().text_base().font_semibold().truncate().child(SharedString::from(self.title.clone())))
-                        .when(!cwd.is_empty(),|this|this.child(div().text_xs().truncate().text_color(cx.theme().muted_foreground).child(SharedString::from(cwd))))
-                        .child(div().h_flex().items_center().gap_2().min_w_0()
-                            .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))
+                    // One 48pt row: title and quiet meta, then named icon actions and the … menu.
+                    .child(div().id("chat-header").test_support().h_flex().items_center().gap_2().h(px(48.)).px_3().flex_shrink_0().border_b_1().border_color(cx.theme().border)
+                        .child(div().h_flex().items_baseline().gap_2().flex_1().min_w_0()
+                            .child(div().id("chat-title").flex_shrink_0().max_w(gpui_kit::relative(0.75)).truncate().text_size(px(crate::ui::TextRole::HEADLINE)).font_semibold()
+                                .when(!cwd.is_empty(),|d|{let cwd=SharedString::from(cwd.clone());gpui_kit::StatefulInteractiveElement::tooltip(d,move|w,cx|gpui_kit::component::tooltip::Tooltip::new(cwd.clone()).build(w,cx))})
+                                .child(SharedString::from(self.title.clone())).test_support())
+                            // Meta yields space before the title does.
+                            .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().min_w_0().flex_shrink(16.).truncate().text_size(px(crate::ui::TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
+                        .child(div().h_flex().items_center().gap_0p5().flex_none()
+                            .children(self.queued_message_action(cx))
                             .children(self.conversation_links_action(cx))
                             .children(self.workspace_changes_action(cx))
-                            .children(self.queued_message_action(cx))
+                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child({
+                                let b=Button::new("artifact-gallery").ghost().small();
+                                if self.artifacts_open {b.icon(AppIcon::Back.asset()).label("Back to chat")} else {b.icon(AppIcon::Artifacts.asset()).accessibility_label("Artifacts").tooltip("Artifacts")}
+                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))}))
                             .children(self.mission_context_action(cx))
-                            .child(crate::ui::action("make-mission",if self.selected.as_ref().is_some_and(|id|self.mission.read(cx).has_attempt(id)){"Mission…"}else{"Make a mission…"},crate::ui::Action::Quiet)
-                                .disabled(!self.can_make_mission(cx)).on_click(cx.listener(|view,_,w,cx|view.open_mission(w,cx))))
-                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child(Button::new("artifact-gallery").ghost().small().icon(if self.artifacts_open{AppIcon::Back.asset()}else{AppIcon::Artifacts.asset()}).label(if self.artifacts_open{"Back to chat"}else{"Artifacts"})
-                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))))
-                            .child(div().flex_1().min_w_0().text_xs().truncate().text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(format!("{}{}",history_status,if self.state.queued>0{format!(" · {} queued",self.state.queued)}else{String::new()}))))))
+                            .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto()
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
