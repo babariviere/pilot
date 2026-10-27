@@ -704,7 +704,13 @@ bash scripts/check.sh
 # Real offscreen renderer, optional local screenshot. Does not open a visible UI.
 GPUI_FIXTURE_SCREENSHOT="$PWD/evidence/local/offscreen.png" \
   bash scripts/cargo.sh test --test rendering --locked
+# Library and other libtest suites: one process per test, in parallel.
+bash scripts/cargo.sh nextest run --locked --lib --test settings_state
 ```
+
+`scripts/bootstrap.sh` installs a pinned, checksummed `cargo-nextest` into
+`.tools/bin`; its profiles live in `.config/nextest.toml` (`--profile ci` in CI).
+Native probe targets use `harness = false` and keep `cargo test`.
 
 Pure tests cover stable IDs, history bounds, stream/prepend identity, exact UTF-8
 source reconstruction, local echo/overlap/stop/capacity and stress fixture sizes.

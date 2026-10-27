@@ -38,7 +38,7 @@ class CiTests(unittest.TestCase):
                         GITHUB_STEP_SUMMARY=str(self.root / "summary"))
         # Eliminate inherited test controls, never production environment tools.
         for key in ["FAIL_MATCH", "FAKE_OS", "FAKE_ARCH", "FAKE_VERSION", "METAL_CODE", "FAKE_LIPO", "MAC_TEST_LIST",
-                    "DIFF_FILES", "DIFF_FAIL", "GITHUB_EVENT_NAME", "UPDATER_TEST_LIST", "UPDATER_RESULT"]:
+                    "DIFF_FILES", "DIFF_FAIL", "GITHUB_EVENT_NAME", "UPDATER_TEST_LIST"]:
             self.env.pop(key, None)
         self.write("scripts/cargo.sh", '''#!/usr/bin/env bash
 set -eu
@@ -47,12 +47,8 @@ if [[ -n "${FAIL_MATCH:-}" && "$*" == *"$FAIL_MATCH"* ]]; then exit 42; fi
 if [[ "$*" == 'test --locked -p pilot-desktop --lib -- --list' ]]; then
   printf '%s\\n' "${MAC_TEST_LIST:-}"
 fi
-if [[ "$*" == 'test --locked --manifest-path updater/Cargo.toml --lib'* ]]; then
-  if [[ "$*" == *'-- --list' ]]; then
-    printf '%s\\n' "${UPDATER_TEST_LIST:-}"
-  else
-    printf '%s\\n' "${UPDATER_RESULT-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;}"
-  fi
+if [[ "$*" == 'test --locked --manifest-path updater/Cargo.toml --lib'*'-- --list' ]]; then
+  printf '%s\\n' "${UPDATER_TEST_LIST:-}"
 fi
 if [[ "$*" == 'build --locked --release --workspace --bins' ]]; then
   mkdir -p target/dev/release
@@ -149,11 +145,10 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.write("bin/python3", '#!/bin/sh\necho "$*" >> "$CALLS"\n')
         self.run_ci("check")
         calls = self.calls()
-        self.assertIn(["test", "--locked", "-p", "pilot-visual-worker", "--bin", "pilot-visual-worker",
-                       "--", "--test-threads=1"], calls)
-        self.assertIn(["test", "--locked", "-p", "pilot-desktop", "--lib", "--", "--test-threads=1"], calls)
-        self.assertIn(["test", "--locked", "-p", "pilot-desktop", "--test", "settings_state",
-                       "--", "--test-threads=1"], calls)
+        self.assertIn(["nextest", "run", "--locked", "--profile", "ci", "--no-tests=warn", "-p", "pilot-visual-worker",
+                       "--bin", "pilot-visual-worker"], calls)
+        self.assertIn(["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail", "-p", "pilot-desktop", "--lib",
+                       "--test", "settings_state"], calls)
         self.assertEqual(calls[-1], ["-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py", "-v"])
 
     def test_linux_executes_production_portable_library_and_state_tests_without_release(self):
@@ -161,9 +156,8 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.run_ci("check", FAKE_OS="Linux", FAKE_ARCH="x86_64")
         calls = self.calls()
         self.assertIn(["build", "--locked", "--workspace", "--bins"], calls)
-        self.assertIn(["test", "--locked", "-p", "pilot-desktop", "--lib", "--", "--test-threads=1"], calls)
-        self.assertIn(["test", "--locked", "-p", "pilot-desktop", "--test", "settings_state",
-                       "--", "--test-threads=1"], calls)
+        self.assertIn(["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail", "-p", "pilot-desktop", "--lib",
+                       "--test", "settings_state"], calls)
         self.assertFalse(any("--release" in call for call in calls))
 
     def updater_native_names(self):
@@ -183,7 +177,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
             ["fmt", *base, "--all", "--", "--check"],
             ["clippy", "--locked", *base, "--all-targets", "--", "-D", "warnings"],
             ["test", "--locked", *base, "--lib", "--", "--list"],
-            ["test", "--locked", *base, "--lib", "--", "--test-threads=1"],
+            ["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail", *base, "--lib"],
         ])
         for call in self.calls():
             self.assertNotIn("native-macos", call)
@@ -195,7 +189,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(self.calls(), [
             ["clippy", "--locked", *base, "--all-targets", "--features", "native-linux", "--", "-D", "warnings"],
             ["build", "--locked", *base, "--features", "native-linux", "--bin", "pilot-desktop-update-helper"],
-            ["test", "--locked", *base, "--lib", "--features", "native-linux", "--", "--test-threads=1"],
+            ["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail", *base, "--lib", "--features", "native-linux"],
         ])
         self.run_ci("updater-linux-tests", expected=1, FAKE_OS="Darwin", FAKE_ARCH="arm64")
 
@@ -222,27 +216,24 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(calls[1], ["build", *base, "--features", "native-macos",
                                     "--bin", "pilot-desktop-update-helper"])
         self.assertEqual(calls[2], ["test", *base, "--lib", "--features", "native-macos", "--", "--list"])
-        self.assertEqual(calls[3:], [
-            ["test", *base, "--lib", "--features", "native-macos", f"owned_tests::{name}",
-             "--", "--exact", "--test-threads=1"] for name in self.updater_native_names()
-        ] + [["test", *base, "--lib", "--features", "native-macos", "--", "--test-threads=1"]])
+        self.assertEqual(calls[3:], [["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail",
+                                      "--manifest-path", "updater/Cargo.toml", "--lib", "--features",
+                                      "native-macos", "--test-threads=1"]])
 
     def test_updater_missing_registration_zero_counts_and_failed_commands_are_failures(self):
         for phase in ["updater-check", "updater-mac-tests"]:
             with self.subTest(phase=phase):
                 self.run_ci(phase, expected=1, UPDATER_TEST_LIST="unrelated: test")
-                for result in ["", "test result: ok. 0 passed; 0 failed; 20 filtered out;",
-                               "test result: FAILED. 1 passed; 1 failed;"]:
-                    # Empty env value deliberately produces no result, not a default.
-                    self.run_ci(phase, expected=1, UPDATER_TEST_LIST=self.updater_listing(),
-                                UPDATER_RESULT=result)
-                for failure in ["clippy", "-- --list", "--test-threads=1"]:
+                # Zero selected tests fail inside nextest; the suite must request that.
+                self.run_ci(phase, UPDATER_TEST_LIST=self.updater_listing())
+                self.assertIn("--no-tests=fail", self.calls()[-1])
+                for failure in ["clippy", "-- --list", "nextest run"]:
                     self.run_ci(phase, expected=42, UPDATER_TEST_LIST=self.updater_listing(),
                                 FAIL_MATCH=failure)
         self.run_ci("updater-check", expected=42, FAIL_MATCH="fmt")
         self.run_ci("updater-mac-tests", expected=42, FAIL_MATCH="build")
         self.run_ci("updater-mac-tests", expected=42, UPDATER_TEST_LIST=self.updater_listing(),
-                    FAIL_MATCH="--lib --features native-macos -- --test-threads=1")
+                    FAIL_MATCH="--lib --features native-macos --test-threads=1")
 
     def test_mac_specific_tests_are_list_verified_exact_and_not_portable_suite(self):
         selected = SCRIPT.read_text().split("  mac-tests)", 1)[1].split("    )", 1)[0]
@@ -251,9 +242,11 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         listing = "\n".join(f"{name}: test" for name in names)
         self.run_ci("mac-tests", MAC_TEST_LIST=listing)
         calls = self.calls()
-        self.assertEqual(len(calls), 2 + len(names))  # helper build, list, then each exact test
-        self.assertTrue(all("--exact" in call for call in calls[2:]))
-        self.assertEqual({call[5] for call in calls[2:]}, set(names))
+        self.assertEqual(len(calls), 3)  # helper build, list, then one serial run of exactly these tests
+        run = calls[2]
+        self.assertEqual(run[:7], ["nextest", "run", "--locked", "--profile", "ci", "--no-tests=fail", "-p"])
+        self.assertIn("--test-threads=1", run)
+        self.assertEqual(run[-1].split("|"), [f"test(={name})" for name in names])
 
     def test_missing_mac_specific_test_fails_instead_of_zero_test_success(self):
         self.run_ci("mac-tests", expected=1, MAC_TEST_LIST="unrelated: test")
@@ -436,7 +429,7 @@ class WorkflowTests(unittest.TestCase):
         discovered = {path.stem for path in (desktop / "tests").glob("*.rs")}
         pure = (discovered - declared.keys()) | {name for name, target in declared.items()
                                                 if target.get("harness", True)}
-        executed = set(re.findall(r'cargo test --locked -p pilot-desktop --test ([\w-]+)', source))
+        executed = set(re.findall(r'nextest -p pilot-desktop [^\n]*?--test ([\w-]+)', source))
         self.assertEqual(executed, pure)
         self.assertIn("catalog", native)
         self.assertIn("settings", native)

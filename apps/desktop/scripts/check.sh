@@ -6,9 +6,9 @@ bash scripts/cargo.sh build --locked -p pilot-visual-worker
 bash scripts/cargo.sh fmt --all -- --check
 bash scripts/cargo.sh clippy -p pilot-visual-worker --locked --all-targets -- -D warnings
 bash scripts/cargo.sh clippy --all-targets --locked -- -D warnings
-bash scripts/cargo.sh test --lib --locked -- --test-threads=1
-# Pure preferences validation/durability, path-import harness, no production state.
-bash scripts/cargo.sh test --test settings_state --locked -- --test-threads=1
+# Library suite plus the pure preferences path-import harness (no production state), in
+# parallel under cargo-nextest (one process per test). Native probes below keep cargo test.
+bash scripts/cargo.sh nextest run --locked --no-tests=fail --lib --test settings_state
 # Native offscreen renderer, not a visible app or scrolling benchmark.
 bash scripts/cargo.sh test --test rendering --locked
 bash scripts/cargo.sh test --test chrome --locked

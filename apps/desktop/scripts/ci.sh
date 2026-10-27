@@ -29,18 +29,10 @@ cargo() { bash scripts/cargo.sh "$@"; }
 # The updater has its own workspace/lockfile. Always name its real manifest;
 # the desktop workspace alone does not register or execute these tests.
 updater=(--manifest-path updater/Cargo.toml)
-updater_test() {
-  if [[ "${1:-}" == --native-all ]]; then
-    cargo test --locked "${updater[@]}" --lib --features native-macos -- --test-threads=1 | tee target/ci-updater-result.txt
-  elif [[ $# -gt 0 ]]; then
-    cargo test --locked "${updater[@]}" --lib --features native-macos "owned_tests::$1" -- --exact --test-threads=1 | tee target/ci-updater-result.txt
-  else
-    cargo test --locked "${updater[@]}" --lib -- --test-threads=1 | tee target/ci-updater-result.txt
-  fi
-  grep -Eq '^test result: ok[.] [1-9][0-9]* passed;' target/ci-updater-result.txt || {
-    echo 'Updater suite did not report a nonzero passing test count.' >&2; exit 1;
-  }
-}
+# cargo-nextest (installed by bootstrap) runs each libtest test in its own process.
+# --no-tests=fail turns an empty selection into a failure instead of a silent pass.
+nextest() { cargo nextest run --locked --profile ci --no-tests=fail "$@"; }
+updater_test() { nextest "${updater[@]}" --lib "$@"; }
 
 case "${1:-}" in
   changed)
@@ -100,10 +92,10 @@ PY
     # Build the real production app/helper, not a copied portable-core fixture.
     cargo build --locked --workspace --bins
     cargo clippy --locked --workspace --all-targets --features native-probes -- -D warnings
-    cargo test --locked -p pilot-visual-worker --bin pilot-visual-worker -- --test-threads=1
-    cargo test --locked -p pilot-desktop --lib -- --test-threads=1
-    # Auto-discovered path-import integration harness, not part of --lib.
-    cargo test --locked -p pilot-desktop --test settings_state -- --test-threads=1
+    # The helper's tests are macOS-only, so an empty Linux selection is expected here.
+    cargo nextest run --locked --profile ci --no-tests=warn -p pilot-visual-worker --bin pilot-visual-worker
+    # Library suite plus the auto-discovered path-import harness settings_state (not part of --lib).
+    nextest -p pilot-desktop --lib --test settings_state
     python3 -m unittest discover -s scripts -p 'test_*.py' -v
     ;;
   linux-gui-check)
@@ -135,7 +127,7 @@ PY
     }
     cargo clippy --locked "${updater[@]}" --all-targets --features native-linux -- -D warnings
     cargo build --locked "${updater[@]}" --features native-linux --bin pilot-desktop-update-helper
-    cargo test --locked "${updater[@]}" --lib --features native-linux -- --test-threads=1
+    updater_test --features native-linux
     ;;
   updater-mac-tests)
     macos_host
@@ -173,12 +165,9 @@ PY
         echo "Missing required macOS updater test: $test" >&2; exit 1;
       }
     done
-    for test in "${updater_native_tests[@]}"; do
-      updater_test "$test"
-    done
-    # Integrated capsule/reservation modules register their own native tests,
-    # beyond the original owned_tests subset. Execute the complete native lib.
-    updater_test --native-all
+    # The complete native lib covers the required tests above plus the integrated
+    # capsule/reservation modules. Serial, since these share OS-level fixtures.
+    updater_test --features native-macos --test-threads=1
     ;;
   build)
     macos_host
@@ -249,12 +238,15 @@ PY
       artifact_worker::tests::explicit_scoped_read_and_event_use_only_faux_gets_and_close_reaps
     )
     cargo test --locked -p pilot-desktop --lib -- --list > target/ci-macos-tests.txt
+    filter=()
     for test in "${tests[@]}"; do
       grep -Fqx "$test: test" target/ci-macos-tests.txt || {
         echo "Missing required macOS test: $test" >&2; exit 1;
       }
-      cargo test --locked -p pilot-desktop --lib "$test" -- --exact --test-threads=1
+      filter+=("test(=$test)")
     done
+    # One serial run of exactly these tests (they own helper processes and sandboxes).
+    nextest -p pilot-desktop --lib --test-threads=1 -E "$(IFS='|'; echo "${filter[*]}")"
     ;;
   native)
     macos_host
