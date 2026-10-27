@@ -108,6 +108,82 @@ pub fn selected_fill(cx: &App) -> Hsla {
     cx.theme().list_active
 }
 
+/// Shared task status ladder (DESIGN.md): label, pie fill and row colour.
+/// Empty to do, one-third in progress, two-thirds in review, full done.
+pub fn task_status(status: &str, cx: &App) -> (SharedString, f32, Hsla) {
+    use crate::dither::Signal;
+    let dark = cx.theme().is_dark();
+    let tint = |s: Signal| -> Hsla { gpui_kit::rgb(s.rgb(dark)).into() };
+    let muted = cx.theme().muted_foreground;
+    match status {
+        "todo" => ("To do".into(), 0., muted),
+        "in_progress" => ("In progress".into(), 1. / 3., tint(Signal::Working)),
+        "in_review" => ("In review".into(), 2. / 3., tint(Signal::NeedsYou)),
+        "blocked" => ("Blocked".into(), 0., tint(Signal::Failed)),
+        "done" => ("Done".into(), 1., tint(Signal::Ready)),
+        "dropped" => ("Dropped".into(), 0., muted),
+        "delegated" => ("Delegated".into(), 1. / 3., muted),
+        other => (SharedString::from(other.to_owned()), 0., muted),
+    }
+}
+/// 14pt status pie: outline ring plus a clockwise sector from 12 o'clock.
+pub fn status_pie(fraction: f32, color: Hsla) -> Div {
+    use gpui_kit::{PathBuilder, canvas, point};
+    div().size(px(14.)).flex_none().child(
+        canvas(
+            |_, _, _| (),
+            move |b, (), window, _| {
+                let c = b.center();
+                let at = |a: f32| c + point(px(a.cos() * 5.5), px(a.sin() * 5.5));
+                let mut ring = PathBuilder::stroke(px(1.5));
+                for i in 0..=48 {
+                    let p = at(std::f32::consts::TAU * i as f32 / 48.);
+                    if i == 0 {
+                        ring.move_to(p)
+                    } else {
+                        ring.line_to(p)
+                    }
+                }
+                if let Ok(p) = ring.build() {
+                    window.paint_path(p, color);
+                }
+                if fraction > 0. {
+                    let mut sector = PathBuilder::fill();
+                    sector.move_to(c);
+                    let n = (48. * fraction).ceil() as usize;
+                    for i in 0..=n {
+                        let a = -std::f32::consts::FRAC_PI_2
+                            + std::f32::consts::TAU * fraction * i as f32 / n as f32;
+                        sector.line_to(at(a));
+                    }
+                    sector.close();
+                    if let Ok(p) = sector.build() {
+                        window.paint_path(p, color);
+                    }
+                }
+            },
+        )
+        .size_full(),
+    )
+}
+/// Plain 6pt capsule with proportional segments over a faint track; no animation.
+pub fn progress_bar(segments: &[(usize, Hsla)], total: usize, track: Hsla) -> Div {
+    let total = total.max(1) as f32;
+    div()
+        .h_flex()
+        .h(px(6.))
+        .w_full()
+        .rounded_full()
+        .overflow_hidden()
+        .bg(track)
+        .children(segments.iter().filter(|(n, _)| *n > 0).map(|(n, color)| {
+            div()
+                .h_full()
+                .w(gpui_kit::relative(*n as f32 / total))
+                .bg(*color)
+        }))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconSize {
     Chrome,

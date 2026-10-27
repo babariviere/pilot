@@ -12,10 +12,12 @@ use gpui_kit::{
     WeakEntity, Window,
     base::SelectableText,
     component::{
-        Disableable, IndexPath, StyledExt,
+        ActiveTheme, Disableable, IndexPath, StyledExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
     },
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::sync::Arc;
 #[path = "task_edit_pane.rs"]
@@ -45,17 +47,18 @@ impl ListDelegate for Rows {
         &mut self,
         ix: IndexPath,
         _: &mut Window,
-        _: &mut Context<ListState<Self>>,
+        cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
         let t = self.snapshot.tasks.get(ix.row)?;
         let id = t.id.clone();
         let owner = self.owner.clone();
         let generation = self.generation;
+        let (label, fill, color) = ui::task_status(&t.status, cx);
         Some(
             ListItem::new(SharedString::from(format!("mission-tasks-row-{}", t.id)))
                 .accessibility_label(SharedString::from(format!(
                     "#{} {}, {}",
-                    t.number, t.title, t.status
+                    t.number, t.title, label
                 )))
                 .on_click(move |_, w, cx| {
                     cx.stop_propagation();
@@ -68,12 +71,16 @@ impl ListDelegate for Rows {
                         .w_full()
                         .min_w_0()
                         .py_1()
+                        .h_flex()
+                        .items_center()
+                        .gap(px(Space::CONTROL))
+                        .child(ui::status_pie(fill, color))
                         .child(
                             ResourceLabel::new(SharedString::from(format!(
                                 "#{} {}",
                                 t.number, t.title
                             )))
-                            .detail(SharedString::from(t.status.clone())),
+                            .detail(label),
                         ),
                 ),
         )
@@ -509,19 +516,34 @@ impl Render for Pane {
             .child(
                 div()
                     .h_flex()
+                    .items_center()
                     .gap_2()
-                    .child(ui::heading(
-                        "mission-tasks-heading",
-                        "Tasks",
-                        Text::Headline,
-                    ))
+                    .child(
+                        div().flex_1().min_w_0().child(ui::heading(
+                            "mission-tasks-heading",
+                            "Tasks",
+                            Text::Headline,
+                        )),
+                    )
+                    .when(self.opened, |d| {
+                        d.child(
+                            ui::icon_action(
+                                "mission-tasks-refresh",
+                                "Refresh tasks",
+                                crate::app_icon::AppIcon::Retry,
+                                Action::Quiet,
+                            )
+                            .disabled(self.state.busy)
+                            .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
+                        )
+                    })
                     .child(
                         ui::action(
                             "mission-tasks-toggle",
                             if self.opened {
-                                "Close tasks"
+                                "Hide tasks"
                             } else {
-                                "Browse tasks"
+                                "Show tasks"
                             },
                             Action::Quiet,
                         )
@@ -535,15 +557,14 @@ impl Render for Pane {
                                 v.read(w, cx);
                             }
                         })),
-                    ),
+                    )
+                    .when(self.state.key.is_some(), |d| {
+                        d.child(
+                            ui::action("mission-task-new", "New task…", Action::Secondary)
+                                .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
+                        )
+                    }),
             );
-        if self.state.key.is_some() {
-            root = root.child(
-                ui::action("mission-task-new", "New task…", Action::Quiet)
-                    .self_start()
-                    .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
-            );
-        }
         if let Some(e) = self.create_error {
             root = root.child(Notice::new(e).tone(Tone::Error));
         }
@@ -553,26 +574,17 @@ impl Render for Pane {
         if !self.opened {
             return root;
         }
-        root = root.child(
-            div()
-                .h_flex()
-                .gap_2()
-                .child(
-                    ui::action("mission-tasks-refresh", "Refresh tasks", Action::Quiet)
-                        .disabled(self.state.busy)
-                        .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
-                )
-                .child(ui::text(
-                    Text::Caption,
-                    if self.state.busy {
-                        "Loading tasks… Retained tasks are not current."
-                    } else if self.state.error.is_some() {
-                        "Task read failed. Retained tasks are stale."
-                    } else {
-                        "Task snapshot. Refresh explicitly to update."
-                    },
-                )),
-        );
+        // Only states that change what the list means are narrated.
+        if self.state.busy || self.state.error.is_some() {
+            root = root.child(ui::text(
+                Text::Caption,
+                if self.state.busy {
+                    "Loading tasks… Retained tasks are not current."
+                } else {
+                    "Task read failed. Retained tasks are stale."
+                },
+            ));
+        }
         if let Some(e) = self.state.error {
             root = root.child(
                 div()
@@ -582,7 +594,47 @@ impl Render for Pane {
             );
         }
         if let Some(s) = &self.state.snapshot {
-            root=root.child(ui::text(Text::Caption,SharedString::from(format!("{} · {} · {} tasks received. Viewer limit: 256 tasks / 2 MiB response. This API has no task paging.",s.title,s.status,s.tasks.len()))).id("mission-tasks-coverage").test_support());
+            // Progress bar and legend in the shared status ladder colours.
+            let mut counts: Vec<(SharedString, f32, gpui_kit::Hsla, usize)> = Vec::new();
+            for t in s.tasks.iter() {
+                let (label, fill, color) = ui::task_status(&t.status, cx);
+                match counts.iter_mut().find(|c| c.0 == label) {
+                    Some(c) => c.3 += 1,
+                    None => counts.push((label, fill, color, 1)),
+                }
+            }
+            counts.sort_by(|a, b| b.1.total_cmp(&a.1));
+            let mut track = cx.theme().muted_foreground;
+            track.a *= 0.25;
+            let bar: Vec<_> = counts
+                .iter()
+                .filter(|c| c.1 > 0. || c.0 == "Blocked")
+                .map(|c| (c.3, c.2))
+                .collect();
+            root = root.child(
+                div()
+                    .id("mission-tasks-coverage")
+                    .test_support()
+                    .v_flex()
+                    .gap_2()
+                    .child(ui::progress_bar(&bar, s.tasks.len(), track))
+                    .child(
+                        div()
+                            .h_flex()
+                            .flex_wrap()
+                            .gap_3()
+                            .text_size(px(crate::appearance::TextRole::CAPTION))
+                            .text_color(cx.theme().muted_foreground)
+                            .children(counts.iter().map(|(label, _, color, n)| {
+                                div()
+                                    .h_flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(div().size(px(6.)).rounded_full().bg(*color))
+                                    .child(SharedString::from(format!("{n} {}", label.to_lowercase())))
+                            })),
+                    ),
+            );
             if s.tasks.is_empty() {
                 root = root.child(Notice::new("No tasks received in this snapshot."));
             }
@@ -625,9 +677,10 @@ impl Render for Pane {
                                 .flex_wrap()
                                 .gap_2()
                                 .child(
-                                    ui::action(
+                                    ui::icon_action(
                                         "mission-tasks-back",
                                         "Close details",
+                                        crate::app_icon::AppIcon::Close,
                                         Action::Quiet,
                                     )
                                     .on_click(cx.listener(|v, _, w, cx| v.back(w, cx))),
@@ -685,11 +738,10 @@ impl Render for Pane {
                                         t.id, generation
                                     )),
                                     SharedString::from(format!(
-                                        "#{} {}\n{}\n{}\n\n{}",
+                                        "#{} {}\n{}\n\n{}",
                                         t.number,
                                         t.title,
-                                        t.status,
-                                        t.context,
+                                        ui::task_status(&t.status, cx).0,
                                         if t.body.is_empty() {
                                             "No description saved."
                                         } else {

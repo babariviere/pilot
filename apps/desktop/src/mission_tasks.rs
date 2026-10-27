@@ -22,8 +22,6 @@ pub(crate) struct Task {
 #[derive(Clone, Debug)]
 pub(crate) struct Snapshot {
     pub(crate) key: Key,
-    pub(crate) title: String,
-    pub(crate) status: String,
     pub(crate) tasks: Vec<Task>,
 }
 impl Snapshot {
@@ -121,10 +119,11 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             .then(a.number.cmp(&b.number))
             .then(a.id.cmp(&b.id))
     });
+    // The mission header still validates; the overview already shows it.
+    text(&v["mission"]["title"], 800)?;
+    text(&v["mission"]["status"], 40)?;
     Ok(Snapshot {
         key: key.clone(),
-        title: text(&v["mission"]["title"], 800)?,
-        status: text(&v["mission"]["status"], 40)?,
         tasks,
     })
 }

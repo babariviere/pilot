@@ -23,7 +23,7 @@ use gpui_kit::{
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
     TestSupportExt, Window,
     base::SelectableText,
-    component::{Disableable, StyledExt},
+    component::{ActiveTheme, Disableable, StyledExt},
     div,
     prelude::FluentBuilder,
     px,
@@ -742,23 +742,24 @@ impl Render for Browser {
         };
         let mut content = ui::page()
             .gap(px(Space::CONTROL))
+            .when(!is_list, |v| {
+                v.child(
+                    ui::action("missions-list", "Missions", Action::Quiet)
+                        .icon(crate::app_icon::AppIcon::Back.asset())
+                        .self_start()
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.generation == generation {
+                                cx.emit(Event::List { generation });
+                            }
+                        })),
+                )
+            })
             .child(
                 div()
                     .h_flex()
                     .items_center()
                     .gap_2()
                     .min_w_0()
-                    .when(!is_list, |v| {
-                        v.child(
-                            ui::action("missions-list", "All missions", Action::Quiet).on_click(
-                                cx.listener(move |v, _, _, cx| {
-                                    if v.generation == generation {
-                                        cx.emit(Event::List { generation });
-                                    }
-                                }),
-                            ),
-                        )
-                    })
                     .child(
                         div().flex_1().min_w_0().child(
                             ui::text(Text::Title, SharedString::from(title))
@@ -767,7 +768,12 @@ impl Render for Browser {
                         ),
                     )
                     .child(
-                        ui::action("missions-refresh", "Refresh", Action::Secondary)
+                        ui::icon_action(
+                            "missions-refresh",
+                            "Refresh",
+                            crate::app_icon::AppIcon::Retry,
+                            Action::Quiet,
+                        )
                             .disabled(self.options.is_none() || self.busy)
                             .on_click(cx.listener(move |v, _, w, cx| {
                                 if v.generation == generation {
@@ -843,19 +849,18 @@ impl Render for Browser {
                 }
                 for r in rows {
                     let key = r.key.clone();
-                    let detail = format!(
-                        "{} · {} · {}{}",
-                        r.status,
-                        if local.as_ref() == Some(&key.home) {
-                            "Local home"
-                        } else {
-                            "Home unavailable"
-                        },
-                        key.id,
-                        r.counts
-                            .map(|(d, t)| format!(" · {d}/{t} tasks done"))
-                            .unwrap_or_default()
-                    );
+                let detail = format!(
+                    "{}{}{}",
+                    capitalized(&r.status),
+                    if local.as_ref() == Some(&key.home) {
+                        ""
+                    } else {
+                        " · Home unavailable"
+                    },
+                    r.counts
+                        .map(|(d, t)| format!(" · {d} of {t} tasks done"))
+                        .unwrap_or_default()
+                );
                     content = content.child(
                         ui::action(
                             SharedString::from(format!("mission-row-{}", key.tag())),
@@ -896,15 +901,14 @@ impl Render for Browser {
             content = content
                 .child(ui::text(
                     Text::Caption,
-                    SharedString::from(format!("{} · {}", d.status, self.project_name(&d.project))),
-                ))
-                .child(self.plain(
-                    "mission-canonical",
-                    format!(
-                        "Mission {}\nHome {} / {}",
-                        d.key.id, d.key.home.daemon, d.key.home.lineage
-                    ),
-                ));
+                    SharedString::from(format!(
+                        "{} · {}",
+                        capitalized(&d.status),
+                        self.project_name(&d.project)
+                    )),
+                ).text_color(cx.theme().muted_foreground));
+            // Secondary commands share one quiet row instead of a stacked list.
+            let mut commands = div().h_flex().flex_wrap().items_center().gap_1();
             for (action, label, id) in [
                 (
                     crate::mission_lifecycle::Action::Archive,
@@ -918,9 +922,8 @@ impl Render for Browser {
                 ),
             ] {
                 if action.allowed(&d.status) {
-                    content = content.child(
+                    commands = commands.child(
                         ui::action(id, label, Action::Quiet)
-                            .self_start()
                             .disabled(!self.online || !self.current(generation))
                             .on_click(cx.listener(move |v, _, w, cx| {
                                 if v.generation == generation {
@@ -931,9 +934,8 @@ impl Render for Browser {
                 }
             }
             let activity_key = d.key.clone();
-            content = content.child(
-                ui::action("mission-edit-metadata", "Edit mission", Action::Quiet)
-                    .self_start()
+            commands = commands.child(
+                ui::action("mission-edit-metadata", "Edit", Action::Quiet)
                     .disabled(!self.online || !self.current(generation))
                     .on_click(cx.listener(move |v, _, w, cx| {
                         if v.generation == generation {
@@ -941,17 +943,16 @@ impl Render for Browser {
                         }
                     })),
             );
-            content = content.child(
-                ui::action("mission-open-activity", "Browse activity", Action::Quiet)
-                    .self_start()
+            commands = commands.child(
+                ui::action("mission-open-activity", "Activity", Action::Quiet)
                     .disabled(!self.online || !self.current(generation))
                     .on_click(cx.listener(move |v, _, w, cx| {
                         v.open_activity(&activity_key, generation, w, cx)
                     })),
             );
             content = content
+                .child(commands)
                 .child(self.decisions_view(cx))
-                .child(ui::heading("mission-goal-heading", "Goal", Text::Headline))
                 .child(self.plain(
                     "mission-goal",
                     if d.goal.is_empty() {
@@ -964,7 +965,7 @@ impl Render for Browser {
                 let text = d.goal.clone();
                 let key = d.key.clone();
                 content = content.child(
-                    ui::action("mission-copy-goal", "Copy goal", Action::Quiet)
+                    ui::icon_action("mission-copy-goal", "Copy goal", crate::app_icon::AppIcon::Copy, Action::Quiet)
                         .self_start()
                         .on_click(cx.listener(move |v, _, _, cx| {
                             if v.generation == generation
@@ -980,28 +981,23 @@ impl Render for Browser {
                 "Chats",
                 Text::Headline,
             ));
-            if let Some(id) = &d.coordinator {
-                content = content.child(ui::text(
-                    Text::Caption,
-                    SharedString::from(format!(
-                        "Coordinator chat: {id} (opens only if available below)"
-                    )),
-                ));
-            } else {
+            if d.coordinator.is_none() {
                 content =
                     content.child(ui::text(Text::Caption, "No coordinator chat is assigned."));
             }
             match &self.members {
                 Err(e) => content = content.child(Notice::new(*e).tone(Tone::Warning)),
                 Ok(m) => {
-                    content = content.child(ui::text(
-                        Text::Caption,
-                        SharedString::from(format!(
-                            "{} of {} member chats shown",
-                            m.rows.len(),
-                            m.total
-                        )),
-                    ));
+                    if m.rows.len() < m.total {
+                        content = content.child(ui::text(
+                            Text::Caption,
+                            SharedString::from(format!(
+                                "{} of {} member chats shown",
+                                m.rows.len(),
+                                m.total
+                            )),
+                        ));
+                    }
                     for member in &m.rows {
                         let key = d.key.clone();
                         let id = member.id.clone();
@@ -1012,12 +1008,12 @@ impl Render for Browser {
                             "Member"
                         };
                         let label = format!(
-                            "{role} · {id}{}{}",
-                            if member.archived { " · archived" } else { "" },
+                            "{role}{}{}",
+                            if member.archived { " · Archived" } else { "" },
                             if enabled {
                                 ""
                             } else {
-                                " · unavailable in current Local chat list"
+                                " · Not in the Local chat list"
                             }
                         );
                         content = content.child(
@@ -1051,55 +1047,33 @@ impl Render for Browser {
                 }
             }
             content = content.child(self.tasks_browser.clone());
-            content = content.child(ui::heading(
-                "mission-brief-heading",
-                "Brief",
-                Text::Headline,
-            ));
+            // The brief stays collapsed: its workspace renders and edits it in full.
             content = content.child(
-                ui::action(
-                    "mission-open-brief",
-                    "Open brief workspace",
-                    Action::Secondary,
-                )
-                .self_start()
-                .disabled(!self.online || self.busy || self.error.is_some())
-                .on_click(cx.listener(move |v, _, w, cx| {
-                    if v.generation == generation {
-                        v.open_brief(w, cx);
-                    }
-                })),
-            );
-            if let Some(text) = &d.brief {
-                let copy = text.clone();
-                let key = d.key.clone();
-                content = content
-                    .child(self.plain("mission-brief", text.clone()))
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(ui::heading(
+                        "mission-brief-heading",
+                        "Brief",
+                        Text::Headline,
+                    )))
+                    .when(d.brief.is_none(), |row| {
+                        row.child(ui::text(Text::Caption, "None saved").text_color(cx.theme().muted_foreground))
+                    })
                     .child(
-                        ui::action("mission-copy-brief", "Copy visible brief", Action::Quiet)
-                            .self_start()
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if v.generation == generation
-                                    && v.route == Some(Route::Detail(key.clone()))
-                                {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        ui::action("mission-open-brief", "Open brief", Action::Secondary)
+                            .disabled(!self.online || self.busy || self.error.is_some())
+                            .on_click(cx.listener(move |v, _, w, cx| {
+                                if v.generation == generation {
+                                    v.open_brief(w, cx);
                                 }
                             })),
-                    );
-            } else {
-                content = content.child(Notice::new("No brief saved."));
-            }
+                    ),
+            );
             if d.clipped {
-                content=content.child(Notice::new("Text is clipped for display (goal 8 KiB, brief 32 KiB). Copy retains only the visible bounded text. Full content remains in Swift.").tone(Tone::Warning));
+                content=content.child(Notice::new("The goal is clipped for display; copy keeps only the visible text.").tone(Tone::Warning));
             }
-        } else if let Some(Route::Detail(key)) = &self.route {
-            content = content.child(self.plain(
-                "mission-canonical",
-                format!(
-                    "Mission {}\nHome {} / {}",
-                    key.id, key.home.daemon, key.home.lineage
-                ),
-            ));
         }
         div()
             .id("missions-page")
@@ -1125,4 +1099,12 @@ impl Render for Browser {
             .child(content)
             .into_any_element()
     }
+}
+/// Wire statuses read as sentence case ("active" → "Active").
+fn capitalized(s: &str) -> String {
+    let mut chars = s.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
