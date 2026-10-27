@@ -1,6 +1,7 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
 pub mod bundled_runtime;
 mod bundled_runtime_view;
+pub mod desktop_entry;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod updates_view;
 pub use bundled_runtime_view::BundledRuntimeView;

@@ -97,6 +97,12 @@ fn main() {
         std::process::exit(1);
     }
     #[cfg(target_os = "linux")]
+    if bundled
+        && std::env::current_exe().is_ok_and(|p| pilot_desktop::bundled_runtime::packaged(&p))
+    {
+        pilot_desktop::desktop_entry::install_in_background();
+    }
+    #[cfg(target_os = "linux")]
     let application = gpui_kit::platform::linux(gpui_kit::WindowingModes::WAYLAND);
     #[cfg(target_os = "macos")]
     let application = gpui_kit::application();
@@ -115,6 +121,7 @@ fn main() {
                         size(px(960.), px(760.)),
                         cx,
                     ))),
+                    app_id: Some(pilot_desktop::desktop_entry::APP_ID.into()),
                     ..Default::default()
                 },
                 cx,

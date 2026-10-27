@@ -42,16 +42,23 @@ rm Pilot-Next-linux-x64.zip
 Use `unzip` (or another extractor that keeps executable permissions). Do not
 add, edit or remove files inside the folder: the app verifies its signed file
 list before updating. Start it through `bin/pilot-next` by its full path; a
-symlink to that script does not work, so use a wrapper script or the desktop
+symlink to that script does not work, so use a wrapper script or the menu
 entry below.
 
 Chats, drafts and settings live outside the app folder (`~/.local/state/pilot-next`,
 `~/.local/share/pilot-next` and the Pilot profile), so replacing or moving the
 folder does not touch them.
 
-### Optional launcher entry
+### Menu entry
 
-No desktop entry or icon is shipped. To add a menu entry for your user, run:
+From the release after v1.77.0, the first launch adds **Pilot Next** with its icon
+to your applications menu (`~/.local/share/applications/com.babariviere.pilot-next.desktop`
+and a matching icon under `~/.local/share/icons`). Each launch points it at the
+folder the app runs from, so moving or renaming the folder is picked up. To keep
+your own version, edit that file and remove the `X-Pilot-Next-Managed=true`
+line; the app then leaves it alone.
+
+For v1.77.0 and earlier, add the entry yourself:
 
 ```sh
 mkdir -p ~/.local/share/applications
