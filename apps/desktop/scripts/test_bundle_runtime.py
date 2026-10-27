@@ -30,10 +30,6 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertIn(b"ic09", first)
         self.assertIn(b"\x89PNG\r\n\x1a\n", first)
 
-    def test_linux_menu_icon_is_the_generated_development_mark(self):
-        committed = Path(__file__).resolve().parents[1] / "resources/linux/pilot-next-256.png"
-        self.assertEqual(committed.read_bytes(), make_dev_icon.png(256))
-
     @unittest.skipUnless(sys.platform == "darwin" and shutil.which("clang"), "needs macOS lipo and clang")
     def test_universal_prebuilds_keep_only_the_arm64_slice(self):
         with tempfile.TemporaryDirectory(prefix="next-thin-") as directory:

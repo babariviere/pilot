@@ -10,7 +10,8 @@ use std::{
 /// Wayland app_id, desktop file name and icon name, so the shell matches windows.
 pub const APP_ID: &str = "com.babariviere.pilot-next";
 const MANAGED: &str = "X-Pilot-Next-Managed=true";
-const ICON: &[u8] = include_bytes!("../resources/linux/pilot-next-256.png");
+/// The Pilot app icon, shared with the macOS app; scalable for every launcher size.
+const ICON: &[u8] = include_bytes!("../../macos/Resources/AppIcon.svg");
 
 /// Best effort, off the UI thread. Failures only skip the menu entry.
 pub fn install_in_background() {
@@ -49,7 +50,7 @@ pub(crate) fn install(executable: &Path, data: &Path) -> io::Result<()> {
     }
     let entry = desktop_entry(&launcher).ok_or(io::ErrorKind::InvalidData)?;
     write_if_changed(
-        &data.join(format!("icons/hicolor/256x256/apps/{APP_ID}.png")),
+        &data.join(format!("icons/hicolor/scalable/apps/{APP_ID}.svg")),
         ICON,
     )?;
     let path = data.join(format!("applications/{APP_ID}.desktop"));
@@ -127,7 +128,7 @@ mod tests {
         let launcher = root.canonicalize().unwrap().join("bin/pilot-next");
         assert_eq!(written, desktop_entry(&launcher).unwrap());
         assert_eq!(
-            fs::read(data.join(format!("icons/hicolor/256x256/apps/{APP_ID}.png"))).unwrap(),
+            fs::read(data.join(format!("icons/hicolor/scalable/apps/{APP_ID}.svg"))).unwrap(),
             ICON
         );
         fs::write(&path, "[Desktop Entry]\nName=Mine\n").unwrap();
