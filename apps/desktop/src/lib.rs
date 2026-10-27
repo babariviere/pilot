@@ -248,6 +248,8 @@ mod artifact_view;
 mod reader_zoom;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::inline_visual::probe::run_inline_visual_probe;
+#[cfg(feature = "native-probes")]
+pub use transcript_view::inline_visual::probe::scroll::native::run as run_native_artifact_scroll_probe;
 mod artifact_worker;
 mod attention;
 mod dither;

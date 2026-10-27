@@ -1141,6 +1141,8 @@ impl ArtifactPane {
                 *budget -= rows.len() * columns.len();
                 let mut table = div()
                     .v_flex()
+                    .w_full()
+                    .flex_shrink_0()
                     .min_w_0()
                     .gap_1()
                     .p_2()

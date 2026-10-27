@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "d5cd7de73d5b2d3d18b94a928abf343922091fa77bc472f77b7d2e7e8b1823a7",
   "upstream": "https://crates.io/crates/gpui-base/0.8.0",
-  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change.",
+  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans.",
   "edits": [
     {
       "path": "src/text_selection.rs",
@@ -150,6 +150,31 @@
       "path": "src/virtual_list.rs",
       "old": "    /// Get the base scroll handle.",
       "new": "    /// Restore an offset, cancelling a prior queued item jump.\n    pub fn restore_offset(&self, offset: Point<Pixels>) {\n        self.state.borrow_mut().deferred_scroll_to_item = None;\n        self.base_handle.set_offset(offset);\n    }\n\n    /// Get the base scroll handle."
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "    // Rich text renders its own selection; retain geometry only for word hit testing.",
+      "new": "    /// This participant's cached plain-text copy projection, without invoking copy callbacks.\n    /// Painting one run cannot change another participant's projection.\n    pub(crate) fn projected_text_for_paint(&self, cx: &App) -> Option<String> {\n        self.0.read(cx).copy_item(0).map(|item| item.fallback)\n    }\n\n    // Rich text renders its own selection; retain geometry only for word hit testing."
+    },
+    {
+      "path": "src/selectable_text.rs",
+      "old": "use crate::{TextSelection, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};",
+      "new": "use crate::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};"
+    },
+    {
+      "path": "src/selectable_text.rs",
+      "old": "window-scoped [`TextSelection`].",
+      "new": "window-scoped [`crate::TextSelection`]."
+    },
+    {
+      "path": "src/selectable_text.rs",
+      "old": "let selected_text_before = TextSelection::selected_text(window, cx);",
+      "new": "let selected_text_before = handle.projected_text_for_paint(cx);"
+    },
+    {
+      "path": "src/selectable_text.rs",
+      "old": "if selected_text_before != TextSelection::selected_text(window, cx) {",
+      "new": "if selected_text_before != handle.projected_text_for_paint(cx) {"
     }
   ]
 }

@@ -20,6 +20,15 @@ inside this standalone fixture. No global Cargo/Rust settings are changed.
 
 ## Selection retention
 
+Five further exact edits keep plain `SelectableText` paint checks local to the
+participant's cached copy projection, instead of serializing all window selection
+participants twice for every cell. Explicit window copy and its callbacks remain
+unchanged. The new helper is crate-private, adds no state, and does not invoke
+callbacks while painting. App-side320-cell, Unicode pointer-selection and changed
+selection/copy regressions exercise the actual patched components. See
+[`../docs/artifact-scroll.md`](../docs/artifact-scroll.md) for native timings,
+remaining dense-table layout cost and the deterministic-scheduler caveat.
+
 Opt-in `TextViewState::retain_selection_on_unmount(true, cx)` adds message-local
 selection to the fixture's existing stable-ID, app-owned TextView states. Kit's
 default behavior remains unchanged for callers which do not opt in.

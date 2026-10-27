@@ -11,6 +11,8 @@ impl ArtifactPane {
         self.snapshot.raster.is_some()
     }
     pub(crate) fn suspend_inline(&mut self, cx: &mut Context<Self>) {
+        #[cfg(feature = "native-probes")]
+        let _timing = crate::transcript_view::inline_visual::probe::scroll::work("suspend");
         self.close();
         if let Some(image) = self.retired_image.take() {
             cx.defer(move |cx| cx.drop_image(image, None));
@@ -80,6 +82,8 @@ impl ArtifactPane {
         if self.inline_matches(&reference) {
             return;
         }
+        #[cfg(feature = "native-probes")]
+        let _timing = crate::transcript_view::inline_visual::probe::scroll::work("open");
         // Inline hydration never focuses the reader or steals composition.
         self.close();
         self.flush_image(window, cx);
@@ -93,6 +97,8 @@ impl ArtifactPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        #[cfg(feature = "native-probes")]
+        let _timing = crate::transcript_view::inline_visual::probe::scroll::work("inline_render");
         self.sync_sliders(window, cx);
         let focus = self.focus.get_or_insert_with(|| cx.focus_handle()).clone();
         let generation = self.generation;

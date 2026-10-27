@@ -77,6 +77,9 @@ pub(crate) fn render_scaled<T: 'static>(
             canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
+                    #[cfg(feature = "native-probes")]
+                    let _timing =
+                        crate::transcript_view::inline_visual::probe::scroll::work("chart_paint");
                     if bounds.size.width <= px(30.) || bounds.size.height <= px(20.) {
                         return;
                     }

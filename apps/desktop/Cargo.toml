@@ -12,6 +12,10 @@ required-features = ["native-probes"]
 [features]
 native-probes = ["gpui-kit/test-support"]
 
+[[example]]
+name = "artifact_scroll_native"
+required-features = ["native-probes"]
+
 [[test]]
 name = "path_completion"
 harness = false

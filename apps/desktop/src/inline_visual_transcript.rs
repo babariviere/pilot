@@ -147,6 +147,8 @@ impl TranscriptView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(feature = "native-probes")]
+        let _timing = probe::scroll::work("reconcile");
         if !self.inline_visuals.enabled {
             return;
         }
@@ -252,6 +254,8 @@ impl TranscriptView {
                             && let Some(ix) =
                                 view.transcript.messages().iter().position(|r| r.id() == id)
                         {
+                            #[cfg(feature = "native-probes")]
+                            let _timing = probe::scroll::work("raster_remeasure");
                             view.scroller
                                 .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
                         }

@@ -12,6 +12,9 @@ use std::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
+#[path = "artifact_scroll_probe.rs"]
+pub(crate) mod scroll;
+
 const SOURCE: &str = r#"({ui,state})=>{
 const s=state({on:false,n:4,tab:'Week',clicks:0});
 return()=>ui.column({gap:8},[
@@ -29,6 +32,7 @@ return()=>ui.column({gap:8},[
 }"#;
 struct Server {
     raster: Arc<String>,
+    scroll_raster: Arc<String>,
     options: crate::LocalOptions,
     reads: Arc<Mutex<Vec<(String, u32)>>>,
     stop: Option<async_channel::Sender<()>>,
@@ -52,6 +56,17 @@ impl Server {
             "data:image/png;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(pixels.into_inner())
         ));
+        let mut large = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1024, 640, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 180])
+        }))
+        .write_to(&mut large, image::ImageFormat::Png)
+        .unwrap();
+        let large = Arc::new(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(large.into_inner())
+        ));
+        let scroll_raster = large.clone();
         let served_raster = raster.clone();
         let mut gif_bytes = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
@@ -76,7 +91,7 @@ impl Server {
                 let mut handlers = tokio::task::JoinSet::new();
                 loop { tokio::select! { biased; _=closed.recv()=>break, connection=listener.accept()=>{
                     let Ok((stream,_))=connection else {break;};
-                    let records=records.clone();let raster=served_raster.clone();let gif=served_gif.clone();
+                    let records=records.clone();let raster=served_raster.clone();let gif=served_gif.clone();let large=large.clone();
                     handlers.spawn(async move {
                         let op=async {
                             let mut stream=BufReader::new(stream); let mut headers=String::new();
@@ -89,7 +104,7 @@ if line=="\r\n"{break;} }
                                 let tail=path.strip_prefix("/api/sessions/owner/artifacts/").expect("only exact current-chat reads");
                                 let(id,r)=tail.split_once("?revision=").unwrap();let r=r.parse::<u32>().unwrap();assert!((1..=2).contains(&r));
                                 records.lock().unwrap().push((id.into(),r));
-                                let(kind,source)=match id {"raster" | "raster-a" | "raster-b" | "raster-c"=>("image",raster.as_str()),"raster-gif"=>("image",gif.as_str()),"legacy"=>("html","<script>inert stored source</script>"),"broken"=>("visual","()=>{throw new Error('Synthetic local failure') }"),_=>("visual",SOURCE)};
+                                let(kind,source)=match id {id if id.starts_with("scroll-") => ("visual",scroll::SOURCE), id if id.starts_with("raster-large-") => ("image",large.as_str()),"raster" | "raster-a" | "raster-b" | "raster-c"=>("image",raster.as_str()),"raster-gif"=>("image",gif.as_str()),"legacy"=>("html","<script>inert stored source</script>"),"broken"=>("visual","()=>{throw new Error('Synthetic local failure') }"),_=>("visual",SOURCE)};
                                 json!({"id":id,"sessionId":"owner","revision":r,"title":"Regional study · 日本語 résumé","kind":kind,"source":source,"data":null,"createdAt":1,"updatedAt":2,"visual":{"api":1,"engine":"quickjs-ng 0.17.0"}})
                             }.to_string();
                             let mut stream=stream.into_inner();stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",body.len()).as_bytes()).await?;stream.write_all(body.as_bytes()).await?;Ok(())
@@ -102,6 +117,7 @@ if line=="\r\n"{break;} }
         });
         Self {
             raster,
+            scroll_raster,
             options,
             reads,
             stop: Some(stop),
@@ -369,6 +385,10 @@ fn three_visible_readers(cx: &mut HeadlessAppContext) {
     }
 }
 pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_ARTIFACT_SCROLL_DIR").is_some() {
+        scroll::run(cx);
+        return;
+    }
     three_visible_readers(cx);
     let captures = std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {

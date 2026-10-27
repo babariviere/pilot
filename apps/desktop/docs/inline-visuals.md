@@ -83,6 +83,9 @@ additional renderer/control corpus, Mermaid, shaders and 3D are not this slice.
 
 ## Verification
 
+Measured dense-conversation scrolling causes, fixes and remaining limits are in
+[Artifact-heavy conversation scrolling](artifact-scroll.md).
+
 Smallest matching selection (real confined helper, synthetic GET-only server,
 offscreen production LocalViewer, no real Local profile):
 
