@@ -22,6 +22,7 @@ impl LocalViewer {
                     gpui_kit::Bounds::centered(None, gpui_kit::size(px(780.), px(720.)), cx),
                 )),
                 window_min_size: Some(gpui_kit::size(px(640.), px(440.))),
+                window_background: crate::appearance::window_background(cx),
                 ..Default::default()
             },
             cx,
@@ -83,6 +84,7 @@ impl LocalViewer {
                     gpui_kit::Bounds::centered(None, initial_size, cx),
                 )),
                 window_min_size: Some(gpui_kit::size(px(640.), px(440.))),
+                window_background: crate::appearance::window_background(cx),
                 ..Default::default()
             },
             cx,

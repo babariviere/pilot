@@ -45,6 +45,9 @@ bash scripts/cargo.sh test --locked --features native-probes --test jump
 # Same-fixture shell hierarchy and native chooser reachability/IME checks.
 bash scripts/cargo.sh clippy --locked --features native-probes --test workbench -- -D warnings
 env -u PILOT_NEXT_WORKBENCH_BASELINE bash scripts/cargo.sh test --locked --features native-probes --test workbench
+# Glass tints over a synthetic backdrop, opaque reading surfaces and page entrance.
+bash scripts/cargo.sh clippy --locked --features native-probes --test glass -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test glass
 # Reusable presentation contracts with actual Kit controls, synthetic state only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test catalog -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test catalog

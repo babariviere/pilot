@@ -26,6 +26,9 @@ mod conversation_links_view;
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
+#[path = "glass_probe.rs"]
+pub(crate) mod glass_probe;
+#[cfg(feature = "native-probes")]
 #[path = "history_probe.rs"]
 pub(crate) mod history_probe;
 #[cfg(feature = "native-probes")]
@@ -536,6 +539,9 @@ pub struct LocalViewer {
     chats: Entity<ListState<ChatList>>,
     transcript: Entity<TranscriptView>,
     selected: Option<String>,
+    /// Calm entrance when the destination changes; never on the first frame.
+    page_transition: crate::transition::Transition,
+    page_key: String,
     title: String,
     generation: u64,
     state: Presentation,
@@ -1473,6 +1479,8 @@ impl LocalViewer {
             chats,
             transcript,
             selected: None,
+            page_transition: Default::default(),
+            page_key: String::new(),
             title: "Choose a Local chat".into(),
             generation: 0,
             state: Presentation {
@@ -2120,6 +2128,25 @@ impl Render for LocalViewer {
         {
             self.render_count += 1;
         }
+        let page_key = match &self.page {
+            Page::Home => "home".to_owned(),
+            Page::Missions | Page::Mission(_) => "missions".to_owned(),
+            Page::Inbox(_) => "inbox".to_owned(),
+            Page::Project(id) => format!("project:{id}"),
+            Page::Chat => format!("chat:{:?}", self.selected),
+        };
+        if page_key != self.page_key {
+            if !self.page_key.is_empty() {
+                self.page_transition.start(cx);
+            }
+            self.page_key = page_key;
+        }
+        let entrance = crate::transition::ease_out(self.page_transition.progress(
+            std::time::Duration::from_millis(200),
+            window,
+            cx,
+        ));
+        let glass = crate::appearance::glass(cx);
         let cwd = self
             .selected
             .as_ref()
@@ -2148,7 +2175,8 @@ impl Render for LocalViewer {
             .collect::<Vec<_>>()
             .join(" · ");
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
-            .bg(cx.theme().background).text_color(cx.theme().foreground)
+            // Over glass the sidebar and page are separate tints, never stacked.
+            .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
                 if v.restart_pending {cx.stop_propagation();return;}
                 if let Some(form)=&v.queue_open {
@@ -2212,7 +2240,11 @@ impl Render for LocalViewer {
                 cx.stop_propagation();
             }))
             .child(self.sidebar(window,cx))
-            .child(
+            .child(div().id("main-pane").h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full()
+                .when(glass,|this|this.bg(cx.theme().background))
+                // Paint-only entrance: a short fade and 6pt rise, no layout change.
+                .child(div().relative().top(px(6.*(1.-entrance))).opacity(0.4+0.6*entrance)
+                    .h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full().child(
                 if matches!(self.page,Page::Missions|Page::Mission(_)) {
                     div().id("missions").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full().child(self.missions.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else if matches!(self.page,Page::Inbox(_)) {
@@ -2267,7 +2299,7 @@ impl Render for LocalViewer {
                 self.workspace_changes_companion(conversation, window, cx)
                 }
                 }
-            )
+            )))
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
             .when(self.mission_open,|this|this.child(self.mission_overlay(window,cx)))
             .when(self.add_project_open,|this|this.child(self.add_project_overlay(window,cx)))

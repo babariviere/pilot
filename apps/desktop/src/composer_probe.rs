@@ -180,6 +180,22 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
                         _ => panic!("Only ordinary submit"),
                     }
                     assert!(commands.try_recv().is_err());
+                    // An admitted send starts the paint-only takeoff, which then lands.
+                    assert!(cx.update(|cx| editor.read(cx).takeoff.running()));
+                    let frames = std::env::var_os("PILOT_NEXT_TAKEOFF_DIR")
+                        .filter(|_| width > 800. && !busy && !follow_up)
+                        .map(std::path::PathBuf::from);
+                    for index in 0..30 {
+                        if let Some(dir) = &frames {
+                            std::fs::create_dir_all(dir).unwrap();
+                            cx.capture_screenshot(h)
+                                .unwrap()
+                                .save(dir.join(format!("{}-{index:02}.png", mode.name())))
+                                .unwrap();
+                        }
+                        frame(cx, h);
+                    }
+                    assert!(!cx.update(|cx| editor.read(cx).takeoff.running()));
                     cx.update_window(h, |_, w, cx| {
                         assert_eq!(w.find("local-send").disabled(), Some(true));
                         if busy {

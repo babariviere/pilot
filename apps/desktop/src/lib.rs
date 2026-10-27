@@ -75,6 +75,7 @@ mod mission_update_fixture;
 mod mission_update_probe;
 mod mission_update_transport;
 mod mission_update_view;
+mod transition;
 #[cfg(feature = "native-probes")]
 pub use mission_browser_view::mission_activity_probe::run_mission_activity_probe;
 #[cfg(feature = "native-probes")]
@@ -214,6 +215,8 @@ pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]
 pub use local_view::disclosure_probe::run_disclosure_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::glass_probe::run_glass_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::history_probe::run_history_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::inbox_probe::run_inbox_probe;
@@ -270,7 +273,9 @@ mod visual_scene;
 mod visual_session;
 mod visual_slider;
 mod visual_wire;
-pub use appearance::{ChromeAssets, follow_appearance, init_appearance};
+pub use appearance::{
+    ChromeAssets, enable_glass, follow_appearance, init_appearance, window_background,
+};
 
 mod queued_message;
 #[cfg(any(test, feature = "native-probes"))]

@@ -170,6 +170,19 @@ screenshots. Native phase checks are not visible smoothness/FPS/CPU/RSS proof.
 Dither marks chat-row state (sidebar, Inbox) and the Home sky only. The composer,
 buttons, progress bars and cards never carry it; the working line covers live work.
 
+Glass: `appearance::enable_glass` (called by the app before its windows open) makes
+the window background blur what is behind it on macOS, KWin and Hyprland, and turns
+the page, sidebar and list into translucent tints. Cards, the composer tray/editor,
+popovers, buttons and code stay opaque. Never stack the page tint under the sidebar.
+Elsewhere, and in offscreen probes, every surface stays solid.
+
+`transition::Transition` is the one-shot entrance helper: it runs on the executor
+clock (settled by probe clock advances), requests frames only while running and is
+instant under reduced motion. It drives two paint-only moments: the page entrance
+(200ms fade and 6pt rise when the destination changes, never on the first frame)
+and Send's takeoff (the arrow lifts away and lands again after an admitted send).
+Do not animate layout, streaming height or every control.
+
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.
 Do not neutralize categorical charts or style user-authored content with chrome

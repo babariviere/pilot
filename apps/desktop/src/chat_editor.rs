@@ -83,6 +83,8 @@ pub(crate) struct ChatEditor {
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
     next_request: u64,
+    /// Send's arrow lifts away and lands again once a submit is admitted.
+    takeoff: crate::transition::Transition,
     state: WriteState,
     error: Option<&'static str>,
     closing: bool,
@@ -163,6 +165,7 @@ impl ChatEditor {
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
             next_request: 0,
+            takeoff: Default::default(),
             state: WriteState::default(),
             error: None,
             closing: false,
@@ -745,6 +748,8 @@ impl ChatEditor {
                 self.thinking = false;
                 self.thinking_held = true;
                 cx.emit(EditorEvent::StopRequested { key });
+            } else {
+                self.takeoff.start(cx);
             }
         } else {
             self.error = Some("Local action queue is busy. Nothing new was submitted.");
@@ -948,8 +953,31 @@ impl ChatEditor {
     }
 }
 
+/// Send's arrow: lifts and fades out, then lands from just below. Paint-only.
+fn takeoff_icon(t: f32) -> gpui_kit::component::Icon {
+    use crate::transition::ease_out;
+    let icon = gpui_kit::component::Icon::new(AppIcon::Send.asset());
+    if t >= 1. {
+        return icon;
+    }
+    let (dy, alpha) = if t < 0.5 {
+        let p = ease_out(t * 2.);
+        (-10. * p, 1. - p)
+    } else {
+        let q = ease_out((t - 0.5) * 2.);
+        (6. * (1. - q), q)
+    };
+    icon.transform(gpui_kit::Transformation::translate(gpui_kit::point(
+        px(0.),
+        px(dy),
+    )))
+    .opacity(alpha)
+}
 impl Render for ChatEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let takeoff = self
+            .takeoff
+            .progress(std::time::Duration::from_millis(360), window, cx);
         let Some(key) = self.selected.clone() else {
             let mut empty = div()
                 .px_3()
@@ -1154,7 +1182,7 @@ impl Render for ChatEditor {
                         Button::new("local-send")
                             .primary()
                             .small()
-                            .icon(AppIcon::Send.asset())
+                            .icon(takeoff_icon(takeoff))
                             .when(label != "Send", |b| b.label(label))
                             .accessibility_label(label)
                             .tooltip(if self.busy {

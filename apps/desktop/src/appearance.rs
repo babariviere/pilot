@@ -58,6 +58,48 @@ pub(crate) const fn accent(dark: bool) -> Accent {
 struct CommittedAppearance(AppearancePreference);
 impl gpui_kit::Global for CommittedAppearance {}
 
+/// Whether the embedded faces registered and whether windows are glass.
+#[derive(Clone, Copy, Default)]
+struct Surfaces {
+    fonts: bool,
+    glass: bool,
+}
+impl gpui_kit::Global for Surfaces {}
+
+/// Glass needs a compositor that blurs what is behind a translucent window:
+/// macOS always, KWin through its blur protocol, Hyprland by default. Elsewhere
+/// a translucent window would show the raw desktop, so it stays opaque.
+fn glass_supported() -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    cfg!(target_os = "linux")
+        && (std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
+            || std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some())
+}
+/// Opt the app's windows into the frosted background where the platform supports it.
+/// The page and sidebar become translucent tints over the blur; cards, the composer,
+/// popovers and code stay opaque. Call before opening windows.
+pub fn enable_glass(cx: &mut App) {
+    if glass_supported() && !glass(cx) {
+        let fonts = cx.try_global::<Surfaces>().is_some_and(|s| s.fonts);
+        cx.set_global(Surfaces { fonts, glass: true });
+        install_configs(cx);
+    }
+}
+pub(crate) fn glass(cx: &App) -> bool {
+    cx.try_global::<Surfaces>().is_some_and(|s| s.glass)
+}
+/// Window background matching the active surfaces.
+pub fn window_background(cx: &App) -> gpui_kit::WindowBackgroundAppearance {
+    if glass(cx) {
+        gpui_kit::WindowBackgroundAppearance::Blurred
+    } else {
+        gpui_kit::WindowBackgroundAppearance::Opaque
+    }
+}
+
 fn follows_system(cx: &App) -> bool {
     cx.try_global::<CommittedAppearance>()
         .is_none_or(|policy| policy.0 == AppearancePreference::System)
@@ -170,7 +212,7 @@ pub(crate) fn code(cx: &App) -> gpui_kit::Hsla {
     gpui_kit::rgb(palette(cx.theme().is_dark()).code).into()
 }
 
-fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
+fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
     let Palette {
         page,
         sidebar,
@@ -184,6 +226,16 @@ fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
     } = palette(dark);
     let error = if dark { "#f87171" } else { "#dc2626" };
     let s = |value: &'static str| Some(SharedString::from(value));
+    // Over the window blur the page stays a mostly solid reading surface and the
+    // sidebar lets more of the frosted desktop through. Opaque without glass.
+    let (page_alpha, sidebar_alpha) = if dark { ("d9", "b3") } else { ("d1", "a6") };
+    let glassy = |hex: &str, alpha: &str| {
+        Some(SharedString::from(if glass {
+            format!("{hex}{alpha}")
+        } else {
+            hex.to_owned()
+        }))
+    };
     let accent = accent(dark);
     Rc::new(ThemeConfig {
         name: if dark {
@@ -205,9 +257,9 @@ fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
         shadow: Some(false),
         colors: {
             let mut colors = ThemeConfigColors::default();
-            colors.background = s(page);
+            colors.background = glassy(page, page_alpha);
             colors.foreground = s(ink);
-            colors.sidebar = s(sidebar);
+            colors.sidebar = glassy(sidebar, sidebar_alpha);
             colors.sidebar_foreground = s(ink);
             colors.sidebar_border = s(border);
             colors.muted = s(muted);
@@ -227,7 +279,7 @@ fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
             colors.button_foreground = s(ink);
             colors.button_hover = s(muted);
             colors.button_active = s(selected);
-            colors.list = s(sidebar);
+            colors.list = glassy(sidebar, sidebar_alpha);
             colors.list_active = s(muted);
             colors.list_active_border = s("#00000000");
             colors.list_hover = s(muted);
@@ -261,17 +313,29 @@ pub fn init_appearance(cx: &mut App) {
         .text_system()
         .add_fonts(FONTS.iter().map(|font| Cow::Borrowed(*font)).collect())
         .is_ok();
+    cx.set_global(Surfaces {
+        fonts,
+        glass: false,
+    });
+    install_configs(cx);
+}
+fn install_configs(cx: &mut App) {
+    let Surfaces { fonts, glass } = *cx.global::<Surfaces>();
     Theme::update(cx, |theme| {
-        let mut light = (*config(false, fonts)).clone();
+        let mut light = (*config(false, fonts, glass)).clone();
         light.highlight = theme.light_theme.highlight.clone();
-        let mut dark = (*config(true, fonts)).clone();
+        let mut dark = (*config(true, fonts, glass)).clone();
         dark.highlight = theme.dark_theme.highlight.clone();
         theme.light_theme = Rc::new(light);
         theme.dark_theme = Rc::new(dark);
         theme.focus_ring = false;
         theme.list.active_highlight = true;
     });
-    Theme::sync_system_appearance(None, cx);
+    match cx.global::<CommittedAppearance>().0 {
+        AppearancePreference::System => Theme::sync_system_appearance(None, cx),
+        AppearancePreference::Light => Theme::change(ThemeMode::Light, None, cx),
+        AppearancePreference::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
 }
 /// Subscription belongs to this window; a committed manual choice ignores OS changes.
 pub fn follow_appearance(window: &mut Window, cx: &mut App) {
@@ -356,16 +420,19 @@ mod tests {
             [26., 22., 15., 13., 12., 11., 10.]
         );
         for dark in [false, true] {
-            assert_eq!(config(dark, true).font_size, Some(14.));
-            assert_eq!(config(dark, true).mono_font_size, Some(13.));
-            assert_eq!(config(dark, true).font_family.as_deref(), Some(UI_FONT));
+            assert_eq!(config(dark, true, false).font_size, Some(14.));
+            assert_eq!(config(dark, true, false).mono_font_size, Some(13.));
             assert_eq!(
-                config(dark, true).mono_font_family.as_deref(),
+                config(dark, true, false).font_family.as_deref(),
+                Some(UI_FONT)
+            );
+            assert_eq!(
+                config(dark, true, false).mono_font_family.as_deref(),
                 Some(CODE_FONT)
             );
             // A failed registration keeps the platform families instead of a missing name.
-            assert!(config(dark, false).font_family.is_none());
-            assert!(config(dark, false).mono_font_family.is_none());
+            assert!(config(dark, false, false).font_family.is_none());
+            assert!(config(dark, false, false).mono_font_family.is_none());
         }
         assert_eq!(Radius::TRAY, 14.);
     }
@@ -414,6 +481,57 @@ mod tests {
                 assert_eq!(hex(cx.theme().list_active), hex(muted.into()));
                 assert!(list.a < 0.1);
                 assert_eq!(cx.theme().ring.a, 0.);
+            }
+        });
+    }
+    #[test]
+    fn glass_tints_only_page_sidebar_and_list() {
+        for dark in [false, true] {
+            let solid = config(dark, true, false);
+            let glass = config(dark, true, true);
+            let alpha = |c: &Option<SharedString>| {
+                gpui_kit::Rgba::try_from(c.as_deref().unwrap()).unwrap().a
+            };
+            for (solid, glass) in [
+                (&solid.colors.background, &glass.colors.background),
+                (&solid.colors.sidebar, &glass.colors.sidebar),
+                (&solid.colors.list, &glass.colors.list),
+            ] {
+                assert_eq!(alpha(solid), 1.);
+                assert!((0.5..0.9).contains(&alpha(glass)));
+            }
+            // Reading surfaces and controls stay opaque over the blur.
+            for color in [
+                &glass.colors.popover,
+                &glass.colors.button,
+                &glass.colors.primary,
+            ] {
+                assert_eq!(alpha(color), 1.);
+            }
+            assert!(alpha(&glass.colors.sidebar) < alpha(&glass.colors.background));
+        }
+    }
+    #[gpui_kit::test]
+    fn glass_is_opt_in_and_keeps_the_committed_mode(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            init_appearance(cx);
+            assert!(!glass(cx));
+            assert_eq!(
+                window_background(cx),
+                gpui_kit::WindowBackgroundAppearance::Opaque
+            );
+            commit_appearance(AppearancePreference::Dark, cx);
+            enable_glass(cx);
+            assert!(cx.theme().is_dark(), "glass reinstall keeps a manual mode");
+            if cfg!(target_os = "macos") {
+                assert!(glass(cx));
+                assert_eq!(
+                    window_background(cx),
+                    gpui_kit::WindowBackgroundAppearance::Blurred
+                );
+                assert!(cx.theme().background.a < 1.);
+                assert_eq!(card(cx).a, 1.);
             }
         });
     }

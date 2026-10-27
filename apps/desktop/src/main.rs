@@ -111,6 +111,7 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             pilot_desktop::init_appearance(cx);
+            pilot_desktop::enable_glass(cx);
             TranscriptView::bind_keys(cx);
             LocalViewer::bind_keys(cx);
             // Initial window geometry is a physical platform boundary, not a UI token.
@@ -122,6 +123,7 @@ fn main() {
                         cx,
                     ))),
                     app_id: Some(pilot_desktop::desktop_entry::APP_ID.into()),
+                    window_background: pilot_desktop::window_background(cx),
                     ..Default::default()
                 },
                 cx,

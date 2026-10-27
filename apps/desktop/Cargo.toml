@@ -178,6 +178,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "glass"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "icons"
 harness = false
 test = false
