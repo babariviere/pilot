@@ -17,7 +17,7 @@ This is the existing calm native workbench, not a new visual direction. Reconcil
 | --- | --- | --- |
 | Page | `#ffffff` / `#262626` | `appearance.rs` theme |
 | Sidebar | `#fafafa` / `#202020` | same |
-| Card | `#ffffff` / `#303030` | `appearance::card` |
+| Card | `#ffffff` / `#383838` | `appearance::card` |
 | Tray | `#f5f5f5` / `#2c2c2c` | `appearance::tray` |
 | Text | `#262626` / `#d4d4d4` | active theme foreground |
 | Metadata | `#6b6b6b` / `#9a9a9a` | active theme muted foreground |
@@ -154,6 +154,8 @@ Kit owns existing word fade; `dither_view` owns its bounded per-window activity
 clock/leases, reduced/hidden/offscreen/idle behavior. These components add neither
 durations nor clocks. Keep shared lifecycle checks separate from static catalog
 screenshots. Native phase checks are not visible smoothness/FPS/CPU/RSS proof.
+Dither marks chat-row state (sidebar, Inbox) and the Home sky only. The composer,
+buttons, progress bars and cards never carry it; the working line covers live work.
 
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.

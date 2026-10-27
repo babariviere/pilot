@@ -79,7 +79,6 @@ pub(crate) struct ChatEditor {
     thinking: bool,
     thinking_held: bool,
     background_work: bool,
-    corner: Entity<crate::dither_view::CornerView>,
     pending: BTreeMap<String, u64>,
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
@@ -158,13 +157,6 @@ impl ChatEditor {
             thinking: false,
             thinking_held: false,
             background_work: false,
-            corner: cx.new(|cx| {
-                crate::dither_view::CornerView::new(
-                    crate::dither::Spec::composer(false, false),
-                    window,
-                    cx,
-                )
-            }),
             pending: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
@@ -952,28 +944,13 @@ impl Render for ChatEditor {
             .settled_revision
             .is_some_and(|revision| draft.revision <= revision);
         let send_key = key.clone();
-        let saved = self
-            .state
-            .book
-            .as_ref()
-            .and_then(|b| b.drafts.get(&key))
-            .is_some_and(|d| d.revision >= draft.revision)
-            || (!is_new
-                && draft.text.is_empty()
-                && draft.pending.is_none()
-                && !self.unsaved_local.contains(&key)
-                && self.state.book.is_some());
         let pending = draft
             .pending
             .as_ref()
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
         // A settled empty chat draft disappears on its own. A new-chat slot and an
         // unresolved delivery never retire by themselves, so they can be discarded.
-        let spec = crate::dither::Spec::composer(
-            self.busy || self.thinking || self.background_work,
-            self.background_work && !self.thinking,
-        );
-        self.corner.update(cx, |view, cx| view.configure(spec, cx));
+        // No dither here: list rows carry state, and the working line says the rest.
         let footer = div()
             .id("composer-tray")
             .v_flex()
@@ -991,8 +968,7 @@ impl Render for ChatEditor {
                 spread_radius: px(0.),
             }])
             .border_1()
-            .border_color(cx.theme().border)
-            .child(crate::dither_view::layer(self.corner.clone()));
+            .border_color(cx.theme().border);
         #[cfg(any(test, feature = "native-probes"))]
         let footer = footer.test_support();
         let mut footer = footer;
@@ -1105,16 +1081,13 @@ impl Render for ChatEditor {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
-                    .children((submitting || (self.models.is_none() && (!is_new || !saved))).then_some(if submitting {
+                    // Routine autosave is silent; only states that block sending speak.
+                    .children((submitting || (self.models.is_none() && (self.closing || !self.writable))).then_some(if submitting {
                         "Waiting for Local action…"
                     } else if self.closing {
                         "Saving before closing…"
-                    } else if !self.writable {
-                        "This chat is read-only."
-                    } else if saved {
-                        "Saved privately · Enter to send"
                     } else {
-                        "Saving draft…"
+                        "This chat is read-only."
                     })),
             )
             .child(
@@ -1126,18 +1099,21 @@ impl Render for ChatEditor {
                     // neither move Send nor mount an irrelevant disabled action.
                     .children((!is_new).then(|| self.context_entry.clone()).flatten())
                     .child(stop_slot)
-                    .child(
+                    .child({
+                        let label = if settled && !draft.text.is_empty() {
+                            "Edit to resend"
+                        } else if is_new {
+                            "Create chat"
+                        } else {
+                            "Send"
+                        };
+                        // Ordinary Send is a familiar arrow; other states keep their words.
                         Button::new("local-send")
                             .primary()
                             .small()
                             .icon(AppIcon::Send.asset())
-                            .label(if settled && !draft.text.is_empty() {
-                                "Edit to resend"
-                            } else if is_new {
-                                "Create chat"
-                            } else {
-                                "Send"
-                            })
+                            .when(label != "Send", |b| b.label(label))
+                            .accessibility_label(label)
                             .tooltip(if self.busy {
                                 "Steer current work (Enter). Queue a follow-up with Option-Enter. Never stops the current run."
                             } else {
@@ -1156,8 +1132,8 @@ impl Render for ChatEditor {
                                 if view.selected.as_ref() == Some(&send_key) {
                                     view.submit(false, window, cx);
                                 }
-                            })),
-                    ),
+                            }))
+                    }),
             );
         #[cfg(any(test, feature = "native-probes"))]
         let controls = controls.test_support();
@@ -1263,6 +1239,8 @@ impl Render for ChatEditor {
                     .id("composer-recovery-region")
                     .v_flex()
                     .min_w_0()
+                    // Same inset as the working line, so recovery reads as one column.
+                    .px(px(10.))
                     .gap_2()
                     .children(recovery);
                 #[cfg(any(test, feature = "native-probes"))]

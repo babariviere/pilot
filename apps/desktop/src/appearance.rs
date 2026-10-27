@@ -73,8 +73,9 @@ pub(crate) fn tray(cx: &App) -> gpui_kit::Hsla {
     .into()
 }
 pub(crate) fn card(cx: &App) -> gpui_kit::Hsla {
+    // Dark lifts the editor/card clearly off the #2c2c2c tray, as white does in light.
     gpui_kit::rgb(if cx.theme().is_dark() {
-        0x303030
+        0x383838
     } else {
         0xffffff
     })

@@ -322,7 +322,7 @@ impl Render for CornerView {
         let paint_lease = lease.clone();
         canvas(
             move |bounds: Bounds<Pixels>, window, cx| {
-                let (w, h) = snapshot.spec.surface.grid();
+                let (w, h) = dither::GRID;
                 let image = Bounds::new(
                     point(
                         bounds.right() - px(w as f32 * 2.),
@@ -357,9 +357,8 @@ impl Render for CornerView {
                     });
                 }
                 paint(snapshot, image, bounds, window, cx.theme().is_dark());
-                if snapshot.spec.surface == dither::Surface::Row
-                    && (snapshot.spec.signal.is_some()
-                        || (snapshot.mix < 1. && snapshot.previous.is_some()))
+                if snapshot.spec.signal.is_some()
+                    || (snapshot.mix < 1. && snapshot.previous.is_some())
                 {
                     let owner = owner.clone();
                     let clip = window.content_mask().bounds;
@@ -386,7 +385,7 @@ fn paint(
     if snapshot.spec.signal.is_none() && snapshot.mix >= 1. {
         return;
     }
-    let (w, h) = snapshot.spec.surface.grid();
+    let (w, h) = dither::GRID;
     let colors = [
         Signal::Working,
         Signal::NeedsYou,
@@ -412,17 +411,7 @@ fn paint(
                     bounds.origin + point(px(x as f32 * 2.), px(y as f32 * 2.)),
                     size(px(2.), px(2.)),
                 );
-                paint_cell(
-                    dot,
-                    host,
-                    if snapshot.spec.surface == dither::Surface::Row {
-                        crate::appearance::Radius::ROW
-                    } else {
-                        crate::appearance::Radius::TRAY
-                    },
-                    color,
-                    window,
-                );
+                paint_cell(dot, host, crate::appearance::Radius::ROW, color, window);
             }
         }
     }

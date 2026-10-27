@@ -446,9 +446,9 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                             pixels += usize::from(before.get_pixel(x, y) != after.get_pixel(x, y));
                         }
                     }
-                    assert!(
-                        pixels > 0,
-                        "settled composer work must visibly loop beside opaque editor/controls"
+                    assert_eq!(
+                        pixels, 0,
+                        "the composer carries no dither; the working line reports live work"
                     );
                     println!(
                         "{}",
@@ -507,7 +507,7 @@ fn run_large_motion(cx: &mut HeadlessAppContext) {
         .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
         .unwrap();
     assert!((1..=12).contains(&(end.0 - start.0)));
-    assert_eq!(dither_view::probe_atlas_bytes(), 1_184_352);
+    assert_eq!(dither_view::probe_atlas_bytes(), 364_416);
     println!(
         "{}",
         json!({"large_history_rows":512,"source_bytes":source_bytes,"transcript_renders_during_ticks":count-baseline,"clock_ticks":end.0-start.0,"members":end.1,"atlas_bytes":dither_view::probe_atlas_bytes()})
