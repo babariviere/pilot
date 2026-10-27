@@ -341,21 +341,25 @@ impl LocalViewer {
         self.conversation_links = Some(pane);
         cx.notify();
     }
-    pub(super) fn conversation_links_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn conversation_links_action(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::Div> {
         let local = self.selected.as_ref().is_some_and(|id| {
             self.state
                 .chats
                 .iter()
                 .any(|c| &c.id == id && !c.local_draft)
         }) && !self.artifacts_open;
-        div()
-            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if !v.project_choices_ready(w, cx) {
-                    cx.stop_propagation();
-                }
-            }))
-            .when(local, |d| {
-                d.child(
+        // Absent, not an empty wrapper: header actions share one flex gap.
+        local.then(|| {
+            div()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
                     ui::action("conversation-links-toggle", "Links", Action::Quiet)
                         .disabled(
                             self.selected.is_none()
@@ -366,7 +370,7 @@ impl LocalViewer {
                         .selected(self.conversation_links.is_some())
                         .on_click(cx.listener(|v, _, w, cx| v.toggle_conversation_links(w, cx))),
                 )
-            })
+        })
     }
     pub(super) fn conversation_links_companion(
         &self,

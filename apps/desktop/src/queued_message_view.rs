@@ -479,7 +479,7 @@ impl Render for Popup {
     }
 }
 impl LocalViewer {
-    pub(super) fn queued_message_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn queued_message_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
         let count = self.state.user_queue.rows.len();
         let retained = self.selected.as_ref().is_some_and(|id| {
             self.queue_forms
@@ -491,14 +491,14 @@ impl LocalViewer {
         } else {
             format!("Queued ({count})")
         };
-        div()
-            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if !v.project_choices_ready(w, cx) {
-                    cx.stop_propagation();
-                }
-            }))
-            .when(count > 0 || retained, |d| {
-                d.child(
+        (count > 0 || retained).then(|| {
+            div()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
                     ui::action(
                         "queued-message-open",
                         SharedString::from(label),
@@ -511,7 +511,7 @@ impl LocalViewer {
                     )
                     .on_click(cx.listener(|v, _, w, cx| v.open_queue(w, cx))),
                 )
-            })
+        })
     }
     pub(super) fn sync_queue(&mut self, cx: &mut Context<Self>) {
         let ready = self.page == Page::Chat

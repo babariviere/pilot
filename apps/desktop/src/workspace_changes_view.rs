@@ -416,31 +416,27 @@ impl LocalViewer {
         w.defer(cx, move |w, cx| pane.update(cx, |p, cx| p.refresh(w, cx)));
         cx.notify();
     }
-    pub(super) fn workspace_changes_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if !v.project_choices_ready(w, cx) {
-                    cx.stop_propagation();
-                }
-            }))
-            .when(
-                self.selected.as_ref().is_some_and(|id| {
-                    self.state
-                        .chats
-                        .iter()
-                        .any(|c| &c.id == id && !c.local_draft)
-                }) && !self.artifacts_open,
-                |d| {
-                    d.child(
-                        ui::action("workspace-changes-toggle", "Changes", Action::Quiet)
-                            .disabled(
-                                !self.state.loaded || self.state.generation != self.generation,
-                            )
-                            .selected(self.workspace_changes.is_some())
-                            .on_click(cx.listener(|v, _, w, cx| v.toggle_workspace_changes(w, cx))),
-                    )
-                },
-            )
+    pub(super) fn workspace_changes_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
+        let shown = self.selected.as_ref().is_some_and(|id| {
+            self.state
+                .chats
+                .iter()
+                .any(|c| &c.id == id && !c.local_draft)
+        }) && !self.artifacts_open;
+        shown.then(|| {
+            div()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    ui::action("workspace-changes-toggle", "Changes", Action::Quiet)
+                        .disabled(!self.state.loaded || self.state.generation != self.generation)
+                        .selected(self.workspace_changes.is_some())
+                        .on_click(cx.listener(|v, _, w, cx| v.toggle_workspace_changes(w, cx))),
+                )
+        })
     }
     pub(super) fn workspace_changes_companion(
         &self,

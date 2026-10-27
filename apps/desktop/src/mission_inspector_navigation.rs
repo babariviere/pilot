@@ -128,16 +128,16 @@ impl LocalViewer {
         }
         cx.notify();
     }
-    pub(super) fn mission_context_action(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn mission_context_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
         let p = self.mission_context.read(cx);
-        div()
-            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
-                    cx.stop_propagation();
-                }
-            }))
-            .when(p.source.is_some() || p.visible, |this| {
-                this.child(
+        (p.source.is_some() || p.visible).then(|| {
+            div()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
                     crate::ui::icon_action(
                         "mission-context-toggle",
                         "Mission context (⌘⌥M)",
@@ -147,7 +147,7 @@ impl LocalViewer {
                     .selected(p.visible)
                     .on_click(cx.listener(|v, _, w, cx| v.mission_context_toggle(w, cx))),
                 )
-            })
+        })
     }
     pub(super) fn mission_companion(
         &self,

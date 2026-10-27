@@ -106,6 +106,12 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 }
                 if !baseline {
                     sidebar_alignment(w, width);
+                    let changes = w.find("workspace-changes-toggle").bounds();
+                    let mission = w.find("make-mission").bounds();
+                    assert!(
+                        (mission.left() - changes.right() - w.rem_size() * 0.5).abs() < px(0.5),
+                        "hidden header actions leave no phantom flex gap"
+                    );
                     assert!(w.try_find("add-project").is_none(), "management is disclosed, not permanent");
                     for id in ["nav-home", "nav-inbox", "nav-all-chats"] {
                         let button = w.find(id).bounds();
