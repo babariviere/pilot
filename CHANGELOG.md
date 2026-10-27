@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.80.0](https://github.com/babariviere/pilot/compare/v1.79.0...v1.80.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** pause agents before installing an update ([033ea65](https://github.com/babariviere/pilot/commit/033ea65c2d82e69c589394d6c849c69a98f8970e))
+
+
+### Bug Fixes
+
+* **desktop:** stop settled Stops and registrations blocking updates ([2351fd6](https://github.com/babariviere/pilot/commit/2351fd653becfc2c83f7b72d580a85b42ab3e248))
+
 ## [1.79.0](https://github.com/babariviere/pilot/compare/v1.78.0...v1.79.0) (2026-10-27)
 
 
