@@ -291,6 +291,9 @@ required-features=["native-probes"]
                        "assert '--lib' in sys.argv\nprint('test result: ok. 1 passed;')\n"
                        "raise SystemExit(int(os.environ.get('SCOPED_FAUX_EXIT','0')))\n")
         mbx.chmod(0o700)
+        # Outside GitHub Actions the wrapper uses mbx; CI runs plain Cargo instead.
+        ambient = {key: os.environ.pop(key) for key in ["GITHUB_ACTIONS"] if key in os.environ}
+        self.addCleanup(os.environ.update, ambient)
         for shell in dict.fromkeys(["/bin/bash", shutil.which("bash")]):
             with self.subTest(shell=shell), contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO())):
                 output = scoped.run([shell, "scripts/cargo.sh", "test", "--lib"], self.root, 3, [])

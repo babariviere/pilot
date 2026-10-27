@@ -270,7 +270,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      # Project wrappers pin Rust/mbx, CPU=2 and a 4 GiB admission estimate.
+      # Project wrappers pin Rust, CPU=2 and a 4 GiB admission estimate.
       # No user state, shared compiled outputs, signing or production credentials.
       PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       RUSTFLAGS: -C link-arg=-fuse-ld=lld
@@ -306,9 +306,9 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix or target/mbx cache.
+          # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-mbx1.26.0-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
       - name: Linux build dependencies (ephemeral runner only)
         if: steps.changes.outputs.rust == 'true'
         run: |
@@ -318,10 +318,20 @@ jobs:
             libxkbcommon-x11-dev libxcb1-dev libxcb-xkb-dev libx11-xcb-dev \
             libvulkan-dev libssl-dev libudev-dev libegl1-mesa-dev fonts-dejavu-core \
             weston libgl1-mesa-dri mesa-vulkan-drivers acl
-      - name: Bootstrap pinned Rust, mbx and helper engine
+      - name: Bootstrap pinned Rust and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap
+      # Third-party dependency outputs only (cache-prune drops workspace crates). The key covers
+      # every input that can change them; only main saves (10 GB repo cache limit).
+      - name: Restore Cargo dependency build cache
+        if: steps.changes.outputs.rust == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: apps/desktop/target/dev
+          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
+          restore-keys: |
+            desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-
       - name: Standalone updater portable formatting, strict Clippy and core tests
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -349,6 +359,15 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 2
         run: bash apps/desktop/scripts/ci.sh linux-gui-check
+      - name: Prune workspace outputs before saving the dependency cache
+        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
+        run: bash apps/desktop/scripts/ci.sh cache-prune
+      - name: Save Cargo dependency build cache
+        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: apps/desktop/target/dev
+          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
 
   # Only macOS helper confinement and native Metal pixels; no portable-suite duplicate.
   rust-macos-native:
@@ -379,13 +398,23 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix or target/mbx cache.
+          # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-mbx1.26.0-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
-      - name: Bootstrap pinned Rust, mbx and helper engine
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+      - name: Bootstrap pinned Rust and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap
+      # Third-party dependency outputs only (cache-prune drops workspace crates). The key covers
+      # every input that can change them; only main saves (10 GB repo cache limit).
+      - name: Restore Cargo dependency build cache
+        if: steps.changes.outputs.rust == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: apps/desktop/target/dev
+          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
+          restore-keys: |
+            desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-
       - name: Standalone updater macOS Security, ACL, stage, swap and helper tests
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -406,6 +435,15 @@ jobs:
           path: apps/desktop/target/ci-native-status.txt
           if-no-files-found: warn
           retention-days: 7
+      - name: Prune workspace outputs before saving the dependency cache
+        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
+        run: bash apps/desktop/scripts/ci.sh cache-prune
+      - name: Save Cargo dependency build cache
+        if: ${{ !cancelled() && steps.changes.outputs.rust == 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: apps/desktop/target/dev
+          key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
 
   # Opt-in reusable seam for later packaging. Normal PR/Main calls leave it OFF.
   # No signing, feeds, release publication or Linux-to-macOS artifact promotion.
@@ -439,10 +477,10 @@ jobs:
           path: |
             ~/.cargo/registry/cache
             apps/desktop/.tools/downloads
-          # Exact input identity, no fallback/restore prefix or target/mbx cache.
+          # Exact input identity, no fallback/restore prefix or build-output cache.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-mbx1.26.0-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
-      - name: Bootstrap pinned Rust, mbx and helper engine
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+      - name: Bootstrap pinned Rust and helper engine
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap
       - name: Build locked macOS release app AND visual helper

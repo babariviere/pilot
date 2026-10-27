@@ -11,9 +11,10 @@ bash scripts/cargo.sh --blaze stop
 ```
 
 This path is **local development only**, not CI, release or a replacement for
-pinned verification. `CI`/`GITHUB_ACTIONS` refuse it. Ordinary `cargo.sh`,
-`check-scoped.py` and CI keep mbx1.26.0/Rust1.98.1 and explicitly disable ambient
-`MBX_BLAZE`. No CI workflow, release profile, global Cargo config, shell shim,
+pinned verification. `CI`/`GITHUB_ACTIONS` refuse it. Ordinary `cargo.sh` and
+`check-scoped.py` keep mbx1.26.0/Rust1.98.1 and explicitly disable ambient
+`MBX_BLAZE`. GitHub Actions runs plain Cargo 1.98.1 with a dependency build cache
+instead of mbx. No release profile, global Cargo config, shell shim,
 service or existing app/daemon is changed. Do not use `mbx setup` or `ra-jit enable`.
 
 ## Actual supported integration

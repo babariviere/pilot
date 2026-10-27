@@ -199,6 +199,19 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         ])
         self.run_ci("updater-linux-tests", expected=1, FAKE_OS="Darwin", FAKE_ARCH="arm64")
 
+    def test_cache_prune_keeps_only_third_party_dependency_outputs(self):
+        debug = self.root / "target/dev/debug"
+        keep = ["deps/libserde-1a.rlib", "deps/libserde-1a.rmeta", "deps/serde-1a.d", "deps/libproc_macro-2b.so",
+                ".fingerprint/serde-1a/lib-serde", "build/serde-3c/out/x.rs"]
+        drop = ["deps/libpilot_desktop-4d.rlib", "deps/pilot_desktop-4d", "deps/disclosure-5e", "pilot-desktop",
+                ".fingerprint/pilot-desktop-4d/lib", "build/pilot-desktop-6f/out/y.rs", "incremental/x/y"]
+        for path in keep + drop:
+            (debug / path).parent.mkdir(parents=True, exist_ok=True)
+            (debug / path).write_text("x")
+        self.run_ci("cache-prune")
+        self.assertEqual([path for path in keep + drop if (debug / path).exists()], keep)
+        self.assertEqual(self.calls(), [])
+
     def test_updater_native_builds_real_helper_and_exact_registered_tests_without_metal(self):
         result = self.run_ci("updater-mac-tests", METAL_CODE="78", UPDATER_TEST_LIST=self.updater_listing())
         self.assertIn("Standalone updater macOS Security/ACL/stage/swap/helper checks started", result.stdout)
@@ -523,12 +536,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("ci.sh updater-mac-tests", jobs["rust-macos-native"])
         self.assertNotIn("ci.sh updater-check", jobs["rust-macos-native"])
         self.assertNotIn("ci.sh updater-", jobs["rust-macos-release"])
-        # Still use the existing bounded mbx wrapper, never raw cargo or a
+        # Still use the bounded project wrapper (plain Cargo on CI), never a
         # copied miniature crate that could pass while production is untested.
         self.assertIn('cargo() { bash scripts/cargo.sh "$@"; }', SCRIPT.read_text())
         wrapper = SCRIPT.with_name("cargo.sh").read_text()
         for required in ["CARGO_BUILD_JOBS=2", "MBX_SCHEDULER_CPUS=2", "MBX_SCHEDULER_MEMORY=4GiB",
-                         'CARGO_TARGET_DIR="$PWD/target/dev"']:
+                         'CARGO_TARGET_DIR="$PWD/target/dev"', 'GITHUB_ACTIONS:-}" == true', 'exec cargo "$@"']:
             self.assertIn(required, wrapper)
 
     def test_mac_only_filter_inventory_uses_real_source_definitions(self):
@@ -550,12 +563,28 @@ class WorkflowTests(unittest.TestCase):
                          "~/.cargo/registry/cache", "apps/desktop/.tools/downloads"]:
             self.assertIn(required, source)
         for forbidden in ["pull_request_target:", "secrets.", "contents: write", "continue-on-error:",
-                          "restore-keys:", "release.yaml", "bundle.sh", "gh release", "cargo publish"]:
+                          "release.yaml", "bundle.sh", "gh release", "cargo publish"]:
             self.assertNotIn(forbidden, source)
         self.assertLess(source.index("ci.sh bootstrap"), source.index("ci.sh check"))
         cache = source.split("          path: |", 1)[1].split("          key:", 1)[0]
         cached_paths = [line.strip() for line in cache.splitlines() if line.strip() and not line.strip().startswith("#")]
         self.assertEqual(cached_paths, ["~/.cargo/registry/cache", "apps/desktop/.tools/downloads"])
+
+    def test_dependency_build_cache_is_main_saved_pruned_and_never_used_for_release(self):
+        jobs = self.rust_jobs()
+        for name in ["rust", "rust-macos-native"]:
+            job = jobs[name]
+            restore = job.index("uses: actions/cache/restore@v4")
+            self.assertLess(job.index("ci.sh bootstrap"), restore)
+            self.assertLess(restore, job.index("ci.sh updater-"))
+            self.assertLess(job.index("ci.sh cache-prune"), job.index("uses: actions/cache/save@v4"))
+            self.assertEqual(job.count("github.ref == 'refs/heads/main'"), 2)
+            self.assertEqual(job.count("restore-keys:"), 1)
+            for key in ["apps/desktop/Cargo.lock", "apps/desktop/updater/Cargo.lock", "apps/desktop/patches/**",
+                        "apps/desktop/scripts/prepare-patches.py", "rust1.98.1"]:
+                self.assertIn(key, job)
+        for forbidden in ["actions/cache/restore", "actions/cache/save", "restore-keys:", "desktop-rust-target"]:
+            self.assertNotIn(forbidden, jobs["rust-macos-release"])
 
     def test_toolchain_pins_match_existing_wrappers(self):
         desktop = SCRIPT.parents[1]

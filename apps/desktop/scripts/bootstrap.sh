@@ -8,6 +8,11 @@ root="$PWD"
 export RUSTUP_HOME="$root/.tools/rustup"
 mkdir -p .tools/bin
 rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy --no-self-update
+python3 scripts/prepare-patches.py --fetch
+# CI runs plain Cargo (see cargo.sh); mbx only helps local worktrees share outputs.
+if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+  exit 0
+fi
 case "$(uname -s):$(uname -m)" in
   Darwin:arm64) target=aarch64-apple-darwin; sha=5927803d54f313600f7c6792369867eb26f9dfaa909b04fb5727efcf0d17b0b7 ;;
   Linux:x86_64) target=x86_64-unknown-linux-gnu; sha=decb2c1233d194d9d8f98fa926d86a5f726e9091e92fcff75f44a53ed9cab2b9 ;;
@@ -25,5 +30,4 @@ print(f'mbx archive verified: sha256:{actual}')
 PY
 tar -xzf "$archive" -C .tools/bin mbx
 .tools/bin/mbx --version
-python3 scripts/prepare-patches.py --fetch
 # No mbx setup, mise use --global, rustup default, or service installation.

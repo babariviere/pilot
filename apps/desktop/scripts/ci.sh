@@ -76,7 +76,23 @@ PY
     bash scripts/bootstrap.sh
     python3 scripts/prepare-visual-worker.py
     rustc -vV
-    .tools/bin/mbx --version
+    # Patched GPUI sources are path dependencies, so Cargo fingerprints them by
+    # mtime. Fixed mtimes let the dependency cache (keyed by patch specs) reuse them.
+    python3 - <<'PY'
+import os, pathlib
+for path in pathlib.Path('.patched').rglob('*'):
+    os.utime(path, (1700000000, 1700000000), follow_symlinks=False)
+PY
+    ;;
+  cache-prune)
+    # Keep third-party dependency outputs only; workspace crates and test binaries rebuild.
+    profile=target/dev/debug
+    if [[ -d "$profile" ]]; then
+      rm -rf "$profile/incremental" "$profile/examples" "$profile"/.fingerprint/pilot-* "$profile"/build/pilot-*
+      find "$profile" -maxdepth 1 -type f -delete
+      find "$profile/deps" -maxdepth 1 -type f \( -name 'pilot_*' -o -name 'libpilot_*' -o ! -name '*.*' \) -delete
+      du -sh "$profile"
+    fi
     ;;
   check)
     host
@@ -202,7 +218,7 @@ manifest = {
     'source_tree': command('git', 'rev-parse', 'HEAD^{tree}'),
     'target': 'aarch64-apple-darwin', 'deployment_target': '15.0',
     'profile': 'release', 'features': [],
-    'rustc': command('rustc', '-vV'), 'mbx': command('.tools/bin/mbx', '--version'),
+    'rustc': command('rustc', '-vV'),
     'sdk_version': command('xcrun', '--show-sdk-version'),
     'xcode': command('xcodebuild', '-version'),
     'lock_sha256': digest(pathlib.Path('Cargo.lock')),

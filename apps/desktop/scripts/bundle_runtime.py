@@ -334,7 +334,7 @@ def snapshot_rust(expected_source, output, production=None):
     if run("git", "cat-file", "-t", expected_source, cwd=ROOT) != "commit":
         raise ValueError("Rust input source must identify a commit")
     tools = ROOT / "apps/desktop/.tools"
-    if not (tools / "bin/mbx").is_file() or not (tools / "rustup").is_dir():
+    if not (tools / "rustup").is_dir():
         raise ValueError("Bootstrap the pinned build-host Rust tools first")
     with tempfile.TemporaryDirectory(prefix="next-rust-input-source-") as temporary:
         temporary = Path(temporary)
@@ -346,7 +346,8 @@ def snapshot_rust(expected_source, output, production=None):
             tar.extractall(checkout, filter="data")
         desktop = checkout / "apps/desktop"
         (desktop / ".tools/bin").mkdir(parents=True)
-        (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
+        if (tools / "bin/mbx").is_file():  # Absent on CI, where cargo.sh runs plain Cargo.
+            (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
         (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
         env = {key: value for key, value in os.environ.items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
         # No trust/feed/public-key variables are inherited. Only explicit

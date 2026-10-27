@@ -56,6 +56,13 @@ if [[ "${1:-}" == --blaze ]]; then
     env MBX_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-blaze-mbx-v1" \
     "$PWD/.tools/blaze/shim/cargo" "$@"
 fi
+if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+  # Runners start empty and never share an mbx store, so mbx cannot hit there.
+  # Same toolchain, target and job bound; tests.yaml caches dependency outputs.
+  export CARGO_INCREMENTAL=0
+  python3 scripts/prepare-patches.py
+  exec cargo "$@"
+fi
 if [[ ! -x .tools/bin/mbx ]]; then
   echo 'Run bash scripts/bootstrap.sh first.' >&2; exit 1
 fi
