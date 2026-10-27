@@ -218,6 +218,7 @@ export class SharedWorkspaceStore {
 	/**
 	 * Daemon Git commands disable automatic GC. At most once a day, `jj util gc` drops jj data no operation still
 	 * references and runs `git gc`, which packs loose objects and prunes unreachable ones older than two weeks.
+	 * Superseded local copies of landed commits are abandoned first, so their data can be collected too.
 	 */
 	async maintain(repository: string, now = Date.now()): Promise<boolean> {
 		const attempted = this.maintained.get(repository);
@@ -236,6 +237,11 @@ export class SharedWorkspaceStore {
 				return false;
 			}
 			await atomicJson(marker, { at: now });
+			try {
+				await this.abandonSuperseded(repository, await this.control(repository));
+			} catch (error) {
+				console.warn(`pilotd: could not clean up superseded commits in ${repository}: ${error}`);
+			}
 			await this.runner(
 				"jj",
 				["--no-pager", "--color=never", "--ignore-working-copy", "util", "gc"],
@@ -244,6 +250,72 @@ export class SharedWorkspaceStore {
 			);
 			return true;
 		});
+	}
+
+	/**
+	 * A commit rewritten outside this repository (PR auto-rebase, another checkout) keeps its change ID, so once
+	 * fetched from origin the local original turns divergent and stays visible. Abandon such originals when no
+	 * workspace, bookmark, tag or remote bookmark reaches them, they have no other descendants, and their diff
+	 * matches a landed copy exactly. Amended or still-used originals stay.
+	 */
+	private async abandonSuperseded(repository: string, control: string) {
+		const rows = async (revset: string) =>
+			(
+				await this.jj(
+					[
+						"--ignore-working-copy",
+						"log",
+						"--no-graph",
+						"--limit",
+						"1000",
+						"-r",
+						revset,
+						"-T",
+						'change_id ++ "\\t" ++ commit_id ++ "\\t" ++ parents.len() ++ "\\n"',
+					],
+					control,
+				)
+			)
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => line.split("\t") as [string, string, string]);
+		const loose = await rows("divergent() ~ ::(working_copies() | bookmarks() | remote_bookmarks() | tags())");
+		if (!loose.length) return;
+		const landed = new Map<string, string[]>();
+		for (const [change, commit, parents] of await rows('divergent() & ::remote_bookmarks(remote=exact:"origin")'))
+			if (parents === "1") landed.set(change, [...(landed.get(change) ?? []), commit]);
+		const fingerprints = new Map<string, string | undefined>();
+		const fingerprint = async (commit: string) => {
+			if (!fingerprints.has(commit))
+				fingerprints.set(
+					commit,
+					changeFingerprint(
+						await this.runner(
+							"git",
+							["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", commit],
+							repository,
+						),
+					),
+				);
+			return fingerprints.get(commit);
+		};
+		const superseded: string[] = [];
+		for (const [change, commit, parents] of loose) {
+			const copies = landed.get(change);
+			if (parents !== "1" || !copies || !fullCommit.test(commit)) continue;
+			const own = await fingerprint(commit);
+			for (const copy of copies) {
+				if (own && own === (await fingerprint(copy))) {
+					superseded.push(commit);
+					break;
+				}
+			}
+		}
+		if (!superseded.length) return;
+		const set = `(${superseded.join(" | ")})`;
+		// Abandoning rebases descendants, so keep any original that something else builds on.
+		const safe = (await rows(`${set} ~ ::((${set}::) ~ ${set})`)).map(([, commit]) => commit);
+		if (safe.length) await this.jj(["--ignore-working-copy", "abandon", ...safe], control);
 	}
 
 	private bindingPath(shared: SharedWorkspace) {

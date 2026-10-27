@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -112,6 +113,51 @@ test("empty saved change remains jj-resolvable and restores exact IDs after both
 		);
 		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
 		assert.equal(jj(w.path, "log", "--no-graph", "-r", "@", "-T", "commit_id"), recovery.commitId);
+	} finally {
+		f.close();
+	}
+});
+
+test("daily maintenance abandons unreferenced originals of commits that landed rewritten elsewhere", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		const repository = w.shared!.repository;
+		const head = () => jj(w.path, "log", "--no-graph", "-r", "@-", "-T", "commit_id");
+		// Same change ID, new commit: what a jj rewrite in another repository pushes to origin.
+		const rewrite = (commit: string) =>
+			execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin"], {
+				cwd: repository,
+				encoding: "utf8",
+				input: execFileSync("git", ["cat-file", "commit", commit], { cwd: repository, encoding: "utf8" }).replace(
+					/\n\n/,
+					"\n\nlanded: ",
+				),
+			}).trim();
+		writeFileSync(join(w.path, "one.txt"), "one\n");
+		jj(w.path, "commit", "-m", "one");
+		const one = head();
+		jj(w.path, "new", w.base);
+		writeFileSync(join(w.path, "two.txt"), "two\n");
+		jj(w.path, "commit", "-m", "two");
+		const two = head();
+		const twoChange = jj(w.path, "log", "--no-graph", "-r", two, "-T", "change_id");
+		git(repository, "push", "--quiet", f.source, `${rewrite(one)}:refs/heads/landed-one`);
+		git(repository, "push", "--quiet", f.source, `${rewrite(two)}:refs/heads/landed-two`);
+		// The local "two" is amended after landing, so its diff no longer matches the landed copy.
+		jj(w.path, "edit", two);
+		writeFileSync(join(w.path, "two.txt"), "two amended\n");
+		jj(w.path, "new", w.base);
+		const amended = jj(w.path, "log", "--no-graph", "-r", `change_id(${twoChange})`, "-T", "commit_id");
+		jj(w.path, "git", "fetch", "--remote", "origin");
+		const divergent = () =>
+			jj(w.path, "log", "--no-graph", "-r", "divergent()", "-T", 'commit_id ++ "\\n"').split("\n").sort();
+		assert.equal(divergent().length, 4);
+		assert.equal(await f.store.maintain(repository), true);
+		const left = divergent();
+		assert.equal(left.length, 2, "only the amended change stays divergent");
+		assert.ok(left.includes(amended));
+		assert.equal(jj(w.path, "log", "--no-graph", "-r", `${one} & ::visible_heads()`, "-T", "commit_id"), "");
 	} finally {
 		f.close();
 	}
