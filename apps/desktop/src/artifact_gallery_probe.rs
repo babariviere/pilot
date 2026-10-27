@@ -394,7 +394,8 @@ pub fn run_artifact_gallery_probe(cx: &mut HeadlessAppContext) {
                         reference(0, 1)
                     );
                     assert!(p.snapshot.error.is_none());
-                    w.find("artifact-raster-viewport").bounds()
+                    // Expanded rasters render inside the zoomable reader.
+                    w.find("reader-viewport").bounds()
                 })
                 .unwrap();
             painted(cx, h, bounds, width, [24, 110, 220]);
