@@ -124,7 +124,7 @@ impl Form {
             let result = output
                 .recv()
                 .await
-                .unwrap_or(Err("Metadata reader stopped. No save sent."));
+                .unwrap_or(Err("Couldn't load the mission. Nothing was saved."));
             let _ = view.update_in(cx, |v, w, cx| {
                 v.read = None;
                 match result {
@@ -187,11 +187,14 @@ impl Form {
                 self.state.finish(&submission, Outcome::NotSent(e));
             }
             Ok(output) => {
-                self.completion=Some(cx.spawn(async move |view,cx| {
-                    let reply=output.recv().await;
-                    let _=view.update(cx,|v,cx| {
-                        let outcome=reply.unwrap_or(Outcome::Unknown("Metadata worker stopped without a receipt. It may have committed. Do not replay."));
-                        v.state.finish(&submission,outcome);cx.notify();
+                self.completion = Some(cx.spawn(async move |view, cx| {
+                    let reply = output.recv().await;
+                    let _ = view.update(cx, |v, cx| {
+                        let outcome = reply.unwrap_or(Outcome::Unknown(
+                            "Couldn't confirm the save. It may have applied; don't save it again.",
+                        ));
+                        v.state.finish(&submission, outcome);
+                        cx.notify();
                     });
                 }));
             }
@@ -270,12 +273,9 @@ impl Render for Form {
             ))
             .child(ui::text(
                 Text::Caption,
-                SharedString::from(format!("Local mission: {}", self.source.key.id)),
+                SharedString::from(format!("Mission: {}", self.source.key.id)),
             ))
-            .child(ui::text(
-                Text::Caption,
-                "Only title and goal change. Draft retained through navigation, not app restart.",
-            ));
+            .child(ui::text(Text::Caption, "Only the title and goal change."));
         for (ix, (label, input, id)) in [
             ("Title", self.title.clone(), "metadata-title"),
             ("Goal", self.body.clone(), "metadata-body"),
@@ -304,12 +304,16 @@ impl Render for Form {
         if let Some((_, outcome)) = &self.state.attempt {
             let (text, tone) = match outcome {
                 Outcome::Pending => (
-                    "Saving… Closing or navigating away does not cancel this captured save.".to_string(),
+                    "Saving… Closing or navigating away does not cancel this captured save."
+                        .to_string(),
                     Tone::Normal,
                 ),
                 Outcome::NotSent(e) => (e.to_string(), Tone::Error),
                 Outcome::Unknown(e) => (format!("Save unconfirmed. {e}"), Tone::Error),
-                Outcome::Saved(_) => ("Saved. Local acknowledged the captured title and goal; refresh Overview for a new snapshot.".to_string(),Tone::Normal),
+                Outcome::Saved(_) => (
+                    "Saved. Refresh the overview to see it.".to_string(),
+                    Tone::Normal,
+                ),
             };
             form = form.child(
                 div()
@@ -337,7 +341,7 @@ impl Render for Form {
                 .child(
                     ui::action("metadata-submit", "Save", Action::Primary)
                         .disabled(blocked || unchanged || value.is_err())
-                        .tooltip("Save title and goal in this exact Local mission (⌘Enter).")
+                        .tooltip("Save the title and goal (⌘Enter)")
                         .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
                 )
                 .child(

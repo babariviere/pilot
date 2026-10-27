@@ -142,7 +142,7 @@ impl Form {
                 self.completion=Some(cx.spawn(async move |view,cx| {
                     let reply=output.recv().await;
                     let _=view.update(cx,|v,cx| {
-                        let (s,outcome)=match reply {Ok(r)=>(r.submission,r.outcome),Err(_)=>(submission,Outcome::Unknown("Task worker stopped without a receipt. It may have committed. Do not resubmit."))};
+                        let (s,outcome)=match reply {Ok(r)=>(r.submission,r.outcome),Err(_)=>(submission,Outcome::Unknown("Couldn't confirm the task was created. It may exist already; don't create it again."))};
                         v.state.finish(&s,outcome);cx.notify();
                     });
                 }));
@@ -184,20 +184,45 @@ impl Render for Form {
         .inset_0()
         .size_full();
         let blocked = self.state.blocked();
-        let mut form=div().id("mission-task-create").test_support().relative().w_full().min_w_0().v_flex().gap_2().track_focus(&self.focus).key_context("MissionTaskCreate")
+        let mut form = div()
+            .id("mission-task-create")
+            .test_support()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .v_flex()
+            .gap_2()
+            .track_focus(&self.focus)
+            .key_context("MissionTaskCreate")
             // Kit resolves textarea Enter before raw key-down dispatch. Capture
             // that real action, not a competing outer key binding/subscription.
-            .capture_action(cx.listener(|v,event:&gpui_kit::base::input::Enter,w,cx| {
-                if event.secondary && !event.shift {cx.stop_propagation();v.submit(w,cx);}
+            .capture_action(
+                cx.listener(|v, event: &gpui_kit::base::input::Enter, w, cx| {
+                    if event.secondary && !event.shift {
+                        cx.stop_propagation();
+                        v.submit(w, cx);
+                    }
+                }),
+            )
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
+                cx.stop_propagation();
+                v.close(w, cx);
             }))
-            .capture_action(cx.listener(|v,_:&gpui_kit::base::input::Escape,w,cx| {
-                cx.stop_propagation();v.close(w,cx);
-            }))
-            .on_action(cx.listener(|v,_:&SubmitTask,w,cx|v.submit(w,cx)))
-            .on_action(cx.listener(|v,_:&CloseTask,w,cx|v.close(w,cx)))
-            .child(ui::heading("task-create-heading","New task",Text::Headline))
-            .child(ui::text(Text::Caption,SharedString::from(format!("Local mission: {}",self.key.id))))
-            .child(ui::text(Text::Caption,"Draft retained through navigation, not app restart. Creation does not assign or start a chat."));
+            .on_action(cx.listener(|v, _: &SubmitTask, w, cx| v.submit(w, cx)))
+            .on_action(cx.listener(|v, _: &CloseTask, w, cx| v.close(w, cx)))
+            .child(ui::heading(
+                "task-create-heading",
+                "New task",
+                Text::Headline,
+            ))
+            .child(ui::text(
+                Text::Caption,
+                SharedString::from(format!("Mission: {}", self.key.id)),
+            ))
+            .child(ui::text(
+                Text::Caption,
+                "Creating a task doesn't assign it or start a chat.",
+            ));
         for (ix, (label, input, id)) in [
             ("Title", self.title.clone(), "task-create-title"),
             ("Description", self.body.clone(), "task-create-body"),
@@ -233,7 +258,7 @@ impl Render for Form {
                 Outcome::Unknown(e) => (format!("Creation unconfirmed. {e}"), Tone::Error),
                 Outcome::Created(t) => (
                     format!(
-                        "Created task #{} · {}. Refresh tasks to update the snapshot.",
+                        "Created task #{} · {}. Refresh tasks to see it.",
                         t.number, t.id
                     ),
                     Tone::Normal,
@@ -257,9 +282,7 @@ impl Render for Form {
                 .child(
                     ui::action("task-create-submit", "Create task", Action::Primary)
                         .disabled(blocked)
-                        .tooltip(
-                            "Explicitly create this task in the captured Local mission (⌘Enter).",
-                        )
+                        .tooltip("Create this task (⌘Enter)")
                         .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
                 )
                 .child(

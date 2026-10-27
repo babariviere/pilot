@@ -129,7 +129,7 @@ impl Activity {
             let started = self
                 .options
                 .clone()
-                .ok_or("Local activity source unavailable.")
+                .ok_or("Activity isn't available.")
                 .and_then(Reader::start);
             match started {
                 Err(e) => {
@@ -146,7 +146,7 @@ impl Activity {
                         let _ = view.update(cx, |v, cx| {
                             v.reader = None;
                             v.state.pending = None;
-                            v.state.error = Some("Activity reader stopped. Retained events are a snapshot; Refresh to retry.");
+                            v.state.error = Some("Couldn't load activity. What's shown may be out of date; refresh to try again.");
                             v.state.stale = v.state.loaded;
                             cx.notify();
                         });
@@ -164,7 +164,7 @@ impl Activity {
                 generation,
                 &key,
                 before,
-                Err("Activity request could not be queued. Refresh to retry."),
+                Err("Couldn't request activity. Refresh to try again."),
             );
         }
         cx.notify();
@@ -227,7 +227,7 @@ impl Render for Activity {
                         ui::text(
                             Text::Caption,
                             SharedString::from(format!(
-                                "{} events loaded · Local snapshot, newest first",
+                                "{} events · newest first",
                                 self.state.rows.len()
                             )),
                         )
@@ -237,9 +237,9 @@ impl Render for Activity {
                         ui::action(
                             "activity-scope",
                             if self.scope_open {
-                                "Hide source and limits"
+                                "Hide details"
                             } else {
-                                "Source and viewing limits"
+                                "Details"
                             },
                             Action::Quiet,
                         )
@@ -293,12 +293,11 @@ impl Render for Activity {
         }
         if self.state.stale {
             content = content.child(
-                Notice::new("Retained activity is not a fresh snapshot. Refresh explicitly.")
-                    .tone(Tone::Warning),
+                Notice::new("This may be out of date. Refresh to update.").tone(Tone::Warning),
             );
         }
         if self.state.loaded && self.state.rows.is_empty() && !busy && self.state.error.is_none() {
-            content = content.child(Notice::new("No activity in the received snapshot."));
+            content = content.child(Notice::new("No activity yet."));
         }
         content = content.child(ui::rule(w, cx));
         for e in &self.state.rows {
@@ -437,7 +436,7 @@ impl Render for Activity {
         if self.state.rows.len() >= ROW_CAP {
             content = content.child(Notice::new("250-event viewing limit reached. Earlier events may exist; Refresh returns to the newest window."));
         } else if self.state.exhausted {
-            content = content.child(Notice::new("No earlier events returned at this snapshot. This is not a live completeness guarantee."));
+            content = content.child(Notice::new("No earlier events."));
         } else if self.state.loaded && !self.state.rows.is_empty() {
             content = content.child(
                 ui::action(

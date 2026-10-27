@@ -105,7 +105,7 @@ impl Form {
             let reply = output
                 .recv()
                 .await
-                .unwrap_or(Err("Lifecycle reader stopped. Nothing sent."));
+                .unwrap_or(Err("Couldn't load the mission. Nothing was sent."));
             let _ = view.update(cx, |v, cx| {
                 v.read = None;
                 match reply {
@@ -132,9 +132,21 @@ impl Form {
             }
         };
         self.error = None;
-        match wire::start(self.options.clone(),send.clone()){
-            Err(e)=>{self.state.finish(&send,Outcome::NotSent(e));},
-            Ok(output)=>self.completion=Some(cx.spawn(async move|view,cx|{let outcome=output.recv().await.unwrap_or(Outcome::Unknown("Lifecycle worker stopped without a receipt. It may have committed; do not repeat."));let _=view.update(cx,|v,cx|{v.state.finish(&send,outcome);cx.notify();});})),
+        match wire::start(self.options.clone(), send.clone()) {
+            Err(e) => {
+                self.state.finish(&send, Outcome::NotSent(e));
+            }
+            Ok(output) => {
+                self.completion = Some(cx.spawn(async move |view, cx| {
+                    let outcome = output.recv().await.unwrap_or(Outcome::Unknown(
+                        "Couldn't confirm the change. It may have applied; don't repeat it.",
+                    ));
+                    let _ = view.update(cx, |v, cx| {
+                        v.state.finish(&send, outcome);
+                        cx.notify();
+                    });
+                }))
+            }
         }
         cx.notify();
     }
@@ -175,7 +187,7 @@ impl Render for Form {
                 ),
                 Outcome::Ack => (
                     format!(
-                        "Local acknowledged: {}. Refresh Overview for a new snapshot.",
+                        "Done: {}. Refresh the overview to see it.",
                         self.action.status()
                     ),
                     Tone::Normal,
@@ -201,7 +213,7 @@ impl Render for Form {
                 .child(
                     ui::action("lifecycle-submit", self.action.label(), Action::Primary)
                         .disabled(blocked)
-                        .tooltip("Confirm this exact status-only Local operation (⌘Enter).")
+                        .tooltip("Confirm (⌘Enter)")
                         .on_click(cx.listener(|v, _, _, cx| v.submit(cx))),
                 )
                 .child(

@@ -129,8 +129,7 @@ impl Pane {
         } else if self.online != input.online {
             self.cancel();
             if self.detail.is_some() {
-                self.error =
-                    Some("Retained snapshot is not current. Refresh when Local is available.");
+                self.error = Some("This may be out of date. Refresh when connected.");
             }
         }
         self.source = input.source;
@@ -157,7 +156,7 @@ impl Pane {
         self.error = None;
         if self.source.is_none() || !self.online {
             self.error = Some(if !self.online {
-                "Local is unavailable. Retained text is not a current snapshot."
+                "Not connected. This may be out of date."
             } else {
                 self.availability
             });
@@ -199,7 +198,7 @@ impl Pane {
             })
         });
         if !self.busy {
-            self.error = Some("Mission read could not be queued. Refresh explicitly.");
+            self.error = Some("Couldn't request this mission. Refresh to try again.");
         }
     }
     pub(crate) fn accept(&mut self, response: mission_reader::Response, cx: &mut Context<Self>) {
@@ -225,9 +224,9 @@ impl Pane {
                 } else {
                     self.current = false;
                     self.error = Some(if c.truncated {
-                        "Mission is outside the received canonical catalog window. No guessed lookup was made."
+                        "This mission isn't in the loaded mission list."
                     } else {
-                        "Canonical Local mission context is unavailable. No host or ID fallback was attempted."
+                        "Mission details aren't available."
                     });
                 }
             }
@@ -243,7 +242,7 @@ impl Pane {
             }
             _ => {
                 self.current = false;
-                self.error = Some("Mission context identity differs. Refresh explicitly.");
+                self.error = Some("This mission changed. Refresh to see it.");
             }
         }
         cx.notify();
@@ -257,7 +256,7 @@ impl Pane {
         self.current = false;
         if self.visible {
             self.error.get_or_insert(
-                "Mission reader stopped. Retained context is not current; Refresh to retry.",
+                "Couldn't load the mission. What's shown may be out of date; refresh to try again.",
             );
         }
         cx.notify();
@@ -302,16 +301,16 @@ impl Render for Pane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let note = if self.busy {
             if self.detail.is_some() {
-                "Refreshing; showing the previous snapshot…"
+                "Refreshing…"
             } else {
                 "Loading mission context…"
             }
         } else if !self.online {
-            "Offline · retained snapshot, not current"
+            "Offline · may be out of date"
         } else if self.error.is_some() || !self.current {
-            "Snapshot is not current"
+            "May be out of date"
         } else {
-            "Read-only snapshot · Refresh to update"
+            "Read-only · Refresh to update"
         };
         let mut content = div()
             .v_flex()
@@ -381,7 +380,7 @@ impl Render for Pane {
             );
             if self.tasks_open {
                 if d.tasks.is_empty() {
-                    content = content.child(ui::text(Text::Caption, "No tasks in this snapshot"));
+                    content = content.child(ui::text(Text::Caption, "No tasks"));
                 }
                 for t in &d.tasks {
                     content = content.child(
@@ -413,13 +412,11 @@ impl Render for Pane {
                     );
                 }
                 if d.task_count > d.tasks.len() {
-                    content = content.child(Notice::new("Task context is limited to the first 24 received tasks. This is not the full mission task list."));
+                    content = content.child(Notice::new("Showing the first 24 tasks."));
                 }
             }
             if d.clipped {
-                content = content.child(Notice::new(
-                    "Mission text is clipped to the bounded display limit.",
-                ));
+                content = content.child(Notice::new("Long text is shortened here."));
             }
             match &self.members {
                 Err(e) => content = content.child(Notice::new(*e).tone(Tone::Error)),
@@ -443,8 +440,7 @@ impl Render for Pane {
                     );
                     if self.members_open {
                         if m.rows.is_empty() {
-                            content = content
-                                .child(ui::text(Text::Caption, "No member chats in this snapshot"));
+                            content = content.child(ui::text(Text::Caption, "No chats"));
                         }
                         for member in &m.rows {
                             let id = member.id.clone();
@@ -471,7 +467,7 @@ impl Render for Pane {
                                         .detail(if ready {
                                             "Open existing chat"
                                         } else {
-                                            "Unavailable in current Local context"
+                                            "Not available here"
                                         })
                                         .icon(ui::IconRole::Chats),
                                 )
@@ -492,7 +488,7 @@ impl Render for Pane {
                             );
                         }
                         if m.total > m.rows.len() {
-                            content = content.child(Notice::new("Member context is limited to 16 received chats; received counts are not a canonical total."));
+                            content = content.child(Notice::new("Showing the first 16 chats."));
                         }
                     }
                 }

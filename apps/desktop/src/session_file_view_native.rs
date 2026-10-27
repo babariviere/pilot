@@ -98,7 +98,7 @@ impl FilePane {
                             p.reader = None;
                             p.state.cancel();
                             p.state.error = Some(
-                                "File reader stopped. Retained content is stale. Refresh to retry.",
+                                "Couldn't read the file. What's shown may be out of date; refresh to try again.",
                             );
                             cx.notify();
                         });
@@ -114,7 +114,7 @@ impl FilePane {
         }) {
             self.state.accept(
                 serial,
-                Err("File request could not be queued. Refresh to retry."),
+                Err("Couldn't request the file. Refresh to try again."),
             );
         }
         cx.notify();
@@ -134,18 +134,23 @@ impl Render for FilePane {
             .is_some_and(|v| self.current(v.read(cx)));
         let mut body = div().v_flex().min_w_0().gap_2();
         if !current {
-            body=body.child(ui::Notice::new("Source changed. Retained file is stale. Close and reopen Changes for the active source."));
+            body = body.child(ui::Notice::new(
+                "The chat changed. This file may be out of date; reopen Changes.",
+            ));
         }
         if self.state.busy {
-            body = body.child(div().id("session-file-loading").test_support().child(
-                ui::Notice::new("Reading file. Any previous content below is stale."),
-            ));
+            body = body.child(
+                div()
+                    .id("session-file-loading")
+                    .test_support()
+                    .child(ui::Notice::new("Reading the file…")),
+            );
         }
         if let Some(e) = self.state.error {
             body = body.child(
                 div().id("session-file-error").test_support().child(
                     ui::Notice::new(e)
-                        .detail("Any retained content below is stale. No fallback attempted.")
+                        .detail("What's shown below may be out of date.")
                         .tone(Tone::Error),
                 ),
             );
@@ -167,9 +172,9 @@ impl Render for FilePane {
             }
             Some(Content::Text { truncated, .. }) => {
                 let completeness = if *truncated {
-                    "Partial file. Showing only the bounded prefix; Copy shown portion is not the whole file."
+                    "Only the start of this file is shown. Copy includes only what's shown."
                 } else {
-                    "Complete text returned by Local in this snapshot."
+                    "Full file."
                 };
                 body = body
                     .child(
@@ -282,7 +287,7 @@ impl Render for FilePane {
                             if self.details {
                                 "Hide source details"
                             } else {
-                                "Local · read-only · Details"
+                                "Read-only · Details"
                             },
                             Action::Quiet,
                         )

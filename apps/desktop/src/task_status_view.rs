@@ -95,7 +95,7 @@ impl Form {
                             Err(_) => (
                                 s,
                                 Outcome::Unknown(
-                                    "Worker stopped without a receipt. No retry is available.",
+                                    "Couldn't confirm the change. It may have applied.",
                                 ),
                             ),
                         };
@@ -169,7 +169,7 @@ impl Render for Form {
         }
         root=root.child(choices)
             .child(ui::text(Text::Caption,"Changes status only, retaining the assigned chat. Explicit status clears delegation. Existing phase completion and managed-ticket progress may change; coordinator notices can resume its agent. No new chat is created."))
-            .child(ui::text(Text::Caption,"Other writers may race after verification. Current status is a captured snapshot, not a conditional write. Choice and receipt are retained in this window, not across app restart."));
+            .child(ui::text(Text::Caption,"Someone else may change the status at the same time; this is the status when you opened it."));
         if model::backward(&self.target.current, &self.chosen) {
             root=root.child(Notice::new("Moving work backward permanently disables automatic linked-PR status sync, even for future links.").tone(Tone::Warning));
         }
@@ -182,7 +182,7 @@ impl Render for Form {
                 Outcome::NotSent(e) => (*e, Tone::Error),
                 Outcome::Unknown(e) => (*e, Tone::Error),
                 Outcome::Acknowledged => (
-                    "Status change acknowledged by Local. Refresh tasks to inspect current state; this is not a crash-durability receipt.",
+                    "Status changed. Refresh tasks to see the current state.",
                     Tone::Normal,
                 ),
             };

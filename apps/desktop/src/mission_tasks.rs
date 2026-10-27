@@ -40,9 +40,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     let raw = v["tasks"]
         .as_array()
         .filter(|a| a.len() <= ROW_LIMIT)
-        .ok_or(
-            "Tasks unavailable or exceed the 256-task viewer limit. No partial list was admitted.",
-        )?;
+        .ok_or("Tasks aren't available, or there are more than 256.")?;
     let mut ids = HashSet::new();
     let mut numbers = HashSet::new();
     let mut tasks = Vec::with_capacity(raw.len());
@@ -178,7 +176,7 @@ impl State {
                 self.snapshot = Some(s);
                 self.error = None;
             }
-            Ok(_) => self.error = Some("Task snapshot source differs. Refresh explicitly."),
+            Ok(_) => self.error = Some("Tasks changed. Refresh to see them."),
             Err(e) => self.error = Some(e),
         }
         true

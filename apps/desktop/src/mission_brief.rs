@@ -481,7 +481,12 @@ impl Book {
                 .filter(|a| matches!(a.outcome, Outcome::Pending))
                 .map(|a| a.save.clone())
             {
-                e.finish(&save, Outcome::Unknown("Brief worker stopped. The captured save has no confirmed result; do not retry automatically."));
+                e.finish(
+                    &save,
+                    Outcome::Unknown(
+                        "Couldn't confirm the save. Check the latest brief before saving again.",
+                    ),
+                );
             }
         }
     }

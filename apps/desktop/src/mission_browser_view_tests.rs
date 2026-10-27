@@ -15,7 +15,7 @@ fn closed_reader_clears_busy_preserves_snapshot_and_ignores_an_old_lane(cx: &mut
         assert!(v.busy && v.error.is_none() && v.catalog_current);
         v.reader_stopped(2, cx);
         assert!(!v.busy);
-        assert!(v.error.unwrap().contains("reader stopped"));
+        assert!(v.error.unwrap().contains("Couldn't load the mission"));
         assert!(!v.catalog_current);
         assert_eq!(v.catalog.as_ref().unwrap().rows.len(), 3);
         assert!(v.reader.is_none());
@@ -94,7 +94,7 @@ fn failed_refresh_keeps_snapshot_but_never_claims_empty_current_or_linkable(
             assert!(!v.can_open(&f::key("mission-A"), 1));
             assert_eq!(
                 v.snapshot_note(),
-                Some("Snapshot unavailable · retained content may be outdated")
+                Some("Couldn't refresh · may be out of date")
             );
         }
     });

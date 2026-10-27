@@ -132,7 +132,7 @@ fn member_metadata_and_reader_lane_changes_fail_closed(cx: &mut TestAppContext) 
         p.stopped(old, cx);
         assert!(p.error.is_none());
         p.stopped(p.lane, cx);
-        assert!(p.error.unwrap().contains("reader stopped"));
+        assert!(p.error.unwrap().contains("Couldn't load the mission"));
         assert!(!p.busy);
         assert!(p.detail.is_some());
     });

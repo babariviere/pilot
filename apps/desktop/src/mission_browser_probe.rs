@@ -286,7 +286,7 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                 v.missions
                     .read(cx)
                     .error
-                    .is_some_and(|e| e.contains("reader stopped"))
+                    .is_some_and(|e| e.contains("Couldn't load the mission"))
                     && !v.missions.read(cx).busy
             });
             let stopped_requests = server.state.lock().unwrap().seen.len();

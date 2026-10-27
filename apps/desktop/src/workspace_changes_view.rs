@@ -87,7 +87,7 @@ impl Pane {
                                 if current && r.chat == p.chat && p.state.accept(r.generation,r.result) { cx.notify(); }
                             }).is_err() {return;}
                         }
-                        let _ = pane.update(cx,|p,cx| {p.reader=None; p.state.serial+=1; p.state.busy=false; p.state.error=Some("Changes reader stopped. Retained snapshot is stale. Refresh to retry.");cx.notify();});
+                        let _ = pane.update(cx,|p,cx| {p.reader=None; p.state.serial+=1; p.state.busy=false; p.state.error=Some("Couldn't read changes. What's shown may be out of date; refresh to try again.");cx.notify();});
                     }));
                 }
             }
@@ -100,7 +100,7 @@ impl Pane {
         }) {
             self.state.accept(
                 serial,
-                Err("Changes request could not be queued. Refresh to retry."),
+                Err("Couldn't request changes. Refresh to try again."),
             );
         }
         cx.notify();
@@ -130,7 +130,9 @@ impl Render for Pane {
             .is_some_and(|v| self.current(v.read(cx)));
         let mut content = div().v_flex().min_w_0();
         if !current {
-            content=content.child(div().p_3().child(ui::Notice::new("Chat or Local source changed. Reopen Changes for the active chat. Retained snapshot is stale.")));
+            content = content.child(div().p_3().child(ui::Notice::new(
+                "The chat changed. Reopen Changes to see its current changes.",
+            )));
         }
         if self.state.busy {
             content = content.child(
@@ -139,9 +141,9 @@ impl Render for Pane {
                     .test_support()
                     .p_3()
                     .child(ui::Notice::new(if self.state.snapshot.is_some() {
-                        "Refreshing. Previous snapshot retained below."
+                        "Refreshing…"
                     } else {
-                        "Reading canonical chat workspace…"
+                        "Reading changes…"
                     })),
             );
         }
@@ -153,7 +155,7 @@ impl Render for Pane {
                     .p_3()
                     .child(
                         ui::Notice::new(e)
-                            .detail("Changes are unknown. Any retained snapshot below is stale.")
+                            .detail("Changes are unknown. What's shown below may be out of date.")
                             .tone(Tone::Error),
                     ),
             );
@@ -162,7 +164,7 @@ impl Render for Pane {
             content=content.child(div().id("workspace-changes-provenance").test_support().p_3().v_flex().gap_2()
                 .child(ui::text(Text::Body,format!("{} files · since {}",s.total,model::preview(&s.base))))
                 .child(ui::text(Text::Caption,format!("Branch: {}",s.branch.as_deref().map(model::preview).unwrap_or_else(||"Not reported".into()))))
-                .child(ui::action("workspace-changes-details",if self.details {"Hide snapshot details"} else {"Local snapshot · Details"},Action::Quiet).self_start().on_click(cx.listener(|p,_,w,cx|{p.focus.focus(w,cx);p.details = !p.details;cx.notify();})))
+                .child(ui::action("workspace-changes-details",if self.details {"Hide details"} else {"Details"},Action::Quiet).self_start().on_click(cx.listener(|p,_,w,cx|{p.focus.focus(w,cx);p.details = !p.details;cx.notify();})))
                 .when(self.details,|d|d
                     .child(ui::text(Text::Caption,format!("Base: {}",model::display(&s.base))))
                     .child(ui::text(Text::Caption,format!("Branch: {}",s.branch.as_deref().map(model::display).unwrap_or_else(||"Not reported".into()))))
@@ -179,9 +181,9 @@ impl Render for Pane {
                         .child(ui::text(
                             Text::Body,
                             if s.limited {
-                                "No files in this partial snapshot. Changes remain unknown."
+                                "No files shown. Changes may be incomplete."
                             } else {
-                                "No changes reported against this base in this snapshot."
+                                "No changes."
                             },
                         )),
                 );
@@ -252,17 +254,15 @@ impl Render for Pane {
                             .on_click(cx.listener(move |p, _, w, cx| p.open_file(ix, w, cx))),
                     );
                     if f.status == "deleted" {
-                        row = row.child(ui::text(
-                            Text::Caption,
-                            "Deleted in this Changes snapshot. No current file to open.",
-                        ));
+                        row =
+                            row.child(ui::text(Text::Caption, "Deleted. There's no file to open."));
                     }
                     row=row.child(ui::text(Text::Caption,model::display(&f.path))).child(
                         div().id(("workspace-change-diff",ix)).test_support().min_w_0().w_full()
                             .font_family(cx.theme().mono_font_family.clone()).text_sm()
                             .child(gpui_kit::base::SelectableText::new(
                                 SharedString::from(format!("workspace-patch-{ix}")),
-                                SharedString::from(f.patch.as_deref().map(model::display_patch).unwrap_or_else(||"Diff unavailable within display limits (binary, metadata-only, unsupported path, missing or incomplete patch). This does not mean unchanged.".into())))));
+                                SharedString::from(f.patch.as_deref().map(model::display_patch).unwrap_or_else(||"Diff unavailable (binary, metadata-only, unsupported path or too large). This doesn't mean the file is unchanged.".into())))));
                 }
                 content = content.child(row);
             }

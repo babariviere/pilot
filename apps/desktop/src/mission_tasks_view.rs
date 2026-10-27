@@ -372,7 +372,7 @@ impl Pane {
                         while let Ok(r)=output.recv().await {
                             if view.update_in(cx, |v,w,cx| { if v.opened && v.state.accept(r.generation, &r.route.0, r.result) { v.rebuild(w,cx); cx.notify(); } }).is_err() { return; }
                         }
-                        let _=view.update(cx,|v,cx| { if v.lane==lane { v.reader=None; v.state.busy=false; if v.opened { v.state.error.get_or_insert("Task reader stopped. Retained tasks are stale; Refresh to retry."); } cx.notify(); } });
+                        let _=view.update(cx,|v,cx| { if v.lane==lane { v.reader=None; v.state.busy=false; if v.opened { v.state.error.get_or_insert("Couldn't load tasks. What's shown may be out of date; refresh to try again."); } cx.notify(); } });
                     }));
                 }
             }
@@ -384,7 +384,7 @@ impl Pane {
             })
         }) {
             self.state.busy = false;
-            self.state.error = Some("Task read could not be queued. Refresh to retry.");
+            self.state.error = Some("Couldn't request tasks. Refresh to try again.");
         }
         cx.notify();
     }
@@ -577,9 +577,9 @@ impl Render for Pane {
             root = root.child(ui::text(
                 Text::Caption,
                 if self.state.busy {
-                    "Loading tasks… Retained tasks are not current."
+                    "Loading tasks…"
                 } else {
-                    "Task read failed. Retained tasks are stale."
+                    "Couldn't refresh tasks. What's shown may be out of date."
                 },
             ));
         }
@@ -637,7 +637,7 @@ impl Render for Pane {
                     ),
             );
             if s.tasks.is_empty() {
-                root = root.child(Notice::new("No tasks received in this snapshot."));
+                root = root.child(Notice::new("No tasks yet."));
             }
             if let Some(l) = &self.list {
                 root = root.child(

@@ -340,7 +340,7 @@ impl Browser {
         if let Some(brief) = &self.brief {
             if !brief.read(cx).matches_options(&options) {
                 self.error = Some(
-                    "Brief workspace belongs to another Local connection. Existing drafts and save outcomes were retained; reopen this window to change profiles.",
+                    "This brief belongs to a different connection. Your drafts are kept; reopen the window to switch.",
                 );
                 cx.notify();
                 return;
@@ -431,7 +431,7 @@ impl Browser {
                 self.members = m;
                 self.error = None;
             }
-            _ => self.error = Some("Mission response source differs; refresh explicitly."),
+            _ => self.error = Some("The mission changed. Refresh to see it."),
         }
         cx.notify();
     }
@@ -482,9 +482,7 @@ impl Browser {
             }) {
                 self.detail = None;
                 self.members = Err("Member chats are unavailable.");
-                self.error = Some(
-                    "Mission home is unavailable in this Local-only viewer. Cached catalog context is not live detail.",
-                );
+                self.error = Some("This mission lives elsewhere and can't be opened here.");
                 if let Some(reader) = &self.reader {
                     reader.request(mission_reader::Request {
                         generation: self.generation,
@@ -506,9 +504,7 @@ impl Browser {
             return;
         }
         let Some(options) = self.options.clone() else {
-            self.error = Some(
-                "Mission reads are unavailable in this captured view. Open Local to browse missions.",
-            );
+            self.error = Some("Missions aren't available in this view.");
             cx.notify();
             return;
         };
@@ -545,7 +541,7 @@ impl Browser {
         }) {
             self.busy = true;
         } else {
-            self.error = Some("Mission read could not be queued. Retry explicitly.");
+            self.error = Some("Couldn't request missions. Refresh to try again.");
         }
         cx.notify();
     }
@@ -557,7 +553,7 @@ impl Browser {
         self.busy = false;
         if self.route.is_some() {
             self.error.get_or_insert(
-                "Mission reader stopped. Retained context is not current; Refresh to retry.",
+                "Couldn't load the mission. What's shown may be out of date; refresh to try again.",
             );
             if self.route == Some(Route::Catalog) {
                 self.catalog_current = false;
@@ -736,11 +732,11 @@ impl Browser {
     }
     fn snapshot_note(&self) -> Option<&'static str> {
         if self.busy {
-            Some("Loading mission snapshot…")
+            Some("Loading…")
         } else if self.error.is_some() {
-            Some("Snapshot unavailable · retained content may be outdated")
+            Some("Couldn't refresh · may be out of date")
         } else if !self.online {
-            Some("Offline · showing a previous snapshot")
+            Some("Offline · may be out of date")
         } else {
             None
         }
@@ -878,7 +874,10 @@ impl Render for Browser {
                     .test_support()
             }));
         if !self.online {
-            content=content.child(Notice::new("Local is unavailable. Retained text is safe to read; chat links require a current Local connection.").tone(Tone::Warning));
+            content = content.child(
+                Notice::new("Not connected. You can read this, but chat links need a connection.")
+                    .tone(Tone::Warning),
+            );
         }
         if let Some(error) = self.error {
             content = content.child(
@@ -922,9 +921,9 @@ impl Render for Browser {
                 }
                 if rows.is_empty() {
                     content = content.child(Notice::new(if self.catalog_current {
-                        "No missions in this received scope."
+                        "No missions yet."
                     } else {
-                        "No retained rows in this scope; current missions are unknown."
+                        "Couldn't load missions."
                     }));
                 }
                 for r in rows {
@@ -935,7 +934,7 @@ impl Render for Browser {
                         if local.as_ref() == Some(&key.home) {
                             ""
                         } else {
-                            " · Home unavailable"
+                            " · Can't open here"
                         },
                         r.counts
                             .map(|(d, t)| format!(" · {d} of {t} tasks done"))
@@ -969,9 +968,8 @@ impl Render for Browser {
                     );
                 }
             } else if !self.busy && self.error.is_none() {
-                content = content.child(Notice::new(
-                    "Mission catalog not loaded. Refresh explicitly.",
-                ));
+                content =
+                    content.child(Notice::new("Missions aren't loaded. Refresh to load them."));
             }
         } else if let Some(d) = self
             .detail

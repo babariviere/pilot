@@ -402,7 +402,7 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
                 v.mission_context
                     .read(cx)
                     .error
-                    .is_some_and(|e| e.contains("reader stopped"))
+                    .is_some_and(|e| e.contains("Couldn't load the mission"))
             });
             let reads = server.state.lock().unwrap().seen.len();
             settle(cx, h);

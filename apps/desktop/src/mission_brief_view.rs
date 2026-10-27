@@ -184,9 +184,8 @@ impl Workspace {
             self.online = online;
             self.cancel_read();
             if !online {
-                self.read_error = Some(
-                    "Local is unavailable. Retained brief and drafts are not a current server snapshot.",
-                );
+                self.read_error =
+                    Some("Not connected. The brief may be out of date; your drafts are kept.");
             }
             cx.notify();
         }
@@ -256,7 +255,8 @@ impl Workspace {
             self.reader = None;
             self.busy = false;
             self.request = None;
-            self.read_error.get_or_insert("Brief worker stopped. Refresh explicitly; an unconfirmed save is not safe to replay automatically.");
+            self.read_error
+                .get_or_insert("Couldn't confirm the last save. Refresh before saving again.");
         }
         cx.notify();
     }
@@ -288,7 +288,7 @@ impl Workspace {
         self.read_error = if self.busy {
             None
         } else {
-            Some("Brief read could not be queued. Refresh explicitly.")
+            Some("Couldn't request the brief. Refresh to try again.")
         };
         self.request = Some(request);
         cx.notify();
@@ -398,10 +398,8 @@ impl Workspace {
             Ok(save) => {
                 self.edit_error = None;
                 if !self.reader.as_ref().is_some_and(|r| r.save(save.clone())) {
-                    self.book.finish(
-                        &save,
-                        Outcome::Rejected("Save could not be queued. No save was dispatched."),
-                    );
+                    self.book
+                        .finish(&save, Outcome::Rejected("Couldn't save. Nothing was sent."));
                 }
             }
         }
@@ -561,11 +559,11 @@ impl Render for Workspace {
             .child(ui::text(
                 Text::Small,
                 if self.busy {
-                    "Loading · retained text is not a fresh snapshot"
+                    "Loading…"
                 } else if !self.online {
-                    "Offline · retained text and private edits"
+                    "Offline · your edits are kept"
                 } else {
-                    "Local brief · explicit revision-checked Save only"
+                    "Saved only when you choose Save"
                 },
             ));
         if let Some(err) = self.read_error {
@@ -579,7 +577,7 @@ impl Render for Workspace {
                 let (note,tone)=match &a.outcome {
                     Outcome::Pending=>(format!("Saving captured draft against revision {}… New typing stays separate.",a.save.expected),Tone::Quiet),
                     Outcome::Confirmed(b)=>(format!("Save confirmed · revision {}{}",b.revision.number,if dirty{" · newer private edits retained"}else{""}),Tone::Success),
-                    Outcome::Conflict=>("Save reported a revision conflict. Your draft is retained; review latest before another Save.".into(),Tone::Warning),
+                    Outcome::Conflict=>("Someone else changed the brief. Your draft is kept; review the latest before saving.".into(),Tone::Warning),
                     Outcome::Rejected(err)=>(format!("{err} Your draft is retained."),Tone::Error),
                     Outcome::Unknown(err)=>(format!("{err} Later reads do not confirm this save."),Tone::Warning),
                 };
@@ -607,7 +605,7 @@ impl Render for Workspace {
             }
             if dirty && !self.editing {
                 page = page.child(Notice::new(
-                    "Unsaved brief draft retained in this window. Resume editing to review it.",
+                    "You have an unsaved draft. Resume editing to review it.",
                 ));
             }
         }
@@ -642,7 +640,7 @@ impl Render for Workspace {
                             Action::Primary,
                         )
                         .disabled(!save_ready)
-                        .tooltip("Save requires a reviewed base and no pending brief save. For a conflict or unknown result, refresh and explicitly choose the received latest base first.")
+                        .tooltip("Review the latest brief before saving.")
                         .on_click(self.click(cx, |v, _, w, cx| v.save(w, cx))),
                     )
                     .child(
@@ -674,20 +672,77 @@ impl Render for Workspace {
                 ),
         );
         if self.editing {
-            page=page.child(ui::text(Text::Caption,"Private Markdown draft · 64 KiB edit limit · retained through navigation, not app restart"))
-                .child(div().id("brief-input").test_support().relative().w_full().min_w_0().child(Textarea::new(&self.input).aria_label("Mission brief Markdown")).child(editor_bounds))
-                .child(div().h_flex().gap_2().flex_wrap()
-                    .child(ui::action("brief-copy-draft","Copy my draft",Action::Quiet).on_click(self.click(cx,|v,_,_,cx|{cx.write_to_clipboard(ClipboardItem::new_string(v.input.read(cx).value().to_string()));})))
-                    .when(recovery,|d|d.child(ui::action("brief-use-latest","Use received latest as base, keep my text",Action::Secondary).disabled(pending).on_click(self.click(cx,|v,_,w,cx|{
-                        if v.marked(w,cx){return;}
-                        if let Some(s)=&v.source&&let Some(e)=v.book.get_mut(s){v.edit_error=e.use_latest().err();}
-                        cx.notify();
-                    }))))
-                    .when(dirty,|d|d.child(ui::action("brief-discard","Discard draft",Action::Quiet).disabled(pending).on_click(self.click(cx,|v,_,w,cx|{
-                        if v.marked(w,cx){return;}
-                        if let Some(s)=&v.source&&let Some(e)=v.book.get_mut(s){v.edit_error=e.discard().err();if v.edit_error.is_none(){v.editing=false;v.focus.focus(w,cx);}}
-                        cx.notify();
-                    })))));
+            page = page
+                .child(ui::text(Text::Caption, "Markdown draft · up to 64 KB"))
+                .child(
+                    div()
+                        .id("brief-input")
+                        .test_support()
+                        .relative()
+                        .w_full()
+                        .min_w_0()
+                        .child(Textarea::new(&self.input).aria_label("Mission brief Markdown"))
+                        .child(editor_bounds),
+                )
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            ui::action("brief-copy-draft", "Copy my draft", Action::Quiet)
+                                .on_click(self.click(cx, |v, _, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        v.input.read(cx).value().to_string(),
+                                    ));
+                                })),
+                        )
+                        .when(recovery, |d| {
+                            d.child(
+                                ui::action(
+                                    "brief-use-latest",
+                                    "Use received latest as base, keep my text",
+                                    Action::Secondary,
+                                )
+                                .disabled(pending)
+                                .on_click(self.click(
+                                    cx,
+                                    |v, _, w, cx| {
+                                        if v.marked(w, cx) {
+                                            return;
+                                        }
+                                        if let Some(s) = &v.source
+                                            && let Some(e) = v.book.get_mut(s)
+                                        {
+                                            v.edit_error = e.use_latest().err();
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                        })
+                        .when(dirty, |d| {
+                            d.child(
+                                ui::action("brief-discard", "Discard draft", Action::Quiet)
+                                    .disabled(pending)
+                                    .on_click(self.click(cx, |v, _, w, cx| {
+                                        if v.marked(w, cx) {
+                                            return;
+                                        }
+                                        if let Some(s) = &v.source
+                                            && let Some(e) = v.book.get_mut(s)
+                                        {
+                                            v.edit_error = e.discard().err();
+                                            if v.edit_error.is_none() {
+                                                v.editing = false;
+                                                v.focus.focus(w, cx);
+                                            }
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
+                );
         } else if let Some(b) = brief {
             page = page.child(ui::text(
                 Text::Caption,
@@ -726,17 +781,20 @@ impl Render for Workspace {
                     }),
             );
             if b.clipped() {
-                page=page.child(Notice::new("Display is clipped to 32 KiB. Full received copy is separate; clipped text is never used as an edit base."));
+                page = page.child(Notice::new("Only the first 32 KB is shown."));
             }
             if !b.editable() {
-                page=page.child(Notice::new("Full source exceeds this native editor's 64 KiB limit. Read/copy remains available; use Swift to edit larger briefs."));
+                page=page.child(Notice::new("This brief is larger than this editor's 64 KB limit. You can read and copy it; use the Swift app to edit it."));
             }
             page = page.child(Self::plain(
                 "brief-source",
                 SharedString::from(b.visible().to_owned()),
             ));
         } else if empty {
-            page=page.child(Self::plain("brief-empty","No brief revision yet. An explicit initial Save, including an empty brief, creates revision 1.".into()));
+            page = page.child(Self::plain(
+                "brief-empty",
+                "No brief yet. Save to create the first version.".into(),
+            ));
         }
         if self.history_open {
             page = page.child(

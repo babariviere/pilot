@@ -167,7 +167,7 @@ impl Render for Form {
             .on_action(cx.listener(|v, _: &SubmitUpdate, w, cx| v.submit(w, cx)))
             .on_action(cx.listener(|v, _: &CloseUpdate, w, cx| v.close(w, cx)))
             .child(ui::heading("mission-update-heading", "Post an update", Text::Headline))
-            .child(ui::text(Text::Caption, SharedString::from(format!("Local mission: {}", self.key.id))))
+            .child(ui::text(Text::Caption, SharedString::from(format!("Mission: {}", self.key.id))))
             .child(ui::text(Text::Caption, "Posted as your update, without starting a chat. Text and delivery state stay here through navigation, not app restart."))
             .child(ui::FieldRow::new("mission-update-field", "Update",
                 div().id("mission-update-text").test_support().relative().w_full().min_w_0()

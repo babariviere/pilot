@@ -273,9 +273,7 @@ impl Render for View {
                     ui::Action::Quiet,
                 )
                 .on_click(cx.listener(|v, _, _, cx| {
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        v.prepared.source.to_string(),
-                    ))
+                    cx.write_to_clipboard(ClipboardItem::new_string(v.prepared.source.to_string()))
                 })),
             );
         if self.prepared.diagram.is_ok() && !self.reader {
@@ -344,8 +342,19 @@ impl Render for View {
             } else {
                 ui::Tone::Error
             };
-            root=root.child(div().id(self.key("error")).test_support().aria_label(reason.heading()).pr(px(72.))
-                .child(ui::Notice::new(reason.heading()).tone(tone).detail(SharedString::from(format!("{} Its source is shown below.",reason.detail())))));
+            root = root.child(
+                div()
+                    .id(self.key("error"))
+                    .test_support()
+                    .aria_label(reason.heading())
+                    .pr(px(72.))
+                    .child(ui::Notice::new(reason.heading()).tone(tone).detail(
+                        SharedString::from(format!(
+                            "{} Its source is shown below.",
+                            reason.detail()
+                        )),
+                    )),
+            );
         }
         // Header last so it paints over the diagram's top-right corner.
         root.child(body).child(header)

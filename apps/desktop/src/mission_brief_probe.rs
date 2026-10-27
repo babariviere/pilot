@@ -487,7 +487,7 @@ fn component(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Opt
     until(cx, h, |cx| {
         pane.read(cx)
             .read_error
-            .is_some_and(|e| e.contains("worker stopped"))
+            .is_some_and(|e| e.contains("Couldn't confirm the last save"))
             && !pane.read(cx).busy
     });
     let requests = server.state.lock().unwrap().seen.len();
