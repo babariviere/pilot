@@ -20,11 +20,16 @@ use tokio::io::AsyncReadExt;
 const CAP: u64 = 8 * 1024 * 1024;
 const FILES: usize = 30_000;
 const TOTAL: u64 = 2 * 1024 * 1024 * 1024;
+#[cfg(any(not(target_os = "linux"), test))]
 const MANIFEST: &str = "Contents/Resources/bundled-runtime.json";
+#[cfg(any(target_os = "linux", test))]
+#[path = "linux_bundled_runtime.rs"]
+mod linux;
+
 type Failure = &'static str;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static UPDATE_RECEIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn set_update_receipt(path: PathBuf) -> Result<(), Failure> {
     if !path.is_absolute() {
         return Err("Update startup receipt must be an absolute transaction path.");
@@ -33,13 +38,14 @@ pub fn set_update_receipt(path: PathBuf) -> Result<(), Failure> {
         .set(path)
         .map_err(|_| "Update startup receipt was already set.")
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn update_receipt() -> Option<PathBuf> {
     UPDATE_RECEIPT.get().cloned()
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Manifest {
     schema: u32,
     kind: String,
@@ -84,6 +90,13 @@ impl Entry {
 
 /// A bundle-shaped launch must fail visibly if damaged, never silently become a fixture.
 pub fn packaged(executable: &Path) -> bool {
+    #[cfg(target_os = "linux")]
+    if executable
+        .parent()
+        .is_some_and(|p| p.file_name().is_some_and(|n| n == "libexec"))
+    {
+        return true;
+    }
     executable.parent().is_some_and(|p| {
         p.file_name().is_some_and(|n| n == "MacOS")
             && p.parent()
@@ -132,6 +145,7 @@ fn file(path: &Path, cap: u64) -> Result<File, Failure> {
 }
 fn enumerate(
     root: &Path,
+    excluded: &[&str],
     cancel: &AtomicBool,
     deadline: Instant,
 ) -> Result<BTreeSet<String>, Failure> {
@@ -147,10 +161,13 @@ fn enumerate(
                 .ok()
                 .and_then(Path::to_str)
                 .ok_or("Invalid bundle path.")?;
-            if name == "Contents/_CodeSignature" || name.starts_with("Contents/_CodeSignature/") {
+            if excluded.contains(&"Contents/Resources/bundled-runtime.json")
+                && (name == "Contents/_CodeSignature"
+                    || name.starts_with("Contents/_CodeSignature/"))
+            {
                 continue;
             }
-            if name != MANIFEST && name != "Contents/MacOS/pilot-desktop" {
+            if !excluded.contains(&name) {
                 paths.insert(name.to_string());
             }
             if paths.len() > FILES {
@@ -167,6 +184,7 @@ fn enumerate(
     }
     Ok(paths)
 }
+#[cfg(any(not(target_os = "linux"), test))]
 fn validate(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<(), Failure> {
     let root = root
         .canonicalize()
@@ -214,9 +232,34 @@ fn validate(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<(), F
     if serde_json::from_slice::<Build>(&stamp).ok().as_ref() != Some(build) {
         return Err("Runtime manifest/build identity mismatch.");
     }
+    validate_inventory(
+        &root,
+        manifest.files,
+        &[MANIFEST, "Contents/MacOS/pilot-desktop"],
+        &[
+            "Contents/Resources/runtime/node/bin/node",
+            "Contents/Resources/runtime/runtime-build.json",
+            "Contents/Resources/runtime/packages/daemon/src/runtime-launch.ts",
+            "Contents/Resources/runtime/packages/daemon/src/main.ts",
+            "Contents/MacOS/pilot-visual-worker",
+            "Contents/Helpers/PilotPower",
+            "Contents/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents",
+        ],
+        cancel,
+        deadline,
+    )
+}
+fn validate_inventory(
+    root: &Path,
+    entries: Vec<Entry>,
+    excluded: &[&str],
+    required: &[&str],
+    cancel: &AtomicBool,
+    deadline: Instant,
+) -> Result<(), Failure> {
     let mut paths = BTreeSet::new();
     let mut total = 0u64;
-    for entry in manifest.files {
+    for entry in entries {
         check(cancel, deadline)?;
         let name = entry.path();
         if !relative(name) || !paths.insert(name.to_owned()) {
@@ -241,7 +284,7 @@ fn validate(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<(), F
                     || !path
                         .canonicalize()
                         .map_err(|_| "Broken runtime link.")?
-                        .starts_with(&root)
+                        .starts_with(root)
                 {
                     return Err("Bundled runtime link escapes its app.");
                 }
@@ -285,20 +328,12 @@ fn validate(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<(), F
             }
         }
     }
-    for required in [
-        "Contents/Resources/runtime/node/bin/node",
-        "Contents/Resources/runtime/runtime-build.json",
-        "Contents/Resources/runtime/packages/daemon/src/runtime-launch.ts",
-        "Contents/Resources/runtime/packages/daemon/src/main.ts",
-        "Contents/MacOS/pilot-visual-worker",
-        "Contents/Helpers/PilotPower",
-        "Contents/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents",
-    ] {
-        if !paths.contains(required) {
+    for required in required {
+        if !paths.contains(*required) {
             return Err("Required bundled runtime resource is absent.");
         }
     }
-    if paths != enumerate(&root, cancel, deadline)? {
+    if paths != enumerate(root, excluded, cancel, deadline)? {
         return Err("Bundle inventory changed.");
     }
     Ok(())
@@ -349,14 +384,30 @@ fn failure(code: &str) -> Failure {
 /// One bounded worker calls this; no environment mutation, shell, PATH lookup or production restart.
 pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::LocalOptions, Failure> {
     let deadline = Instant::now() + Duration::from_secs(45);
-    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        return Err("Bundled runtime requires arm64 macOS.");
+    #[cfg(target_os = "linux")]
+    if update_receipt().is_some() {
+        return Err(
+            "Verified Linux update runtime handoff is unavailable in this build. No daemon was started or update acknowledged.",
+        );
     }
+    if !cfg!(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "linux", target_arch = "x86_64")
+    )) {
+        return Err("Bundled runtime requires arm64 macOS or x86_64 Wayland Linux.");
+    }
+    #[cfg(not(target_os = "linux"))]
     let root = executable
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
         .ok_or("Cannot locate bundled runtime.")?;
+    #[cfg(target_os = "linux")]
+    let root = executable
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("Cannot locate Linux package.")?;
+    #[cfg(not(target_os = "linux"))]
     validate(root, &cancel, deadline)?;
     #[cfg(target_os = "macos")]
     let pinned = if let Some(receipt) = update_receipt() {
@@ -387,6 +438,24 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
     } else {
         runtime_root
     };
+    #[cfg(target_os = "linux")]
+    let runtime_root = {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or(
+                PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?)
+                    .join(".local/share"),
+            );
+        linux::publish(
+            &runtime_root,
+            &data.join("pilot-next/runtimes"),
+            &cancel,
+            deadline,
+        )?
+    };
+    #[cfg(target_os = "linux")]
+    let runtime = runtime_root.join("runtime");
+    #[cfg(not(target_os = "linux"))]
     let runtime = runtime_root.join("Contents/Resources/runtime");
     let home = std::env::var_os("HOME").ok_or("HOME is unavailable.")?;
     let mut command = tokio::process::Command::new(runtime.join("node/bin/node"));
@@ -440,6 +509,7 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         .build()
         .map_err(|_| "Cannot start runtime worker.")?;
     executor.block_on(async {
+        check(&cancel, deadline)?;
         let mut child = command
             .spawn()
             .map_err(|_| "Cannot launch bundled Node runtime.")?;

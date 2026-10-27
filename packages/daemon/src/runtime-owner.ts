@@ -291,6 +291,7 @@ export async function inspectRuntime(
 	home: string,
 	port: number,
 	build: RuntimeBuild,
+	expectedRuntimeRoot?: string,
 ): Promise<"idle" | "starting" | "ready"> {
 	home = await profile(home);
 	let db: DatabaseSync;
@@ -317,6 +318,7 @@ export async function inspectRuntime(
 		port: number;
 		pid: number;
 		build: RuntimeBuild;
+		runtimeRoot?: string;
 	};
 	try {
 		record = JSON.parse(readPrivate(join(home, RECORD), CAP));
@@ -331,7 +333,8 @@ export async function inspectRuntime(
 		record.port !== port ||
 		!Number.isSafeInteger(record.pid) ||
 		record.pid <= 0 ||
-		JSON.stringify(record.build) !== JSON.stringify(build)
+		JSON.stringify(record.build) !== JSON.stringify(build) ||
+		(expectedRuntimeRoot !== undefined && record.runtimeRoot !== expectedRuntimeRoot)
 	)
 		fail("runtime_incompatible");
 	const challenge = randomBytes(32).toString("hex");
@@ -373,7 +376,8 @@ export async function inspectRuntime(
 			value.port !== port ||
 			value.pid !== record.pid ||
 			value.challenge !== challenge ||
-			JSON.stringify(value.build) !== JSON.stringify(build)
+			JSON.stringify(value.build) !== JSON.stringify(build) ||
+			(expectedRuntimeRoot !== undefined && value.runtimeRoot !== expectedRuntimeRoot)
 		)
 			fail("runtime_proof_invalid");
 		if (value.ready !== true) return "starting";

@@ -189,6 +189,11 @@ chats and subagents automatically. They do not wait for entire conversations to 
 Chats with working subagents stay Working, even when the parent has finished its current reply.
 Pending child work also reopens automatically after a daemon restart or a sleep pause.
 
+The experimental Rust desktop in `apps/desktop` also implements guarded bundled
+Local startup for x86-64 Wayland Linux. Its [runtime contract and qualification
+boundaries](apps/desktop/docs/linux-local-runtime.md) are separate from Swift and
+from Linux installer, updater and native visual confinement qualification.
+
 ### Headless Linux runtime (development)
 
 The daemon and session workers can also run without a Mac app on **Linux x86-64**, using Node 24+

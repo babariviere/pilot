@@ -57,7 +57,8 @@ separate signature and platform-security contract.
 
 - A bundle-shaped no-argument executable launch uses the bundled runtime.
   A damaged/missing manifest fails visibly instead of silently opening fixtures.
-- `--bundled` explicitly requests that same path. Only arm64 macOS is enabled.
+- `--bundled` explicitly requests that same path on arm64 macOS. The separate
+  [Linux Local contract](linux-local-runtime.md) covers x86-64 Wayland packages.
 - `--local` and `--local-check` keep their existing, explicit external-daemon
   behavior. They do not start, stop, upgrade or attest a daemon. Existing Local
   chat reads are still unauthenticated loopback reads, not newly authenticated API.

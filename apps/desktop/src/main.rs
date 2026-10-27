@@ -82,7 +82,7 @@ fn main() {
         ["--fixture", "fence"] => Some(fence_fixture()),
         ["--help"] => {
             println!(
-                "Pilot Next.\n--bundled: guarded bundled Local runtime, arm64 macOS only.\n--local: explicit existing-daemon mode, Local chats/create/send/Stop and private durable drafts.\nExisting loopback API, no request authentication. Full hello identity is pinned.\nNo approvals, archive or read-status writes. --local-check stays read-only.\nNo args: packaged app uses its guarded runtime; unbundled executable uses a synthetic fixture.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to save and exit."
+                "Pilot Next.\n--bundled: guarded bundled Local runtime, arm64 macOS or x86_64 Wayland Linux.\n--local: explicit existing-daemon mode, Local chats/create/send/Stop and private durable drafts.\nExisting loopback API, no request authentication. Full hello identity is pinned.\nNo approvals, archive or read-status writes. --local-check stays read-only.\nNo args: packaged app uses its guarded runtime; unbundled executable uses a synthetic fixture.\n--fixture giant: 1 MiB/2,000 paragraphs. --fixture fence: 5,000 code lines.\nClose window or Cmd/Ctrl-Q to save and exit."
             );
             return;
         }

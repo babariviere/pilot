@@ -77,9 +77,9 @@ Limits match the shared seam: 30,000 objects, 2GiB expanded, 256MiB/file and
 
 `bin/pilot-next` without arguments explicitly requests `--bundled`, so a Linux
 candidate cannot silently open synthetic fixtures and look like a working Local
-app. Current `bundled_runtime::start` refuses everything except arm64 macOS.
-The package **does not enable that path on Linux**. Explicit fixture/help modes
-remain available; explicit `--local` retains the existing external-daemon
+app. [Bundled Linux Local startup](linux-local-runtime.md) validates the full
+payload and retains its runtime independently of the GUI before activation.
+Explicit fixture/help modes remain available; explicit `--local` retains the existing external-daemon
 contract, never starts a bundled daemon, and is not used by these checks.
 
 The source-owned Local profile contract remains unchanged: permanent SQLite
@@ -87,8 +87,9 @@ lease, reserved listener, exact build/source/profile live challenge, activation
 before service graph admission, no replay and honest refusal/Unknown. The
 launcher never chooses another profile/port, adopts a legacy owner, starts a
 second daemon, stops/replaces/migrates one, or claims protocol-only compatibility.
-No Linux retention, launch or confinement contract is inferred from macOS.
-Installer and auto-update remain disabled, as does native visual execution.
+Linux retention/startup is qualified separately from macOS, with exact-source
+evidence in [Linux Local qualification](../evidence/linux-local-runtime.md).
+Installer/updater qualification and native visual confinement remain separate.
 
 ## Native checks and evidence boundaries
 
@@ -133,9 +134,9 @@ unbuilt packages, other distributions or the disabled platform capabilities.
 
 Remaining acceptance gates:
 
-1. Separately qualify any Linux bundled-launch/retention/ownership integration
-   with source-owned fixture profiles, lease contention, compatible reuse,
-   legacy refusal and activation uncertainty before changing the platform guard.
+1. Preserve the separately qualified Linux Local lifecycle and its exact-source
+   evidence when changing the runtime or packaging contract. This is not blanket
+   qualification of future release payloads or other distributions.
 2. Qualify native visual confinement separately. Keep refusal until then.
 3. Real Wayland GPU/distribution, keyboard/IME and frame-pacing acceptance remain
    outstanding. Headless Weston software buffers do not establish those.

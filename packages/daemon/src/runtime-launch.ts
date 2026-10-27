@@ -1,6 +1,7 @@
 /** Short-lived packaged launcher. No credential/package/extension loading; no PID-based signals. */
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +15,8 @@ export async function launchRuntime(options: {
 	home: string;
 	port: number;
 	build: RuntimeBuild;
+	/** Packaged CLI pins the actual immutable module root, not only its source tuple. */
+	runtimeRoot?: string;
 	entry: string;
 	signal?: AbortSignal;
 	timeout?: number;
@@ -27,12 +30,12 @@ export async function launchRuntime(options: {
 	const deadline = Date.now() + (options.timeout ?? 20_000);
 	if (signal?.aborted) throw new RuntimeFailure("runtime_startup_canceled");
 	if (existsSync(home)) {
-		const status = await inspectRuntime(home, port, build);
+		const status = await inspectRuntime(home, port, build, options.runtimeRoot);
 		if (status === "ready") return "reused";
 		if (status === "starting") {
 			while (Date.now() < deadline && !signal?.aborted) {
 				await delay(100, undefined, { signal });
-				if ((await inspectRuntime(home, port, build)) === "ready") return "reused";
+				if ((await inspectRuntime(home, port, build, options.runtimeRoot)) === "ready") return "reused";
 			}
 			throw new RuntimeFailure("runtime_owner_still_starting");
 		}
@@ -94,7 +97,7 @@ export async function launchRuntime(options: {
 		});
 		while (Date.now() < deadline && !signal?.aborted) {
 			if (exited) throw new RuntimeFailure("runtime_launch_failed");
-			const status = await inspectRuntime(home, port, build);
+			const status = await inspectRuntime(home, port, build, options.runtimeRoot);
 			if (status === "ready") return "started";
 			await delay(100, undefined, { signal });
 		}
@@ -160,6 +163,7 @@ async function main(): Promise<void> {
 		port: config.port,
 		build,
 		entry,
+		runtimeRoot: await realpath(fileURLToPath(new URL("../../../", import.meta.url))),
 		env: process.env,
 	});
 }

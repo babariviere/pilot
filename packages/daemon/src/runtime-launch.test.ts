@@ -37,7 +37,7 @@ import { daemonHello } from ${JSON.stringify(new URL("./hello.ts", import.meta.u
 import { loadConfig } from ${JSON.stringify(new URL("./config.ts", import.meta.url).href)};
 import { writeFile } from 'node:fs/promises';
 const home=process.env.PILOT_HOME, port=Number(process.env.PILOT_PORT);
-const owner=await ownRuntime(home,port,true,${JSON.stringify(build)});
+const owner=await ownRuntime(home,port,true,${JSON.stringify(build)},process.env.RUNTIME_ROOT);
 const config=loadConfig();
 await writeFile(home+'/policy',JSON.stringify({scope:config.modelScopeReadOnly===true,mcp:config.mcpSetupReadOnly===true,retentionOff:config.workspaceRetentionMs===Number.POSITIVE_INFINITY,park:config.idleParkMs}),{mode:0o600});
 if(process.env.MODE==='silent') { await new Promise(()=>setInterval(()=>{},1000)); }
@@ -104,6 +104,19 @@ test("configured child retains scope/MCP read-only and no-retention/idle policy"
 		retentionOff: true,
 		park: 1234,
 	});
+});
+test("retained launch reuses only its exact live module root, never a same-build app-root owner", async (t) => {
+	const f = await fixture(t);
+	const root = join(f.env.HOME, "retained capsule/runtime");
+	const options = { ...f, runtimeRoot: root, env: { ...f.env, RUNTIME_ROOT: root } };
+	assert.equal(await launchRuntime(options), "started");
+	assert.equal(await launchRuntime(options), "reused");
+	assert.equal(f.children.length, 1);
+	await assert.rejects(
+		launchRuntime({ ...options, runtimeRoot: join(f.env.HOME, "replaceable-app/runtime") }),
+		/runtime_incompatible/,
+	);
+	assert.equal(f.children.length, 1);
 });
 async function until(check: () => Promise<boolean>) {
 	const deadline = Date.now() + 5000;

@@ -70,6 +70,25 @@ test("bundled admission never adopts a legacy profile, even an empty existing di
 	await assert.rejects(readFile(join(home, OWNER_FILE)), { code: "ENOENT" });
 	assert.equal(await readFile(join(home, "retained-draft"), "utf8"), "unchanged");
 });
+test("retained startup pins the live record and signed module root without changing legacy callers", async (t) => {
+	const home = await fixture(t),
+		p = await port(),
+		root = join(home, "retained-runtime");
+	const owner = await ownRuntime(home, p, true, build, root);
+	t.after(() => owner.close());
+	owner.ready(await daemonHello(home, capabilities));
+	assert.equal(await inspectRuntime(home, p, build, root), "ready");
+	await assert.rejects(inspectRuntime(home, p, build, join(home, "replaceable-app")), /runtime_incompatible/);
+	const recordPath = join(home, ".daemon-owner.json");
+	const original = await readFile(recordPath, "utf8");
+	const redirected = join(home, "forged-root");
+	await writeFile(recordPath, JSON.stringify({ ...JSON.parse(original), runtimeRoot: redirected }), { mode: 0o600 });
+	await assert.rejects(inspectRuntime(home, p, build, redirected), /runtime_proof_invalid/);
+	await writeFile(recordPath, original, { mode: 0o600 });
+	assert.equal(await inspectRuntime(home, p, build), "ready");
+	await owner.close();
+	assert.equal(await inspectRuntime(home, p, build, redirected), "idle");
+});
 test("a guarded ordinary runtime can be attested, but its legacy profile cannot be auto-started", async (t) => {
 	const home = await fixture(t),
 		p = await port();
