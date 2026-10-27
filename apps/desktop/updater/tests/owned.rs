@@ -315,7 +315,7 @@ fn stable_shared_release_selects_only_rust_gui_assets_and_matches_signed_version
             reply(200, None, serde_json::to_vec(&release).unwrap()),
             reply(200, None, envelope(&metadata(&archive()))),
         ]);
-        let result = transport.discover(&trust(), &access(), &Default::default());
+        let result = transport.discover(&trust(), Some(&access()), &Default::default());
         assert_eq!(result.is_ok(), valid, "{tag}");
     }
     release["tag_name"] = "v0.1.1".into();
@@ -329,7 +329,7 @@ fn stable_shared_release_selects_only_rust_gui_assets_and_matches_signed_version
         serde_json::to_vec(&release).unwrap(),
     )]);
     assert!(matches!(
-        transport.discover(&trust(), &access(), &Default::default()),
+        transport.discover(&trust(), Some(&access()), &Default::default()),
         Err(Error::Identity)
     ));
 }
@@ -354,7 +354,7 @@ fn private_api_redirects_strip_credentials_before_every_cdn_hop() {
     ]);
     assert!(
         transport
-            .discover(&trust(), &access(), &Default::default())
+            .discover(&trust(), Some(&access()), &Default::default())
             .unwrap()
             .is_some()
     );
@@ -366,6 +366,38 @@ fn private_api_redirects_strip_credentials_before_every_cdn_hop() {
             .all(|(_, token)| token.as_deref() == Some("synthetic-token"))
     );
     assert!(requests[2..].iter().all(|(_, token)| token.is_none()));
+}
+#[test]
+fn public_release_check_and_download_need_no_token() {
+    let bytes = archive();
+    let signed = envelope(&metadata(&bytes));
+    let (transport, requests) = network(vec![
+        reply(200, None, release()),
+        reply(200, None, signed),
+        reply(
+            302,
+            Some("https://release-assets.githubusercontent.com/a?synthetic=1"),
+            vec![],
+        ),
+        reply(200, None, bytes),
+    ]);
+    let verified = transport
+        .discover(&trust(), None, &Default::default())
+        .unwrap()
+        .expect("newer signed release");
+    let temp = Temp::new();
+    transport
+        .download(
+            &verified,
+            &trust(),
+            None,
+            &temp.0.join("archive.zip"),
+            &Default::default(),
+        )
+        .unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(requests.iter().all(|(_, token)| token.is_none()));
 }
 #[test]
 fn redirect_to_unapproved_host_or_back_to_credential_origin_is_refused_before_request() {
@@ -380,7 +412,7 @@ fn redirect_to_unapproved_host_or_back_to_credential_origin_is_refused_before_re
             reply(302, Some(destination), vec![]),
         ]);
         assert!(matches!(
-            transport.discover(&trust(), &access(), &Default::default()),
+            transport.discover(&trust(), Some(&access()), &Default::default()),
             Err(Error::RedirectDenied)
         ));
         assert_eq!(requests.lock().unwrap().len(), 2);
@@ -400,14 +432,14 @@ fn network_offline_auth_metadata_bounds_and_cancellation_are_typed() {
     ] {
         let (transport, _) = network(vec![response]);
         assert!(
-            matches!(transport.discover(&trust(), &access(), &Default::default()), Err(error) if error == expected)
+            matches!(transport.discover(&trust(), Some(&access()), &Default::default()), Err(error) if error == expected)
         );
     }
     let (transport, requests) = network(vec![]);
     let cancel = transport::Cancellation::default();
     cancel.cancel();
     assert!(matches!(
-        transport.discover(&trust(), &access(), &cancel),
+        transport.discover(&trust(), Some(&access()), &cancel),
         Err(Error::Cancelled)
     ));
     assert!(requests.lock().unwrap().is_empty());
@@ -424,12 +456,12 @@ fn signed_current_build_is_no_update_and_downgrade_is_an_error() {
         match expected {
             None => assert!(
                 transport
-                    .discover(&trust(), &access(), &Default::default())
+                    .discover(&trust(), Some(&access()), &Default::default())
                     .unwrap()
                     .is_none()
             ),
             Some(expected) => assert!(
-                matches!(transport.discover(&trust(),&access(),&Default::default()),Err(error) if error == expected)
+                matches!(transport.discover(&trust(),Some(&access()),&Default::default()),Err(error) if error == expected)
             ),
         }
     }
@@ -442,7 +474,13 @@ fn downloaded_archive_must_match_signed_size_and_digest_and_never_overwrites() {
     let path = temp.0.join("archive.zip");
     let (transport, _) = network(vec![reply(200, None, bytes.clone())]);
     transport
-        .download(&signed, &trust(), &access(), &path, &Default::default())
+        .download(
+            &signed,
+            &trust(),
+            Some(&access()),
+            &path,
+            &Default::default(),
+        )
         .unwrap();
     assert_eq!(
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -456,7 +494,13 @@ fn downloaded_archive_must_match_signed_size_and_digest_and_never_overwrites() {
     );
     let (transport, _) = network(vec![reply(200, None, bytes)]);
     assert_eq!(
-        transport.download(&signed, &trust(), &access(), &path, &Default::default()),
+        transport.download(
+            &signed,
+            &trust(),
+            Some(&access()),
+            &path,
+            &Default::default()
+        ),
         Err(Error::Filesystem)
     );
     assert_eq!(fs::read(&path).unwrap(), b"tampered");
@@ -471,7 +515,13 @@ fn corrupt_and_truncated_download_never_survive_as_a_verified_artifact() {
         let path = temp.0.join("bad.zip");
         assert!(
             transport
-                .download(&signed, &trust(), &access(), &path, &Default::default())
+                .download(
+                    &signed,
+                    &trust(),
+                    Some(&access()),
+                    &path,
+                    &Default::default()
+                )
                 .is_err()
         );
         assert!(!path.exists());

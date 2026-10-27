@@ -48,7 +48,10 @@ signer owns sealing the inventory and outer update metadata.
 ## Install, daemon preservation and recovery
 
 Only an owned, writable install with safe ancestors is supported. No sudo,
-system package-manager replacement or permission repair is attempted. Staging
+system package-manager replacement or permission repair is attempted. The
+extracted `Pilot Next` directory may be renamed or moved (for example to
+`~/.local/opt/pilot-next`): the signed inventory identifies the install, not its
+name, and updates replace it in place under the same name. Staging
 and the permanent per-target lock use the existing installer journal. Linux
 uses `renameat2(RENAME_EXCHANGE)` for a same-volume atomic whole-directory
 exchange, persisting both directory parents and retaining the old payload.
@@ -96,8 +99,10 @@ GUI with `native-probes` and helper with `native-linux,fixture`, using only the
 script's public synthetic identity/key. Assemble source-matched old `100.1` and
 new `101.1` packages; the new policy must admit the old inventory digest. Pass
 `--old`, `--new`, an explicit owned `--wayland` socket and `--case` (`success`,
-`wrong-signature`, `wrong-platform`, `wrong-hash`, `wrong-source`). The fixture
-transport replaces network input only and is absent from normal distributions.
+`wrong-signature`, `wrong-platform`, `wrong-hash`, `wrong-source`), and optionally
+`--install-name` to install under a renamed directory. The fixture transport
+replaces network input only, accepts only anonymous requests like the public
+release, and is absent from normal distributions.
 It refuses other compiled identities/keys and nonprivate temporary targets.
 Keep closed fixture evidence on private disk: one full run uses about 2.6 GiB,
 and `/tmp` may be memory-backed. The script reaps only its owned descendants.

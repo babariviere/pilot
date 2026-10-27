@@ -1,4 +1,5 @@
-//! Worker-only, bounded HTTPS. All redirects are manually admitted. No implicit auth.
+//! Worker-only, bounded HTTPS. All redirects are manually admitted. Public releases are
+//! read anonymously; an explicit token is optional and never inferred.
 use crate::{
     Error,
     manifest::{ARCHIVE_ASSET, MANIFEST_ASSET, MAX_MANIFEST, Trust, VerifiedManifest},
@@ -126,7 +127,7 @@ impl Transport {
         &self,
         start: Url,
         trust: &Trust,
-        access: &Access,
+        access: Option<&Access>,
         cancel: &Cancellation,
     ) -> Result<Reply, Error> {
         let mut url = start;
@@ -138,7 +139,7 @@ impl Transport {
             }
             let response = self
                 .network
-                .get(&url, authenticated.then_some(access.0.as_str()))?;
+                .get(&url, access.filter(|_| authenticated).map(|a| a.0.as_str()))?;
             cancel.check()?;
             match response.status {
                 200 => return Ok(response),
@@ -162,7 +163,7 @@ impl Transport {
     pub fn discover(
         &self,
         trust: &Trust,
-        access: &Access,
+        access: Option<&Access>,
         cancel: &Cancellation,
     ) -> Result<Option<VerifiedManifest>, Error> {
         trust.validate()?;
@@ -194,7 +195,7 @@ impl Transport {
         &self,
         manifest: &VerifiedManifest,
         trust: &Trust,
-        access: &Access,
+        access: Option<&Access>,
         path: &Path,
         cancel: &Cancellation,
     ) -> Result<(), Error> {

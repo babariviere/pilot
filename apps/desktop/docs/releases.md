@@ -61,7 +61,8 @@ Build versions use this workflow's monotonically increasing run number/attempt,
 independently of Sparkle. The app still requires explicit **Install and restart**,
 fresh durability/admission receipts and retained-runtime verification. Ordinary
 Quit never installs; existing daemons are never stopped, migrated or replaced.
-The Linux updater's native evidence and limits are in [Linux updates](linux-updates.md).
+The Linux updater's native evidence and limits are in [Linux updates](linux-updates.md);
+user install steps are in [Install Pilot Next on Linux](linux-install.md).
 
 No release trigger, production variable/secret mutation, published-asset deletion,
 live app/daemon installation or restart is part of this change. Retrying an older

@@ -193,6 +193,7 @@ The experimental Rust desktop in `apps/desktop` also implements guarded bundled
 Local startup for x86-64 Wayland Linux. Its [runtime contract and qualification
 boundaries](apps/desktop/docs/linux-local-runtime.md) are separate from Swift and
 from Linux installer, updater and native visual confinement qualification.
+To install it on Linux, follow [Install Pilot Next on Linux](apps/desktop/docs/linux-install.md).
 
 ### Headless Linux runtime (development)
 

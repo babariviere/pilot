@@ -191,7 +191,7 @@ not an idle polling timer; prepared/authorized UI cannot remain falsely ready af
 helper death. A lost COMMIT receipt is uncertain, not an undo of durable intent.
 There is no elevated install, automatic provider-credential discovery, daemon
 replacement, rollback UI or production GUI update acceptance claim. GUI Settings,
-explicit quit coordination, session-only repository access, retained-runtime proof and
+explicit quit coordination, anonymous public checks with optional session-only access, retained-runtime proof and
 startup/recovery handling are integrated; synthetic component/helper checks do not
 establish full production-bundle, Gatekeeper, notarization or macOS-version acceptance.
 

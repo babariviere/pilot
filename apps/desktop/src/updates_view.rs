@@ -70,10 +70,6 @@ impl Updates {
         };
         match worker {
             Ok(mut worker) => {
-                #[cfg(feature = "native-probes")]
-                if pilot_desktop_updater::fixture::enabled() {
-                    result.access = Some("synthetic-fixture-access".into());
-                }
                 if let Some(location) = location {
                     worker.supply_runtime(location);
                 }
@@ -343,7 +339,7 @@ fn error_text(error: Error) -> &'static str {
             "Updates are not configured in this development build. No feed or trust key is inferred."
         }
         Error::Authentication => {
-            "An explicitly approved update access provider is required. No credentials were searched or migrated."
+            "GitHub refused the update request, usually a rate limit. Retry later, or use an access token for this session."
         }
         Error::ActiveWork | Error::Busy => {
             "Installation is deferred while work or another operation is active. Nothing was stopped."
@@ -382,9 +378,7 @@ impl Render for Updates {
         let message = match state {
             None => error_text(self.unavailable.unwrap_or(Error::Unconfigured)),
             Some(State::Idle) => "No update check has completed.",
-            Some(State::Current) => {
-                "No newer compatible release was found by the last authenticated check."
-            }
+            Some(State::Current) => "Pilot Next is up to date.",
             Some(State::Available(_)) => {
                 "An authenticated update is available. Downloading does not install it."
             }
@@ -494,7 +488,11 @@ impl Render for Updates {
                 }
             }
         }
-        if let Some(input) = self.access_input.clone() {
+        // Public releases need no token. Offer one only after GitHub refuses a request.
+        let wants_access = self.access.is_some()
+            || self.unsaved_access(cx)
+            || matches!(state, Some(State::Failed(Error::Authentication)));
+        if let Some(input) = self.access_input.clone().filter(|_| wants_access) {
             if self.access.is_none() {
                 view=view.child(Input::new(&input).disabled(checking || self.fenced))
                     .child(ui::text(Text::Caption,"Explicit access for the configured release repository only. Kept in memory for this app session, never saved or searched in Keychain, gh or provider accounts."))

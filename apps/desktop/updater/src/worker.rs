@@ -15,8 +15,8 @@ use std::{
 };
 
 enum Job {
-    Check(u64, Access, Cancellation),
-    Download(u64, Candidate, Access, Cancellation),
+    Check(u64, Option<Access>, Cancellation),
+    Download(u64, Candidate, Option<Access>, Cancellation),
     Prepare(u64, Safety, Option<crate::coordination::Location>),
     Commit(u64, Safety),
     Abort(u64),
@@ -88,7 +88,8 @@ impl Worker {
                             prepared = None;
                             helper_operation = None;
                             staged = None;
-                            let release = Transport::new()?.discover(&trust, &access, &cancel)?;
+                            let release =
+                                Transport::new()?.discover(&trust, access.as_ref(), &cancel)?;
                             let outcome = match &release {
                                 Some(release) => Outcome::Available(Candidate {
                                     version: release.manifest().build.clone(),
@@ -111,7 +112,7 @@ impl Worker {
                                 Transport::new()?.download(
                                     release,
                                     &trust,
-                                    &access,
+                                    access.as_ref(),
                                     &root.join("archive.zip"),
                                     &cancel,
                                 )?;
@@ -255,13 +256,13 @@ impl Worker {
 }
 impl Backend for Worker {
     fn check(&mut self, operation: u64, _trigger: Trigger) -> Result<(), Error> {
-        let access = self.access.take().ok_or(Error::Authentication)?;
+        let access = self.access.take();
         let cancel = Cancellation::default();
         self.cancellation = Some((operation, cancel.clone()));
         self.send(Job::Check(operation, access, cancel))
     }
     fn download(&mut self, operation: u64, candidate: &Candidate) -> Result<(), Error> {
-        let access = self.access.take().ok_or(Error::Authentication)?;
+        let access = self.access.take();
         let cancel = Cancellation::default();
         self.cancellation = Some((operation, cancel.clone()));
         self.send(Job::Download(operation, candidate.clone(), access, cancel))

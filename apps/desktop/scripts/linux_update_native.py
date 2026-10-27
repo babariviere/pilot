@@ -28,7 +28,7 @@ def signature(node, raw):
     return subprocess.check_output([str(node), "--input-type=module", "-e", NODE_SIGN], input=raw, timeout=10)
 
 
-def qualify(old, new, wayland, case="success"):
+def qualify(old, new, wayland, case="success", install_name="Pilot Next"):
     package.native_host()
     old, new = old.resolve(strict=True), new.resolve(strict=True)
     if not wayland.is_absolute() or wayland.stat().st_uid != os.getuid():
@@ -54,7 +54,7 @@ def qualify(old, new, wayland, case="success"):
     print(f"Owned full-GUI update fixture: {root}", flush=True)
     install = root / "install with spaces"
     install.mkdir(mode=0o700)
-    target = install / "Pilot Next"
+    target = install / install_name
     shutil.copytree(old, target, symlinks=True)
     node = target / "runtime/node/bin/node"
     archive_dir = root / "archive-input"
@@ -210,5 +210,6 @@ if __name__ == "__main__":
     parser.add_argument("--new", type=Path, required=True)
     parser.add_argument("--wayland", type=Path, required=True)
     parser.add_argument("--case", choices=("success", "wrong-signature", "wrong-platform", "wrong-hash", "wrong-source"), default="success")
+    parser.add_argument("--install-name", default="Pilot Next", help="installed directory name (users may rename it)")
     args = parser.parse_args()
-    qualify(args.old, args.new, args.wayland, args.case)
+    qualify(args.old, args.new, args.wayland, args.case, args.install_name)

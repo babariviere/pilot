@@ -18,12 +18,15 @@ for its distinct layout, trust and qualification boundaries.
 
 ## Access and scheduling
 
-Configured builds accept an explicit masked access token for their exact release
-repository. It is bounded, session-only, never serialized, and never obtained
-from gh, Keychain, environment or agent/provider credentials. **Clear session
-access** clears the worker's copy too. Unused typed access must be used or cleared
-before managed close or restart, rather than silently discarded. Preedit is a
-veto, not permission to submit or discard it.
+Configured builds check and download the public release anonymously; the signed
+envelope and archive digests, not the HTTP request, authenticate the update.
+Only after GitHub refuses a request (typically the anonymous rate limit) does the
+panel offer a masked access token for the exact release repository. It is
+bounded, session-only, never serialized, and never obtained from gh, Keychain,
+environment or agent/provider credentials. **Clear session access** clears the
+worker's copy too. Unused typed access must be used or cleared before managed
+close or restart, rather than silently discarded. Preedit is a veto, not
+permission to submit or discard it.
 
 The app-lifetime controller coalesces completion wakes, permits one operation,
 and owns one bounded foreground scheduling timer. Scheduling resumes from the

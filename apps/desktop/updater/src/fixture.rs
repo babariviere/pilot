@@ -73,10 +73,7 @@ impl Fixture {
 }
 impl Network for Fixture {
     fn get(&self, url: &url::Url, token: Option<&str>) -> Result<Reply, Error> {
-        if url.scheme() != "https"
-            || url.host_str() != Some("api.github.com")
-            || token != Some("synthetic-fixture-access")
-        {
+        if url.scheme() != "https" || url.host_str() != Some("api.github.com") || token.is_some() {
             return Err(Error::Identity);
         }
         if url.path() == "/repos/synthetic/fixture-only/releases/latest" {

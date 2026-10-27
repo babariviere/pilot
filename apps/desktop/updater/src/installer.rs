@@ -179,9 +179,10 @@ pub fn finish_stage(
 
 pub(crate) fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
     if !target.is_absolute()
-        || target
-            .file_name()
-            .is_none_or(|name| name != trust.bundle_name.as_str())
+        || target.file_name().is_none_or(|name| {
+            // Linux installs may be renamed; the signed inventory identifies them.
+            !cfg!(target_os = "linux") && name != trust.bundle_name.as_str()
+        })
         || target.canonicalize().map_err(|_| Error::Filesystem)? != target
     {
         return Err(Error::Identity);

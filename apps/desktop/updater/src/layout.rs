@@ -26,7 +26,11 @@ pub fn running_root() -> Result<std::path::PathBuf, crate::Error> {
         .ancestors()
         .nth(GUI.split('/').count())
         .ok_or(crate::Error::Identity)?;
-    if root.file_name().is_none_or(|name| name != BUNDLE) || root.join(GUI) != executable {
+    // macOS bundles keep their name. A Linux install is a plain user directory that is
+    // often renamed (for example `~/.local/opt/pilot-next`); its signed inventory, not
+    // the directory name, identifies the payload.
+    let named = cfg!(target_os = "linux") || root.file_name().is_some_and(|name| name == BUNDLE);
+    if !named || root.join(GUI) != executable {
         return Err(crate::Error::Identity);
     }
     root.canonicalize().map_err(|_| crate::Error::Filesystem)
