@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.81.0](https://github.com/babariviere/pilot/compare/v1.80.0...v1.81.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** give inline native visuals their natural height ([687d308](https://github.com/babariviere/pilot/commit/687d3089c3646897650aaa83f3c73fb1acc572da))
+* **desktop:** group chat list by status in Swift recency order ([1bfd371](https://github.com/babariviere/pilot/commit/1bfd3719c9b5d1cfe02919f13f25693f3b753613))
+* **desktop:** show chart hover readout in native visuals ([470400f](https://github.com/babariviere/pilot/commit/470400fb8836152b080248014dad64964a6f0ba5))
+
+
+### Bug Fixes
+
+* **desktop:** discard uncommitted downloads at startup ([178432f](https://github.com/babariviere/pilot/commit/178432f6c6a970403411b42f057de6efad332c49))
+* **desktop:** keep the Linux update helper alive past the app's service ([b54413d](https://github.com/babariviere/pilot/commit/b54413de76a4ef32e81d4cb04895c15ac1e8186e))
+* **desktop:** keep visual controls usable during redraws and stop guessing visual heights ([0b591f0](https://github.com/babariviere/pilot/commit/0b591f0b973fa67177f2208bbac3719ce0dfaa4f))
+* **missions:** stop auto-archiving delivered members ([389660e](https://github.com/babariviere/pilot/commit/389660ebab5184082b9e1c2e2d6f32b6486e335e))
+
 ## [1.80.0](https://github.com/babariviere/pilot/compare/v1.79.0...v1.80.0) (2026-10-27)
 
 
