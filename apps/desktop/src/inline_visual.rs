@@ -7,6 +7,9 @@ pub(crate) struct Expand(pub(crate) Reference);
 impl gpui_kit::EventEmitter<Expand> for ArtifactPane {}
 
 impl ArtifactPane {
+    pub(crate) fn inline_raster_ready(&self) -> bool {
+        self.snapshot.raster.is_some()
+    }
     pub(crate) fn suspend_inline(&mut self, cx: &mut Context<Self>) {
         self.close();
         if let Some(image) = self.retired_image.take() {
@@ -181,6 +184,7 @@ impl ArtifactPane {
                 .gap_3()
                 .overflow_y_scroll();
             if let Some(raster) = &self.snapshot.raster {
+                view = view.h_auto();
                 if raster.first_frame {
                     view = view.child(
                         crate::ui::text(crate::ui::Text::Caption, "First frame only")
@@ -190,10 +194,25 @@ impl ArtifactPane {
                     );
                 }
 
-                content = content
-                    .relative()
-                    .overflow_hidden()
-                    .child(crate::artifact_image_view::preview(raster));
+                return view
+                    .child(
+                        div()
+                            .id("inline-visual-content")
+                            .test_support()
+                            .w_full()
+                            .min_w_0()
+                            .child(
+                                crate::artifact_image_view::inline_frame(raster)
+                                    .child(crate::artifact_image_view::preview(raster)),
+                            )
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if v.generation == generation {
+                                    cx.emit(Expand(v.reference.clone().unwrap()));
+                                }
+                            })),
+                    )
+                    .into_any_element();
             } else if !revision.visual_supported {
                 content = content.child(crate::ui::text(crate::ui::Text::Caption, "No native inline preview for this artifact. Source is retained; Expand opens its detail."));
             } else if let Some(scene) = self.snapshot.scene.clone() {

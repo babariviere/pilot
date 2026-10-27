@@ -131,6 +131,10 @@ impl TranscriptView {
                     Ok(raster) => entry.raster = Some(raster),
                     Err(e) => entry.error = Some(e),
                 }
+                if let Some(ix) = v.transcript.messages().iter().position(|r| r.id() == id) {
+                    v.scroller
+                        .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+                }
                 cx.notify();
             });
         });
@@ -267,15 +271,15 @@ impl TranscriptView {
                     .child(actions),
             );
         if supported {
-            let mut viewport = div()
+            let raster = entry.and_then(|e| e.raster.as_ref());
+            let mut viewport = raster
+                .map(crate::artifact_image_view::inline_frame)
+                .unwrap_or_else(|| div().w_full().h_48())
                 .id(("conversation-image-viewport", id))
                 .test_support()
                 .relative()
-                .w_full()
-                .min_w_0()
-                .h_48()
                 .overflow_hidden();
-            if let Some(raster) = entry.and_then(|e| e.raster.as_ref()) {
+            if let Some(raster) = raster {
                 viewport = viewport.child(
                     img(raster.image.clone())
                         .object_fit(ObjectFit::Contain)

@@ -242,6 +242,19 @@ impl TranscriptView {
                         },
                     );
                     let admission = cx.observe_in(&pane, window, |view, pane, window, cx| {
+                        if pane.read(cx).inline_raster_ready()
+                            && let Some(id) = view
+                                .inline_visuals
+                                .entries
+                                .iter()
+                                .find(|e| e.pane == pane)
+                                .and_then(|e| e.row)
+                            && let Some(ix) =
+                                view.transcript.messages().iter().position(|r| r.id() == id)
+                        {
+                            view.scroller
+                                .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+                        }
                         if view.inline_visuals.admission_pending
                             && !pane.read(cx).inline_admitting()
                         {

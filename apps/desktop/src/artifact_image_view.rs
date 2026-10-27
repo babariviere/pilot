@@ -1,9 +1,98 @@
 //! Raster presentation only. The pane owns identity, decode, mode and lifetime.
 use crate::artifact_image::Raster;
 use gpui_kit::{
-    AnyElement, InteractiveElement, IntoElement, ObjectFit, ParentElement, Styled, StyledImage,
-    TestSupportExt, Window, div, img, px,
+    AnyElement, App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId,
+    InspectorElementId, InteractiveElement, IntoElement, LayoutId, ObjectFit, ParentElement,
+    Pixels, Styled, StyledImage, TestSupportExt, Window, div, img, px, size,
 };
+
+/// Swift ArtifactViewerLayout's inline image ceiling, without enlarging small images.
+/// Measure against the resolved width: a CSS aspect ratio alone leaves the virtual
+/// list's first measurement at the unconstrained image height, reserving blank space.
+pub(crate) fn inline_frame(raster: &Raster) -> gpui_kit::Div {
+    let ratio = raster.width as f32 / raster.height as f32;
+    div()
+        .relative()
+        .flex()
+        .flex_col()
+        .flex_shrink_0()
+        .w_full()
+        .max_w(px((raster.width as f32).min(720. * ratio).max(48.)))
+        .overflow_hidden()
+        .child(InlineSize {
+            width: raster.width as f32,
+            height: raster.height as f32,
+        })
+}
+
+struct InlineSize {
+    width: f32,
+    height: f32,
+}
+impl IntoElement for InlineSize {
+    type Element = Self;
+    fn into_element(self) -> Self {
+        self
+    }
+}
+impl Element for InlineSize {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        _: &mut App,
+    ) -> (LayoutId, ()) {
+        let (width, height) = (self.width, self.height);
+        (
+            window.request_measured_layout(Default::default(), move |known, available, _, _| {
+                let available =
+                    known
+                        .width
+                        .map(f32::from)
+                        .unwrap_or_else(|| match available.width {
+                            AvailableSpace::Definite(width) => f32::from(width),
+                            _ => width,
+                        });
+                let scale = 1f32.min(available / width).min(720. / height);
+                size(
+                    px((width * scale).max(48.).min(available)),
+                    px((height * scale).max(48.)),
+                )
+            }),
+            (),
+        )
+    }
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+}
 
 pub(crate) fn preview(raster: &Raster) -> AnyElement {
     div()

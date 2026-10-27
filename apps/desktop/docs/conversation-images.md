@@ -62,11 +62,17 @@ uses Kit's normal window-selection clearing on modal entry/exit. Composer draft
 text, its selection and active preedit remain with the existing editor owner;
 marked text prevents sibling reader opening before pointer blur.
 
-Supported rows reserve a 12-rem image viewport. Loading, decoded content and
-failure replace content inside it without moving subsequent rows. The absolute
-image box fits the actual available transcript width with Contain; it has no
-intrinsic-size overflow. Unsupported rows stay compact. Existing virtualized
-reader keys, scrolling, text parsers and copy paths remain authoritative.
+Loading rows reserve a 12-rem viewport. Decoded images hug their aspect-fitted
+size, using the available conversation width and a 720pt height ceiling without
+enlarging small images (48pt minimum click target). This follows Swift's actual
+transcript `ArtifactCard` / `ArtifactViewerLayout.inlineSize(image: true)` policy,
+not composer attachment thumbnails. Next retains its existing conversation
+column width rather than imposing Swift's separate 760pt artifact column cap.
+Raster artifact rows use the same fitting policy; native visual sizing is unchanged.
+Contain preserves the complete image without cropping or stretching. Decode
+completion remeasures the affected list row through the existing scroll owner,
+preserving follow/reading anchors. Unsupported rows stay compact. Existing
+virtualized reader keys, text parsers and copy paths remain authoritative.
 
 ## Scoped synthetic verification
 

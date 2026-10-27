@@ -59,8 +59,12 @@ permit until their exact metadata arrives; this does not raise image limits.
 
 `inline_visual.rs` is presentation on `ArtifactPane`, reusing its off-UI worker,
 scene validator, native renderer, slider pacing and generation/state-version
-fences. The fixed 440pt viewport keeps row geometry stable during load, controls
-and tool events. Content scrolls at actual size rather than shrinking charts.
+fences. Native visuals retain the fixed 440pt viewport during load, controls
+and tool events. Their content scrolls at actual size rather than shrinking charts.
+Decoded raster artifacts instead hug their aspect-fitted natural size, constrained
+by the conversation width and Swift's 720pt image ceiling (48pt minimum target).
+Small images no longer sit inside a 440pt blank box. Raster completion remeasures
+its transcript row; clicking the image opens the existing expanded reader.
 Expanded raster readers have Fit, 100%, zoom and Reset controls. Native chart,
 canvas and Mermaid geometry is repainted at bounded scale, never rasterized.
 Text, tables and controls keep native text/interaction metrics. The expanded

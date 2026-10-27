@@ -814,6 +814,15 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
             let raster_bounds = cx
                 .update_window(h, |_, w, _| w.find("artifact-raster-pixels").bounds())
                 .unwrap();
+            assert_eq!(
+                raster_bounds.size,
+                size(px(48.), px(48.)),
+                "tiny raster keeps Swift's minimum target, not a fixed card"
+            );
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("inline-visual").bounds().size.height < px(120.));
+            })
+            .unwrap();
             let shot = cx.capture_screenshot(h).unwrap();
             let scale = shot.width() as f32 / width;
             assert_eq!(
@@ -829,7 +838,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                 shot.save(dir.join(format!("{width}-{dark}-image.png")))
                     .unwrap();
             }
-            cx.update_window(h, |_, w, cx| w.click("inline-expand", cx))
+            cx.update_window(h, |_, w, cx| w.click("artifact-raster-viewport", cx))
                 .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
