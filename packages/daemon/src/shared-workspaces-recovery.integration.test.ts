@@ -192,6 +192,10 @@ test("daily maintenance packs objects, persists its schedule and keeps live and 
 		const restarted = new SharedWorkspaceStore(join(f.root, "home"));
 		assert.equal(await restarted.maintain(repository, now + 86_400_000 - 1), false, "persisted across restarts");
 		assert.equal(await restarted.maintain(repository, now + 86_400_000), true);
+		const busy = new SharedWorkspaceStore(join(f.root, "home"));
+		const threeDays = 3 * 86_400_000;
+		assert.equal(await busy.maintain(repository, now + threeDays, threeDays), false, "busy waits three days");
+		assert.equal(await busy.maintain(repository, now + 86_400_000 + threeDays, threeDays), true);
 		assert.match(jj(live.path, "diff", "--name-only"), /a\.txt/);
 		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
 		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "dirty final\n");

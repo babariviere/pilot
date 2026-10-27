@@ -225,7 +225,7 @@ for (const recovery of ["manual", "restart"] as const) {
 	});
 }
 
-test("daily repository maintenance waits until no chat in the repository is working", async (t) => {
+test("repository maintenance prefers idle repositories and runs busy ones after three days", async (t) => {
 	const f = await fixture(t);
 	const created = await f.spawn();
 	const meta = f.sessions["metas"].get(created.id)!;
@@ -237,12 +237,17 @@ test("daily repository maintenance waits until no chat in the repository is work
 	meta.working = false;
 	pty = true;
 	await f.sessions["maintainRepositories"]();
-	assert.equal(maintain.mock.callCount(), 0, "working chats and live terminals defer maintenance");
 	pty = false;
 	await f.sessions["maintainRepositories"]();
+	const repository = meta.workspace!.shared!.repository;
 	assert.deepEqual(
-		maintain.mock.calls.map((call) => call.arguments[0]),
-		[meta.workspace!.shared!.repository],
+		maintain.mock.calls.map((call) => [call.arguments[0], call.arguments[2]]),
+		[
+			[repository, 3 * DAY],
+			[repository, 3 * DAY],
+			[repository, DAY],
+		],
+		"working chats and live terminals stretch the interval to three days",
 	);
 });
 

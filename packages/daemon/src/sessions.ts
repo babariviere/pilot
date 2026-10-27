@@ -583,6 +583,8 @@ function hasSettledPullRequests(meta: SessionMeta): boolean {
 	return prs.length > 0 && prs.every(isTerminalPullRequest);
 }
 const WEEK_MS = 7 * DAY_MS;
+/** How long a repository whose chats never all go idle waits before maintenance runs anyway. */
+const BUSY_MAINTENANCE_MS = 3 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
 const WORKSPACE_CLEANUP_BACKOFF_MS = 5 * 60_000;
 const WORKSPACE_CLEANUP_MAX_FAILURES = 5;
@@ -2093,20 +2095,27 @@ export class SessionManager {
 		}
 	}
 
-	/** Daily jj/Git collection for each shared repository, only while none of its chats is doing work. */
+	/**
+	 * Daily jj/Git collection for each shared repository, preferably while none of its chats is doing work. A busy
+	 * repository is still collected once its last run is three days old: git and jj both tolerate concurrent
+	 * commands, and the daemon's own repository work shares the store's queue.
+	 */
 	private async maintainRepositories(): Promise<void> {
 		for (const repository of await this.sharedWorkspaces.repositories()) {
 			if (this.closing) return;
-			if (this.repositoryInUse(repository)) continue;
 			try {
-				await this.sharedWorkspaces.maintain(repository);
+				await this.sharedWorkspaces.maintain(
+					repository,
+					Date.now(),
+					this.repositoryInUse(repository) ? BUSY_MAINTENANCE_MS : DAY_MS,
+				);
 			} catch (error) {
 				console.warn(`pilotd: could not maintain shared repository ${repository}: ${error}`);
 			}
 		}
 	}
 
-	/** Abandoning jj operations races with commands from agents, terminals and in-flight refreshes. */
+	/** Whether agents, terminals or refreshes may be running commands in the repository. */
 	private repositoryInUse(repository: string): boolean {
 		for (const meta of this.metas.values()) {
 			if (meta.workspace?.shared?.repository !== repository && meta.coordinatorView?.repository !== repository)

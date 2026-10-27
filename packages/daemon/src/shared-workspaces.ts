@@ -216,14 +216,15 @@ export class SharedWorkspaceStore {
 	}
 
 	/**
-	 * Daemon Git commands disable automatic GC. At most once a day, `jj util gc` drops jj data no operation still
-	 * references and runs `git gc`, which packs loose objects and prunes unreachable ones older than two weeks.
+	 * Daemon Git commands disable automatic GC. At most once per `interval` (a day by default), `jj util gc` drops jj
+	 * data no operation still references and runs `git gc`, which packs loose objects and prunes unreachable ones
+	 * older than two weeks.
 	 * Merged task bookmarks are forgotten and superseded local copies of landed commits abandoned first, so their
 	 * data can be collected too.
 	 */
-	async maintain(repository: string, now = Date.now()): Promise<boolean> {
+	async maintain(repository: string, now = Date.now(), interval = DAY_MS): Promise<boolean> {
 		const attempted = this.maintained.get(repository);
-		if (attempted !== undefined && now - attempted < DAY_MS) return false;
+		if (attempted !== undefined && now - attempted < interval) return false;
 		// Set before any failure, so a broken repository is retried daily rather than on every sweep.
 		this.maintained.set(repository, now);
 		return this.queue(repository, async () => {
@@ -233,7 +234,7 @@ export class SharedWorkspaceStore {
 				(text) => (JSON.parse(text) as { at?: unknown }).at,
 				() => undefined,
 			);
-			if (typeof previous === "number" && now - previous < DAY_MS) {
+			if (typeof previous === "number" && now - previous < interval) {
 				this.maintained.set(repository, previous);
 				return false;
 			}
