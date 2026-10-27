@@ -68,6 +68,9 @@ The existing private daemon owner proof and nonrenewable idle reservation bind
 boot, process, profile, policy and exact retained runtime root. Linux capsules
 use `runtimes/<SHA256 exact package inventory>/payload/runtime`. The candidate's
 signed `update-runtime-policy.json` must admit that exact capsule digest.
+Release packaging admits the runtimes of the newest published Linux releases
+(see [releases](releases.md)). When no process holds the profile lease any more,
+startup uses the app's own runtime instead of the recorded one.
 Legacy/app-root/unproven runtimes refuse, rather than being moved or declared
 independent. No daemon is stopped, restarted, replaced or migrated; no second
 daemon may use its data. Existing history/profile data stays outside replacement.

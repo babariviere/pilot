@@ -34,6 +34,39 @@ class GuiReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.accepted_capsules({"PILOT_NEXT_ACCEPTED_CAPSULES": value})
 
+    def test_linux_release_admits_newest_published_linux_runtimes(self):
+        import hashlib, io, json
+        def archive(inventory):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, "w") as package:
+                package.writestr("Pilot Next/linux-gui-package.json", inventory)
+            return buffer.getvalue()
+        linux = lambda tag: {"name": release.LINUX_ARCHIVE, "browser_download_url": f"https://github.com/o/r/releases/download/{tag}/x.zip"}
+        listing = [
+            {"tag_name": "v9", "draft": True, "assets": [linux("v9")]},
+            {"tag_name": "v8", "assets": [linux("v8")]},
+            {"tag_name": "v7", "assets": [{"name": "Pilot-arm64.zip"}]},
+            {"tag_name": "v6", "prerelease": True, "assets": [linux("v6")]},
+            {"tag_name": "v5", "assets": [linux("v5")]},
+            {"tag_name": "v4", "assets": [linux("v4")]},
+        ]
+        seen = []
+        class Response(io.BytesIO):
+            pass
+        def opener(request, timeout):
+            seen.append((request.full_url, request.get_header("Authorization")))
+            if "api.github.com" in request.full_url:
+                return Response(json.dumps(listing).encode())
+            return Response(archive(request.full_url.split("/")[-2].encode()))
+        digests = release.previous_linux_capsules("o/r", "token", limit=2, opener=opener)
+        self.assertEqual(digests, [hashlib.sha256(b"v8").hexdigest(), hashlib.sha256(b"v5").hexdigest()])
+        self.assertEqual(seen[0], ("https://api.github.com/repos/o/r/releases?per_page=30", "Bearer token"))
+        self.assertTrue(all(auth is None for _, auth in seen[1:]))
+        configured = "a" * 64
+        env = {"PILOT_NEXT_ACCEPTED_CAPSULES": json.dumps([configured])}
+        previous = [configured, "b" * 64, "c" * 64, "d" * 64, "e" * 64]
+        self.assertEqual(release.linux_release_capsules(env, previous), [configured, "b" * 64, "c" * 64, "d" * 64])
+
     def test_current_linux_candidate_cannot_be_archived_as_a_usable_release(self):
         import linux_gui_package as linux
         with tempfile.TemporaryDirectory() as tmp:

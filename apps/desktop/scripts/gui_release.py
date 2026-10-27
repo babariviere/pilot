@@ -2,6 +2,7 @@
 """Build release GUI payloads. Never publish, install, launch Local or discover secrets."""
 import argparse
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,9 @@ import re
 import shutil
 import subprocess
 import stat
+import tempfile
 import tomllib
+import urllib.request
 import zipfile
 
 import bundle_runtime as bundle
@@ -49,6 +52,42 @@ def accepted_capsules(env):
             len(set(values)) != len(values)):
         raise ValueError("Expected up to four exact qualified retained capsule digests")
     return values
+
+
+def previous_linux_capsules(repository, token=None, limit=4, opener=urllib.request.urlopen):
+    """Runtime capsule ids (SHA256 of the exact linux-gui-package.json) of the newest published Linux releases.
+
+    Admitting them lets an update keep using a daemon that an earlier release started; the
+    daemon is never stopped or replaced, and the new app checks its protocol on connect.
+    """
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "pilot-release"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = f"https://api.github.com/repos/{repository}/releases?per_page=30"
+    with opener(urllib.request.Request(url, headers=headers), timeout=60) as response:
+        releases = json.load(response)
+    digests = []
+    for release in releases:
+        asset = next((a for a in release.get("assets", []) if a.get("name") == LINUX_ARCHIVE), None)
+        if release.get("draft") or release.get("prerelease") or asset is None:
+            continue
+        # Public download URL: no credential is sent to the asset CDN.
+        request = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "pilot-release"})
+        with tempfile.TemporaryFile() as archive:
+            with opener(request, timeout=600) as response:
+                shutil.copyfileobj(response, archive)
+            with zipfile.ZipFile(archive) as package:
+                digests.append(hashlib.sha256(package.read("Pilot Next/linux-gui-package.json")).hexdigest())
+        if len(digests) == limit:
+            break
+    return digests
+
+
+def linux_release_capsules(env, previous=None):
+    """Configured capsules first, then the newest previous Linux releases, at most four."""
+    if previous is None:
+        previous = previous_linux_capsules(env["PILOT_NEXT_UPDATER_REPOSITORY"], env.get("GH_TOKEN"))
+    return list(dict.fromkeys(accepted_capsules(env) + list(previous)))[:4]
 
 
 def macos(expected, output, config):

@@ -109,6 +109,7 @@ jobs:
         if: inputs.platform == 'linux'
         env:
           RELEASE_SOURCE: ${{ inputs.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/linux-runtime-input"
@@ -118,7 +119,9 @@ jobs:
             -e RELEASE_SOURCE="$RELEASE_SOURCE" \
             quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \
             /opt/python/cp313-cp313/bin/python3 /source/apps/desktop/scripts/linux_gui_package_runtime.py --repository /source --source "$RELEASE_SOURCE" --output /output/stage
-          digests="$(python3 -c 'import os,sys; sys.path.insert(0,"apps/desktop/scripts"); from gui_release import accepted_capsules; print("\n".join(accepted_capsules(os.environ)))')"
+          # Admit the runtimes of the newest published Linux releases so updates can keep their running daemon.
+          digests="$(python3 -c 'import os,sys; sys.path.insert(0,"apps/desktop/scripts"); from gui_release import linux_release_capsules; print("\n".join(linux_release_capsules(os.environ)))')"
+          echo "Accepted retained runtimes:"; printf '  %s\n' $digests
           capsule_args=()
           while IFS= read -r digest; do
             if [ -n "$digest" ]; then capsule_args+=(--accepted-capsule "$digest"); fi

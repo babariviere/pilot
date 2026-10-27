@@ -249,6 +249,11 @@ pub fn selected(location: &Location, current: &Path, trust: &Trust) -> Result<Pa
         Ok(r) => r,
         Err(_) => return Ok(current.to_owned()),
     };
+    // The owner record outlives its daemon. Once no daemon holds the profile lease,
+    // start this app's own runtime rather than refusing or reviving the old one.
+    if !owner_live(&location.home) {
+        return Ok(current.to_owned());
+    }
     let runtime_root = record["runtimeRoot"]
         .as_str()
         .ok_or(Error::RuntimeUnverified)?;
@@ -257,6 +262,31 @@ pub fn selected(location: &Location, current: &Path, trust: &Trust) -> Result<Pa
     let current_id = capsule_identity(current)?;
     validate_capsule(&root, trust, &accepted, Some(&current_id))?;
     Ok(root.to_owned())
+}
+/// Whether a process holds the daemon's SQLite profile lease (`BEGIN EXCLUSIVE`
+/// for the daemon's lifetime). Only queries the lock (F_GETLK); never takes it.
+/// Unknown answers count as live, keeping the existing strict path.
+fn owner_live(home: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let file = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(home.join(".daemon-owner.sqlite"))
+    {
+        Ok(file) => file,
+        Err(error) => return error.kind() != std::io::ErrorKind::NotFound,
+    };
+    // SAFETY: zeroed flock is a valid query; the fd is open for this call.
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK as _;
+    lock.l_whence = libc::SEEK_SET as _;
+    // SAFETY: valid fd and flock out-pointer.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut lock) } != 0 {
+        return true;
+    }
+    #[allow(clippy::useless_conversion)] // F_UNLCK is c_int on Linux, c_short on macOS.
+    let unlocked = i32::from(libc::F_UNLCK);
+    i32::from(lock.l_type) != unlocked
 }
 fn validate_capsule(
     root: &Path,
@@ -633,6 +663,38 @@ mod configuration_tests {
         assert_eq!(configuration(&next), configuration(&trust));
         next.repository = "synthetic/other".into();
         assert_ne!(configuration(&next), configuration(&trust));
+    }
+
+    #[test]
+    fn owner_is_live_only_while_another_process_holds_the_lease() {
+        use std::io::{BufRead, BufReader, Write};
+        let dir = crate::owned_tests::Temp::new();
+        assert!(
+            !owner_live(dir.path()),
+            "no lease file: nothing owns the profile"
+        );
+        let lease = dir.path().join(".daemon-owner.sqlite");
+        fs::write(&lease, b"").unwrap();
+        assert!(!owner_live(dir.path()), "stale lease: its daemon exited");
+        let mut holder = std::process::Command::new("python3")
+            .args([
+                "-c",
+                "import fcntl,sys;f=open(sys.argv[1],'r+');fcntl.lockf(f,fcntl.LOCK_EX);print('locked',flush=True);sys.stdin.read()",
+            ])
+            .arg(&lease)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(holder.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "locked");
+        assert!(owner_live(dir.path()));
+        holder.stdin.take().unwrap().flush().unwrap();
+        holder.wait().unwrap();
+        assert!(!owner_live(dir.path()));
     }
 }
 

@@ -87,16 +87,17 @@ v1.77.0 and earlier need two workarounds: keep the folder named exactly
 token in the Updates panel for each check. Later releases accept any folder name
 and check anonymously.
 
-### Known limitation: changing versions
+### Changing versions and the background daemon
 
 The Pilot daemon keeps running after you close the window, and it stays on the
-version that started it. A different version of the app refuses to start while
-the profile is owned by the previous version's daemon ("The running daemon has
-no exact supported retained runtime…"), and **Install and restart…** is deferred
-for the same reason. This applies to in-app updates and to reinstalling a newer
-zip. Your data is not touched; the old daemon and its work keep running. Until
-releases admit the previous runtime, switching versions requires that daemon to
-stop first, which the app does not do for you.
+version that started it. A newer app keeps using that daemon: each Linux release
+accepts the runtimes of the few releases before it. The daemon moves to the new
+version the next time it is not running when the app starts, for example after a
+reboot. The app never stops it for you.
+
+v1.77.0 and earlier accept no earlier runtime. If one of them refuses to start
+because another version's daemon is running ("The running daemon has no exact
+supported retained runtime…"), install a newer release instead.
 
 Technical details: [Linux updates](linux-updates.md) and
 [Linux GUI package](linux-gui-package.md).

@@ -51,11 +51,13 @@ Missing prerequisites fail, leaving the release draft unpublished:
   Native visual execution remains disabled pending separate confinement
   qualification; this release wiring cannot enable it or claim it works.
 - Optional platform-specific `PILOT_NEXT_MACOS_ACCEPTED_CAPSULES` and
-  `PILOT_NEXT_LINUX_ACCEPTED_CAPSULES` variables are JSON lists of exact already
-  qualified retained-runtime manifest digests (existing limit: four). They become
-  signed candidate policy. Empty lists never authorize replacing an app while
-  using an unaccepted retained daemon capsule. Compatibility must be established
-  for the actual prior payload; never infer it from a version or source label.
+  `PILOT_NEXT_LINUX_ACCEPTED_CAPSULES` variables are JSON lists of exact
+  retained-runtime manifest digests (existing limit: four). They become signed
+  candidate policy. On macOS, compatibility must be established for the actual
+  prior payload. Linux packaging also admits, after the configured digests, the
+  runtimes of the newest published Linux releases (SHA256 of each release's exact
+  `linux-gui-package.json`), so an update can keep using the daemon an earlier
+  release started; the app still checks the daemon's protocol when it connects.
 
 Build versions use this workflow's monotonically increasing run number/attempt,
 independently of Sparkle. The app still requires explicit **Install and restart**,
