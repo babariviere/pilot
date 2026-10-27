@@ -1362,53 +1362,143 @@ impl Render for ArtifactPane {
         let revision = self.snapshot.revision.clone();
         let scene = self.snapshot.scene.clone();
         let generation = self.generation;
-        view = view.child(
-            div()
-                .h_flex()
-                .flex_wrap()
-                .gap_2()
+        // One toolbar: back · title · revision, then source, copy and zoom actions.
+        let provenance: SharedString = if revision
+            .as_ref()
+            .is_some_and(|r| r.reference.kind == "image")
+            || reference.kind == "image"
+        {
+            "Local · stored raster · static preview only".into()
+        } else {
+            "Local · current chat · visual controls have no file/network/tool bridge".into()
+        };
+        let mut header = div()
+            .id("artifact-toolbar")
+            .test_support()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .min_w_0()
+            .child(
+                Button::new("artifact-back")
+                    .ghost()
+                    .small()
+                    .icon(AppIcon::Back.asset())
+                    .accessibility_label("All artifacts")
+                    .tooltip("All artifacts")
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        if v.generation != generation {
+                            return;
+                        }
+                        v.show_gallery(window, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .id("artifact-title")
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_sm()
+                    .font_semibold()
+                    .tooltip(move |w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(provenance.clone()).build(w, cx)
+                    })
+                    .child(SharedString::from(format!(
+                        "{} · r{}",
+                        revision
+                            .as_ref()
+                            .map_or(reference.title.as_str(), |r| r.reference.title.as_str()),
+                        reference.revision
+                    ))),
+            );
+        if let Some(revision) = &revision {
+            let source = revision.source.clone();
+            let previous = reference.clone();
+            header = header
+                // Only offered when an earlier revision exists.
+                .when(reference.revision > 1, |h| {
+                    h.child(
+                        Button::new("artifact-previous")
+                            .ghost()
+                            .small()
+                            .label(format!("r{}", reference.revision.saturating_sub(1)))
+                            .icon(AppIcon::Back.asset())
+                            .accessibility_label("Previous revision")
+                            .tooltip("Previous revision")
+                            .disabled(reference.revision <= 1 || self.busy)
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                if v.generation != generation || v.busy {
+                                    return;
+                                }
+                                let mut r = previous.clone();
+                                r.revision -= 1;
+                                v.open(r, window, cx);
+                            })),
+                    )
+                })
                 .child(
-                    Button::new("artifact-back")
+                    Button::new("artifact-source")
                         .ghost()
                         .small()
-                        .label("All artifacts")
-                        .icon(AppIcon::Artifacts.asset())
-                        .on_click(cx.listener(move |v, _, window, cx| {
+                        .icon(AppIcon::Source.asset())
+                        .when(self.source, |b| {
+                            gpui_kit::component::Selectable::selected(b, true)
+                        })
+                        .accessibility_label(if self.source { "Hide source" } else { "Source" })
+                        .tooltip(if self.source { "Hide source" } else { "Source" })
+                        .on_click(cx.listener(move |v, _, _, cx| {
                             if v.generation != generation {
                                 return;
                             }
-                            v.show_gallery(window, cx);
+                            v.source = !v.source;
+                            cx.notify();
                         })),
                 )
                 .child(
-                    div()
-                        .text_sm()
-                        .font_semibold()
-                        .child(SharedString::from(format!(
-                            "{} · r{}",
-                            revision
-                                .as_ref()
-                                .map_or(reference.title.as_str(), |r| r.reference.title.as_str()),
-                            reference.revision
-                        ))),
-                ),
-        );
-        view = view.child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(
-                    if revision
-                        .as_ref()
-                        .is_some_and(|r| r.reference.kind == "image")
-                        || reference.kind == "image"
-                    {
-                        "Local · stored raster · static preview only"
-                    } else {
-                        "Local · current chat · visual controls have no file/network/tool bridge"
-                    },
-                ),
-        );
+                    Button::new("artifact-copy-source")
+                        .ghost()
+                        .small()
+                        .disabled(self.source_copy.is_some())
+                        .icon(AppIcon::Copy.asset())
+                        .accessibility_label(if self.source_copy.is_some() {
+                            "Copying source…"
+                        } else {
+                            "Copy source"
+                        })
+                        .tooltip("Copy source")
+                        .on_click(cx.listener(move |v, _, window, cx| {
+                            if v.generation == generation {
+                                if v.snapshot
+                                    .revision
+                                    .as_ref()
+                                    .is_some_and(|r| r.reference.kind == "image")
+                                {
+                                    v.copy_image_source(source.clone(), window, cx);
+                                } else {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        (*source).clone(),
+                                    ));
+                                }
+                            }
+                        })),
+                );
+        }
+        if !self.source && (self.snapshot.raster.is_some() || scene.is_some()) {
+            let fit = self.snapshot.raster.as_ref().map_or(1., |r| {
+                self.zoom.image_fit(
+                    r.width as f32 / window.scale_factor(),
+                    r.height as f32 / window.scale_factor(),
+                )
+            });
+            header = header.child(self.zoom.toolbar(cx, move |v, command, cx| {
+                if v.generation == generation && !v.source {
+                    v.zoom.apply(command, fit);
+                    cx.notify();
+                }
+            }));
+        }
+        view = view.child(header);
         if self.busy && self.snapshot.scene.is_none() {
             view = view.child("Loading isolated preview…");
         }
@@ -1463,71 +1553,6 @@ impl Render for ArtifactPane {
             }
         }
         if let Some(revision) = revision {
-            let source = revision.source.clone();
-            let previous = reference.clone();
-            view = view.child(
-                div()
-                    .h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(
-                        Button::new("artifact-previous")
-                            .ghost()
-                            .small()
-                            .label("Previous revision")
-                            .icon(AppIcon::Back.asset())
-                            .disabled(reference.revision <= 1 || self.busy)
-                            .on_click(cx.listener(move |v, _, window, cx| {
-                                if v.generation != generation || v.busy {
-                                    return;
-                                }
-                                let mut r = previous.clone();
-                                r.revision -= 1;
-                                v.open(r, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("artifact-source")
-                            .ghost()
-                            .small()
-                            .label(if self.source { "Hide source" } else { "Source" })
-                            .icon(AppIcon::Source.asset())
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if v.generation != generation {
-                                    return;
-                                }
-                                v.source = !v.source;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("artifact-copy-source")
-                            .ghost()
-                            .small()
-                            .label(if self.source_copy.is_some() {
-                                "Copying source…"
-                            } else {
-                                "Copy source"
-                            })
-                            .disabled(self.source_copy.is_some())
-                            .icon(AppIcon::Copy.asset())
-                            .on_click(cx.listener(move |v, _, window, cx| {
-                                if v.generation == generation {
-                                    if v.snapshot
-                                        .revision
-                                        .as_ref()
-                                        .is_some_and(|r| r.reference.kind == "image")
-                                    {
-                                        v.copy_image_source(source.clone(), window, cx);
-                                    } else {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            (*source).clone(),
-                                        ));
-                                    }
-                                }
-                            })),
-                    ),
-            );
             if !revision.visual_supported && revision.reference.kind != "image" {
                 view=view.child(Self::note("Preview family/runtime is unsupported here. Source/provenance is retained; no HTML, React, shader or external execution."));
             }
@@ -1552,20 +1577,6 @@ impl Render for ArtifactPane {
                         .text_color(cx.theme().muted_foreground),
                     ),
                 );
-            }
-            if !self.source && (self.snapshot.raster.is_some() || scene.is_some()) {
-                let fit = self.snapshot.raster.as_ref().map_or(1., |r| {
-                    self.zoom.image_fit(
-                        r.width as f32 / window.scale_factor(),
-                        r.height as f32 / window.scale_factor(),
-                    )
-                });
-                view = view.child(self.zoom.toolbar(cx, move |v, command, cx| {
-                    if v.generation == generation && !v.source {
-                        v.zoom.apply(command, fit);
-                        cx.notify();
-                    }
-                }));
             }
             let mut content = div()
                 .id(SharedString::from(scope))

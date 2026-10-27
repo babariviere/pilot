@@ -592,7 +592,20 @@ impl ArtifactPane {
                 .pt_3()
                 .pb_2()
                 .gap_3()
-                .child(ui::text(Text::Headline, "Artifacts").flex_1())
+                .child(
+                    ui::text(Text::Headline, "Artifacts")
+                        .id("artifact-gallery-heading")
+                        .flex_1()
+                        // A limited list says so in the heading tooltip, not a footer.
+                        .when(self.gallery.metadata.is_limited(), |d| {
+                            d.tooltip(|w, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(
+                                    "Showing the first 64 artifacts",
+                                )
+                                .build(w, cx)
+                            })
+                        }),
+                )
                 .when(
                     !self.gallery.errors.is_empty() || self.gallery.problem.is_some(),
                     |d| {
@@ -717,14 +730,6 @@ impl ArtifactPane {
                     .size_full(),
                 ),
         );
-        if self.gallery.metadata.is_limited() {
-            root = root.child(
-                ui::text(Text::Caption, "Showing the first 64 artifacts")
-                    .px_3()
-                    .py_2()
-                    .text_color(cx.theme().muted_foreground),
-            );
-        }
         root.into_any_element()
     }
     fn gallery_row(
@@ -842,7 +847,7 @@ impl ArtifactPane {
                             .size_full()
                             .min_w_0()
                             .text_left()
-                            .gap_2()
+                            .gap_1()
                             .child(preview)
                             .child(
                                 ui::text(Text::Label, SharedString::from(reference.title.clone()))
@@ -851,12 +856,10 @@ impl ArtifactPane {
                                         reference.id, reference.revision
                                     )))
                                     .test_support()
+                                    .mt_1()
                                     .w_full()
                                     .min_w_0()
-                                    .whitespace_normal()
-                                    .line_height(px(Text::Label.size() * 1.4))
-                                    .h(px(Text::Label.size() * 2.8))
-                                    .overflow_hidden(),
+                                    .truncate(),
                             )
                             .child(
                                 ui::text(Text::Caption, SharedString::from(caption))
