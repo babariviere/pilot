@@ -234,6 +234,7 @@ pub use model::{fence_fixture, giant_fixture};
 pub use transcript_view::TranscriptView;
 mod app_icon;
 mod app_shell;
+mod home_sky;
 #[cfg(feature = "native-probes")]
 mod icon_probe;
 #[cfg(feature = "native-probes")]

@@ -199,6 +199,7 @@ pub(crate) struct Overview {
     project_rows: Vec<usize>,
     working: Vec<usize>,
     visible: Vec<usize>,
+    sky: std::rc::Rc<std::cell::RefCell<crate::home_sky::Sky>>,
     #[cfg(feature = "native-probes")]
     pub(crate) renders: u64,
 }
@@ -241,6 +242,7 @@ impl Overview {
             project_rows: Vec::new(),
             working: Vec::new(),
             visible: Vec::new(),
+            sky: Default::default(),
             #[cfg(feature = "native-probes")]
             renders: 0,
         }
@@ -579,6 +581,26 @@ impl Render for Overview {
                 .self_start()
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ShellEvent::AllChats))),
         );
+        // Home (all projects) opens under its dithered sky; the title sits in its foot.
+        let home = self.project.is_none();
+        let mut page = div().relative().w_full();
+        if home {
+            page = page.child(
+                div()
+                    .id("home-sky")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .w_full()
+                    .child(crate::home_sky::element(
+                        self.sky.clone(),
+                        cx.theme().is_dark(),
+                    )),
+            );
+            // Title in the sparse last dots; the count line below the band stays clear.
+            body = body.pt(px(crate::home_sky::HEIGHT - 40.));
+        }
+        let page = page.child(body);
         div()
             .v_flex()
             .size_full()
@@ -587,7 +609,7 @@ impl Render for Overview {
             .overflow_y_scrollbar()
             .id("overview-scroll")
             .with_scroll_handle(&self.scroll)
-            .child(body)
+            .child(page)
     }
 }
 #[cfg(test)]

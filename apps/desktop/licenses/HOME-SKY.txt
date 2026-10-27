@@ -1,0 +1,12 @@
+Home sky scenes (embedded by src/home_sky.rs from apps/macos/Sources/Pilot/Resources)
+
+HomeSky.png
+White Clouds and Blue Sky, Willfried Wende
+https://www.pexels.com/photo/white-clouds-and-blue-sky-13695930/
+
+HomeSkyNight.png
+Scenic Seascape with Cloudy Sky, Landiva Weber
+https://www.pexels.com/photo/scenic-seascape-with-cloudy-sky-17126747/
+
+Both images are used under the Pexels License: https://www.pexels.com/license/
+Pilot crops, dithers and dissolves them into the page. No endorsement is implied.
