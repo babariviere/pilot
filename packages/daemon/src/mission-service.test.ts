@@ -779,7 +779,7 @@ test("compact get stays within estimated token budgets on a large fixture, with 
 	await assert.rejects(f.service.call(worker.id, "tasks", { filter: "bogus" }), /filter must be/);
 });
 
-test("delivered members archive after settlement, retain handoff, and new tasks start fresh chats", async (t) => {
+test("delivered members stay unarchived, retain handoff, and new tasks start fresh chats", async (t) => {
 	const f = await fixture(t);
 	const member = await f.spawn();
 	const { id } = f.store.create({
@@ -798,54 +798,13 @@ test("delivered members archive after settlement, retain handoff, and new tasks 
 	await assert.rejects(f.service.call(member.id, "claim", { id: "2" }), /retired/);
 	worker.state = "idle";
 	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
-	await until(() => f.sessions.get(member.id)!.archivedAt);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined, "delivery never archives the chat");
 	const detail = (await f.service.call(member.id, "get", { id: "1" })) as { completion: unknown };
 	assert.deepEqual(detail.completion, record);
 	const next = await f.service.startTask(id, "2");
 	assert.notEqual(next.id, member.id);
 	assert.equal(f.store.resolveTask(id, "2").sessionId, next.id);
-	await f.sessions.restore(member.id);
-	await f.sessions.retireMissionMember(member.id);
-	assert.equal(
-		f.sessions.get(member.id)!.archivedAt,
-		undefined,
-		"explicit restoration wins over automatic retirement",
-	);
-});
-
-test("member retirement rechecks jobs, children, delivery and user override after persistence", async (t) => {
-	const f = await fixture(t);
-	const member = await f.spawn();
-	const { id } = f.store.create({
-		projectId: f.project.id,
-		title: "Synthetic guards",
-		tasks: [{ title: "One" }, { title: "Two" }],
-	});
-	f.service.join(member.id, { missionId: id, taskId: "1" });
-	await f.service.call(member.id, "complete", {
-		id: "1",
-		completion: { commit: "b".repeat(40), checks: "Tests passed, scoped coverage.", issues: "" },
-	});
-	const worker = f.workers.get(member.id)!;
-	worker.state = "idle";
-	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
-	const meta = f.sessions["require"](member.id);
-	const background = t.mock.method(f.sessions, "backgroundWorking" as never, () => true);
-	await f.sessions.retireMissionMember(member.id);
-	assert.equal(f.sessions.get(member.id)!.archivedAt, undefined);
-	background.mock.restore();
-	const durable = t.mock.method(f.store, "whenDurable", () => {
-		f.store.updateTask(id, "2", { sessionId: member.id, overrideRetirement: true });
-		return Promise.resolve();
-	});
-	await f.sessions.retireMissionMember(member.id);
-	assert.equal(
-		f.sessions.get(member.id)!.archivedAt,
-		undefined,
-		"new assignment during persistence cancels retirement",
-	);
-	assert.equal(meta.working, false);
-	durable.mock.restore();
 });
 
 class FakeWorker implements SessionWorker {

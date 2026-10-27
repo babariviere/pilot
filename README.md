@@ -126,7 +126,7 @@ unchanged; outstanding accounting memory and release verification is documented 
   replica-only summaries remain read-only until current details can be loaded from the mission's home.
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Delivered members cannot claim new
-  tasks and archive after their existing tasks and live work settle. A user can explicitly assign with
+  tasks and stay in the chat list until archived. A user can explicitly assign with
   `overrideRetirement: true`; new tasks normally start fresh chats. Legacy task records remain unchanged.
   Routine comments batch for 30 seconds, including when idle. ACK-only and explicitly informational
   comments do not wake the coordinator. Blockers, needs-you, failures and structured task delivery

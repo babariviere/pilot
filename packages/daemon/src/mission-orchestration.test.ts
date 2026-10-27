@@ -100,7 +100,7 @@ test("completion is immutable, bounded, referenced once and retires admission du
 	assert.deepEqual(store.completeTask(id, "1", "member", record), record);
 	assert.deepEqual(store.completeTask(id, task.id, "member", record), record);
 	assert.equal(store.events(id).length, before + 1);
-	assert.equal(store.memberRetirementReady("member"), true);
+	assert.equal(store.retiredMember("member"), true);
 	assert.throws(() => store.completeTask(id, "1", "member", { ...record, checks: "Changed" }), /already has/);
 	assert.throws(() => store.claimTask(id, "2", "member"), /retired/);
 	assert.throws(() => store.claimTasks(id, ["2"], "member"), /retired/);

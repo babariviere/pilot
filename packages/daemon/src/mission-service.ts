@@ -213,8 +213,6 @@ export class MissionService {
 			},
 			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
 			passiveMissionLifecycle: (missionId) => store.passiveLifecycle(missionId),
-			retiredMember: (sessionId) => store.memberRetirementReady(sessionId),
-			memberRetiredAt: (sessionId) => store.memberRetiredAt(sessionId),
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);
 				if (membership?.coordinator && store.require(membership.missionId).title !== title)

@@ -3017,26 +3017,8 @@ export class MissionStore {
 		return row ? JSON.parse(str(row.record!)) : undefined;
 	}
 
-	memberRetiredAt(sessionId: string): number | undefined {
-		const row = this.one("SELECT retired_at FROM retired_members WHERE session_id = ?", sessionId);
-		return row ? num(row.retired_at!) : undefined;
-	}
-
 	retiredMember(sessionId: string): boolean {
 		return !!this.one("SELECT 1 FROM retired_members WHERE session_id = ?", sessionId);
-	}
-
-	memberRetirementReady(sessionId: string): boolean {
-		const membership = this.membership(sessionId);
-		if (
-			!membership ||
-			membership.coordinator ||
-			!this.retiredMember(sessionId) ||
-			this.passiveLifecycle(membership.missionId)
-		)
-			return false;
-		const tasks = this.tasks(membership.missionId).filter((task) => task.sessionId === sessionId);
-		return tasks.length > 0 && tasks.every((task) => task.status === "done" || task.status === "dropped");
 	}
 
 	private assertFreshMember(sessionId: string): void {
