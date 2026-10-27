@@ -56,10 +56,13 @@ eviction keeps its geometry. Only legacy pins without a size, on first load, sti
 start at the 440pt viewport. The hint is layout only: the read keeps its identity,
 kind and codec checks, and decoded pixels win. New
 readers wait for canceled readers' completion receivers before starting. The
-existing two-process semaphore queues FIFO. Idle readers release their helper
-before publication, retaining the validated scene/state, not a VM. A control or
-canvas request reconstructs closures from committed state in the same bounded
-lane, verifies that the reconstructed tree and state match, then dispatches.
+existing two-process semaphore queues FIFO. A reader keeps its helper warm for
+2 s after each load, event or draw, so drags and runs of clicks skip process
+start-up: in the debug-build inline probe, cold events/draws took ~22-27 ms
+(p50) and warm ones ~0.5/0.2 ms. It releases the slot after that idle window, or immediately when
+another reader is waiting for a slot or a restart fence wants it. A later request
+on a released reader reconstructs closures from committed state in the same
+bounded lane, verifies that the reconstructed tree and state match, then dispatches.
 A mismatch fails closed rather than targeting different controls. Sandbox
 attestation, source/wire limits, deadlines and kill/reap behavior remain intact. The cache never retains a worker for an offscreen artifact.
 Untyped pin reads are serialized through the existing single image-envelope

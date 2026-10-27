@@ -188,6 +188,10 @@ impl Session {
             process.stop().await;
         }
     }
+    /// A helper process holds this reader's committed closures.
+    pub(crate) fn alive(&self) -> bool {
+        self.process.is_some()
+    }
 }
 fn validate_state(state: &str) -> Result<(), Fault> {
     if state.encode_utf16().count() > 64 * 1024

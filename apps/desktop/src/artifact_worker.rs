@@ -10,8 +10,10 @@ use serde_json::Value;
 use std::{
     collections::BTreeMap,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+/// How long an idle reader keeps its warm helper before releasing the slot.
+const WARM: Duration = Duration::from_secs(2);
 #[derive(Clone, Default)]
 pub(crate) struct Snapshot {
     pub(crate) raster: Option<Arc<crate::artifact_image::Raster>>,
@@ -246,12 +248,33 @@ async fn run(
         if events.is_closed() || updates.is_closed() {
             break;
         }
-        session.stop().await;
+        if !snapshot.live {
+            session.stop().await;
+        }
         publish(&updates, &replace, snapshot.clone());
-        let Ok(command) = events.recv().await else {
+        // Keep the helper warm between interactions, so a drag or a run of
+        // clicks skips process start-up. It yields its slot after WARM idle,
+        // or as soon as another reader or a restart needs one.
+        let command = if session.alive() {
+            tokio::select! {
+                biased;
+                command = events.recv() => command,
+                _ = tokio::time::sleep(WARM) => {
+                    session.stop().await;
+                    events.recv().await
+                }
+                _ = crate::visual_runtime::contended() => {
+                    session.stop().await;
+                    events.recv().await
+                }
+            }
+        } else {
+            events.recv().await
+        };
+        let Ok(command) = command else {
             break;
         };
-        if !matches!(command, Command::Retry) {
+        if !matches!(command, Command::Retry) && !session.alive() {
             // As with Retry, join startup even if the row retires mid-spawn.
             // Cancelling attestation would drop an unreaped helper.
             if let Err(error) = session.prepare().await {

@@ -10,7 +10,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -25,6 +25,39 @@ const RUNTIME: &str = include_str!("../../../packages/artifacts/src/visual/runti
 static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
 static TEARDOWN_FAILED: AtomicBool = AtomicBool::new(false);
+/// Readers waiting for a helper slot, plus a pending restart fence. Warm idle
+/// helpers yield their slot as soon as either wants it.
+static WAITING: AtomicUsize = AtomicUsize::new(0);
+static RESTART_WANTED: AtomicBool = AtomicBool::new(false);
+static CONTENDED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+fn contention() -> bool {
+    WAITING.load(Ordering::Acquire) > 0 || RESTART_WANTED.load(Ordering::Acquire)
+}
+/// Resolves once another reader or a restart needs a helper slot.
+pub(crate) async fn contended() {
+    loop {
+        let notified = CONTENDED.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if contention() {
+            return;
+        }
+        notified.await;
+    }
+}
+struct Waiting;
+impl Waiting {
+    fn new() -> Self {
+        WAITING.fetch_add(1, Ordering::AcqRel);
+        CONTENDED.notify_waiters();
+        Self
+    }
+}
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        WAITING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 static RESTART_PERMITS: std::sync::Mutex<Option<tokio::sync::OwnedSemaphorePermit>> =
     std::sync::Mutex::new(None);
@@ -38,13 +71,18 @@ pub(crate) fn fence_for_restart() -> bool {
     }
     // Reserve the whole capacity atomically, not a racy free-count snapshot.
     let Ok(permits) = SLOTS.clone().try_acquire_many_owned(2) else {
+        // Warm idle helpers release their slots; the next attempt can succeed.
+        RESTART_WANTED.store(true, Ordering::Release);
+        CONTENDED.notify_waiters();
         return false;
     };
+    RESTART_WANTED.store(false, Ordering::Release);
     *held = Some(permits);
     true
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn release_restart_fence() {
+    RESTART_WANTED.store(false, Ordering::Release);
     RESTART_PERMITS
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -113,7 +151,14 @@ impl Process {
                 "Visual helper teardown failed; restart the app",
             ));
         }
-        let permit = SLOTS.clone().acquire_owned().await.map_err(|_| {
+        let permit = match SLOTS.clone().try_acquire_owned() {
+            Ok(permit) => Ok(permit),
+            Err(_) => {
+                let _waiting = Waiting::new();
+                SLOTS.clone().acquire_owned().await
+            }
+        };
+        let permit = permit.map_err(|_| {
             Fault::new(
                 "busy",
                 "Native visual worker limit reached; retry when another visual closes",
@@ -656,5 +701,20 @@ mod tests {
         let mut fresh = Process::start().await.unwrap();
         assert!(fresh.exchange(json!({"kind":"load","source":"({ui})=>ui.text('Fresh')","data":null,"state":null,"seed":"synthetic","now":0})).await.is_ok());
         fresh.stop().await;
+    }
+}
+
+#[cfg(test)]
+mod warm_tests {
+    use super::*;
+    #[tokio::test]
+    async fn warm_helpers_are_told_to_yield_while_a_reader_waits_for_a_slot() {
+        let idle = tokio::spawn(contended());
+        let waiting = Waiting::new();
+        tokio::time::timeout(Duration::from_secs(1), idle)
+            .await
+            .expect("a waiting reader wakes warm helpers")
+            .unwrap();
+        drop(waiting);
     }
 }
