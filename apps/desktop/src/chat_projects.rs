@@ -1,9 +1,6 @@
 //! Explicit per-draft Local project choice. No path-to-project inference.
 use super::*;
-use crate::{
-    local_model::Project,
-    ui,
-};
+use crate::{local_model::Project, ui};
 use gpui_kit::StatefulInteractiveElement;
 use gpui_kit::component::FocusableExt;
 use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
@@ -43,9 +40,16 @@ impl SelectItem for Choice {
             .w_full()
             .min_w_0()
             .v_flex()
-            .aria_label(SharedString::from(format!("{} · {}", self.title, self.detail)))
+            .aria_label(SharedString::from(format!(
+                "{} · {}",
+                self.title, self.detail
+            )))
             .child(div().min_w_0().truncate().child(self.title.clone()))
-            .child(ui::text(ui::Text::Caption, self.detail.clone()).min_w_0().truncate());
+            .child(
+                ui::text(ui::Text::Caption, self.detail.clone())
+                    .min_w_0()
+                    .truncate(),
+            );
         #[cfg(any(test, feature = "native-probes"))]
         let row = row.test_support();
         row

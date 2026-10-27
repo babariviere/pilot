@@ -114,7 +114,8 @@ impl View {
                 |bounds, _, _| bounds,
                 move |bounds, _, w, _| {
                     #[cfg(feature = "native-probes")]
-                    let _timing = crate::transcript_view::inline_visual::probe::scroll::work("mermaid_paint");
+                    let _timing =
+                        crate::transcript_view::inline_visual::probe::scroll::work("mermaid_paint");
                     let draw =
                         |points: &[[f32; 2]], closed: bool, fill: bool, color, w: &mut Window| {
                             let mut path = if fill {

@@ -47,7 +47,13 @@ impl Server {
                         handlers.spawn(async move{
                             let operation=async{
                                 let mut stream=BufReader::new(stream);let mut headers=String::new();
-                                loop{let mut line=String::new();if stream.read_line(&mut line).await?==0{break;}headers.push_str(&line);if line=="\r\n"{break;}if headers.len()>8192{return Ok::<(),std::io::Error>(());}}
+                                loop{
+                                    let mut line=String::new();
+                                    if stream.read_line(&mut line).await?==0{break;}
+                                    headers.push_str(&line);
+                                    if line=="\r\n"{break;}
+                                    if headers.len()>8192{return Ok::<(),std::io::Error>(());}
+                                }
                                 let request=headers.lines().next().unwrap_or("").to_string();records.lock().unwrap().push(request.clone());
                                 assert!(!headers.to_lowercase().contains("authorization:"));assert!(!headers.to_lowercase().contains("cookie:"));
                                 let path=request.split_whitespace().nth(1).unwrap_or("");assert!(request.starts_with("GET "));

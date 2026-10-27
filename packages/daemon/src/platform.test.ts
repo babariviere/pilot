@@ -106,7 +106,10 @@ test("hello is a bounded no-store read with origin protection and no account/pat
 	const response = await fetch(base);
 	assert.equal(response.status, 200);
 	assert.equal(response.headers.get("cache-control"), "no-store");
-	assert.deepEqual(await response.json(), hello);
+	assert.deepEqual(await response.json(), {
+		...hello,
+		capabilities: { ...hello.capabilities, passiveFailedModel: true, guardedQueue: true, sessionPathCandidates: 1 },
+	});
 	assert.ok(!JSON.stringify(hello).includes(home));
 	assert.equal(hello.protocolVersion, 1);
 	assert.equal(hello.minimumClientProtocolVersion, 1);

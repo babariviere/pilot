@@ -21,6 +21,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { AttentionDoc } from "./attention.ts";
+import { queueGuardToken } from "./queue.ts";
 import {
 	DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
 	DIAGNOSTIC_HISTORY_MAX_BYTES,
@@ -111,10 +112,13 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 		assert.equal(view.completion, undefined, "a running session must not publish an old completion");
 		const queue = view.events[1];
 		assert.equal(queue?.type, "queue_update");
-		assert.deepEqual(queue.items, [
-			{ id: 904, mode: "steer", content: "steer" },
-			{ id: 905, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
-		]);
+		assert.deepEqual(
+			queue.items,
+			[
+				{ id: 904, mode: "steer", content: "steer" },
+				{ id: 905, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
+			].map((item) => ({ ...item, guardToken: queueGuardToken(item) })),
+		);
 		assert.deepEqual(
 			queue.automatic?.map(({ id, origin, mode, preview }) => ({ id, origin, mode, preview })),
 			[{ id: 11, origin: "job", mode: "followUp", preview: "Background job tests done" }],

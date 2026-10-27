@@ -70,7 +70,7 @@ test("setup capability is key/namespace scoped, bounded metadata only, and cance
 			changed: true,
 			value: value("delayed-private-access"),
 		}),
-		/unavailable|unauthorized/,
+		/stale|unavailable|unauthorized/,
 	);
 	assert.deepEqual(await f.reader.request({ op: "status", namespace: "pi", key: "anthropic" }), {
 		state: "reauthentication_required",

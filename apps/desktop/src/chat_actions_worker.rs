@@ -41,7 +41,8 @@ impl Worker {
                                 let _ = reply.try_send(inspect(&client, &options, &target).await);
                             }
                             Request::Set(evidence, action, reply) => {
-                                let _ = reply.try_send(set(&client, &options, &evidence, action).await);
+                                let _ =
+                                    reply.try_send(set(&client, &options, &evidence, action).await);
                             }
                         }
                     }

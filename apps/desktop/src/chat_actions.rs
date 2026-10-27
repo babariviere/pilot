@@ -46,9 +46,15 @@ impl Evidence {
                 !raw[*key].is_null()
                     && !raw[*key].as_str().is_some_and(crate::local_model::valid_id)
             })
-            || ["control", "working", "sleepPaused", "offlinePaused", "canRetryStartup"]
-                .iter()
-                .any(|key| !raw[*key].is_null() && !raw[*key].is_boolean())
+            || [
+                "control",
+                "working",
+                "sleepPaused",
+                "offlinePaused",
+                "canRetryStartup",
+            ]
+            .iter()
+            .any(|key| !raw[*key].is_null() && !raw[*key].is_boolean())
             || (!raw["runningJobs"].is_null() && !raw["runningJobs"].is_array())
         {
             return Err("Chat action metadata is incomplete or invalid.");

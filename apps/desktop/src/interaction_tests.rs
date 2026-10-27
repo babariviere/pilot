@@ -181,7 +181,7 @@ async fn question_answer_courier_unknown_restart_never_replays_and_explicit_retr
     let original = serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap();
     assert_eq!(
         daemon.seen.lock().unwrap().envelopes.as_slice(),
-        &[original.clone()]
+        std::slice::from_ref(&original)
     );
     assert!(client.command(WriteCommand::Close));
     until(&updates, |s| s.flushed).await;

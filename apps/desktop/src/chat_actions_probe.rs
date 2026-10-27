@@ -1,8 +1,8 @@
 //! Actual production rows/Kit menus, synthetic HTTP/private drafts, offscreen only.
-#[path = "chat_actions_selected_probe.rs"]
-mod selected;
 #[path = "chat_actions_capacity_probe.rs"]
 mod capacity;
+#[path = "chat_actions_selected_probe.rs"]
+mod selected;
 use super::*;
 use crate::chat_actions_fixture::{self as f, Behavior, Daemon, Seen};
 use gpui_kit::{

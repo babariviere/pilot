@@ -495,6 +495,10 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 page(cx, handle, &view, expanded, Some(70), 4);
                 cx.update_window(handle, |_, window, cx| {
                     let b = window.find("viewport").bounds();
+                    // The idle-hidden thumb fades on wall time and ignores clicks once
+                    // invisible. A short wheel away from the top reveals it for the drag.
+                    window.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(40.))), cx);
+                    window.render_frame(cx);
                     window.drag(
                         point(b.right() - px(9.), b.bottom() - px(20.)),
                         point(b.right() - px(9.), b.top() - px(20.)),

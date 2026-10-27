@@ -49,7 +49,13 @@ async fn session_failure_summary_updates_and_reader_errors_stay_separate_and_cha
                     let (stream,_)=accepted.unwrap(); let updates=updates.clone(); let seen=seen.clone();
                     handlers.spawn(async move {
                         let mut reader=BufReader::new(stream); let mut headers=String::new();
-                        loop { let mut line=String::new(); if reader.read_line(&mut line).await.unwrap_or(0)==0 {return;} if line=="\r\n" {break;} headers.push_str(&line); assert!(headers.len()<8192); }
+                        loop {
+                            let mut line=String::new();
+                            if reader.read_line(&mut line).await.unwrap_or(0)==0 {return;}
+                            if line=="\r\n" {break;}
+                            headers.push_str(&line);
+                            assert!(headers.len()<8192);
+                        }
                         let first=headers.lines().next().unwrap(); assert!(first.starts_with("GET ")); seen.lock().unwrap().push(first.to_owned());
                         let path=first.split_whitespace().nth(1).unwrap(); let mut stream=reader.into_inner();
                         if path=="/api/hello" {

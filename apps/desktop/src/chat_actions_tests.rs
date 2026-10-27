@@ -131,14 +131,20 @@ async fn inspection_is_get_only_then_exact_archive_and_restore_paths_with_no_bod
             .iter()
             .all(|r| r.0 == "GET")
     );
-    assert!(transport::set(&client, &daemon.options, &e, Action::Archive).await == Outcome::Acknowledged);
+    assert!(
+        transport::set(&client, &daemon.options, &e, Action::Archive).await
+            == Outcome::Acknowledged
+    );
     let raw = daemon.seen.lock().unwrap().source.clone();
     let t = target(&daemon.options, &raw);
     let e = transport::inspect(&client, &daemon.options, &t)
         .await
         .unwrap();
     assert!(!e.archive);
-    assert!(transport::set(&client, &daemon.options, &e, Action::Archive).await == Outcome::Acknowledged);
+    assert!(
+        transport::set(&client, &daemon.options, &e, Action::Archive).await
+            == Outcome::Acknowledged
+    );
     let seen = daemon.seen.lock().unwrap();
     let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
     assert_eq!(posts.len(), 2);

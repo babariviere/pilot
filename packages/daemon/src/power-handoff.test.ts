@@ -6,12 +6,11 @@ import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
 import { MissionNotices } from "./mission-notices.ts";
 import { MissionStore } from "./missions.ts";
-import { NOTICE_DEBOUNCE_MS } from "./notice-dispatcher.ts";
 import { POWER_IDLE_GRACE_MS, PowerService, type PowerSessions } from "./power.ts";
 import type { PowerCommand } from "./power-helper.ts";
 import type { SessionManager } from "./sessions.ts";
 
-test("mission completion debounce and coordinator admission stay awake across the last child's finish", async (t) => {
+test("mission completion notice and coordinator admission stay awake across the last child's finish", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
 	const home = await mkdtemp(join(tmpdir(), "pilot-power-handoff-"));
 	const store = new MissionStore(":memory:");
@@ -105,10 +104,9 @@ test("mission completion debounce and coordinator admission stay awake across th
 		notices.start();
 		change("child", { state: "idle", working: false, outcome: "done", outcomeAt: Date.now() });
 		await power.settled();
-		t.mock.timers.tick(NOTICE_DEBOUNCE_MS - 1);
-		assert.equal(deliveries, 0);
 		assert.equal(power.status().keepingAwake, true);
-		t.mock.timers.tick(1);
+		// The last member's completion skips the debounce; only the dispatcher's one-second timer floor remains.
+		t.mock.timers.tick(1_000);
 		await receipt;
 		assert.equal(power.status().keepingAwake, true, "notice delivery still has an awake Mac");
 		t.mock.timers.tick(10_000);

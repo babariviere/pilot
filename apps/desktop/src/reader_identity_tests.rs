@@ -49,7 +49,7 @@ fn canonical_reader_reopen_does_not_alias_reallocated_render_numbers() {
     );
 }
 #[test]
-fn canonical_reader_qualifies_models_and_blocks_including_collapsed_projection() {
+fn canonical_reader_qualifies_models_and_blocks_including_large_sources() {
     let original = json!({"id":20,"head":20,"kind":"pi.assistant","model":[
         {"role":"user","content":"model0"},
         {"role":"assistant","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"model1 block1"},{"type":"text","text":"model1 block2"}]},
@@ -74,12 +74,12 @@ fn canonical_reader_qualifies_models_and_blocks_including_collapsed_projection()
             text
         );
     }
-    let collapsed = fresh(vec![entry(20, &"x".repeat(1024 * 1024 + 1))]);
+    // Large sources are no longer collapsed, so they keep their exact block identity.
+    let large = fresh(vec![entry(20, &"x".repeat(1024 * 1024 + 1))]);
     assert_eq!(
-        collapsed[0].reader_key(),
-        Some(ReaderKey::model(20, 0, None))
+        large[0].reader_key(),
+        Some(ReaderKey::model(20, 0, Some(1)))
     );
-    assert!(!collapsed[0].matches_reader(&ReaderKey::model(20, 0, Some(1))));
 }
 #[test]
 fn canonical_reader_live_promotion_keeps_render_key_but_acquires_entry_identity() {
