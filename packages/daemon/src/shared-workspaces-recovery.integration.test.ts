@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { SharedWorkspaceStore } from "./shared-workspaces.ts";
 import { fixture, git, jj } from "./testing/shared-workspace.ts";
 
 test("concurrent children share an independent repository, pin bases, leave source untouched and use linked .git", async () => {
@@ -110,6 +111,35 @@ test("empty saved change remains jj-resolvable and restores exact IDs after both
 			recovery.changeId,
 		);
 		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(jj(w.path, "log", "--no-graph", "-r", "@", "-T", "commit_id"), recovery.commitId);
+	} finally {
+		f.close();
+	}
+});
+
+test("daily maintenance packs objects, persists its schedule and keeps live and saved workspaces intact", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		const live = await f.store.create(f.source, f.path("session-b"));
+		writeFileSync(join(w.path, "a.txt"), "dirty final\n");
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, recovery);
+		writeFileSync(join(live.path, "a.txt"), "live work\n");
+		jj(live.path, "status");
+		const repository = w.shared!.repository;
+		assert.deepEqual(await f.store.repositories(), [repository]);
+		assert.doesNotMatch(git(repository, "count-objects", "-v"), /^count: 0$/m);
+		const now = Date.now();
+		assert.equal(await f.store.maintain(repository, now), true);
+		assert.match(git(repository, "count-objects", "-v"), /^count: 0$/m, "git gc packed loose objects");
+		assert.equal(await f.store.maintain(repository, now + 1), false, "at most one run a day");
+		const restarted = new SharedWorkspaceStore(join(f.root, "home"));
+		assert.equal(await restarted.maintain(repository, now + 86_400_000 - 1), false, "persisted across restarts");
+		assert.equal(await restarted.maintain(repository, now + 86_400_000), true);
+		assert.match(jj(live.path, "diff", "--name-only"), /a\.txt/);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "dirty final\n");
 		assert.equal(jj(w.path, "log", "--no-graph", "-r", "@", "-T", "commit_id"), recovery.commitId);
 	} finally {
 		f.close();

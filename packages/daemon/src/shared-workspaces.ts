@@ -22,6 +22,7 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
+import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
 import {
 	copyLocalConfigs,
 	dissociateWorkspace,
@@ -31,7 +32,6 @@ import {
 	validateBaseBranch,
 	type Workspace,
 } from "./workspaces.ts";
-import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
 
 export interface SharedWorkspace {
 	repository: string;
@@ -71,6 +71,9 @@ const changeFingerprint = (raw: string) => {
 	return lines.length ? hash(lines.join("\n")) : undefined;
 };
 const maintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
+const DAY_MS = 86_400_000;
+/** `jj util gc` runs `git gc`, which can take minutes on a large repository. */
+const GC_TIMEOUT_MS = 10 * 60_000;
 const baseRefs = "refs/pilot/origin/";
 const baseRemote = "pilot-base";
 const networkEnvironment = new Set([
@@ -162,6 +165,8 @@ export class SharedWorkspaceStore {
 	/** Unwrapped runner, for the one Git check that needs its own GIT_INDEX_FILE. */
 	private readonly baseRunner: Runner;
 	private readonly runner: Runner;
+	/** Last maintenance attempt per repository in this process, so failures are not retried every sweep. */
+	private readonly maintained = new Map<string, number>();
 	constructor(home: string, runner: Runner = run) {
 		this.home = home;
 		this.baseRunner = runner;
@@ -196,6 +201,49 @@ export class SharedWorkspaceStore {
 
 	private jj(args: string[], cwd: string, signal?: AbortSignal) {
 		return this.runner("jj", ["--no-pager", "--color=never", ...args], cwd, undefined, signal);
+	}
+
+	/** Managed repository paths. Ownership is checked by each operation. */
+	async repositories(): Promise<string[]> {
+		const directory = await canonical(join(this.home, "repositories"));
+		const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+			return [];
+		});
+		return entries
+			.filter((entry) => entry.isDirectory() && /^[0-9a-f]{64}$/.test(entry.name))
+			.map((entry) => join(directory, entry.name));
+	}
+
+	/**
+	 * Daemon Git commands disable automatic GC. At most once a day, `jj util gc` drops jj data no operation still
+	 * references and runs `git gc`, which packs loose objects and prunes unreachable ones older than two weeks.
+	 */
+	async maintain(repository: string, now = Date.now()): Promise<boolean> {
+		const attempted = this.maintained.get(repository);
+		if (attempted !== undefined && now - attempted < DAY_MS) return false;
+		// Set before any failure, so a broken repository is retried daily rather than on every sweep.
+		this.maintained.set(repository, now);
+		return this.queue(repository, async () => {
+			await this.repositoryOwned(repository);
+			const marker = join(repository, ".jj", "pilot-maintenance.json");
+			const previous = await readFile(marker, "utf8").then(
+				(text) => (JSON.parse(text) as { at?: unknown }).at,
+				() => undefined,
+			);
+			if (typeof previous === "number" && now - previous < DAY_MS) {
+				this.maintained.set(repository, previous);
+				return false;
+			}
+			await atomicJson(marker, { at: now });
+			await this.runner(
+				"jj",
+				["--no-pager", "--color=never", "--ignore-working-copy", "util", "gc"],
+				repository,
+				GC_TIMEOUT_MS,
+			);
+			return true;
+		});
 	}
 
 	private bindingPath(shared: SharedWorkspace) {

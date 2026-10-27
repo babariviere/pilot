@@ -177,7 +177,7 @@ anyway and setup continues; the agent is told so (section 5). Stop ends the hold
 ### `workspace.restored`
 
 Fires when an archived chat is restored and its workspace was reset: restored from a reclaimed snapshot, or a
-legacy clone whose generated output was pruned. Both cases set `meta.workspaceReset`; the trigger ID is
+workspace whose generated output was pruned. Both cases set `meta.workspaceReset`; the trigger ID is
 `workspace.restored:<workspaceReset.at>`. It is queued in the same write that clears the archive and holds the
 next turn the same way. Restoring a chat whose workspace was never reclaimed or pruned fires nothing.
 

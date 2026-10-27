@@ -134,33 +134,38 @@ test("live PTYs, busy workers and worker subprocesses block manual reclaim and a
 	assert.equal(existsSync(created.cwd), false);
 });
 
-test("archived legacy clones keep history and inputs but lose regenerable outputs after retention", async (t) => {
+test("archived workspaces lose regenerable outputs at once, keep history and inputs, and shared ones are reclaimed later", async (t) => {
 	const f = await fixture(t);
 	const legacy = await f.spawn();
-	const recent = await f.spawn();
-	for (const created of [legacy, recent]) {
+	const shared = await f.spawn();
+	for (const created of [legacy, shared]) {
 		await writeFile(join(created.cwd, ".gitignore"), "ignored-secret\nnode_modules/\n");
 		await mkdir(join(created.cwd, "node_modules", "dep"), { recursive: true });
 		await writeFile(join(created.cwd, "node_modules", "dep", "index.js"), "dependency\n");
 		await writeFile(join(created.cwd, "ignored-secret"), "irreplaceable\n");
 		await writeFile(join(created.cwd, "tracked.txt"), "uncommitted work\n");
 		await f.sessions.archive(created.id);
-		delete f.sessions["metas"].get(created.id)!.workspace!.shared;
 	}
+	delete f.sessions["metas"].get(legacy.id)!.workspace!.shared;
 	const now = Date.now();
 	t.mock.method(Date, "now", () => now);
-	f.sessions["metas"].get(legacy.id)!.archivedAt = now - DAY;
-	f.sessions["metas"].get(recent.id)!.archivedAt = now - DAY + 1;
 	await f.sessions["reclaimArchivedWorkspaces"]();
-	assert.equal(existsSync(join(legacy.cwd, "node_modules")), false);
-	assert.ok(existsSync(join(recent.cwd, "node_modules")), "recently archived clones are untouched");
-	for (const file of ["ignored-secret", "tracked.txt", ".jj"]) assert.ok(existsSync(join(legacy.cwd, file)), file);
-	assert.equal(await readFile(join(legacy.cwd, "tracked.txt"), "utf8"), "uncommitted work\n");
-	const pruned = await f.stored(legacy.id);
-	assert.equal(pruned.workspacePrunedAt, now);
-	assert.deepEqual(pruned.workspaceReset, { at: now });
-	assert.equal(pruned.workspaceRecovery, undefined, "legacy clones are never removed");
-	assert.equal(pruned.workspaceCleanupError, undefined);
+	for (const created of [legacy, shared]) {
+		assert.equal(existsSync(join(created.cwd, "node_modules")), false, created.id);
+		for (const file of ["ignored-secret", "tracked.txt", ".jj"]) assert.ok(existsSync(join(created.cwd, file)), file);
+		assert.equal(await readFile(join(created.cwd, "tracked.txt"), "utf8"), "uncommitted work\n");
+		const pruned = await f.stored(created.id);
+		assert.equal(pruned.workspacePrunedAt, now);
+		assert.deepEqual(pruned.workspaceReset, { at: now });
+		assert.equal(pruned.workspaceRecovery, undefined, "pruning never removes the workspace");
+		assert.equal(pruned.workspaceCleanupError, undefined);
+	}
+	f.sessions["metas"].get(shared.id)!.archivedAt = now - DAY;
+	f.sessions["metas"].get(legacy.id)!.archivedAt = now - DAY;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(existsSync(shared.cwd), false, "shared workspaces are still reclaimed after retention");
+	assert.equal((await f.stored(shared.id)).workspaceRecovery?.phase, "reclaimed");
+	assert.ok(existsSync(legacy.cwd), "legacy clones are never removed");
 	await f.sessions.restore(legacy.id);
 	assert.equal((await f.stored(legacy.id)).workspacePrunedAt, undefined, "a later archival may prune again");
 	await f.sessions.send(legacy.id, "continue after pruning");
@@ -220,6 +225,27 @@ for (const recovery of ["manual", "restart"] as const) {
 	});
 }
 
+test("daily repository maintenance waits until no chat in the repository is working", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	const meta = f.sessions["metas"].get(created.id)!;
+	const maintain = t.mock.method(f.sessions["sharedWorkspaces"], "maintain", async () => true);
+	let pty = false;
+	f.sessions.setWorkspaceProcessGuard((id) => id === created.id && pty);
+	meta.working = true;
+	await f.sessions["maintainRepositories"]();
+	meta.working = false;
+	pty = true;
+	await f.sessions["maintainRepositories"]();
+	assert.equal(maintain.mock.callCount(), 0, "working chats and live terminals defer maintenance");
+	pty = false;
+	await f.sessions["maintainRepositories"]();
+	assert.deepEqual(
+		maintain.mock.calls.map((call) => call.arguments[0]),
+		[meta.workspace!.shared!.repository],
+	);
+});
+
 test("legacy pruning uses per-session backoff, conflicts stay quiet and restoration resets the budget", async (t) => {
 	const f = await fixture(t);
 	const legacy = await f.spawn();
@@ -232,14 +258,17 @@ test("legacy pruning uses per-session backoff, conflicts stay quiet and restorat
 	delete f.sessions["metas"].get(legacy.id)!.workspace!.shared;
 	let conflict = true;
 	const pruning = f.sessions as unknown as { pruneWorkspace: (typeof f.sessions)["pruneWorkspace"] };
-	const prune = t.mock.method(pruning, "pruneWorkspace", async () => {
+	const original = pruning.pruneWorkspace.bind(f.sessions);
+	const prune = t.mock.method(pruning, "pruneWorkspace", async (id: string) => {
+		if (id !== legacy.id) return original(id);
 		if (conflict) throw new Conflict("busy");
 		throw new Error("pruning failed");
 	});
+	const legacyCalls = () => prune.mock.calls.filter((call) => call.arguments[0] === legacy.id).length;
 	const warnings = t.mock.method(console, "warn", () => {});
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	await f.sessions["reclaimArchivedWorkspaces"]();
-	assert.equal(prune.mock.callCount(), 2, "busy sessions are checked every sweep");
+	assert.equal(legacyCalls(), 2, "busy sessions are checked every sweep");
 	assert.equal(warnings.mock.callCount(), 0);
 	assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0);
 	assert.equal(existsSync(healthy.cwd), true, "recent archives are still retained");
@@ -248,14 +277,14 @@ test("legacy pruning uses per-session backoff, conflicts stay quiet and restorat
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	assert.equal(existsSync(healthy.cwd), false, "one failing session never delays another");
-	assert.equal(prune.mock.callCount(), 3);
+	assert.equal(legacyCalls(), 3);
 	assert.equal(warnings.mock.callCount(), 1);
 	await f.sessions.restore(legacy.id);
 	assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0);
 	await f.sessions.archive(legacy.id);
 	f.sessions["metas"].get(legacy.id)!.archivedAt = now - DAY;
 	await f.sessions["reclaimArchivedWorkspaces"]();
-	assert.equal(prune.mock.callCount(), 4, "a new archival starts a fresh budget immediately");
+	assert.equal(legacyCalls(), 4, "a new archival starts a fresh budget immediately");
 	now += 5 * 60_000;
 	prune.mock.restore();
 	await f.sessions["reclaimArchivedWorkspaces"]();

@@ -428,7 +428,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
 	workspaceReclaimedAt?: number;
 	workspaceCleanupError?: string;
-	/** Regenerable outputs of a legacy clone were deleted during this archival. Cleared on restore. */
+	/** Regenerable outputs of the workspace were deleted during this archival. Cleared on restore. */
 	workspacePrunedAt?: number;
 	/** Told to the next kernel so the agent does not assume dependencies or build output exist. */
 	workspaceReset?: WorkspaceReset;
@@ -2000,6 +2000,7 @@ export class SessionManager {
 		this.archiveTimer = setTimeout(() => {
 			this.archiveSweep = this.archiveInactiveSessions()
 				.then(() => this.reclaimArchivedWorkspaces())
+				.then(() => this.maintainRepositories())
 				.catch((error: unknown) => console.warn(`pilotd: archive maintenance failed: ${error}`))
 				.finally(() => this.scheduleArchiveSweep());
 		}, ARCHIVE_INTERVAL_MS);
@@ -2048,27 +2049,27 @@ export class SessionManager {
 			const previous = this.workspaceCleanupBackoff.get(meta.id);
 			if (previous && previous.archivedAt !== meta.archivedAt) this.workspaceCleanupBackoff.delete(meta.id);
 			else if (previous && Date.now() < previous.until) continue;
-			const legacy =
-				meta.workspace &&
-				!meta.workspace.shared &&
-				meta.mode !== "ask" &&
-				meta.cwd === join(this.dir(meta.workspaceOriginId ?? meta.id), "workspace") &&
-				meta.archivedAt !== undefined &&
-				meta.archivedAt <= staleBefore &&
-				meta.workspacePrunedAt === undefined &&
-				!hasActivePullRequest(meta);
 			if (
 				meta.continuedTo ||
 				meta.coordinatorView ||
-				(!legacy && !meta.workspace?.shared) ||
+				!meta.workspace ||
 				meta.archivedAt === undefined ||
-				meta.archivedAt > staleBefore ||
 				hasActivePullRequest(meta) ||
 				meta.workspaceRecovery?.phase === "reclaimed"
 			)
 				continue;
+			// Shared workspaces are removed after retention. Until then, and for legacy clones that are never
+			// removed, only regenerable dependency and build outputs go, as soon as the chat is archived.
+			const reclaim = meta.workspace.shared !== undefined && meta.archivedAt <= staleBefore;
+			const prune =
+				!reclaim &&
+				meta.workspacePrunedAt === undefined &&
+				!meta.workspaceRecovery &&
+				meta.mode !== "ask" &&
+				meta.cwd === join(this.dir(meta.workspaceOriginId ?? meta.id), "workspace");
+			if (!reclaim && !prune) continue;
 			try {
-				if (legacy) await this.pruneWorkspace(meta.id, staleBefore);
+				if (prune) await this.pruneWorkspace(meta.id);
 				else await this.reclaimWorkspace(meta.id, staleBefore);
 				this.workspaceCleanupBackoff.delete(meta.id);
 			} catch (error) {
@@ -2086,10 +2087,45 @@ export class SessionManager {
 					? "automatic retries paused until daemon restart"
 					: `retrying in ${delay / 60_000} minutes`;
 				console.warn(
-					`pilotd: could not ${legacy ? "prune" : "reclaim"} workspace for ${meta.id}: ${error}; ${retry}`,
+					`pilotd: could not ${prune ? "prune" : "reclaim"} workspace for ${meta.id}: ${error}; ${retry}`,
 				);
 			}
 		}
+	}
+
+	/** Daily jj/Git collection for each shared repository, only while none of its chats is doing work. */
+	private async maintainRepositories(): Promise<void> {
+		for (const repository of await this.sharedWorkspaces.repositories()) {
+			if (this.closing) return;
+			if (this.repositoryInUse(repository)) continue;
+			try {
+				await this.sharedWorkspaces.maintain(repository);
+			} catch (error) {
+				console.warn(`pilotd: could not maintain shared repository ${repository}: ${error}`);
+			}
+		}
+	}
+
+	/** Abandoning jj operations races with commands from agents, terminals and in-flight refreshes. */
+	private repositoryInUse(repository: string): boolean {
+		for (const meta of this.metas.values()) {
+			if (meta.workspace?.shared?.repository !== repository && meta.coordinatorView?.repository !== repository)
+				continue;
+			const worker = this.workers.get(meta.id);
+			if (
+				meta.working ||
+				meta.pending?.length ||
+				this.starting.has(meta.id) ||
+				this.sending.has(meta.id) ||
+				this.workspaceRefreshes.has(meta.id) ||
+				this.hasWorkspaceProcess(meta.id) ||
+				worker?.state === "working" ||
+				worker?.state === "starting" ||
+				worker?.busy
+			)
+				return true;
+		}
+		return false;
 	}
 
 	/** Keep conversation storage and a pinned jj snapshot; remove only the private working directory. */
@@ -2170,10 +2206,11 @@ export class SessionManager {
 	}
 
 	/**
-	 * Legacy private clones have no restore recipe, so keep the clone and its history in place and delete only
-	 * ignored regenerable outputs. Uses the same serialization and quiescence rules as reclamation.
+	 * Free an archived workspace's disk space in place: delete only ignored regenerable outputs, keeping history and
+	 * every input. Legacy private clones have no restore recipe, so this is all they ever get. Uses the same
+	 * serialization and quiescence rules as reclamation.
 	 */
-	private async pruneWorkspace(id: string, staleBefore: number): Promise<SessionSummary> {
+	private async pruneWorkspace(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
 			this.require(id);
@@ -2187,10 +2224,9 @@ export class SessionManager {
 					if (this.closing) throw new Conflict("pilotd is shutting down");
 					if (
 						meta.archivedAt === undefined ||
-						meta.archivedAt > staleBefore ||
 						meta.workspacePrunedAt !== undefined ||
+						meta.workspaceRecovery ||
 						!meta.workspace ||
-						meta.workspace.shared ||
 						hasActivePullRequest(meta)
 					)
 						return this.summary(meta);

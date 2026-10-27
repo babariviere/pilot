@@ -525,10 +525,11 @@ tokens, request bodies or command output. It retains the latest 200 actions per 
 events per mission. Compound commands and background starts show an unknown per-command exit status
 rather than an inferred success.
 
-Archiving keeps the conversation, but not necessarily its working directory. After the retention period,
-Pilot can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume. It can
-also prune generated build and dependency output from legacy clones. Dependencies may need reinstalling
-after recovery.
+Archiving keeps the conversation, but not necessarily its working directory. Pilot deletes generated build and
+dependency output (such as `node_modules` and Rust `target`) from an archived chat's workspace right away. After
+the retention period, it can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume.
+Dependencies may need reinstalling after either. Once a day, while none of its chats is working, each shared
+repository also runs `jj util gc`, which packs Git objects with `git gc`.
 Ignored content does not block jj workspace reclamation and is discarded, except for bounded regular
 mise local configs saved for recovery. Track any other files you need to retain.
 
