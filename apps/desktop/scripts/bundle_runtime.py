@@ -118,6 +118,25 @@ def supports_macos_15(load_commands):
     return bool(versions) and all(v <= (15, 0, 0) for v in versions)
 
 
+def thin_universal(root):
+    """Keep only the arm64 slice of universal npm prebuilds (fsevents ships x86_64+arm64)."""
+    for directory, _, files in os.walk(root, followlinks=False):
+        for name in files:
+            path = Path(directory) / name
+            if path.is_symlink() or not path.is_file():
+                continue
+            with path.open("rb") as stream:
+                if stream.read(4) not in (b"\xca\xfe\xba\xbe", b"\xca\xfe\xba\xbf"):
+                    continue
+            archs = run("/usr/bin/lipo", "-archs", str(path)).split()
+            if "arm64" not in archs or archs == ["arm64"]:
+                continue  # native_closure still rejects anything without an arm64 slice.
+            thin = path.with_name(path.name + ".arm64")
+            run("/usr/bin/lipo", str(path), "-thin", "arm64", "-output", str(thin))
+            thin.chmod(stat.S_IMODE(path.stat().st_mode))
+            os.replace(thin, path)
+
+
 def native_closure(root):
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("App bundles require native arm64 macOS verification")
@@ -315,6 +334,7 @@ def snapshot_build(expected_source, output, native=False):
             env["XDG_CONFIG_HOME"] = str(temporary / "config")
             env["XDG_DATA_HOME"] = str(temporary / "data")
             subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/bundle-runtime.sh"), str(output)], env=env, check=True, timeout=1200)
+            thin_universal(output)
             (output / "desktop-assets").mkdir()
             subprocess.run([sys.executable, str(checkout / "apps/desktop/scripts/make_dev_icon.py"),
                             str(output / "desktop-assets/AppIcon.icns")], check=True, timeout=10)

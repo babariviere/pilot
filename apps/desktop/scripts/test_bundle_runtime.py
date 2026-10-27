@@ -29,6 +29,21 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertEqual(int.from_bytes(first[4:8], "big"), len(first))
         self.assertIn(b"ic09", first)
         self.assertIn(b"\x89PNG\r\n\x1a\n", first)
+
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("clang"), "needs macOS lipo and clang")
+    def test_universal_prebuilds_keep_only_the_arm64_slice(self):
+        with tempfile.TemporaryDirectory(prefix="next-thin-") as directory:
+            root = Path(directory)
+            (root / "a.c").write_text("int f(void) { return 1; }\n")
+            fat = root / "node_modules/fsevents/fsevents.node"
+            fat.parent.mkdir(parents=True)
+            subprocess.run(["clang", "-arch", "arm64", "-arch", "x86_64", "-shared", "-o", str(fat), str(root / "a.c")], check=True)
+            (root / "link.node").symlink_to(fat)
+            fat.chmod(0o755)
+            bundle.thin_universal(root)
+            self.assertEqual(bundle.run("/usr/bin/lipo", "-archs", str(fat)), "arm64")
+            self.assertEqual(fat.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(sorted(p.name for p in fat.parent.iterdir()), ["fsevents.node"])
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="next-bundle-faux-")
         self.addCleanup(self.temporary.cleanup)

@@ -102,7 +102,7 @@ uses private outputs and the mbx CPU2/4GiB wrapper. Its additive
 `linux-gui-check` phase reuses those debug binaries, moves them to a path with
 spaces, checks relocated help and the no-compositor refusal even with DISPLAY
 set, audits **every ELF** via readelf/ldd, then launches only a synthetic fenced
-message against an owned headless Weston compositor and software Mesa. It
+message against an owned headless sway (wlroots) compositor and software Mesa. It
 requires actual Wayland `get_toplevel` and a `wl_surface.attach` rendered-buffer
 request, not merely a successful compiler or living process. No X server is
 started; inherited user/Pilot/Node/provider/network configuration is excluded.
@@ -117,12 +117,12 @@ backend. Runtime startup still selects WAYLAND only after a real socket connects
 There is no distro-wide minimum ABI claim: recorded versions are requirements
 of those exact binaries on that exact runner, not the headless runtime's ceiling.
 
-For explicitly authorized workstation qualification when Weston is unavailable,
+For explicitly authorized workstation qualification without an owned compositor,
 the native probe accepts `--existing-wayland-socket /run/user/UID/wayland-0`.
 This shows a short-lived synthetic window, with its own HOME/config/data, on the
 explicit absolute same-user socket. The probe never starts, stops, owns or
 reconfigures that compositor. The receipt distinguishes this mode from owned
-headless Weston; software rendering is still selected. CI keeps its owned
+headless sway; software rendering is still selected. CI keeps its owned
 compositor default. Neither mode is a live daemon or performance test.
 
 **The initial source-only slice executed no native Linux qualification.** Its
@@ -143,7 +143,7 @@ Remaining acceptance gates:
    qualification of future release payloads or other distributions.
 2. Qualify native visual confinement separately. Keep refusal until then.
 3. Real Wayland GPU/distribution, keyboard/IME and frame-pacing acceptance remain
-   outstanding. Headless Weston software buffers do not establish those.
+   outstanding. Headless sway software buffers do not establish those.
 4. Never publish the development candidate or relabel it as a production update.
 
 macOS packaging and retained-runtime integration remain owned by the existing

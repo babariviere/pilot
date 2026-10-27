@@ -131,7 +131,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
 
     def test_linux_gui_ci_has_owned_compositor_and_no_release_enablement(self):
         workflow = WORKFLOW.read_text().split("  rust:", 1)[1].split("  rust-macos-native:", 1)[0]
-        self.assertIn("weston libgl1-mesa-dri mesa-vulkan-drivers", workflow)
+        self.assertIn("sway libgl1-mesa-dri mesa-vulkan-drivers", workflow)
         self.assertIn("ci.sh linux-gui-check", workflow)
         self.assertLess(workflow.index("ci.sh check"), workflow.index("ci.sh linux-gui-check"))
 

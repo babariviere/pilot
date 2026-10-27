@@ -317,7 +317,7 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libxcb1-dev libxcb-xkb-dev libx11-xcb-dev \
             libvulkan-dev libssl-dev libudev-dev libegl1-mesa-dev fonts-dejavu-core \
-            weston libgl1-mesa-dri mesa-vulkan-drivers acl
+            sway libgl1-mesa-dri mesa-vulkan-drivers acl
       - name: Bootstrap pinned Rust and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10

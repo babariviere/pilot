@@ -15,7 +15,8 @@ import linux_gui_package as package
 
 
 def bounded_log():
-    resource.setrlimit(resource.RLIMIT_FSIZE, (8 * 1024**2, 8 * 1024**2))
+    # Also bounds memfd wl_shm pools, which a software-rendered window grows past 8 MiB.
+    resource.setrlimit(resource.RLIMIT_FSIZE, (256 * 1024**2, 256 * 1024**2))
 
 
 def stop(child):
@@ -38,17 +39,25 @@ def compositor_display(root, env, existing):
             raise ValueError("Existing compositor must be an absolute same-user socket")
         yield str(existing)
         return
-    with (root / "weston.log").open("wb") as log:
-        compositor = subprocess.Popen(["weston", "--backend=headless-backend.so", "--use-pixman",
-                                       "--socket=fixture-wayland", "--idle-time=0"],
-                                      env=env, stdout=log, stderr=log, preexec_fn=bounded_log)
+    # Headless Weston advertises no wl_seat, which GPUI requires. wlroots/sway
+    # always advertises seat0, even with no input devices.
+    config = root / "sway.config"
+    config.write_text("xwayland disable\n")
+    run = root / "run"
+    with (root / "sway.log").open("wb") as log:
+        compositor = subprocess.Popen(["sway", "--config", str(config)],
+                                      env=dict(env, WLR_BACKENDS="headless", WLR_RENDERER="pixman",
+                                               WLR_LIBINPUT_NO_DEVICES="1"),
+                                      stdout=log, stderr=log, preexec_fn=bounded_log)
         try:
             deadline = time.monotonic() + 10
-            while not (root / "run/fixture-wayland").exists():
+            while not (sockets := [path.name for path in run.glob("wayland-*") if path.is_socket()]):
                 if compositor.poll() is not None or time.monotonic() >= deadline:
-                    raise ValueError("Owned headless Weston failed: " + (root / "weston.log").read_text())
+                    raise ValueError("Owned headless sway failed: " + (root / "sway.log").read_text()[-4000:])
                 time.sleep(0.05)
-            yield "fixture-wayland"
+            if len(sockets) != 1:
+                raise ValueError("Owned headless sway socket is ambiguous")
+            yield sockets[0]
         finally:
             stop(compositor)
 
@@ -116,7 +125,7 @@ def probe(binaries, output, expected, existing=None):
                            relocation=True, no_wayland_refused=True, wayland_toplevel_and_buffer=True,
                            full_runtime_qualified=False, bundled_launch=False, native_confinement=False,
                            installer=False, updater=False,
-                           compositor="existing-wayland-explicit" if existing else "owned-headless-weston",
+                           compositor="existing-wayland-explicit" if existing else "owned-headless-sway",
                            limits="Software-rendered fixture only. No GPU, IME, frame pacing or daemon execution acceptance."))
 
 

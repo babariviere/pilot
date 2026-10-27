@@ -60,7 +60,7 @@ jobs:
         if: inputs.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-xcb-dev libx11-dev libxi-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxdamage-dev libxfixes-dev libxrender-dev libegl1-mesa-dev libvulkan-dev weston
+          sudo apt-get install -y clang cmake pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-xcb-dev libx11-dev libxi-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxdamage-dev libxfixes-dev libxrender-dev libegl1-mesa-dev libvulkan-dev sway libgl1-mesa-dri mesa-vulkan-drivers
       - name: Bootstrap pinned Rust and native visual inputs
         run: bash apps/desktop/scripts/ci.sh bootstrap
       - name: Build optimized macOS GUI, updater helper and immutable native/runtime closure
