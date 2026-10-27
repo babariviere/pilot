@@ -483,13 +483,19 @@ export function createDaemonServer(
 	const runtimeResources = new RuntimeResources(runtimeSources);
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
+			// An app update keeps pilotd running, so paused agents and open terminals need not block it.
 			runtimeSources.map((source) =>
 				source === sessions
 					? {
 							freezeAdmissions: () => sessions.freezeAdmissions(),
-							blockers: () => sessions.idleUpdateBlockers(),
+							blockers: () => sessions.updateReservationBlockers(),
 						}
-					: source,
+					: source === terminals
+						? {
+								freezeAdmissions: () => terminals.freezeAdmissions(),
+								blockers: () => terminals.admissionBlockers(),
+							}
+						: source,
 			),
 		),
 	);

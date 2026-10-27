@@ -1,4 +1,4 @@
-/** Idle-only bounded admission ownership. Never drains, signals or stops work. */
+/** Bounded admission ownership for an app update. Never drains, signals or stops work itself; the app drains agents first. */
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { RuntimeResources } from "./runtime-admission.ts";

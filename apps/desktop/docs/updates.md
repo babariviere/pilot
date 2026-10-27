@@ -54,15 +54,20 @@ stopped, restarted or retroactively declared independent. Unproven reuse refuses
 
 The private owner endpoint authenticates boot/root/build/profile-bound requests
 with a fresh nonce and HMAC. Install preparation acquires a single nonrenewable
-180-second idle reservation, after freezing all admissions and inspecting live
-worker jobs/children/resources. Busy, uninspectable or changed workers refuse.
-No active work is paused or stopped. Attempts, inspection time and nonce storage
+180-second reservation, after freezing all admissions. Sessions qualify when idle
+or when every worker has paused at a tool boundary; a working, unpaused or changed
+worker refuses. pilotd survives the app swap, so background jobs and open terminals
+do not block. The freeze keeps paused agents paused until startup ACK releases it;
+nothing is stopped or interrupted mid-tool. Attempts, inspection time and nonce storage
 are bounded. Expiry always releases admission; an early timer cannot expire a
 still-valid reservation. This is a narrow private-profile proof, not general
 authentication for the ordinary loopback API.
 
 ## Explicit install protocol
 
+0. Pause agents first, as the Swift app does: renew `POST /api/update/pause` off the
+   UI thread until every agent has paused after its current tool call. Input stays
+   usable while waiting; Cancel stops renewal and agents resume within 30 seconds.
 1. Fence UI admissions and reject preedit, unsaved secondary forms, unresolved
    deliveries/model changes/mission outcomes, active or unreaped visual helpers,
    and pending preference operations. Nothing is discarded to obtain readiness.

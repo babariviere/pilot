@@ -64,7 +64,15 @@ durable COMMIT. It verifies the archive and re-extracts/reverifies the complete
 signed payload after actual parent exit. No COMMIT, cancellation, busy work,
 expired reservation or unconfirmed safety leaves the installed app unchanged.
 
-The existing private daemon owner proof and nonrenewable idle reservation bind
+Install first pauses agents, as the Swift app does: the app calls
+`POST /api/update/pause` off the UI thread (every second while tools drain, then
+every five seconds) until each agent has paused at a tool boundary. Input is not
+fenced while waiting, and Cancel stops the renewals so agents resume within the
+30 second lease. pilotd keeps running across the app swap, so background jobs and
+open terminals do not block installation; they only end when the later daemon
+handoff replaces pilotd.
+
+The existing private daemon owner proof and nonrenewable reservation bind
 boot, process, profile, policy and exact retained runtime root. Linux capsules
 use `runtimes/<SHA256 exact package inventory>/payload/runtime`. The candidate's
 signed `update-runtime-policy.json` must admit that exact capsule digest.
@@ -72,7 +80,9 @@ Release packaging admits the runtimes of the newest published Linux releases
 (see [releases](releases.md)). When no process holds the profile lease any more,
 startup uses the app's own runtime instead of the recorded one.
 Legacy/app-root/unproven runtimes refuse, rather than being moved or declared
-independent. No daemon is stopped, restarted, replaced or migrated; no second
+independent. The reservation accepts idle or drained (paused) sessions and its
+admission freeze keeps paused agents paused through the swap; startup ACK
+releases it. No daemon is stopped, restarted, replaced or migrated; no second
 daemon may use its data. Existing history/profile data stays outside replacement.
 
 Relaunch uses the new native executable directly, preserving the desktop-session

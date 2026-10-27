@@ -28,6 +28,11 @@ pub(crate) struct Updates {
     pub(crate) fenced: bool,
     cancel_prepare: bool,
     pub(crate) notice: Option<&'static str>,
+    /// The profile daemon whose agents pause before installing, as in the Swift app.
+    location: Option<Location>,
+    /// Renews the daemon's 30 second pause lease until the install ends or is cancelled.
+    pausing: Option<Task<()>>,
+    agents_paused: bool,
     startup_started: bool,
     startup: Option<Result<(), Error>>,
     startup_task: Option<Task<()>>,
@@ -67,6 +72,9 @@ impl Updates {
             fenced: false,
             cancel_prepare: false,
             notice: None,
+            location: location.clone(),
+            pausing: None,
+            agents_paused: false,
         };
         match worker {
             Ok(mut worker) => {
@@ -199,6 +207,9 @@ impl Updates {
             }
             if self.cancel_prepare && matches!(controller.state(), State::ReadyToRestart(_)) {
                 self.fenced = false;
+                // A cancelled install releases the agents too.
+                self.pausing = None;
+                self.agents_paused = false;
             }
         }
         self.filter_recovery();
@@ -301,7 +312,76 @@ impl Updates {
         self.notice = Some(message);
         self.fenced = false;
         self.cancel_prepare = false;
+        self.stop_pausing();
         cx.notify();
+    }
+    /// Pauses agents once their current tool calls finish before installing. Returns true
+    /// once they are paused (or there is no daemon to pause). Until then the lease is
+    /// renewed off the UI thread, and `Event::Restart` is emitted again when ready.
+    pub(crate) fn ensure_agents_paused(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(location) = self.location.clone() else {
+            return true;
+        };
+        if self.agents_paused {
+            return true;
+        }
+        if self.pausing.is_none() {
+            self.notice = None;
+            self.pausing = Some(cx.spawn(async move |owner, cx| {
+                loop {
+                    let target = location.clone();
+                    let result =
+                        cx.background_executor()
+                            .spawn(async move {
+                                pilot_desktop_updater::coordination::pause_agents(&target)
+                            })
+                            .await;
+                    let Ok(Some(interval)) = owner.update(cx, |u, cx| u.paused(result, cx)) else {
+                        break;
+                    };
+                    cx.background_executor().timer(interval).await;
+                }
+            }));
+            cx.notify();
+        }
+        false
+    }
+    /// Next renewal interval, or None to stop. Renewals stay well inside the 30 second lease.
+    fn paused(&mut self, result: Result<bool, Error>, cx: &mut Context<Self>) -> Option<Duration> {
+        self.pausing.as_ref()?;
+        match result {
+            Ok(true) => {
+                if !self.agents_paused {
+                    self.agents_paused = true;
+                    cx.emit(Event::Restart);
+                }
+                cx.notify();
+                Some(Duration::from_secs(5))
+            }
+            Ok(false) => {
+                self.agents_paused = false;
+                Some(Duration::from_secs(1))
+            }
+            Err(_) => {
+                self.stop_pausing();
+                self.notice = Some(
+                    "Agents could not be paused for the update. Installation is deferred and agents resume on their own.",
+                );
+                cx.notify();
+                None
+            }
+        }
+    }
+    pub(crate) fn release_agents(&mut self) {
+        self.stop_pausing();
+    }
+    /// Agents resume on their own once the daemon's pause lease lapses.
+    fn stop_pausing(&mut self) {
+        self.pausing = None;
+        self.agents_paused = false;
+    }
+    fn waiting_for_agents(&self) -> bool {
+        self.pausing.is_some() && !self.agents_paused
     }
     pub(crate) fn cancel_prepared(&mut self, message: &'static str, cx: &mut Context<Self>) {
         #[cfg(feature = "native-probes")]
@@ -316,6 +396,14 @@ impl Updates {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.pausing.is_some() && !self.fenced {
+            // Nothing is armed yet. The downloaded update stays ready to install.
+            self.stop_pausing();
+            self.notice = Some("Install cancelled. Agents resume within 30 seconds.");
+            cx.emit(Event::Changed);
+            cx.notify();
+            return;
+        }
         if let Some(controller) = &mut self.controller {
             match controller.state() {
                 State::Working {
@@ -378,7 +466,11 @@ impl Render for Updates {
             }));
         }
         let state = self.state();
+        let waiting_for_agents = self.waiting_for_agents();
         let message = match state {
+            _ if waiting_for_agents => {
+                "Pausing agents after their current tool calls finish. Installation continues once they pause."
+            }
             None => error_text(self.unavailable.unwrap_or(Error::Unconfigured)),
             Some(State::Idle) => "No update check has completed.",
             Some(State::Current) => "Pilot Next is up to date.",
@@ -399,7 +491,9 @@ impl Render for Updates {
             Some(State::Working {
                 work: Work::PreparingExit,
                 ..
-            }) => "Preparing a safe restart. Input remains fenced; no work will be stopped.",
+            }) => {
+                "Preparing a safe restart. Input is fenced and agents stay paused; no tool call is interrupted."
+            }
             Some(State::Working {
                 work: Work::CommittingExit,
                 ..
@@ -435,7 +529,8 @@ impl Render for Updates {
         let can_install = matches!(
             state,
             Some(State::ReadyToRestart(_) | State::Deferred { .. })
-        ) && !self.fenced;
+        ) && !self.fenced
+            && self.pausing.is_none();
         let can_cancel = matches!(
             state,
             Some(
@@ -444,7 +539,8 @@ impl Render for Updates {
                     ..
                 } | State::ExitPrepared
             )
-        ) || (self.fenced && matches!(state, Some(State::ReadyToRestart(_))));
+        ) || (self.fenced && matches!(state, Some(State::ReadyToRestart(_))))
+            || waiting_for_agents;
         let mut view = div()
             .id("updates-controller")
             .v_flex()

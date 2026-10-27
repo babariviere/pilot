@@ -132,13 +132,15 @@ trust/feed/signing configuration is deliberately absent from development assembl
    `ReadyToRestart` only after signed bytes and full bundle validation. Do not relabel
    the running version. No helper is armed by checks, download, scheduling or ordinary quit.
 5. Explicit Restart intent fences edits/admissions and captures fresh durable receipts
-   for drafts, deliveries and Settings. Preserve uncommitted IME/preedit, active tools/jobs
-   and unsaved text. Wait/defer; do not force completion/cancellation. The concrete GUI
+   for drafts, deliveries and Settings. Preserve uncommitted IME/preedit and unsaved text.
+   Before fencing, the GUI pauses agents at their next tool boundary through
+   `coordination::pause_agents` (the daemon's renewable update pause, as in the Swift
+   app); it never cancels a tool call. The concrete GUI
    uses `prepare_retained`, not a client assertion of `Runtime::Independent` or
    `SharedStopped`. Its native worker proves the exact sealed capsule/process/profile
-   and obtains a nonrenewable idle reservation. Legacy/app-root and unproven runtimes
-   refuse. The same reservation must remain valid after actual parent exit; no existing
-   daemon is paused, stopped, migrated, replaced or restarted.
+   and obtains a nonrenewable reservation that accepts idle or paused sessions. Legacy/app-root
+   and unproven runtimes refuse. The same reservation must remain valid after actual parent
+   exit; no existing daemon is stopped, migrated, replaced or restarted.
 6. Call `request_install(safety, now)` only after those acknowledgements. It starts a
    helper that waits for COMMIT; the live app remains unchanged. When `ExitPrepared`
    arrives, capture/revalidate **fresh** exact-revision receipts and fences, then

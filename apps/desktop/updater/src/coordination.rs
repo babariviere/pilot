@@ -1,4 +1,4 @@
-//! Exact retained-root proof and idle reservation, using only the configured
+//! Exact retained-root proof, agent pause and update reservation, using only the configured
 //! private profile record. Not a provider credential lookup or remote-host API.
 #[cfg(target_os = "macos")]
 use crate::runtime;
@@ -307,33 +307,10 @@ pub fn retire_older_owner(
     if crate::helper::process_executable(pid)? != node {
         return Ok(Handoff::Unchanged);
     }
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(1))
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| Error::Native)?;
     let until = std::time::Instant::now() + wait;
     loop {
         // Each call renews the daemon's 30 second admission lease while tools drain.
-        let response = client
-            .post(format!(
-                "http://127.0.0.1:{}/api/update/pause",
-                location.port
-            ))
-            .header("content-type", "application/json")
-            .body("{}")
-            .send()
-            .and_then(|r| r.error_for_status())
-            .and_then(|r| r.bytes())
-            .map_err(|_| Error::RuntimeUnverified)?;
-        let paused: Value =
-            serde_json::from_slice(&response).map_err(|_| Error::RuntimeUnverified)?;
-        if paused["processId"].as_i64() != Some(pid.into()) {
-            return Err(Error::Identity);
-        }
-        if paused["ready"] == true {
+        if request_pause(location, pid)? {
             break;
         }
         if std::time::Instant::now() >= until {
@@ -357,6 +334,48 @@ pub fn retire_older_owner(
         std::thread::sleep(Duration::from_millis(250));
     }
     Ok(Handoff::Stopped)
+}
+/// Asks the profile's running daemon to pause its agents once their current tool calls
+/// finish, as the Swift app does before installing. Each call renews the daemon's
+/// 30 second pause lease; agents resume on their own once calls stop. Returns whether
+/// every agent has paused. No daemon means nothing to pause.
+pub fn pause_agents(location: &Location) -> Result<bool, Error> {
+    if !owner_live(&location.home) {
+        return Ok(true);
+    }
+    let pid = record(location)?["pid"]
+        .as_i64()
+        .filter(|p| *p > 1 && *p <= i32::MAX as i64)
+        .ok_or(Error::RuntimeUnverified)? as i32;
+    request_pause(location, pid)
+}
+fn request_pause(location: &Location, pid: i32) -> Result<bool, Error> {
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| Error::Native)?;
+    let response = client
+        .post(format!(
+            "http://127.0.0.1:{}/api/update/pause",
+            location.port
+        ))
+        .header("content-type", "application/json")
+        .body("{}")
+        .send()
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.bytes())
+        .map_err(|_| Error::RuntimeUnverified)?;
+    if response.len() > 4096 {
+        return Err(Error::RuntimeUnverified);
+    }
+    let paused: Value = serde_json::from_slice(&response).map_err(|_| Error::RuntimeUnverified)?;
+    if paused["processId"].as_i64() != Some(pid.into()) {
+        return Err(Error::Identity);
+    }
+    Ok(paused["ready"] == true)
 }
 /// Retained capsules live at `<store>/<id>/<root>`.
 fn older_in_same_store(capsule: &Path, current: &Path) -> bool {
@@ -776,6 +795,66 @@ mod configuration_tests {
         assert_eq!(configuration(&next), configuration(&trust));
         next.repository = "synthetic/other".into();
         assert_ne!(configuration(&next), configuration(&trust));
+    }
+
+    #[test]
+    fn agent_pause_reports_readiness_only_for_the_recorded_daemon() {
+        use std::io::{BufRead, BufReader, Write};
+        let dir = crate::owned_tests::Temp::new();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let location = Location {
+            home: dir.path().to_owned(),
+            port: listener.local_addr().unwrap().port(),
+            policy: Default::default(),
+        };
+        assert_eq!(
+            pause_agents(&location),
+            Ok(true),
+            "no daemon owns the profile, so nothing needs pausing"
+        );
+        let replies = [
+            r#"{"ready":false,"processId":42}"#,
+            r#"{"ready":true,"processId":42}"#,
+            r#"{"ready":true,"processId":7}"#,
+        ];
+        let server = std::thread::spawn(move || {
+            let mut paths = Vec::new();
+            for body in replies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                paths.push(request.trim().to_owned());
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+            paths
+        });
+        assert_eq!(request_pause(&location, 42), Ok(false));
+        assert_eq!(request_pause(&location, 42), Ok(true));
+        assert_eq!(
+            request_pause(&location, 42),
+            Err(Error::Identity),
+            "another process answering the port is never treated as paused"
+        );
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .iter()
+                .all(|line| line == "POST /api/update/pause HTTP/1.1")
+        );
     }
 
     #[test]

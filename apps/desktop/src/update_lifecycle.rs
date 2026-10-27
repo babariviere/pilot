@@ -69,6 +69,11 @@ impl LocalViewer {
             updater.update(cx,|u,cx|u.defer("Finish or preserve secondary editor changes and pending operations before installing. Nothing was discarded.",cx));
             return;
         }
+        // Like the Swift app, pause agents once their current tool calls finish. Input is not
+        // fenced while waiting; the updater emits Restart again once every agent has paused.
+        if !updater.update(cx, |u, cx| u.ensure_agents_paused(cx)) {
+            return;
+        }
         if !crate::visual_runtime::fence_for_restart() {
             updater.update(cx,|u,cx|u.defer("A native visual helper is still active or its cleanup is unconfirmed. Close the visual and retry; no process was stopped.",cx));
             return;
@@ -199,6 +204,7 @@ impl LocalViewer {
                 ),
             Some(State::RecoveryRequired(_)) => {
                 self.restart_timeout = None;
+                updater.update(cx, |u, _| u.release_agents());
                 cx.notify();
             }
             _ => {}

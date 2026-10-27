@@ -4652,31 +4652,34 @@ export class SessionManager {
 		return blockers;
 	}
 
-	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
-	async idleUpdateBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
-		// Called only while the composite admission freeze is held. Unlike the legacy
-		// drain inspector, this never sends update.pause or changes worker lifecycle.
-		if (!this.updateGate.frozen || !this.checkUpdateReadiness().ready)
-			return [{ kind: "admission", id: "sessions-not-idle" }];
-		const workers = [...this.workers];
-		if (workers.length > 128) return [{ kind: "unknown", id: "worker-overflow" }];
+	/**
+	 * Acquire a bounded app-update lease once sessions are idle, or once every worker has paused at a tool
+	 * boundary through POST /api/update/pause (the app drains agents first, as the Swift app does). Called only
+	 * while the composite admission freeze is held, which keeps paused agents paused through the app swap.
+	 * Background jobs and child processes do not block: pilotd keeps running while the app is replaced, and they
+	 * only end when a later handoff replaces pilotd itself.
+	 */
+	async updateReservationBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		if (!this.updateGate.frozen) return [{ kind: "admission", id: "sessions-not-frozen" }];
+		if (this.checkUpdateReadiness().ready) return [];
+		if (
+			this.updateGate.admissions ||
+			this.starting.size ||
+			this.preparations.size ||
+			this.parking.size ||
+			this.saving.size ||
+			this.sleepTransition ||
+			this.sleepResuming ||
+			this.closing
+		)
+			return [{ kind: "admission", id: "sessions-changing" }];
 		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [];
-		for (let offset = 0; offset < workers.length; offset += 4) {
-			await Promise.all(
-				workers.slice(offset, offset + 4).map(async ([id, worker]) => {
-					try {
-						if (!worker.jobs || !worker.hasChildren) throw new Error("Uninspectable worker");
-						const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
-						if (jobs.length || children || this.workers.get(id) !== worker)
-							blockers.push({ kind: "active-work", id });
-					} catch {
-						blockers.push({ kind: "unknown", id });
-					}
-				}),
-			);
+		for (const [id, worker] of this.workers) {
+			const pause = this.updatePausing.get(worker);
+			if (pause?.ready && !pause.error) continue;
+			blockers.push({ kind: "active-work", id, sessionId: id });
+			if (blockers.length >= 64) break;
 		}
-		if (!this.updateGate.frozen || !this.checkUpdateReadiness().ready || workers.length !== this.workers.size)
-			blockers.push({ kind: "admission", id: "sessions-changed" });
 		return blockers;
 	}
 

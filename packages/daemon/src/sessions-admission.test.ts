@@ -15,7 +15,7 @@ import { ProjectStore } from "./projects.ts";
 import type { SessionWorker } from "./sessions.ts";
 import { SessionManager } from "./sessions.ts";
 
-test("idle-only update inspection never drains workers and refuses jobs, descendants and unknown IPC", async (t) => {
+test("update reservation accepts idle or drained sessions and never drains workers itself", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-idle-update-"));
 	const sessions = new SessionManager(home, new ProjectStore(home));
 	t.after(async () => {
@@ -24,36 +24,49 @@ test("idle-only update inspection never drains workers and refuses jobs, descend
 	});
 	await sessions.load();
 	const commands: KernelCommand[] = [];
+	let busy = false;
 	const worker: SessionWorker = {
 		ready: Promise.resolve(),
 		state: "idle",
-		busy: false,
+		get busy() {
+			return busy;
+		},
 		send: (command) => {
 			commands.push(command);
 		},
 		request: async () => {},
 		close: async () => {},
-		jobs: async () => [],
-		hasChildren: async () => false,
+		jobs: async () => [{ id: "background-shell" }] as never,
+		hasChildren: async () => true,
 	};
-	const workers = (sessions as unknown as { workers: Map<string, SessionWorker> }).workers;
-	workers.set("synthetic-idle", worker);
-	assert.notDeepEqual(await sessions.idleUpdateBlockers(), []);
+	const internal = sessions as unknown as {
+		workers: Map<string, SessionWorker>;
+		updatePausing: Map<SessionWorker, { id: string; ready: boolean; error?: string }>;
+	};
+	internal.workers.set("synthetic-idle", worker);
+	assert.notDeepEqual(await sessions.updateReservationBlockers(), []);
 	const release = sessions.freezeAdmissions();
 	try {
-		assert.deepEqual(await sessions.idleUpdateBlockers(), []);
-		worker.hasChildren = async () => true;
-		assert.equal((await sessions.idleUpdateBlockers())[0]?.kind, "active-work");
-		worker.hasChildren = async () => false;
-		worker.jobs = async () => {
-			throw new Error("fixture IPC failure");
-		};
-		assert.equal((await sessions.idleUpdateBlockers())[0]?.kind, "unknown");
+		// pilotd survives an app swap, so background jobs and child processes do not block it.
+		assert.deepEqual(await sessions.updateReservationBlockers(), []);
+		worker.state = "working";
+		busy = true;
+		assert.deepEqual(await sessions.updateReservationBlockers(), [
+			{ kind: "active-work", id: "synthetic-idle", sessionId: "synthetic-idle" },
+		]);
+		internal.updatePausing.set(worker, { id: "pause", ready: false });
+		assert.equal((await sessions.updateReservationBlockers())[0]?.kind, "active-work");
+		internal.updatePausing.set(worker, { id: "pause", ready: true, error: "save failed" });
+		assert.equal((await sessions.updateReservationBlockers())[0]?.kind, "active-work");
+		// A worker paused at a tool boundary through /api/update/pause no longer blocks.
+		internal.updatePausing.set(worker, { id: "pause", ready: true });
+		assert.deepEqual(await sessions.updateReservationBlockers(), []);
 		await assert.rejects(sessions.spawn({ cwd: home, message: "must not start" }), ServiceUnavailable);
 		assert.deepEqual(commands, []);
 	} finally {
 		release();
-		workers.clear();
+		internal.updatePausing.clear();
+		internal.workers.clear();
 	}
 });
 

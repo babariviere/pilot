@@ -263,6 +263,10 @@ export class TerminalManager {
 	freezeAdmissions(): () => void {
 		return this.admission.freezeAdmissions();
 	}
+	/** Terminal creations still settling. Open shells are not counted: they survive an app swap with pilotd. */
+	admissionBlockers(): RuntimeBlocker[] {
+		return this.admission.blockers();
+	}
 	blockers(): RuntimeBlocker[] {
 		return [
 			...this.admission.blockers(),
