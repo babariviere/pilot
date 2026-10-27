@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.77.0](https://github.com/babariviere/pilot/compare/v1.76.0...v1.77.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** dithered sky band on Home ([8eef5c4](https://github.com/babariviere/pilot/commit/8eef5c4e93622e19f1898a0640c4a3239677def4))
+* **desktop:** move overview secondary commands into a … menu ([208f793](https://github.com/babariviere/pilot/commit/208f7934ff5ecd1dfd90073f9545d540d434133b))
+* **desktop:** plain-language copy in task, brief, activity and file panes ([15bb3d8](https://github.com/babariviere/pilot/commit/15bb3d8a6f9cbb16a2a095c10b7d27d0cb665789))
+* **desktop:** plain-language status, recovery and empty states ([7a97484](https://github.com/babariviere/pilot/commit/7a97484a5790eae66013ed2a29994fdd7a729ae4))
+* **desktop:** quiet per-diagram Mermaid actions in the reader ([1db0b95](https://github.com/babariviere/pilot/commit/1db0b957fa81a2876c7d5ed8db45d539a9307142))
+
 ## [1.76.0](https://github.com/babariviere/pilot/compare/v1.75.0...v1.76.0) (2026-10-27)
 
 
