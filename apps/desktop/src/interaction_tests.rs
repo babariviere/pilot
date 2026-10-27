@@ -986,7 +986,9 @@ impl Daemon {
                                     }
                                 } else {panic!("unallowlisted synthetic write route: {method} {path}")}
                             };
-                            let body=response.to_string();let headers=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                            // The real daemon answers Stop with 202 Accepted.
+                            let status=if method=="POST"&&path.ends_with("/stop"){"202 Accepted"}else{"200 OK"};
+                            let body=response.to_string();let headers=format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
                             let _=stream.write_all(headers.as_bytes()).await;
                         });
                     },
@@ -1243,6 +1245,10 @@ async fn create_send_and_stop_use_only_allowlisted_user_driven_routes() {
         *stopped.book.as_ref().unwrap().drafts[&key].recovered,
         vec!["synthetic queued input"]
     );
+    assert!(
+        stopped.book.as_ref().unwrap().pending.is_empty(),
+        "an accepted Stop settles and never blocks an update"
+    );
     let seen = daemon.seen.lock().unwrap();
     assert_eq!(seen.executions, 2);
     assert_eq!(seen.stops, 1);
@@ -1414,6 +1420,10 @@ async fn uncertain_stop_is_not_replayed_by_check_retry_or_local_acknowledgement(
     assert_eq!(
         dismissed.book.as_ref().unwrap().drafts["chat:a"].text,
         "keep composer"
+    );
+    assert!(
+        dismissed.book.as_ref().unwrap().restart_settled(),
+        "a dismissed Stop must not block update install"
     );
     assert_eq!(daemon.seen.lock().unwrap().stops, 1);
 }

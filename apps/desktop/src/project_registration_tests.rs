@@ -240,6 +240,10 @@ async fn lost_malformed_oversized_chunked_and_non2xx_preserve_unknown_after_obse
         assert_eq!(catalog(&client(), &s.options).await.unwrap().len(), 1);
         drop(store);
         let mut store = Store::open(t.0.clone(), s.options.host()).unwrap();
+        assert!(
+            store.book.restart_settled(),
+            "a durable Unknown survives restart unchanged and must not block update install"
+        );
         // Even after source availability disappears, the exact attempt fences resend.
         s.seen.lock().unwrap().projects.clear();
         assert!(

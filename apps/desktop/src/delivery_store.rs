@@ -184,21 +184,20 @@ pub(crate) struct Book {
 impl Book {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_settled(&self) -> bool {
+        // An unconfirmed project registration is durable and never resent, so it survives a
+        // restart unchanged. In-flight registration is fenced by the add-project sheet.
+        // A dismissed Stop keeps an "unknown" summary, but Stop is never retried, so it
+        // has nothing left to settle.
         self.pending.is_empty()
             && self.model_changes.is_empty()
-            && self
-                .project_registrations
-                .values()
-                .all(|a| a.created.is_some())
             && self
                 .missions
                 .values()
                 .all(|a| !matches!(a.outcome, crate::mission_conversion::Outcome::Unknown))
             && self.drafts.values().all(|draft| {
-                draft
-                    .last
-                    .as_ref()
-                    .is_none_or(|d| !matches!(d.state.as_str(), "pending" | "unknown"))
+                draft.last.as_ref().is_none_or(|d| {
+                    d.kind == "stop" || !matches!(d.state.as_str(), "pending" | "unknown")
+                })
             })
     }
 }

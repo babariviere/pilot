@@ -684,6 +684,18 @@ async fn read_json(request: reqwest::RequestBuilder) -> Result<Value, Failure> {
         .map(|(value, _)| value)
         .map_err(|e| e.message())
 }
+/// The daemon answers Stop with 202 Accepted. Any other status leaves its outcome unknown.
+async fn read_stop_json(request: reqwest::RequestBuilder) -> Result<Value, Failure> {
+    read_json_with(request, |status| {
+        matches!(
+            status,
+            reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED
+        )
+    })
+    .await
+    .map(|(value, _)| value)
+    .map_err(|e| e.message())
+}
 
 struct HttpFailure {
     category: Category,
@@ -705,13 +717,19 @@ impl HttpFailure {
     }
 }
 async fn read_delivery_json(request: reqwest::RequestBuilder) -> Result<(Value, u16), HttpFailure> {
+    read_json_with(request, |status| status == reqwest::StatusCode::OK).await
+}
+async fn read_json_with(
+    request: reqwest::RequestBuilder,
+    accepted: impl Fn(reqwest::StatusCode) -> bool,
+) -> Result<(Value, u16), HttpFailure> {
     let mut response = request.send().await.map_err(|_| HttpFailure {
         category: Category::Interrupted,
         status: None,
     })?;
     let http_status = response.status().as_u16();
     let status = Some(http_status);
-    if response.status() != reqwest::StatusCode::OK {
+    if !accepted(response.status()) {
         return Err(HttpFailure {
             category: Category::Refused,
             status,
@@ -868,7 +886,7 @@ async fn submit(
     prepared(store);
     if stop {
         // Stop has no durable operation/receipt API. Never retry it automatically.
-        let result = read_json(
+        let result = read_stop_json(
             client
                 .post(format!(
                     "{}/api/sessions/{}/stop",
