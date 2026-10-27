@@ -10,8 +10,29 @@ use std::{
 /// Wayland app_id, desktop file name and icon name, so the shell matches windows.
 pub const APP_ID: &str = "com.babariviere.pilot-next";
 const MANAGED: &str = "X-Pilot-Next-Managed=true";
-/// The Pilot app icon, shared with the macOS app; scalable for every launcher size.
-const ICON: &[u8] = include_bytes!("../../macos/Resources/AppIcon.svg");
+/// The Pilot app icon, shared with the macOS app. Its pre-rendered PNGs are used
+/// because KDE's SVG renderer does not draw the source SVG's clip paths.
+const ICONS: &[u8] = include_bytes!("../../macos/Resources/AppIcon.icns");
+
+/// PNG renditions in the icns: `ic07` 128, `ic08` 256 and `ic09` 512 pixels.
+fn icon_pngs() -> impl Iterator<Item = (u32, &'static [u8])> {
+    let mut offset = 8;
+    std::iter::from_fn(move || {
+        while let Some(header) = ICONS.get(offset..offset + 8) {
+            let length = u32::from_be_bytes(header[4..8].try_into().ok()?) as usize;
+            let body = ICONS.get(offset + 8..offset + length)?;
+            offset += length.max(8);
+            let size = match &header[..4] {
+                b"ic07" => 128,
+                b"ic08" => 256,
+                b"ic09" => 512,
+                _ => continue,
+            };
+            return Some((size, body));
+        }
+        None
+    })
+}
 
 /// Best effort, off the UI thread. Failures only skip the menu entry.
 pub fn install_in_background() {
@@ -49,10 +70,12 @@ pub(crate) fn install(executable: &Path, data: &Path) -> io::Result<()> {
         return Err(io::ErrorKind::NotFound.into());
     }
     let entry = desktop_entry(&launcher).ok_or(io::ErrorKind::InvalidData)?;
-    write_if_changed(
-        &data.join(format!("icons/hicolor/scalable/apps/{APP_ID}.svg")),
-        ICON,
-    )?;
+    for (size, png) in icon_pngs() {
+        write_if_changed(
+            &data.join(format!("icons/hicolor/{size}x{size}/apps/{APP_ID}.png")),
+            png,
+        )?;
+    }
     let path = data.join(format!("applications/{APP_ID}.desktop"));
     match fs::read_to_string(&path) {
         Ok(existing) if !existing.lines().any(|line| line == MANAGED) => Ok(()),
@@ -127,10 +150,13 @@ mod tests {
         let written = fs::read_to_string(&path).unwrap();
         let launcher = root.canonicalize().unwrap().join("bin/pilot-next");
         assert_eq!(written, desktop_entry(&launcher).unwrap());
-        assert_eq!(
-            fs::read(data.join(format!("icons/hicolor/scalable/apps/{APP_ID}.svg"))).unwrap(),
-            ICON
-        );
+        let sizes: Vec<_> = icon_pngs().map(|(size, _)| size).collect();
+        assert_eq!(sizes, [128, 256, 512]);
+        for (size, png) in icon_pngs() {
+            assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+            let written = data.join(format!("icons/hicolor/{size}x{size}/apps/{APP_ID}.png"));
+            assert_eq!(fs::read(written).unwrap(), png);
+        }
         fs::write(&path, "[Desktop Entry]\nName=Mine\n").unwrap();
         install(&root.join("libexec/pilot-desktop"), &data).unwrap();
         assert_eq!(
