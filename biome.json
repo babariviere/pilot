@@ -23,6 +23,14 @@
 		"lineWidth": 120
 	},
 	"files": {
-		"includes": ["**", "!**/node_modules", "!**/dist", "!**/.pi", "!apps/macos"]
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/.pi",
+			"!apps/macos",
+			"!.agents/skills/impeccable",
+			"!.agents/skills/intent"
+		]
 	}
 }

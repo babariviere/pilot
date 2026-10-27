@@ -59,6 +59,9 @@ Docs to use when the task touches them:
 - For interface work, read and use `.agents/skills/frontend-design/SKILL.md` for
   planning and visual critique. Apply it within `DESIGN.md` and the approved product
   brief, using the native renderer and shared tokens rather than importing web defaults.
+- Optional vendored design skills: `.agents/skills/impeccable` for visual craft and critique, and
+  `.agents/skills/intent` (start at `intent/SKILL.md`) for UX strategy. Read each `UPSTREAM.md` first; the
+  contracts above take precedence.
 - Keep screens calm and focused: one primary action, progressive disclosure for the rest, and existing
   layouts, terminology and hierarchy. DESIGN.md explains the intent.
 - `apps/macos/Sources/Pilot/Theme.swift` and the shared components are the design system. Reuse their tokens

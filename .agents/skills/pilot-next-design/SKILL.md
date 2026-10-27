@@ -19,6 +19,9 @@ This skill is a decision workflow, not another component or token specification.
   product's restraint, native conventions or existing tokens.
 - [gpui-kit](../gpui-kit/SKILL.md) supplies component and lifecycle mechanics. Read
   its relevant guides and verify current signatures before changing implementation.
+- [impeccable](../impeccable/SKILL.md) (visual craft and critique) and [Intent](../intent/intent/SKILL.md)
+  (UX strategy, flows, copy, states and accessibility) are optional vendored references.
+  Their `UPSTREAM.md` files say which parts apply to native GPUI; neither overrides this skill.
 
 Read the nearest real view, its guarded handlers and relevant checks before proposing
 a change. Follow the current approved scope and priorities. A design improvement does
