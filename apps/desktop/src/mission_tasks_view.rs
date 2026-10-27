@@ -518,13 +518,11 @@ impl Render for Pane {
                     .h_flex()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div().flex_1().min_w_0().child(ui::heading(
-                            "mission-tasks-heading",
-                            "Tasks",
-                            Text::Headline,
-                        )),
-                    )
+                    .child(div().flex_1().min_w_0().child(ui::heading(
+                        "mission-tasks-heading",
+                        "Tasks",
+                        Text::Headline,
+                    )))
                     .when(self.opened, |d| {
                         d.child(
                             ui::icon_action(
@@ -631,7 +629,10 @@ impl Render for Pane {
                                     .items_center()
                                     .gap_1()
                                     .child(div().size(px(6.)).rounded_full().bg(*color))
-                                    .child(SharedString::from(format!("{n} {}", label.to_lowercase())))
+                                    .child(SharedString::from(format!(
+                                        "{n} {}",
+                                        label.to_lowercase()
+                                    )))
                             })),
                     ),
             );
