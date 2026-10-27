@@ -1,12 +1,12 @@
 # Local read envelopes
 
-`local_client.rs` uses route-specific response budgets, not a blanket 4 MiB
-viewer gate:
+`local_client.rs` does not impose response-size caps on hello or history.
+Artifacts retain their image-envelope budget:
 
 | Read | Wire budget | Contract |
 | --- | --- | --- |
-| `/api/hello` | 4 MiB, unchanged | daemon/lineage/protocol pin |
-| `/api/sessions/:id/history?before=…&limit=24` | 64 MiB | existing cursor page, oldest first, `more` |
+| `/api/hello` | No size cap | daemon/lineage/protocol pin |
+| `/api/sessions/:id/history?before=…&limit=24` | No size cap | existing cursor page, oldest first, `more` |
 | `/api/sessions/:owner/artifacts/:id?revision=…` | 44 MiB | exact owner/id/revision, including unknown-kind pins |
 
 Known image artifacts keep their existing specialized 44 MiB path, which skips
@@ -35,18 +35,16 @@ This does not enable rendering legacy HTML.
 This is source/synthetic evidence, not reproduction of the user's actual
 payload. No real profile content was inspected or changed.
 
-## Remaining boundary
+## Read behavior
 
-64 MiB is a finite client memory-safety budget, **not** a daemon-guaranteed
-maximum. The current history API has no hard single-entry byte bound or way to
-page inside one entry. Larger pages still return a truthful budget error, never
-truncated JSON, false success or a skipped cursor. Supporting arbitrarily large
-single entries with bounded client memory requires a separate backend contract
-or streaming projection change. There is no new user action-count limit or
-adaptive retry/paging state machine.
+Hello and history are read completely before JSON decoding, using fallible
+allocation without an artificial byte ceiling. Memory usage scales with the
+response; allocation failures and interrupted or malformed responses remain
+errors, never truncated JSON, false success or skipped cursors. The existing
+history cursor and 24-entry request are unchanged.
 
-Both declared lengths and accumulated chunks are checked before growth, using
-fallible bounded reservation. Redirect refusal, loopback scope, timeouts and
+Artifact declared lengths and accumulated chunks are checked before growth.
+Redirect refusal, loopback scope, timeouts and
 generation/epoch fences remain. History now checks hello identity before and
 after fetching, just like artifact reads. Mutation, file, sandbox and image
 decoder limits are unchanged.
@@ -60,7 +58,8 @@ python3 scripts/check-scoped.py --unit local_client --native-probes --lint
 ```
 
 This covers faux HTTP length/chunked >4 MiB history pages with embedded images,
-ordinary hello/history, malformed/interrupted responses, route-specific budgets,
+hello >4 MiB and history >64 MiB with both framings, malformed/interrupted
+responses, retained artifact budgets,
 identity changes before/after reads, artifact pins and existing socket paging,
 switch-generation and cancellation tests. Matching production Clippy/build uses
 the shared verification slot, CPU2/4GiB wrapper and private outputs. No live

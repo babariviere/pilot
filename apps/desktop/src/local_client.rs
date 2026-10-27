@@ -13,10 +13,6 @@ use tokio_tungstenite::{
     tungstenite::{Message as Frame, protocol::WebSocketConfig},
 };
 
-const HELLO_CAP: usize = 4 * 1024 * 1024;
-// History's 4 MiB server budget is a soft stop, checked after including an
-// entry. A page can contain inline base64 images or a large tool result.
-const HISTORY_CAP: usize = 64 * 1024 * 1024;
 const FRAME_CAP: usize = 8 * 1024 * 1024;
 type Failure = &'static str;
 #[path = "model_scope_access.rs"]
@@ -188,18 +184,14 @@ enum ReadRoute {
     },
 }
 impl ReadRoute {
-    fn budget(&self) -> (usize, &'static str) {
+    fn budget(&self) -> Option<(usize, &'static str)> {
         match self {
-            Self::Hello => (HELLO_CAP, "Local hello response is too large."),
-            Self::History { .. } => (
-                HISTORY_CAP,
-                "Local history page exceeds the 64 MiB read budget.",
-            ),
+            Self::Hello | Self::History { .. } => None,
             // Pins may not carry a kind. Their revision can still be an image.
-            Self::Artifact { .. } => (
+            Self::Artifact { .. } => Some((
                 crate::artifact_image::HTTP_CAP,
                 "Stored artifact response exceeds the 44 MiB read budget.",
-            ),
+            )),
         }
     }
     fn path(&self) -> String {
@@ -330,8 +322,8 @@ async fn get(
     options: &LocalOptions,
     route: ReadRoute,
 ) -> Result<Value, Failure> {
-    let (cap, message) = route.budget();
-    let body = get_bytes(client, options, route, cap, message).await?;
+    let budget = route.budget();
+    let body = get_bytes(client, options, route, budget).await?;
     serde_json::from_slice(&body).map_err(|_| "Invalid Local JSON response")
 }
 
@@ -339,8 +331,7 @@ async fn get_bytes(
     client: &reqwest::Client,
     options: &LocalOptions,
     route: ReadRoute,
-    cap: usize,
-    limit_message: &'static str,
+    budget: Option<(usize, &'static str)>,
 ) -> Result<Vec<u8>, Failure> {
     let mut response = client
         .get(options.http_url(&route))
@@ -350,8 +341,10 @@ async fn get_bytes(
     if response.status() != reqwest::StatusCode::OK {
         return Err("Local read refused (HTTP status). No redirect or authentication fallback.");
     }
-    if response.content_length().is_some_and(|n| n > cap as u64) {
-        return Err(limit_message);
+    if let Some((cap, message)) = budget
+        && response.content_length().is_some_and(|n| n > cap as u64)
+    {
+        return Err(message);
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -359,14 +352,17 @@ async fn get_bytes(
         .await
         .map_err(|_| "Local response interrupted")?
     {
-        if chunk.len() > cap.saturating_sub(body.len()) {
-            return Err(limit_message);
+        if let Some((cap, message)) = budget
+            && chunk.len() > cap.saturating_sub(body.len())
+        {
+            return Err(message);
         }
         let needed = body.len() + chunk.len();
         if needed > body.capacity() {
-            let target = body.capacity().saturating_mul(2).max(needed).min(cap);
+            let target = body.capacity().saturating_mul(2).max(needed);
+            let target = budget.map_or(target, |(cap, _)| target.min(cap));
             body.try_reserve_exact(target - body.len())
-                .map_err(|_| "Cannot allocate the bounded Local response")?;
+                .map_err(|_| "Cannot allocate the Local response")?;
         }
         body.extend_from_slice(&chunk);
     }
@@ -425,8 +421,10 @@ pub(crate) async fn artifact(
             &client,
             options,
             route,
-            crate::artifact_image::HTTP_CAP,
-            "Stored image response exceeds the 44 MiB image-envelope limit.",
+            Some((
+                crate::artifact_image::HTTP_CAP,
+                "Stored image response exceeds the 44 MiB image-envelope limit.",
+            )),
         )
         .await?;
         gate(&client, options).await?;

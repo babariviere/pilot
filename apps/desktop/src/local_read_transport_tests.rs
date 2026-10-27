@@ -29,6 +29,14 @@ impl Drop for Server {
 }
 impl Server {
     async fn start(body: String, framing: Framing, bad_gate: usize) -> Self {
+        Self::with_hello_padding(body, framing, bad_gate, 0).await
+    }
+    async fn with_hello_padding(
+        body: String,
+        framing: Framing,
+        bad_gate: usize,
+        hello_padding: usize,
+    ) -> Self {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();
@@ -61,7 +69,9 @@ impl Server {
                                 let path = request.split_whitespace().nth(1).unwrap();
                                 let (payload, mode) = if path == "/api/hello" {
                                     let n = gates.fetch_add(1, Ordering::SeqCst) + 1;
-                                    (Arc::new(json!({"daemonId":if n == bad_gate {"changed"} else {"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}).to_string()), Framing::Length)
+                                    let mut hello = json!({"daemonId":if n == bad_gate {"changed"} else {"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}).to_string();
+                                    hello.extend(std::iter::repeat_n(' ', hello_padding));
+                                    (Arc::new(hello), if hello_padding > 0 { framing } else { Framing::Length })
                                 } else {
                                     assert_eq!(path, "/api/sessions/owner/history?before=50&limit=24");
                                     (body, framing)
@@ -118,7 +128,7 @@ async fn large_history_pages_with_inline_images_load_with_both_framings() {
     let image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==";
     let entries: Vec<_> = (40..45).map(|id| json!({"id":id,"kind":"pi.user","model":[{"role":"user","content":[{"type":"text","text":"x".repeat(900*1024)},{"type":"image","mimeType":"image/png","data":image}]}]})).collect();
     let payload = json!({"entries":entries,"more":true}).to_string();
-    assert!(payload.len() > HELLO_CAP);
+    assert!(payload.len() > 4 * 1024 * 1024);
     for framing in [Framing::Length, Framing::Chunked] {
         let server = Server::start(payload.clone(), framing, 0).await;
         let page = history(&client(), &server.options, "owner".into(), 50)
@@ -190,21 +200,45 @@ async fn history_rechecks_identity_before_exposing_a_page() {
 
 #[tokio::test]
 async fn budgets_are_route_specific_and_enforced_for_length_and_chunks() {
-    assert_eq!(ReadRoute::Hello.budget().0, HELLO_CAP);
-    assert_eq!(route().budget().0, HISTORY_CAP);
-    let server = Server::start("{}".into(), Framing::Declared(HISTORY_CAP + 1), 0).await;
-    assert!(
-        get(&client(), &server.options, route())
-            .await
-            .unwrap_err()
-            .contains("64 MiB")
-    );
-    // Exercise accumulated-body enforcement without allocating a huge fixture.
-    let server = Server::start("x".repeat(20000), Framing::Chunked, 0).await;
+    assert_eq!(ReadRoute::Hello.budget(), None);
+    assert_eq!(route().budget(), None);
+    let artifact = ReadRoute::Artifact {
+        owner: "owner".into(),
+        id: "image".into(),
+        revision: 1,
+    };
     assert_eq!(
-        get_bytes(&client(), &server.options, route(), 16384, "budget")
+        artifact.budget().unwrap().0,
+        crate::artifact_image::HTTP_CAP
+    );
+    let server = Server::start("{}".into(), Framing::Declared(20000), 0).await;
+    assert_eq!(
+        get_bytes(&client(), &server.options, route(), Some((16384, "budget")))
             .await
             .unwrap_err(),
         "budget"
     );
+    // Exercise accumulated-body enforcement without allocating a huge fixture.
+    let server = Server::start("x".repeat(20000), Framing::Chunked, 0).await;
+    assert_eq!(
+        get_bytes(&client(), &server.options, route(), Some((16384, "budget")))
+            .await
+            .unwrap_err(),
+        "budget"
+    );
+}
+
+#[tokio::test]
+async fn hello_and_history_cross_the_removed_caps_with_both_framings() {
+    let mut body = String::from("{\"entries\":[],\"more\":false}");
+    body.extend(std::iter::repeat_n(' ', 64 * 1024 * 1024));
+    for framing in [Framing::Length, Framing::Chunked] {
+        let server = Server::with_hello_padding(body.clone(), framing, 0, 4 * 1024 * 1024).await;
+        assert!(hello(&client(), &server.options).await.is_ok());
+        let page = history(&client(), &server.options, "owner".into(), 50)
+            .await
+            .unwrap();
+        assert_eq!(page["entries"], json!([]));
+        assert_eq!(page["more"], false);
+    }
 }

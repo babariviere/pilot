@@ -92,7 +92,7 @@ fn body(source: &str, html: &str) -> String {
 async fn image_envelopes_cross_old_cap_including_unknown_pins() {
     let source = format!("data:image/png;base64,{}", "A".repeat(3 * 1024 * 1024));
     let value = body(&source, &source);
-    assert!(value.len() > HELLO_CAP);
+    assert!(value.len() > 4 * 1024 * 1024);
     let server = Server::start(value.clone(), 200, None, 0).await;
     let revision = artifact(&server.options, &reference()).await.unwrap();
     assert_eq!(*revision.source, source);

@@ -30,7 +30,8 @@ fallback, remote image fetch, new endpoint or host capability.
 
 ## Bounds and ownership
 
-Local HTTP reads use [route-specific budgets](local-read-budgets.md); the
+Local hello/history reads have no size cap; artifacts retain their
+[image-envelope budget](local-read-budgets.md). The
 8 MiB WebSocket frame budget is unchanged.
 Inline bytes share the existing 1 MiB per-message source budget with displayed
 text, and the existing retained-history source quota (8 MiB minus existing live
