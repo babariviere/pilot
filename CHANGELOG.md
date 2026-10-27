@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.75.0](https://github.com/babariviere/pilot/compare/v1.74.0...v1.75.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** calm overview page and task list ([862b5be](https://github.com/babariviere/pilot/commit/862b5bed5fa024c8051e6bcfd7af7bd1f618fa2a))
+* **desktop:** calm sidebar rows and compact footer ([33d823f](https://github.com/babariviere/pilot/commit/33d823f7020c30e320f7bcfd43aca8eeeb703704))
+* **desktop:** quiet transcript messages and image chrome ([0511cec](https://github.com/babariviere/pilot/commit/0511cece1afe4e66cfd1bf43570a75e21d206ddb))
+* **desktop:** trim coverage copy on Home, Inbox and Settings ([3d49c79](https://github.com/babariviere/pilot/commit/3d49c7972897e5e05830090e221ff82b1897810d))
+
+
+### Bug Fixes
+
+* **release:** thin universal Mach-O prebuilds and run the Linux GUI fixture on sway ([50c07ae](https://github.com/babariviere/pilot/commit/50c07ae6dcc4d7eb049b0fd549fd2f4bbaaf8cb1))
+
 ## [1.74.0](https://github.com/babariviere/pilot/compare/v1.73.0...v1.74.0) (2026-10-27)
 
 
