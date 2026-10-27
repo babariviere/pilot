@@ -114,6 +114,8 @@ pub(crate) struct Chat {
     pub(crate) background_work: bool,
     pub(crate) cwd: String,
     pub(crate) project_id: Option<String>,
+    /// List order and grouping inputs (`chat_order`).
+    pub(crate) order: crate::chat_order::Order,
 }
 impl Chat {
     /// Row reason: attention, else live signal, else a non-routine raw state.
@@ -176,7 +178,22 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
             .as_str()
             .filter(|id| valid_id(id))
             .map(str::to_owned),
+        order: crate::chat_order::read(value, working(value)),
     })
+}
+
+/// Swift `SessionSummary.isWorking`: live work, including background jobs,
+/// unless paused.
+fn working(value: &Value) -> bool {
+    let state = value["state"].as_str().unwrap_or("");
+    let jobs = value["runningJobs"]
+        .as_array()
+        .is_some_and(|jobs| !jobs.is_empty());
+    let paused = value["sleepPaused"] == true || value["offlinePaused"] == true;
+    !paused
+        && value["working"]
+            .as_bool()
+            .unwrap_or(matches!(state, "working" | "starting") || jobs)
 }
 
 // Read-only summary projection, mirroring SessionSignal/WorkingLine. It does not
@@ -188,10 +205,7 @@ fn decoration(value: &Value) -> (Option<crate::dither::Signal>, bool) {
         .as_array()
         .is_some_and(|jobs| !jobs.is_empty());
     let paused = value["sleepPaused"] == true || value["offlinePaused"] == true;
-    let working = !paused
-        && value["working"]
-            .as_bool()
-            .unwrap_or(matches!(state, "working" | "starting") || jobs);
+    let working = working(value);
     let background = working && !matches!(state, "working" | "starting") && jobs;
     let reason = value["attentionReason"]["kind"].as_str().unwrap_or("");
     let coordinator =

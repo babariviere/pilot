@@ -21,14 +21,7 @@ impl LocalViewer {
                 .map(|c| c.id.clone());
             list.delegate_mut().archived = value;
             list.delegate_mut().filter();
-            let ix = selected
-                .and_then(|id| {
-                    list.delegate()
-                        .filtered
-                        .iter()
-                        .position(|ix| list.delegate().all[*ix].id == id)
-                })
-                .map(IndexPath::new);
+            let ix = selected.and_then(|id| list.delegate().index(&id));
             list.set_selected_index(ix, w, cx);
             cx.notify();
         });
@@ -413,7 +406,7 @@ mod tests {
         let (h, v) = setup(cx);
         cx.update_window(h,|_,w,cx|v.update(cx,|v,cx|{
             v.state.chats=Arc::new(vec![crate::local_model::chat(&serde_json::json!({"id":"archived","title":"Archived","archivedAt":1,"state":"idle"})).unwrap(),crate::local_model::chat(&serde_json::json!({"id":"active","title":"Active","state":"idle"})).unwrap()]);v.rebuild_nav(w,cx);
-            v.chats.update(cx,|l,cx|l.set_selected_index(Some(IndexPath::new(0)),w,cx));
+            v.chats.update(cx,|l,cx|{let ix=l.delegate().index("active");l.set_selected_index(ix,w,cx)});
             let selected=v.selected.clone();let transcript=v.transcript.clone();let editor=v.editor.clone();
             v.set_archived(&None,true,w,cx);
             let l=v.chats.read(cx);assert_eq!(l.delegate().at(l.delegate().selected.unwrap()).unwrap().id,"active");
@@ -448,5 +441,117 @@ mod tests {
         assert!(matches!(reads.try_recv(),Ok(Command::Open{id,generation:11})if id=="source"));
         assert!(reads.is_empty());
         v.read_with(cx, |v, _| assert!(v.refreshing));
+    }
+    #[gpui_kit::test]
+    fn sidebar_groups_by_status_in_recency_order_and_keeps_selection_across_live_updates(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+        use serde_json::json;
+        let (h, v) = setup(cx);
+        let chats = |values: Vec<serde_json::Value>| {
+            let mut chats: Vec<_> = values
+                .iter()
+                .map(|v| crate::local_model::chat(v).unwrap())
+                .collect();
+            chat_order::sort(&mut chats);
+            Arc::new(chats)
+        };
+        let base = || {
+            vec![
+                json!({"id":"recent-old","title":"Recent old","state":"idle","outcome":"done","outcomeAt":10}),
+                json!({"id":"recent-new","title":"Recent new","state":"idle","outcome":"done","outcomeAt":90}),
+                json!({"id":"question","title":"Question","state":"idle","outcome":"question","outcomeAt":20}),
+                json!({"id":"failed","title":"Failed","state":"idle","outcome":"failed","outcomeAt":5}),
+                json!({"id":"working","title":"Working","state":"working","updatedAt":50}),
+                json!({"id":"pinned","title":"Pinned","state":"idle","pinned":true}),
+                // Equal and missing timestamps fall back to ascending id.
+                json!({"id":"same-b","title":"Same","state":"idle"}),
+                json!({"id":"same-a","title":"Same","state":"idle"}),
+                json!({"id":"archived","title":"Archived","state":"idle","archivedAt":3}),
+            ]
+        };
+        let top = |w: &Window, id: &str| w.find(SharedString::from(id.to_owned())).bounds().top();
+        let selected_id = |v: &LocalViewer, cx: &App| {
+            let l = v.chats.read(cx).delegate();
+            l.selected.and_then(|ix| l.at(ix)).map(|c| c.id.clone())
+        };
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                v.state.chats = chats(base());
+                v.rebuild_nav(w, cx);
+                v.chats.update(cx, |l, cx| {
+                    let ix = l.delegate().index("question");
+                    l.set_selected_index(ix, w, cx)
+                });
+            });
+            w.render_frame(cx);
+            let order = [
+                "sidebar-section-pinned",
+                "chat-row-pinned",
+                "sidebar-section-needs-you",
+                "chat-row-failed",
+                "chat-row-question",
+                "sidebar-section-working",
+                "chat-row-working",
+                "sidebar-section-recent",
+                "chat-row-recent-new",
+                "chat-row-recent-old",
+                "chat-row-same-a",
+                "chat-row-same-b",
+            ];
+            for pair in order.windows(2) {
+                assert!(
+                    top(w, pair[0]) < top(w, pair[1]),
+                    "{} above {}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+            for absent in [
+                "sidebar-section-drafts",
+                "sidebar-section-ready",
+                "sidebar-section-archived",
+                "chat-row-archived",
+            ] {
+                assert!(w.try_find(absent).is_none(), "{absent} is hidden");
+            }
+        })
+        .unwrap();
+        let (opened, transcript, editor) = v.read_with(cx, |v, _| {
+            (v.selected.clone(), v.transcript.clone(), v.editor.clone())
+        });
+        // Live update: the selected question gets a reply and starts working,
+        // and an old chat finishes. Rows move; selection follows the id.
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                let mut next = base();
+                next[2] = json!({"id":"question","title":"Question","state":"working","updatedAt":200,"lastUserMessageAt":199});
+                next[0] = json!({"id":"recent-old","title":"Recent old","state":"idle","outcome":"done","outcomeAt":150});
+                v.state.chats = chats(next);
+                v.rebuild_nav(w, cx);
+                assert_eq!(selected_id(v, cx).as_deref(), Some("question"));
+                let l = v.chats.read(cx).delegate();
+                assert_eq!(SECTIONS[l.selected.unwrap().section], chat_order::Section::Working);
+            });
+            w.render_frame(cx);
+            assert!(top(w, "chat-row-question") < top(w, "chat-row-working"));
+            assert!(top(w, "chat-row-recent-old") < top(w, "chat-row-recent-new"));
+        })
+        .unwrap();
+        v.read_with(cx, |v, _| {
+            assert_eq!(v.selected, opened);
+            assert_eq!(v.transcript, transcript);
+            assert_eq!(v.editor, editor);
+        });
+        // The Archived filter adds its own group last, newest archive first.
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| v.set_archived(&None, true, w, cx));
+            w.render_frame(cx);
+            assert!(top(w, "chat-row-same-b") < top(w, "sidebar-section-archived"));
+            assert!(top(w, "sidebar-section-archived") < top(w, "chat-row-archived"));
+            assert_eq!(selected_id(v.read(cx), cx).as_deref(), Some("question"));
+        })
+        .unwrap();
     }
 }

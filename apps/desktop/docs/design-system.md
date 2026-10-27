@@ -187,6 +187,16 @@ column and 28pt targets. Long names truncate without shrinking body text; actual
 owners retain full accessible names. Search, filters, archive, navigation history,
 Usage, Settings and connection/recovery state keep their existing owners.
 
+Chat order and groups follow Swift (`src/chat_order.rs` documents the exact
+rules). Every summary list uses Swift's `listPrecedes`: pinned, unsettled PRs,
+newest list activity (`updatedAt` while working, else the later of the last
+user message and the visible result), newest creation, then id. The sidebar
+groups that order into Pinned, Needs you (failed, questions, other attention),
+Ready to merge, Working and Recent, with Swift's caption headers and counts on
+Needs you and Working. Next has no review marks, so unread results stay in
+Recent; drafts lead under Drafts and the Archived filter adds Archived last.
+Selection follows the chat id when rows move.
+
 The `workbench` native target measures these columns/hit bounds and glyph paint,
 including long Unicode, empty/loading/unavailable and retained-error states at
 680/1100 light/dark. `project_add` dispatches actual pointer/Tab/Return/Escape

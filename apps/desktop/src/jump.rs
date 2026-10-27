@@ -255,7 +255,15 @@ impl Catalog {
             ));
         }
         let mut recent = 0;
-        for c in s.chats.iter().take(1000).filter(|c| !c.local_draft) {
+        // Most recent activity first, like Swift's palette.
+        let mut chats: Vec<_> = s
+            .chats
+            .iter()
+            .take(1000)
+            .filter(|c| !c.local_draft)
+            .collect();
+        chats.sort_by(|a, b| crate::chat_order::recent(a, b));
+        for c in chats {
             let project = c
                 .project_id
                 .as_ref()

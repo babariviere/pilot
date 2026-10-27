@@ -117,6 +117,7 @@ use crate::{
     app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
     appearance::{self},
     chat_editor::{ChatEditor, EditorEvent},
+    chat_order::{self, SECTIONS},
     delivery_store::Store,
     dither::{Signal, Spec},
     dither_view::CornerView,
@@ -169,7 +170,10 @@ pub enum PreviewState {
 struct ChatList {
     action_owner: gpui_kit::WeakEntity<LocalViewer>,
     all: Arc<Vec<Chat>>,
+    /// Visible indices of `all` in display order, grouped by `chat_order::SECTIONS`.
     filtered: Vec<usize>,
+    /// Start of each section in `filtered`, plus its end.
+    bounds: [usize; SECTIONS.len() + 1],
     query: String,
     archived: bool,
     selected: Option<IndexPath>,
@@ -183,29 +187,77 @@ impl ChatList {
     fn filter(&mut self) {
         let ids: HashSet<_> = self.all.iter().map(|chat| chat.id.as_str()).collect();
         self.corners.retain(|id, _| ids.contains(id.as_str()));
-        self.filtered = self
-            .all
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| {
-                (self.archived || !c.archived)
-                    && (self.query.is_empty() || c.title.to_lowercase().contains(&self.query))
-                    && self
-                        .project
-                        .as_ref()
-                        .is_none_or(|id| c.project_id.as_ref() == Some(id))
-            })
-            .map(|(ix, _)| ix)
-            .collect();
+        let sections = chat_order::sections(&self.all, |c| {
+            (self.archived || !c.archived)
+                && (self.query.is_empty() || c.title.to_lowercase().contains(&self.query))
+                && self
+                    .project
+                    .as_ref()
+                    .is_none_or(|id| c.project_id.as_ref() == Some(id))
+        });
+        self.filtered.clear();
+        for (section, rows) in sections.iter().enumerate() {
+            self.bounds[section] = self.filtered.len();
+            self.filtered.extend(rows);
+        }
+        self.bounds[SECTIONS.len()] = self.filtered.len();
     }
     fn at(&self, ix: IndexPath) -> Option<&Chat> {
-        self.filtered.get(ix.row).and_then(|ix| self.all.get(*ix))
+        let start = *self.bounds.get(ix.section)?;
+        let end = *self.bounds.get(ix.section + 1)?;
+        (start + ix.row < end)
+            .then(|| self.filtered.get(start + ix.row))
+            .flatten()
+            .and_then(|ix| self.all.get(*ix))
+    }
+    /// Where a chat appears, by canonical id.
+    fn index(&self, id: &str) -> Option<IndexPath> {
+        let position = self.filtered.iter().position(|ix| self.all[*ix].id == id)?;
+        let section = self.bounds.iter().rposition(|start| *start <= position)?;
+        Some(IndexPath::new(position - self.bounds[section]).section(section))
+    }
+    fn first(&self) -> Option<IndexPath> {
+        let id = self.all.get(*self.filtered.first()?)?.id.clone();
+        self.index(&id)
     }
 }
 impl ListDelegate for ChatList {
     type Item = ListItem;
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        self.filtered.len()
+    fn sections_count(&self, _: &App) -> usize {
+        SECTIONS.len()
+    }
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        self.bounds[section + 1] - self.bounds[section]
+    }
+    /// Swift's sidebar section header: caption title, with a count for Needs
+    /// you and Working. Always rendered so the list measures one header height.
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let kind = SECTIONS[section];
+        let count = self.items_count(section, cx);
+        Some(
+            div()
+                .id(SharedString::from(format!(
+                    "sidebar-section-{}",
+                    kind.key()
+                )))
+                .test_support()
+                .h_flex()
+                .items_center()
+                .gap_1()
+                .pl_2()
+                .pt_2()
+                .pb_1()
+                .text_size(px(appearance::TextRole::CAPTION))
+                .font_semibold()
+                .text_color(cx.theme().muted_foreground)
+                .child(kind.title())
+                .when(kind.counted() && count > 0, |d| d.child(count.to_string())),
+        )
     }
     fn render_item(
         &mut self,
@@ -764,6 +816,7 @@ impl LocalViewer {
                 busy: true,
                 signal: Some(Signal::Working),
                 background_work: false,
+                order: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -782,6 +835,7 @@ impl LocalViewer {
                 busy: false,
                 signal: None,
                 background_work: false,
+                order: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -800,6 +854,7 @@ impl LocalViewer {
                 busy: false,
                 signal: None,
                 background_work: false,
+                order: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -812,7 +867,8 @@ impl LocalViewer {
             delegate.opened = view.selected.clone();
             delegate.loaded = true;
             delegate.filter();
-            list.set_selected_index(Some(IndexPath::new(0)), window, cx);
+            let first = delegate.first();
+            list.set_selected_index(first, window, cx);
             cx.notify();
         });
         let mut rows: Vec<_> = (1..=48)
@@ -963,6 +1019,7 @@ impl LocalViewer {
             busy: false,
             signal: Some(Signal::Failed),
             background_work: false,
+            order: Default::default(),
             cwd: String::new(),
             project_id: None,
             model_configuration: None,
@@ -1042,6 +1099,7 @@ impl LocalViewer {
                     action_owner,
                     all: Arc::new(Vec::new()),
                     filtered: Vec::new(),
+                    bounds: Default::default(),
                     query: String::new(),
                     archived: false,
                     selected: None,
@@ -1268,6 +1326,7 @@ impl LocalViewer {
                             busy: true,
                             signal: Some(Signal::Working),
                             background_work: false,
+                            order: Default::default(),
                             cwd: String::new(),
                             project_id: None,
                             model_configuration: None,
@@ -2014,6 +2073,7 @@ impl LocalViewer {
                     busy: false,
                     signal: None,
                     background_work: false,
+                    order: Default::default(),
                     cwd: String::new(),
                     project_id: None,
                     attention: None,
@@ -2035,14 +2095,7 @@ impl LocalViewer {
             delegate.project = self.project_scope.clone();
             delegate.projects = self.state.projects.clone();
             delegate.filter();
-            let selected = selected
-                .and_then(|id| {
-                    delegate
-                        .filtered
-                        .iter()
-                        .position(|ix| delegate.all[*ix].id == id)
-                })
-                .map(IndexPath::new);
+            let selected = selected.and_then(|id| delegate.index(&id));
             list.set_selected_index(selected, window, cx);
             cx.notify();
         });
@@ -2363,6 +2416,7 @@ mod refresh_tests {
                         busy: false,
                         signal: None,
                         background_work: false,
+                        order: Default::default(),
                         cwd: String::new(),
                         project_id: None,
                         attention: None,

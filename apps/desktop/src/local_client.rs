@@ -752,13 +752,11 @@ async fn run(
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         view.list_loaded=true;
                         let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).take(local_model::SESSION_CAP).collect::<Vec<_>>()).unwrap_or_default();
-                        chats.sort_by(|a,b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.id.cmp(&b.id)));
+                        crate::chat_order::sort(&mut chats);
                         view.chats = Arc::new(chats);
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
-                        let chats = Arc::make_mut(&mut view.chats);
-                        if let Some(old) = chats.iter_mut().find(|c| c.id == chat.id) { *old = chat; }
-                        else if chats.len() < local_model::SESSION_CAP { chats.push(chat); }
+                        crate::chat_order::upsert(Arc::make_mut(&mut view.chats), chat, local_model::SESSION_CAP);
                     }
                 }
             }

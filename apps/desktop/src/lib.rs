@@ -8,6 +8,7 @@ pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_actions;
+mod chat_order;
 mod context_meter;
 mod context_usage;
 mod path_completion;

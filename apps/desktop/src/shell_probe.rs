@@ -201,7 +201,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 let v = view.read(cx);
                 let d = v.chats.read(cx).delegate();
                 assert_eq!(d.filtered.len(), 1);
-                assert_eq!(d.at(IndexPath::new(0)).unwrap().id, "synthetic");
+                assert_eq!(d.at(d.first().unwrap()).unwrap().id, "synthetic");
                 assert!(
                     Arc::ptr_eq(&d.all, &v.state.chats),
                     "scope changes must share, not deep-clone, the loaded chat metadata"
@@ -265,16 +265,8 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(handle, |_, window, cx| {
                 assert_eq!(view.read(cx).page, Page::Project("project-b".into()));
                 assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1);
-                assert_eq!(
-                    view.read(cx)
-                        .chats
-                        .read(cx)
-                        .delegate()
-                        .at(IndexPath::new(0))
-                        .unwrap()
-                        .id,
-                    "other"
-                );
+                let d = view.read(cx).chats.read(cx).delegate();
+                assert_eq!(d.at(d.first().unwrap()).unwrap().id, "other");
                 window.click("nav-home", cx);
             })
             .unwrap();

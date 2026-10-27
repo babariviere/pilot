@@ -174,13 +174,7 @@ impl LocalViewer {
             let ix = saved
                 .selected
                 .as_ref()
-                .and_then(|id| {
-                    list.delegate()
-                        .filtered
-                        .iter()
-                        .position(|ix| &list.delegate().all[*ix].id == id)
-                })
-                .map(IndexPath::new);
+                .and_then(|id| list.delegate().index(id));
             list.set_selected_index(ix, window, cx);
             list.scroll_handle().restore_offset(gpui_kit::point(
                 px(0.),
@@ -261,6 +255,7 @@ impl LocalViewer {
                     busy: false,
                     signal: None,
                     background_work: false,
+                    order: Default::default(),
                     cwd: String::new(),
                     project_id: None,
                     model_configuration: None,
