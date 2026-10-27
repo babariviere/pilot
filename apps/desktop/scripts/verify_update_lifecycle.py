@@ -37,11 +37,11 @@ def inside(output):
         env.update(PILOT_NEXT_UPDATER_PUBLIC_KEY=PUBLIC_KEY,
                    PILOT_NEXT_UPDATER_REPOSITORY="synthetic/fixture-only",
                    PILOT_NEXT_UPDATER_APPLICATION_ID="com.example.synthetic.next",
-                   PILOT_NEXT_UPDATER_CODE_REQUIREMENT='identifier "com.example.synthetic.next"')
+                   PILOT_NEXT_UPDATER_CODE_REQUIREMENT=("signed-linux-inventory-v1" if sys.platform == "linux" else 'identifier "com.example.synthetic.next"'))
         for name, build in (("old", "100.1"), ("new", "101.1")):
             env["PILOT_NEXT_UPDATER_BUILD"] = build
             command = ["bash", "apps/desktop/scripts/cargo.sh", "build", "--manifest-path", "updater/Cargo.toml",
-                       "--locked", "--features", "native-macos", "--bin", "pilot-desktop-update-helper",
+                       "--locked", "--features", "native-linux" if sys.platform == "linux" else "native-macos", "--bin", "pilot-desktop-update-helper",
                        "--example", "lifecycle-fixture"]
             started = time.monotonic()
             subprocess.run(command, cwd=ROOT, env=env, check=True, timeout=300)
@@ -56,8 +56,10 @@ def inside(output):
                                      sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
             commands.append(dict(build=build, argv=command, seconds=time.monotonic() - started, binaries=binaries))
         node = subprocess.check_output(["node", "-p", "process.execPath"], text=True, timeout=5).strip()
-        for mode in ("--verify", "--verify-cancel", "--verify-expired"):
-            fixture = output / mode.removeprefix("--")
+        fixtures = output / "relocated GUI fixtures"
+        fixtures.mkdir(mode=0o700)
+        for mode in ("--verify", "--verify-cancel", "--verify-expired", "--verify-interrupted", "--verify-startup-fails"):
+            fixture = fixtures / mode.removeprefix("--")
             fixture.mkdir(mode=0o700)
             subprocess.run([str(inputs / "old/lifecycle-fixture"), mode, str(fixture), str(inputs), node],
                            cwd=ROOT, env=env, check=True, timeout=240)
@@ -72,8 +74,8 @@ def inside(output):
 
 
 def main():
-    if sys.platform != "darwin" or platform.machine() != "arm64":
-        raise SystemExit("Native arm64 macOS fixture required; no Linux installer is enabled")
+    if (sys.platform, platform.machine()) not in (("darwin", "arm64"), ("linux", "x86_64")):
+        raise SystemExit("Native arm64 macOS or x86_64 Linux fixture required")
     if len(sys.argv) == 3 and sys.argv[1] == "--inside":
         inside(sys.argv[2])
         return

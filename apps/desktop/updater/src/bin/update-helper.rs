@@ -1,5 +1,8 @@
 fn main() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    ))]
     {
         let mut arguments = std::env::args_os().skip(1);
         if arguments.next().as_deref() != Some(std::ffi::OsStr::new("--transaction")) {
@@ -28,10 +31,17 @@ fn main() {
             pilot_desktop_updater::helper::run_native(root.into(), control, lock)
         })
         .join();
+        #[cfg(feature = "fixture")]
+        if pilot_desktop_updater::fixture::enabled() {
+            eprintln!("fixture-helper-result={result:?}");
+        }
         if !matches!(result, Ok(Ok(()))) {
             std::process::exit(1);
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    )))]
     std::process::exit(2);
 }

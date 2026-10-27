@@ -25,9 +25,9 @@ impl gpui_kit::Render for Desktop {
 
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let mut args = args;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if args.first().is_some_and(|a| a == "--updater-receipt") {
         let allowed = args.len() == 2
             && std::env::current_exe().is_ok_and(|p| pilot_desktop::bundled_runtime::packaged(&p))

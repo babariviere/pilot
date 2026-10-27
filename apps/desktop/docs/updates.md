@@ -12,6 +12,10 @@ approved distribution configuration must match between GUI and helper; see the
 [updater contract](../updater/README.md). This feature does not configure a
 production release, feed, signing key or default-app switch.
 
+Linux uses the same controller and explicit restart gates with its own signed
+full-payload and native platform implementation. See [Linux updates](linux-updates.md)
+for its distinct layout, trust and qualification boundaries.
+
 ## Access and scheduling
 
 Configured builds accept an explicit masked access token for their exact release

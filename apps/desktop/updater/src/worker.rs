@@ -2,7 +2,7 @@
 use crate::{
     Backend, Candidate, Completion, Error, Outcome, Safety, Trigger,
     helper::{PreparedExit, compiled_trust},
-    installer::{self, MacPlatform, Platform},
+    installer::{self, NativePlatform, Platform},
     transport::{Access, Cancellation, Transport},
 };
 use std::{
@@ -52,15 +52,7 @@ impl Worker {
     /// release identity/key contract. Construction does not perform file/network I/O.
     pub fn for_running_app(wakeup: impl Fn() + Send + Sync + 'static) -> Result<Self, Error> {
         let trust = compiled_trust()?;
-        let executable = std::env::current_exe().map_err(|_| Error::Unconfigured)?;
-        let target = executable
-            .ancestors()
-            .find(|path| {
-                path.file_name()
-                    .is_some_and(|name| name == trust.bundle_name.as_str())
-            })
-            .ok_or(Error::Unconfigured)?
-            .to_owned();
+        let target = crate::layout::running_root()?;
         let (sender, jobs) = mpsc::sync_channel::<Job>(1);
         let (results, receiver) = mpsc::sync_channel(1);
         let (recovery_send, recovery_receive) = mpsc::sync_channel(1);
@@ -70,7 +62,7 @@ impl Worker {
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
-                let recovery = MacPlatform
+                let recovery = NativePlatform
                     .verify(&target, &trust, &trust.current_build, None)
                     .and_then(|()| installer::recoveries(&target, &trust));
                 if recovery_send.send(recovery).is_err() {
@@ -113,7 +105,8 @@ impl Worker {
                             }
                             let target: PathBuf =
                                 target.canonicalize().map_err(|_| Error::Filesystem)?;
-                            let (root, lock) = installer::new_stage(&target, &trust, &MacPlatform)?;
+                            let (root, lock) =
+                                installer::new_stage(&target, &trust, &NativePlatform)?;
                             let preparation = (|| {
                                 Transport::new()?.download(
                                     release,
@@ -128,7 +121,7 @@ impl Worker {
                                     lock,
                                     release.clone(),
                                     &trust,
-                                    &MacPlatform,
+                                    &NativePlatform,
                                     &cancel,
                                 )
                             })();
@@ -150,7 +143,7 @@ impl Worker {
                                 return Err(Error::Busy);
                             }
                             installer::validate_target(&target, &trust)?;
-                            MacPlatform.verify(&target, &trust, &trust.current_build, None)?;
+                            NativePlatform.verify(&target, &trust, &trust.current_build, None)?;
                             let stage = staged.as_ref().ok_or(Error::Identity)?;
                             if let Some(old) = runtime_guard.take() {
                                 old.cancel();

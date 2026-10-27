@@ -1,15 +1,26 @@
 //! App-owned updater. Signed metadata, controlled transport, explicit staged restart.
 use std::time::Duration;
 pub mod archive;
-#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
 pub mod coordination;
+#[cfg(feature = "fixture")]
+pub mod fixture;
 pub mod helper;
 pub mod installer;
+pub mod layout;
+#[cfg(any(test, target_os = "linux"))]
+pub mod linux;
 pub mod manifest;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub mod runtime;
 pub mod transport;
-#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
 pub mod worker;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -417,7 +428,10 @@ impl<B: Backend> Updater<B> {
         }
     }
 }
-#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
 impl Updater<worker::Worker> {
     /// Client receipts do not assert Runtime::Independent. The concrete native
     /// worker must obtain and verify the retained-root reservation before READY.

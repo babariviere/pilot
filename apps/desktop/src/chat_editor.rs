@@ -196,6 +196,32 @@ impl ChatEditor {
             && !self.closing
             && self.update_checkpoint.is_none()
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn update_fixture_draft(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.ready() {
+            return false;
+        }
+        let key = "new:update-fixture";
+        if !self.cache.contains_key(key) {
+            self.select(key.into(), true, false, window, cx);
+            self.text.update(cx, |input, cx| {
+                input.set_value("Owned update draft 👩‍💻 e\u{301} 日本語", window, cx)
+            });
+            self.record_edit(true, cx);
+            return false;
+        }
+        self.unsaved_local.is_empty()
+            && self.pending.is_empty()
+            && self
+                .state
+                .book
+                .as_ref()
+                .is_some_and(|book| book.drafts.get(key) == self.cache.get(key))
+    }
     pub(crate) fn navigation_key(&self) -> Option<&str> {
         self.selected.as_deref()
     }
@@ -747,7 +773,7 @@ impl ChatEditor {
         false
     }
     /// Find must not steal keys from question fields or model/project editors.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn begin_update_checkpoint(
         &mut self,
         generation: u64,
@@ -781,7 +807,7 @@ impl ChatEditor {
         cx.notify();
         true
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn update_receipt(
         &self,
         window: &mut Window,
@@ -817,7 +843,7 @@ impl ChatEditor {
         }
         Some(generation)
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn end_update_checkpoint(&mut self, cx: &mut Context<Self>) {
         self.update_checkpoint = None;
         cx.notify();

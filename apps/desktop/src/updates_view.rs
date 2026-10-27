@@ -37,6 +37,8 @@ pub(crate) struct Updates {
     recovery: Option<pilot_desktop_updater::worker::Recovery>,
     recovery_open: bool,
     startup_receipt: Option<std::path::PathBuf>,
+    #[cfg(feature = "native-probes")]
+    fixture_armed: bool,
 }
 impl EventEmitter<Event> for Updates {}
 impl Updates {
@@ -55,6 +57,8 @@ impl Updates {
             recovery: None,
             recovery_open: false,
             startup_receipt: None,
+            #[cfg(feature = "native-probes")]
+            fixture_armed: false,
             controller: None,
             unavailable: None,
             epoch: Instant::now(),
@@ -66,6 +70,10 @@ impl Updates {
         };
         match worker {
             Ok(mut worker) => {
+                #[cfg(feature = "native-probes")]
+                if pilot_desktop_updater::fixture::enabled() {
+                    result.access = Some("synthetic-fixture-access".into());
+                }
                 if let Some(location) = location {
                     worker.supply_runtime(location);
                 }
@@ -85,6 +93,29 @@ impl Updates {
     pub(crate) fn state(&self) -> Option<&State> {
         self.controller.as_ref().map(Updater::state)
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn drive_fixture(&mut self, draft_ready: bool, cx: &mut Context<Self>) -> bool {
+        if pilot_desktop_updater::fixture::enabled() && self.inspected {
+            eprintln!("fixture-updater-state={:?}", self.state());
+        }
+        if !pilot_desktop_updater::fixture::enabled()
+            || !self.inspected
+            || self.recovery_blocked()
+            || self.fixture_armed
+        {
+            return false;
+        }
+        match self.state().cloned() {
+            Some(State::Idle) => self.check(cx),
+            Some(State::Available(_)) => self.download(cx),
+            Some(State::ReadyToRestart(_)) if draft_ready => {
+                self.fixture_armed = true;
+                return true;
+            }
+            _ => {}
+        }
+        false
+    }
     pub(crate) fn acknowledge_startup(
         &mut self,
         receipt: std::path::PathBuf,
@@ -101,13 +132,7 @@ impl Updates {
             .spawn(move || {
                 let result = (|| {
                     let trust = pilot_desktop_updater::helper::compiled_trust()?;
-                    let executable = std::env::current_exe().map_err(|_| Error::Identity)?;
-                    let target = executable
-                        .ancestors()
-                        .nth(3)
-                        .ok_or(Error::Identity)?
-                        .canonicalize()
-                        .map_err(|_| Error::Filesystem)?;
+                    let target = pilot_desktop_updater::layout::running_root()?;
                     pilot_desktop_updater::coordination::Guard::acknowledge_startup(
                         &receipt, &target, &trust,
                     )
@@ -280,6 +305,10 @@ impl Updates {
         cx.notify();
     }
     pub(crate) fn cancel_prepared(&mut self, message: &'static str, cx: &mut Context<Self>) {
+        #[cfg(feature = "native-probes")]
+        if pilot_desktop_updater::fixture::enabled() {
+            eprintln!("fixture-cancel-prepared={message}");
+        }
         self.notice = Some(message);
         self.cancel_prepare = true;
         if let Some(controller) = &mut self.controller {

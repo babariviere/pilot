@@ -113,6 +113,14 @@ PY
     }
     updater_test
     ;;
+  updater-linux-tests)
+    [[ "$(uname -s):$(uname -m)" == Linux:x86_64 ]] || {
+      echo 'Linux updater checks require native Linux x86_64.' >&2; exit 1;
+    }
+    cargo clippy --locked "${updater[@]}" --all-targets --features native-linux -- -D warnings
+    cargo build --locked "${updater[@]}" --features native-linux --bin pilot-desktop-update-helper
+    cargo test --locked "${updater[@]}" --lib --features native-linux -- --test-threads=1
+    ;;
   updater-mac-tests)
     macos_host
     mkdir -p target
@@ -272,5 +280,5 @@ OBJC
       { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
     fi
     ;;
-  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-linux-tests|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
 esac

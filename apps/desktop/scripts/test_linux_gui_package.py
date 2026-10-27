@@ -43,6 +43,35 @@ class PackageTests(unittest.TestCase):
     def assemble(self):
         package.assemble(self.runtime, self.executables, self.receipt, self.output, self.source)
 
+    def test_full_update_payload_binds_helper_and_policy(self):
+        updater = self.root / "updater"
+        updater.mkdir()
+        helper = updater / "pilot-desktop-update-helper"
+        helper.write_bytes(b"synthetic updater helper, never execute")
+        config = dict(schema=1, mode="configured", build="101.1", application_id="com.example.next",
+                      repository="synthetic/fixture", public_key=__import__("base64").b64encode(bytes([42]) * 32).decode(),
+                      code_requirement="signed-linux-inventory-v1")
+        rust = package.read_json(self.executables / "manifest.json")
+        package.write_json(self.executables / "manifest.json", dict(rust, updater_configuration=config))
+        package.write_json(updater / "manifest.json", dict(tested_sha=self.source, target=package.TARGET, updater_configuration=config,
+            binaries=[dict(name=helper.name, bytes=helper.stat().st_size, sha256=package.digest(helper))]))
+        output = self.root / "install path with spaces/Pilot Next"
+        output.parent.mkdir()
+        package.assemble(self.runtime, self.executables, self.receipt, output, self.source,
+                         updater, "101.1", "com.example.next", ["a" * 64])
+        package.verify(output)
+        value = package.read_json(output / package.MANIFEST)
+        self.assertEqual(value["kind"], "linux-gui-distribution")
+        self.assertEqual(value["bundle_build"], "101.1")
+        self.assertTrue(value["updater"])
+        self.assertFalse(value["native_visual_execution"])
+        self.assertEqual(package.read_json(output / "update-runtime-policy.json")["accepted_capsules"], ["a" * 64])
+        (output / "linux-gui-package.sig").write_text("detached signature placeholder, not an authenticity test")
+        package.verify(output)
+        (output / "libexec/pilot-desktop-update-helper").write_text("tampered")
+        with self.assertRaises(ValueError):
+            package.verify(output)
+
     def test_relocation_and_exact_inventory(self):
         self.assemble()
         relocated = self.root / "different path"

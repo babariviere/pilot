@@ -1,6 +1,86 @@
 use super::*;
 
 #[gpui_kit::test]
+fn update_checkpoint_keeps_draft_and_requires_exact_fresh_ack(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.text.update(cx, |input, cx| {
+                input.set_value("Retain 👩‍💻 e\u{301}", window, cx)
+            });
+            assert!(editor.begin_update_checkpoint(7, window, cx));
+            assert_eq!(editor.update_receipt(window, cx), None);
+            let mut book = (**editor.state.book.as_ref().unwrap()).clone();
+            book.drafts = editor.cache.clone();
+            editor.state.book = Some(std::sync::Arc::new(book));
+            editor.state.checkpoint = Some(6);
+            assert_eq!(editor.update_receipt(window, cx), None);
+            editor.state.checkpoint = Some(7);
+            assert_eq!(editor.update_receipt(window, cx), Some(7));
+            editor.text.update(cx, |input, cx| {
+                input.set_value("Newer native text", window, cx)
+            });
+            assert_eq!(editor.update_receipt(window, cx), None);
+            editor.end_update_checkpoint(cx);
+            assert_eq!(editor.text.read(cx).value().as_ref(), "Newer native text");
+            assert_eq!(editor.cache["chat:a"].text, "Retain 👩‍💻 e\u{301}");
+        });
+    })
+    .unwrap();
+    let mut checkpoint = false;
+    while let Ok(command) = commands.try_recv() {
+        checkpoint |= matches!(command, WriteCommand::Checkpoint(7));
+    }
+    assert!(checkpoint);
+}
+
+#[gpui_kit::test]
+fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAppContext) {
+    use gpui_kit::{ElementInputHandler, test::TestInput};
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            for state in ["pending", "unknown"] {
+                let mut book = (**editor.state.book.as_ref().unwrap()).clone();
+                book.drafts.insert(
+                    "chat:other".into(),
+                    Draft {
+                        last: Some(crate::delivery_store::Delivery {
+                            id: "unconfirmed".into(),
+                            state: state.into(),
+                            target: "a".into(),
+                            kind: "message".into(),
+                            revision: 1,
+                            diagnostic: None,
+                            answer: None,
+                        }),
+                        ..Default::default()
+                    },
+                );
+                editor.state.book = Some(std::sync::Arc::new(book));
+                assert!(!editor.begin_update_checkpoint(8, window, cx));
+            }
+            editor.state.book = Some(book());
+        });
+        window.render_frame(cx);
+        let handler = ElementInputHandler::new(
+            window.find_by_label("Local chat message").bounds(),
+            view.read(cx).text.clone(),
+        );
+        TestInput::new(handler, window).compose_text(None, "にほん", Some(3..3), cx);
+        view.update(cx, |editor, cx| {
+            assert!(editor.marked(window, cx));
+            let before = editor.text.read(cx).value().to_string();
+            assert!(!editor.begin_update_checkpoint(9, window, cx));
+            assert!(editor.marked(window, cx));
+            assert_eq!(editor.text.read(cx).value().as_ref(), before);
+        });
+    })
+    .unwrap();
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
 fn question_discard_guard_refuses_live_or_saved_reply_without_capture(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     let q = question_composer_fixture(4);

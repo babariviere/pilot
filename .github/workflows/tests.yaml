@@ -317,7 +317,7 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libxcb1-dev libxcb-xkb-dev libx11-xcb-dev \
             libvulkan-dev libssl-dev libudev-dev libegl1-mesa-dev fonts-dejavu-core \
-            weston libgl1-mesa-dri mesa-vulkan-drivers
+            weston libgl1-mesa-dri mesa-vulkan-drivers acl
       - name: Bootstrap pinned Rust, mbx and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -330,6 +330,20 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 35
         run: env -u DISPLAY -u WAYLAND_DISPLAY bash apps/desktop/scripts/ci.sh check
+
+      - name: Native Linux updater signatures, atomic exchange and process exit
+        if: steps.changes.outputs.rust == 'true'
+        timeout-minutes: 10
+        run: bash apps/desktop/scripts/ci.sh updater-linux-tests
+
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.rust == 'true'
+        with:
+          node-version: '24.21.0'
+      - name: Owned Linux updater helper install and relaunch fixtures
+        if: steps.changes.outputs.rust == 'true'
+        timeout-minutes: 10
+        run: python3 apps/desktop/scripts/verify_update_lifecycle.py
 
       - name: Relocated Linux GUI fixture, ELF closure and native Wayland buffer
         if: steps.changes.outputs.rust == 'true'

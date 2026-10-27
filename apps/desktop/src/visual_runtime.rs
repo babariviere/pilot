@@ -25,10 +25,10 @@ const RUNTIME: &str = include_str!("../../../packages/artifacts/src/visual/runti
 static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(2)));
 static TEARDOWN_FAILED: AtomicBool = AtomicBool::new(false);
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static RESTART_PERMITS: std::sync::Mutex<Option<tokio::sync::OwnedSemaphorePermit>> =
     std::sync::Mutex::new(None);
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn fence_for_restart() -> bool {
     let Ok(mut held) = RESTART_PERMITS.try_lock() else {
         return false;
@@ -43,7 +43,7 @@ pub(crate) fn fence_for_restart() -> bool {
     *held = Some(permits);
     true
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn release_restart_fence() {
     RESTART_PERMITS
         .lock()
@@ -396,6 +396,18 @@ fn verify_sandbox(_: u32, _: &Path) -> bool {
 #[cfg(all(test, not(target_os = "macos")))]
 mod unsupported_platform_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restart_fence_reserves_all_capacity_without_enabling_source_execution() {
+        let active = SLOTS.clone().try_acquire_owned().unwrap();
+        assert!(!fence_for_restart());
+        drop(active);
+        assert!(fence_for_restart());
+        assert!(SLOTS.clone().try_acquire_owned().is_err());
+        release_restart_fence();
+        assert_eq!(SLOTS.available_permits(), 2);
+    }
 
     #[tokio::test]
     async fn source_execution_refuses_unvalidated_platform_before_starting_worker() {

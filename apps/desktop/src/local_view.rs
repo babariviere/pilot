@@ -98,7 +98,7 @@ pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
 #[path = "transcript_find_probe.rs"]
 pub(crate) mod transcript_find_probe;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "update_lifecycle.rs"]
 mod update_lifecycle;
 #[cfg(feature = "native-probes")]
@@ -394,12 +394,12 @@ pub struct LocalViewer {
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
     settings_events: Vec<Subscription>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     update_events: Vec<Subscription>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_generation: u64,
     pub(super) restart_pending: bool,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_timeout: Option<Task<()>>,
     #[cfg(feature = "native-probes")]
     settings_fixture_size: Option<gpui_kit::Size<gpui_kit::Pixels>>,
@@ -584,13 +584,13 @@ impl LocalViewer {
         view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
         view.connect_model_controls(options.clone(), window, cx);
         view.settings.update(cx, |owner, cx| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 owner.update_location = options.update_location();
             }
             owner.load(cx);
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         view.connect_updates(window, cx);
         view.page = Page::Home;
         view.navigation = crate::navigation::History::new(crate::navigation::Location::home());
@@ -679,8 +679,10 @@ impl LocalViewer {
                         }
                         view.editor
                             .update(cx, |editor, cx| editor.accept(state, window, cx));
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "linux"))]
                         view.acknowledge_update_startup(cx);
+                        #[cfg(feature = "native-probes")]
+                        view.advance_update_restart(window, cx);
                     })
                     .is_err()
                 {
@@ -1164,7 +1166,7 @@ impl LocalViewer {
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
                 EditorEvent::Flushed => cx.quit(),
                 EditorEvent::UpdateCheckpoint => {
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "linux"))]
                     view.advance_update_restart(window, cx);
                 }
                 EditorEvent::StopRequested { key } => {
@@ -1309,12 +1311,12 @@ impl LocalViewer {
             settings_pane: None,
             settings_return: None,
             settings_events: Vec::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_events: Vec::new(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_generation: 0,
             restart_pending: false,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_timeout: None,
             #[cfg(feature = "native-probes")]
             settings_fixture_size: None,

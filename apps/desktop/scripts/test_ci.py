@@ -189,6 +189,16 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
             self.assertNotIn("native-macos", call)
             self.assertNotIn("--release", call)
 
+    def test_linux_updater_native_checks_do_not_use_macos_platform_or_release(self):
+        self.run_ci("updater-linux-tests", FAKE_OS="Linux", FAKE_ARCH="x86_64")
+        base = ["--manifest-path", "updater/Cargo.toml"]
+        self.assertEqual(self.calls(), [
+            ["clippy", "--locked", *base, "--all-targets", "--features", "native-linux", "--", "-D", "warnings"],
+            ["build", "--locked", *base, "--features", "native-linux", "--bin", "pilot-desktop-update-helper"],
+            ["test", "--locked", *base, "--lib", "--features", "native-linux", "--", "--test-threads=1"],
+        ])
+        self.run_ci("updater-linux-tests", expected=1, FAKE_OS="Darwin", FAKE_ARCH="arm64")
+
     def test_updater_native_builds_real_helper_and_exact_registered_tests_without_metal(self):
         result = self.run_ci("updater-mac-tests", METAL_CODE="78", UPDATER_TEST_LIST=self.updater_listing())
         self.assertIn("Standalone updater macOS Security/ACL/stage/swap/helper checks started", result.stdout)
@@ -491,7 +501,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue((updater / "Cargo.lock").is_file())
         helper, = manifest["bin"]
         self.assertEqual(helper["name"], "pilot-desktop-update-helper")
-        self.assertEqual(helper["required-features"], ["native-macos"])
+        self.assertEqual(helper["required-features"], ["native"])
+        self.assertIn("native", manifest["features"]["native-macos"])
+        self.assertIn("native", manifest["features"]["native-linux"])
         self.assertTrue((updater / helper["path"]).is_file())
         lib = (updater / "src/lib.rs").read_text()
         self.assertIn('#[cfg(test)]\n#[path = "../tests/owned.rs"]\nmod owned_tests;', lib)

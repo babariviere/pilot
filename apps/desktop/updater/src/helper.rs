@@ -1,7 +1,12 @@
 //! Explicit two-phase helper handshake. Parent EOF/ordinary quit without COMMIT aborts.
 use crate::{Error, installer::Staged, manifest::Trust};
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
-use std::{fs::File, path::PathBuf, time::Instant};
+use std::time::Instant;
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
+use std::{fs::File, path::PathBuf};
 use std::{
     io::{Read, Write},
     os::{
@@ -36,9 +41,7 @@ impl PreparedExit {
         staged: &Staged,
         helper_stopped: impl Fn(Error) + Send + 'static,
     ) -> Result<Self, Error> {
-        let executable = staged
-            .target
-            .join("Contents/Helpers/pilot-desktop-update-helper");
+        let executable = staged.target.join(crate::layout::HELPER);
         let metadata = std::fs::symlink_metadata(&executable).map_err(|_| Error::Unconfigured)?;
         if !metadata.is_file() || metadata.file_type().is_symlink() {
             return Err(Error::Identity);
@@ -79,6 +82,32 @@ impl PreparedExit {
                 }
                 Ok(())
             });
+        }
+        #[cfg(target_os = "linux")]
+        for name in [
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_STATE_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_RUNTIME_DIR",
+            "WAYLAND_DISPLAY",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "LANG",
+            "LIBGL_ALWAYS_SOFTWARE",
+            "WGPU_BACKEND",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        #[cfg(feature = "fixture")]
+        if crate::fixture::enabled() {
+            command.stderr(Stdio::inherit());
+            command.env(
+                "PILOT_NEXT_UPDATER_FIXTURE",
+                std::env::var_os("PILOT_NEXT_UPDATER_FIXTURE").ok_or(Error::Identity)?,
+            );
         }
         let child = command.spawn().map_err(|_| Error::Native)?;
         // Release closure-owned copies of the child's endpoint before waiting for
@@ -188,7 +217,13 @@ fn duplicate_high(fd: libc::c_int) -> Result<OwnedFd, Error> {
 }
 
 /// Pure protocol seam used by native helper and synthetic exit/ordinary-quit tests.
-#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
+#[cfg(any(
+    test,
+    any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    )
+))]
 pub(crate) fn await_commit(
     control: &mut (impl Read + Write),
     staged: &Staged,
@@ -288,7 +323,7 @@ pub fn compiled_trust() -> Result<Trust, Error> {
         application_id: required(option_env!("PILOT_NEXT_UPDATER_APPLICATION_ID"))?,
         channel: "desktop-stable".into(),
         current_build: required(option_env!("PILOT_NEXT_UPDATER_BUILD"))?,
-        bundle_name: "Pilot Next.app".into(),
+        bundle_name: crate::layout::BUNDLE.into(),
         public_key: bytes.try_into().map_err(|_| Error::Unconfigured)?,
         code_requirement: required(option_env!("PILOT_NEXT_UPDATER_CODE_REQUIREMENT"))?,
     };
@@ -296,25 +331,37 @@ pub fn compiled_trust() -> Result<Trust, Error> {
     Ok(trust)
 }
 
-#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
 pub fn run_native(
     root: PathBuf,
     control_fd: libc::c_int,
     lock_fd: libc::c_int,
 ) -> Result<(), Error> {
-    use crate::installer::{MacPlatform, Platform};
+    #[cfg(feature = "fixture")]
+    let validation_started = std::time::Instant::now();
+    use crate::installer::{NativePlatform, Platform};
     let trust = compiled_trust()?; // no journal access at all in development/unconfigured builds
     let executable = std::env::current_exe().map_err(|_| Error::Unconfigured)?;
     let target = executable
         .ancestors()
-        .find(|path| {
-            path.file_name()
-                .is_some_and(|name| name == trust.bundle_name.as_str())
-        })
+        .nth(crate::layout::HELPER.split('/').count())
         .ok_or(Error::Identity)?
         .canonicalize()
         .map_err(|_| Error::Filesystem)?;
-    MacPlatform.verify(&target, &trust, &trust.current_build, None)?;
+    if executable != target.join(crate::layout::HELPER) {
+        return Err(Error::Identity);
+    }
+    NativePlatform.verify(&target, &trust, &trust.current_build, None)?;
+    #[cfg(feature = "fixture")]
+    if crate::fixture::enabled() {
+        eprintln!(
+            "fixture-helper-target-verified-seconds={:.3}",
+            validation_started.elapsed().as_secs_f64()
+        );
+    }
     // Watch only the real parent, and require the GUI binary in this very bundle.
     // A shell, a different application or an orphaned helper cannot authorize exit.
     // SAFETY: process identity query, bounded path buffer, no other process inspected.
@@ -323,30 +370,17 @@ pub fn run_native(
         return Err(Error::Identity);
     }
     let watch = ParentWatch::new(parent_pid)?;
-    let mut parent_path = [0_u8; 4096];
-    // SAFETY: buffer is initialized/writable and length matches allocation.
-    let path_length = unsafe {
-        libc::proc_pidpath(
-            parent_pid,
-            parent_path.as_mut_ptr().cast(),
-            parent_path.len() as _,
-        )
-    };
-    if path_length <= 0 {
-        return Err(Error::Identity);
+    let parent_executable = process_executable(parent_pid)?;
+    #[cfg(feature = "fixture")]
+    if crate::fixture::enabled() {
+        eprintln!(
+            "fixture-helper-parent-executable={parent_executable:?} expected={:?}",
+            target.join(crate::layout::GUI)
+        );
     }
-    let path_end = parent_path
-        .iter()
-        .position(|b| *b == 0)
-        .ok_or(Error::Identity)?;
-    use std::os::unix::ffi::OsStrExt;
-    let parent_executable =
-        std::path::Path::new(std::ffi::OsStr::from_bytes(&parent_path[..path_end]))
-            .canonicalize()
-            .map_err(|_| Error::Identity)?;
     if parent_executable
         != target
-            .join("Contents/MacOS/pilot-desktop")
+            .join(crate::layout::GUI)
             .canonicalize()
             .map_err(|_| Error::Identity)?
     {
@@ -369,16 +403,12 @@ pub fn run_native(
     {
         return Err(Error::Native);
     }
-    let mut peer = std::mem::MaybeUninit::<libc::sockaddr_storage>::zeroed();
-    let mut peer_length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-    let mut peer_uid = 0;
-    let mut peer_gid = 0;
-    // SAFETY: bounded initialized output allocations and an already checked fd.
-    if unsafe { libc::getpeername(control_fd, peer.as_mut_ptr().cast(), &mut peer_length) } != 0
-        || unsafe { peer.assume_init() }.ss_family as libc::c_int != libc::AF_UNIX
-        || unsafe { libc::getpeereid(control_fd, &mut peer_uid, &mut peer_gid) } != 0
-        || peer_uid != unsafe { libc::geteuid() }
-    {
+    verify_peer(control_fd, parent_pid)?;
+    #[cfg(feature = "fixture")]
+    if crate::fixture::enabled() {
+        eprintln!("fixture-helper-peer-verified");
+    }
+    if unsafe { libc::getppid() } != parent_pid {
         return Err(Error::Identity);
     }
     // SAFETY: checked descriptor is passed by PreparedExit; helper owns it now.
@@ -399,12 +429,23 @@ pub fn run_native(
         return Err(Error::Busy);
     }
     let staged = Staged::reopen(&root, &target, &trust, lock)?;
+    #[cfg(feature = "fixture")]
+    if crate::fixture::enabled() {
+        eprintln!("fixture-helper-stage-reopened");
+    }
     let _guard = crate::coordination::Guard::load(
         &root,
         &root.join("payload").join(&trust.bundle_name),
         staged.build(),
         &trust,
     )?;
+    #[cfg(feature = "fixture")]
+    if crate::fixture::enabled() {
+        eprintln!(
+            "fixture-helper-ready-seconds={:.3}",
+            validation_started.elapsed().as_secs_f64()
+        );
+    }
     // SAFETY: checked descriptor is the inherited private handshake socket.
     let mut control = unsafe { UnixStream::from_raw_fd(control_fd) };
     control
@@ -424,7 +465,7 @@ pub fn run_native(
             return Err(error);
         }
     };
-    staged.apply_after_exit_checked(&trust, &MacPlatform, exit, |candidate| {
+    staged.apply_after_exit_checked(&trust, &NativePlatform, exit, |candidate| {
         // Successful verification after OS-observed parent exit proves the same
         // reservation remained uninterrupted through exit. Expiry/owner death
         // refuses installation even if COMMIT had already been acknowledged.
@@ -473,5 +514,92 @@ pub(crate) fn run_command_checked(
                 return Err(Error::Native);
             }
         }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub(crate) fn process_executable(pid: libc::pid_t) -> Result<std::path::PathBuf, Error> {
+    let mut bytes = [0_u8; 4096];
+    if unsafe { libc::proc_pidpath(pid, bytes.as_mut_ptr().cast(), bytes.len() as _) } <= 0 {
+        return Err(Error::Identity);
+    }
+    let end = bytes.iter().position(|b| *b == 0).ok_or(Error::Identity)?;
+    use std::os::unix::ffi::OsStrExt;
+    std::path::Path::new(std::ffi::OsStr::from_bytes(&bytes[..end]))
+        .canonicalize()
+        .map_err(|_| Error::Identity)
+}
+#[cfg(all(target_os = "linux", feature = "native-linux"))]
+pub(crate) fn process_executable(pid: libc::pid_t) -> Result<std::path::PathBuf, Error> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| Error::Identity)
+}
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+fn verify_peer(fd: libc::c_int, _parent: libc::pid_t) -> Result<(), Error> {
+    let mut peer = std::mem::MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut length = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    let (mut uid, mut gid) = (0, 0);
+    if unsafe { libc::getpeername(fd, peer.as_mut_ptr().cast(), &mut length) } != 0
+        || unsafe { peer.assume_init() }.ss_family as libc::c_int != libc::AF_UNIX
+        || unsafe { libc::getpeereid(fd, &mut uid, &mut gid) } != 0
+        || uid != unsafe { libc::geteuid() }
+    {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
+#[cfg(all(target_os = "linux", feature = "native-linux"))]
+fn verify_peer(fd: libc::c_int, parent: libc::pid_t) -> Result<(), Error> {
+    let mut peer = std::mem::MaybeUninit::<libc::ucred>::uninit();
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    if unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            peer.as_mut_ptr().cast(),
+            &mut length,
+        )
+    } != 0
+    {
+        return Err(Error::Identity);
+    }
+    let peer = unsafe { peer.assume_init() };
+    if peer.pid != parent || peer.uid != unsafe { libc::geteuid() } {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
+#[cfg(all(target_os = "linux", feature = "native-linux"))]
+pub(crate) struct ParentWatch {
+    process: OwnedFd,
+}
+#[cfg(all(target_os = "linux", feature = "native-linux"))]
+impl ParentWatch {
+    pub(crate) fn new(pid: libc::pid_t) -> Result<Self, Error> {
+        let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if descriptor < 0 {
+            return Err(Error::Native);
+        }
+        Ok(Self {
+            process: unsafe { OwnedFd::from_raw_fd(descriptor as libc::c_int) },
+        })
+    }
+    pub(crate) fn wait(self, timeout: Duration) -> Result<ExitedParent, Error> {
+        let mut poll = libc::pollfd {
+            fd: self.process.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let count = unsafe {
+            libc::poll(
+                &mut poll,
+                1,
+                timeout.as_millis().try_into().map_err(|_| Error::Native)?,
+            )
+        };
+        if count != 1 || poll.revents & libc::POLLIN == 0 {
+            return Err(Error::ParentStillRunning);
+        }
+        Ok(ExitedParent { _private: () })
     }
 }

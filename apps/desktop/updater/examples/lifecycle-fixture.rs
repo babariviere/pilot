@@ -1,13 +1,14 @@
-//! Real macOS helper/OS-exit/swap/startup qualification with synthetic identity,
+//! Real native helper/OS-exit/swap/startup qualification with synthetic identity,
 //! temporary signed bundles and an owned Node using the actual proof/reservation
 //! source. Not a GUI, production bundle or OS acceptance test.
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+#[cfg(target_os = "macos")]
+use pilot_desktop_updater::runtime;
 use pilot_desktop_updater::{
     coordination::{Guard, Location},
     helper,
-    installer::{self, MacPlatform, Platform},
+    installer::{self, NativePlatform, Platform},
     manifest::{self, Trust, VerifiedManifest},
-    runtime,
     transport::Cancellation,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -90,7 +91,7 @@ fn run(args: Vec<String>) -> Result<()> {
         let executable = std::env::current_exe()?;
         let target = executable
             .ancestors()
-            .nth(3)
+            .nth(pilot_desktop_updater::layout::GUI.split('/').count())
             .ok_or("app root")?
             .canonicalize()?;
         let root = safe_root(
@@ -99,9 +100,18 @@ fn run(args: Vec<String>) -> Result<()> {
                 .and_then(Path::parent)
                 .ok_or("fixture parent")?,
         )?;
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("XDG_STATE_HOME").as_deref()
+            != Some(root.join("state with spaces").as_os_str())
+        {
+            return Err("GUI state root was not preserved".into());
+        }
         let transaction = PathBuf::from(&args[1]);
         if !transaction.starts_with(&root) {
             return Err("receipt escaped fixture".into());
+        }
+        if root.join("fail-startup").exists() {
+            return Err("owned startup failure injection".into());
         }
         Guard::acknowledge_startup(&transaction, &target, &trust).map_err(err)?;
         fs::write(
@@ -115,7 +125,7 @@ fn run(args: Vec<String>) -> Result<()> {
         let location: Location = serde_json::from_slice(&fs::read(root.join("location.json"))?)?;
         let target = std::env::current_exe()?
             .ancestors()
-            .nth(3)
+            .nth(pilot_desktop_updater::layout::GUI.split('/').count())
             .ok_or("parent bundle")?
             .canonicalize()?;
         if !target.starts_with(&root) {
@@ -124,7 +134,7 @@ fn run(args: Vec<String>) -> Result<()> {
         let manifest: VerifiedManifest =
             VerifiedManifest::parse(&fs::read(root.join("envelope.json"))?, &trust, 12)
                 .map_err(err)?;
-        let (stage, lock) = installer::new_stage(&target, &trust, &MacPlatform).map_err(err)?;
+        let (stage, lock) = installer::new_stage(&target, &trust, &NativePlatform).map_err(err)?;
         fs::copy(root.join("archive.zip"), stage.join("archive.zip"))?;
         let staged = installer::finish_stage(
             stage.clone(),
@@ -132,13 +142,13 @@ fn run(args: Vec<String>) -> Result<()> {
             lock,
             manifest,
             &trust,
-            &MacPlatform,
+            &NativePlatform,
             &Cancellation::default(),
         )
         .map_err(err)?;
         let guard = Guard::prepare(
             location,
-            &stage.join("payload/Pilot Next.app"),
+            &stage.join(format!("payload/{}", trust.bundle_name)),
             &stage,
             staged.build(),
             &trust,
@@ -150,6 +160,11 @@ fn run(args: Vec<String>) -> Result<()> {
             stage.as_os_str().as_encoded_bytes(),
         )?;
         let mut prepared = helper::PreparedExit::launch(&staged, |_| {}).map_err(err)?;
+        if args[2] == "interrupt" {
+            fs::write(root.join("parent-prepared"), b"no COMMIT")?;
+            std::thread::sleep(Duration::from_secs(60));
+            return Err("owned parent interruption did not arrive".into());
+        }
         if args[2] == "cancel" {
             drop(prepared);
             guard.cancel();
@@ -173,7 +188,11 @@ fn run(args: Vec<String>) -> Result<()> {
     if args.len() != 4
         || !matches!(
             args[0].as_str(),
-            "--verify" | "--verify-cancel" | "--verify-expired"
+            "--verify"
+                | "--verify-cancel"
+                | "--verify-expired"
+                | "--verify-interrupted"
+                | "--verify-startup-fails"
         )
         || trust.current_build != "100.1"
     {
@@ -182,14 +201,19 @@ fn run(args: Vec<String>) -> Result<()> {
     let mode = match args[0].as_str() {
         "--verify-cancel" => "cancel",
         "--verify-expired" => "expired",
+        "--verify-interrupted" => "interrupt",
+        "--verify-startup-fails" => "launch-fails",
         _ => "success",
     };
     let root = safe_root(Path::new(&args[1]))?;
+    if mode == "launch-fails" {
+        fs::write(root.join("fail-startup"), b"owned failure injection")?;
+    }
     let inputs = Path::new(&args[2]).canonicalize()?;
     let node = Path::new(&args[3]).canonicalize()?;
     let installed = root.join("Installed");
     fs::create_dir(&installed)?;
-    let old = installed.join("Pilot Next.app");
+    let old = installed.join(trust.bundle_name.as_str());
     bundle(
         &old,
         &inputs.join("old"),
@@ -199,12 +223,20 @@ fn run(args: Vec<String>) -> Result<()> {
         &[],
         &trust,
     )?;
-    let capsule = runtime::publish(&old, &root.join(runtime::STORE_NAME), &trust, &MacPlatform)
-        .map_err(err)?;
-    let id = runtime::identity(&capsule).map_err(err)?;
+    #[cfg(target_os = "macos")]
+    let capsule = runtime::publish(
+        &old,
+        &root.join(runtime::STORE_NAME),
+        &trust,
+        &NativePlatform,
+    )
+    .map_err(err)?;
+    #[cfg(target_os = "linux")]
+    let capsule = publish_linux(&old, &root)?;
+    let id = capsule_id(&capsule)?;
     let new_parent = root.join("Candidate");
     fs::create_dir(&new_parent)?;
-    let candidate = new_parent.join("Pilot Next.app");
+    let candidate = new_parent.join(trust.bundle_name.as_str());
     bundle(
         &candidate,
         &inputs.join("new"),
@@ -229,9 +261,15 @@ fn run(args: Vec<String>) -> Result<()> {
         policy: Default::default(),
     };
     fs::write(root.join("location.json"), serde_json::to_vec(&location)?)?;
-    let mut process = Command::new(capsule.join("Contents/Resources/runtime/node/bin/node"));
+    let mut process = Command::new(capsule.join(format!(
+        "{}/node/bin/node",
+        pilot_desktop_updater::layout::RUNTIME
+    )));
     process
-        .arg(capsule.join("Contents/Resources/runtime/packages/daemon/src/fixture-owner.ts"))
+        .arg(capsule.join(format!(
+            "{}/packages/daemon/src/fixture-owner.ts",
+            pilot_desktop_updater::layout::RUNTIME
+        )))
         .arg(&location.home)
         .arg(port.to_string())
         .env_clear()
@@ -255,11 +293,12 @@ fn run(args: Vec<String>) -> Result<()> {
     }
     let original = fs::read(location.home.join(".daemon-owner.json"))?;
     let mut parent = Owned(
-        Command::new(old.join("Contents/MacOS/pilot-desktop"))
+        Command::new(old.join(pilot_desktop_updater::layout::GUI))
             .arg("--owned-parent")
             .arg(&root)
             .arg(mode)
             .env_clear()
+            .env("XDG_STATE_HOME", root.join("state with spaces"))
             .env("HOME", &root)
             .env("PATH", "/usr/bin:/bin")
             .stdin(Stdio::null())
@@ -267,14 +306,53 @@ fn run(args: Vec<String>) -> Result<()> {
             .stderr(Stdio::inherit())
             .spawn()?,
     );
-    wait_exit(&mut parent.0, Duration::from_secs(90))?;
+    if mode == "interrupt" {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !root.join("parent-prepared").exists() {
+            if Instant::now() >= deadline || parent.0.try_wait()?.is_some() {
+                return Err("owned preparation failed".into());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        parent.0.kill()?;
+        parent.0.wait()?;
+    } else {
+        wait_exit(&mut parent.0, Duration::from_secs(90))?;
+    }
     if mode != "success" {
         let transaction = PathBuf::from(String::from_utf8(fs::read(root.join("transaction"))?)?);
-        std::thread::sleep(Duration::from_secs(2));
-        MacPlatform
-            .verify(&old, &trust, "100.1", Some("0.1.0"))
+        if mode == "launch-fails" {
+            let deadline = Instant::now() + Duration::from_secs(90);
+            while installer::recovery_phase(&transaction).map_err(err)?
+                != installer::Phase::RelaunchRequested
+            {
+                if Instant::now() >= deadline {
+                    return Err("owned relaunch phase timed out".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        } else {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        NativePlatform
+            .verify(
+                &old,
+                &trust,
+                if mode == "launch-fails" {
+                    "101.1"
+                } else {
+                    "100.1"
+                },
+                Some(if mode == "launch-fails" {
+                    "0.1.1"
+                } else {
+                    "0.1.0"
+                }),
+            )
             .map_err(err)?;
-        let expected = if mode == "cancel" {
+        let expected = if mode == "launch-fails" {
+            installer::Phase::RelaunchRequested
+        } else if matches!(mode, "cancel" | "interrupt") {
             installer::Phase::Ready
         } else {
             installer::Phase::Committed
@@ -285,12 +363,12 @@ fn run(args: Vec<String>) -> Result<()> {
             return Err("cancelled/expired fixture installed or lost recovery evidence".into());
         }
         if fs::read(location.home.join(".daemon-owner.json"))? != original
-            || runtime::identity(&capsule).map_err(err)? != id
+            || capsule_id(&capsule)? != id
         {
             return Err("fixture refusal changed runtime".into());
         }
         println!(
-            "PASS real native helper {mode} preserves installed app, existing daemon and truthful journal"
+            "PASS real native helper {mode} preserves daemon, retained payloads and truthful recovery journal"
         );
         return Ok(());
     }
@@ -313,10 +391,13 @@ fn run(args: Vec<String>) -> Result<()> {
     if fs::read(location.home.join(".daemon-owner.json"))? != original {
         return Err("daemon identity changed".into());
     }
-    if runtime::identity(&capsule).map_err(err)? != id {
+    if capsule_id(&capsule)? != id {
         return Err("active capsule changed".into());
     }
-    if !transaction.join("install-payload/Pilot Next.app").is_dir() {
+    if !transaction
+        .join(format!("install-payload/{}", trust.bundle_name))
+        .is_dir()
+    {
         return Err("old app not retained".into());
     }
     println!(
@@ -348,6 +429,7 @@ fn wait_exit(child: &mut Child, timeout: Duration) -> Result<()> {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+#[cfg(target_os = "macos")]
 fn command(c: &mut Command) -> Result<()> {
     if !c
         .env_clear()
@@ -361,6 +443,7 @@ fn command(c: &mut Command) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(target_os = "macos")]
 fn bundle(
     app: &Path,
     inputs: &Path,
@@ -424,7 +507,7 @@ fn bundle(
             .args(["--force", "--sign", "-"])
             .arg(app),
     )?;
-    MacPlatform
+    NativePlatform
         .verify(app, trust, build, Some(short))
         .map_err(err)?;
     Ok(())
@@ -435,7 +518,8 @@ fn zip_bundle(app: &Path, output: &Path) -> Result<()> {
     while let Some(path) = paths.pop() {
         let meta = fs::symlink_metadata(&path)?;
         let name = format!(
-            "Pilot Next.app/{}",
+            "{}/{}",
+            pilot_desktop_updater::layout::BUNDLE,
             path.strip_prefix(app)?.to_str().ok_or("fixture path")?
         );
         let options = zip::write::SimpleFileOptions::default()
@@ -468,10 +552,15 @@ fn envelope(archive: &Path, output: &Path, trust: &Trust) -> Result<()> {
     std::io::copy(&mut File::open(archive)?, &mut HashWriter(&mut hash))?;
     let value = manifest::Manifest {
         schema: 1,
+        source: if cfg!(target_os = "linux") {
+            Some("a".repeat(40))
+        } else {
+            None
+        },
         application_id: trust.application_id.clone(),
         channel: trust.channel.clone(),
-        platform: "macos".into(),
-        architecture: "aarch64".into(),
+        platform: manifest::PLATFORM.into(),
+        architecture: manifest::ARCHITECTURE.into(),
         build: "101.1".into(),
         short_version: "0.1.1".into(),
         bundle_name: trust.bundle_name.clone(),
@@ -492,6 +581,152 @@ fn envelope(archive: &Path, output: &Path, trust: &Trust) -> Result<()> {
     Ok(())
 }
 struct HashWriter<'a>(&'a mut Sha256);
+#[cfg(target_os = "macos")]
+fn capsule_id(root: &Path) -> Result<String> {
+    runtime::identity(root).map_err(err)
+}
+#[cfg(target_os = "linux")]
+fn capsule_id(root: &Path) -> Result<String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(fs::read(root.join("linux-gui-package.json"))?)
+    ))
+}
+#[cfg(target_os = "linux")]
+fn publish_linux(old: &Path, root: &Path) -> Result<PathBuf> {
+    let id = capsule_id(old)?;
+    let store = root.join("runtimes");
+    fs::create_dir(&store)?;
+    fs::set_permissions(&store, fs::Permissions::from_mode(0o700))?;
+    let destination = store.join(id).join("payload");
+    copy_tree(old, &destination)?;
+    Ok(destination)
+}
+#[cfg(target_os = "linux")]
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let path = entry?.path();
+        let target = to.join(path.file_name().ok_or("path")?);
+        if path.is_dir() {
+            copy_tree(&path, &target)?;
+        } else {
+            fs::copy(path, target)?;
+        }
+    }
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+fn bundle(
+    app: &Path,
+    inputs: &Path,
+    node: &Path,
+    build: &str,
+    short: &str,
+    accepted: &[String],
+    trust: &Trust,
+) -> Result<()> {
+    use serde_json::json;
+    for directory in [
+        "libexec",
+        "bin",
+        "runtime/node/bin",
+        "runtime/packages/daemon/src",
+        "runtime/packages/kernel/src",
+    ] {
+        fs::create_dir_all(app.join(directory))?;
+    }
+    fs::copy(
+        inputs.join("lifecycle-fixture"),
+        app.join("libexec/pilot-desktop"),
+    )?;
+    fs::copy(
+        inputs.join("pilot-desktop-update-helper"),
+        app.join("libexec/pilot-desktop-update-helper"),
+    )?;
+    fs::copy(node, app.join("runtime/node/bin/node"))?;
+    fs::write(
+        app.join("libexec/pilot-visual-worker"),
+        b"inert fixture resource",
+    )?;
+    fs::write(app.join("bin/pilot-next"), b"inert fixture launcher")?;
+    fs::write(
+        app.join("runtime/packages/daemon/src/main.ts"),
+        b"inert fixture main",
+    )?;
+    fs::write(
+        app.join("runtime/packages/kernel/src/worker-entry.ts"),
+        b"inert fixture kernel",
+    )?;
+    for name in [
+        "libexec/pilot-desktop",
+        "libexec/pilot-desktop-update-helper",
+        "runtime/node/bin/node",
+    ] {
+        fs::set_permissions(app.join(name), fs::Permissions::from_mode(0o755))?;
+    }
+    fs::write(
+        app.join("runtime/packages/daemon/src/runtime-owner.ts"),
+        OWNER,
+    )?;
+    fs::write(
+        app.join("runtime/packages/daemon/src/update-reservation.ts"),
+        RESERVATION,
+    )?;
+    fs::write(
+        app.join("runtime/packages/daemon/src/fixture-owner.ts"),
+        NODE,
+    )?;
+    let stamp = json!({"schema":1,"source":"a".repeat(40),"version":short,"protocol":1,"platform":"linux","arch":"x64","node":"24.21.0"});
+    fs::write(
+        app.join("runtime/runtime-build.json"),
+        serde_json::to_vec(&stamp)?,
+    )?;
+    fs::write(
+        app.join("update-runtime-policy.json"),
+        serde_json::to_vec(&json!({"schema":1,"accepted_capsules":accepted}))?,
+    )?;
+    for name in ["rust-inputs.json", "updater-inputs.json"] {
+        fs::write(
+            app.join(name),
+            serde_json::to_vec(
+                &json!({"tested_sha":"a".repeat(40),"target":"x86_64-unknown-linux-gnu","updater_configuration":{"schema":1,"mode":"configured","public_key":STANDARD.encode(trust.public_key),"repository":trust.repository,"application_id":trust.application_id,"build":build,"code_requirement":trust.code_requirement}}),
+            )?,
+        )?;
+    }
+    fs::write(
+        app.join("runtime-inputs.json"),
+        serde_json::to_vec(&json!({"source":"a".repeat(40),"target":"x86_64-unknown-linux-gnu"}))?,
+    )?;
+    let mut files = Vec::new();
+    let mut pending = vec![app.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let path = entry?.path();
+            let name = path.strip_prefix(app)?.to_str().ok_or("path")?.to_owned();
+            let meta = fs::metadata(&path)?;
+            if meta.is_dir() {
+                files.push(json!({"path":name,"kind":"directory","mode":meta.mode() & 0o7777}));
+                pending.push(path);
+            } else {
+                files.push(json!({"path":name,"kind":"file","mode":meta.mode() & 0o7777,"bytes":meta.len(),"sha256":format!("{:x}",Sha256::digest(fs::read(path)?))}));
+            }
+        }
+    }
+    files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+    let raw = serde_json::to_vec(
+        &json!({"schema":1,"kind":"linux-gui-distribution","source":"a".repeat(40),"target":"x86_64-unknown-linux-gnu","build":stamp,"bundle_build":build,"short_version":short,"application_id":trust.application_id,"bundled_launch":true,"installer":true,"updater":true,"native_visual_execution":false,"files":files}),
+    )?;
+    let key = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).map_err(|_| "fixture key")?;
+    fs::write(app.join("linux-gui-package.json"), &raw)?;
+    fs::write(
+        app.join("linux-gui-package.sig"),
+        STANDARD.encode(key.sign(&raw).as_ref()),
+    )?;
+    NativePlatform
+        .verify(app, trust, build, Some(short))
+        .map_err(err)
+}
 impl Write for HashWriter<'_> {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
         self.0.update(b);

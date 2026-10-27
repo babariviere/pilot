@@ -101,7 +101,7 @@ pub(crate) struct Pane {
     models: Vec<(Entity<crate::task_model_view::Form>, Subscription)>,
 }
 impl Pane {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_safe(&self) -> bool {
         self.creation.is_none()
             && self.creations.is_empty()

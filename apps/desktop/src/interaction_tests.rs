@@ -12,10 +12,31 @@ async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing
     assert!(!state.flushed);
     assert!(state.error.is_none());
     assert_eq!(state.book.unwrap().drafts["chat:a"].revision, 7);
+    // The checkpoint can overtake its edit's already-queued autosave wake.
+    // That empty wake must not invalidate the exact receipt while preparing exit.
+    let _ = client.wake.try_send(());
+    tokio::time::sleep(AUTOSAVE_MAX + AUTOSAVE_IDLE).await;
+    while let Ok(state) = updates.try_recv() {
+        assert_eq!(
+            state.checkpoint,
+            Some(41),
+            "empty autosave cleared checkpoint"
+        );
+    }
     assert!(client.edit(
         "chat:a".into(),
         draft(8, "Retained after cancelled preparation")
     ));
+    let state = until(&updates, |s| {
+        s.book
+            .as_ref()
+            .is_some_and(|b| b.drafts["chat:a"].revision == 8)
+    })
+    .await;
+    assert_eq!(
+        state.checkpoint, None,
+        "real edits must invalidate the receipt"
+    );
     assert!(client.command(WriteCommand::Checkpoint(42)));
     let state = until(&updates, |s| s.checkpoint == Some(42)).await;
     assert_eq!(state.book.unwrap().drafts["chat:a"].revision, 8);

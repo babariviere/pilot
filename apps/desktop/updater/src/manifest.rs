@@ -4,8 +4,24 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_os = "linux"))]
 pub const MANIFEST_ASSET: &str = "desktop-macos-arm64-update.json";
+#[cfg(not(target_os = "linux"))]
 pub const ARCHIVE_ASSET: &str = "Pilot-Next-macos-arm64.zip";
+#[cfg(target_os = "linux")]
+pub const MANIFEST_ASSET: &str = "desktop-linux-x64-update.json";
+#[cfg(target_os = "linux")]
+pub const ARCHIVE_ASSET: &str = "Pilot-Next-linux-x64.zip";
+pub const PLATFORM: &str = if cfg!(target_os = "linux") {
+    "linux"
+} else {
+    "macos"
+};
+pub const ARCHITECTURE: &str = if cfg!(target_os = "linux") {
+    "x86_64"
+} else {
+    "aarch64"
+};
 pub const MAX_MANIFEST: usize = 128 * 1024;
 pub const MAX_ARCHIVE: u64 = 1024 * 1024 * 1024;
 
@@ -72,7 +88,7 @@ impl Trust {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
             || self.channel != "desktop-stable"
-            || self.bundle_name != "Pilot Next.app"
+            || !matches!(self.bundle_name.as_str(), "Pilot Next.app" | "Pilot Next")
             || self.public_key == [0; 32]
             || self.code_requirement.is_empty()
             || self.code_requirement.len() > 2048
@@ -96,6 +112,8 @@ pub struct Envelope {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub schema: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub application_id: String,
     pub channel: String,
     pub platform: String,
@@ -141,12 +159,21 @@ impl VerifiedManifest {
         if manifest.schema != 1
             || manifest.application_id != trust.application_id
             || manifest.channel != trust.channel
-            || manifest.platform != "macos"
-            || manifest.architecture != "aarch64"
+            || manifest.platform != PLATFORM
+            || manifest.architecture != ARCHITECTURE
             || manifest.bundle_name != trust.bundle_name
             || manifest.archive_name != ARCHIVE_ASSET
             || expected_asset == 0
             || manifest.archive_asset_id != expected_asset
+        {
+            return Err(Error::Identity);
+        }
+        if cfg!(target_os = "linux")
+            && !manifest.source.as_deref().is_some_and(|s| {
+                s.len() == 40
+                    && s.bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
         {
             return Err(Error::Identity);
         }

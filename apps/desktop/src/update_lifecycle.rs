@@ -142,6 +142,23 @@ impl LocalViewer {
     }
     pub(super) fn advance_update_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.acknowledge_update_startup(cx);
+        #[cfg(feature = "native-probes")]
+        if !self.restart_pending
+            && pilot_desktop_updater::fixture::enabled()
+            && let Some(updater) = self.updater(cx)
+        {
+            let authenticated = matches!(
+                updater.read(cx).state(),
+                Some(State::Available(_) | State::ReadyToRestart(_))
+            );
+            let draft_ready = authenticated
+                && self
+                    .editor
+                    .update(cx, |editor, cx| editor.update_fixture_draft(window, cx));
+            if updater.update(cx, |u, cx| u.drive_fixture(draft_ready, cx)) {
+                self.begin_update_restart(window, cx);
+            }
+        }
         if !self.restart_pending {
             return;
         }

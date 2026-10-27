@@ -183,7 +183,7 @@ impl SettingsState {
     }
     /// Loaded durable baseline (1), or one plus the latest exact SaveRequest ID.
     /// Never valid for dirty, pending or unconfirmed current preferences.
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub(crate) fn durability_token(&self) -> Option<u64> {
         self.persisted()
             .then(|| self.next_id.checked_add(1))
@@ -266,7 +266,7 @@ impl SettingsState {
     }
     /// Explicit install-only checkpoint for usable but never-persisted defaults.
     /// Ordinary Save keeps its existing clean-state no-op contract.
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     pub(crate) fn begin_durability_checkpoint(&mut self) -> Option<SaveRequest> {
         if !self.loaded
             || self.saving()

@@ -290,7 +290,7 @@ impl ChatEditor {
         cx.emit(EditorEvent::DraftsChanged);
         cx.notify();
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) fn question_checkpoint_matches(&self, cx: &gpui_kit::App) -> bool {
         let Some(question) = &self.questions.current else {
             return true;

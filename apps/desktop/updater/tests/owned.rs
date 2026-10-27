@@ -21,7 +21,10 @@ impl Temp {
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }
-    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    #[cfg(any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    ))]
     pub(crate) fn path(&self) -> &Path {
         &self.0
     }
@@ -49,10 +52,15 @@ fn metadata(bytes: &[u8]) -> manifest::Manifest {
     let trust = trust();
     manifest::Manifest {
         schema: 1,
+        source: if cfg!(target_os = "linux") {
+            Some("a".repeat(40))
+        } else {
+            None
+        },
         application_id: trust.application_id,
         channel: trust.channel,
-        platform: "macos".into(),
-        architecture: "aarch64".into(),
+        platform: manifest::PLATFORM.into(),
+        architecture: manifest::ARCHITECTURE.into(),
         build: "101.1".into(),
         short_version: "0.1.1".into(),
         bundle_name: trust.bundle_name,
@@ -194,8 +202,8 @@ fn signed_wrong_identity_channel_target_asset_are_rejected() {
         match field {
             0 => manifest.application_id = "com.babariviere.pilot".into(),
             1 => manifest.channel = "beta".into(),
-            2 => manifest.platform = "linux".into(),
-            3 => manifest.architecture = "x86_64".into(),
+            2 => manifest.platform = "wrong-platform".into(),
+            3 => manifest.architecture = "wrong-architecture".into(),
             4 => manifest.archive_asset_id = 99,
             5 => manifest.archive_name = "Pilot-arm64.zip".into(),
             _ => manifest.bundle_name = "Pilot.app".into(),
@@ -287,10 +295,15 @@ fn release() -> Vec<u8> {
 #[test]
 fn stable_shared_release_selects_only_rust_gui_assets_and_matches_signed_version() {
     let mut release: serde_json::Value = serde_json::from_slice(&release()).unwrap();
+    let other_archive = if cfg!(target_os = "linux") {
+        "Pilot-Next-macos-arm64.zip"
+    } else {
+        "Pilot-Next-linux-x64.zip"
+    };
     release["assets"].as_array_mut().unwrap().extend([
         serde_json::json!({"id":21,"name":"Pilot-arm64.zip","state":"uploaded"}),
         serde_json::json!({"id":22,"name":"appcast.xml","state":"uploaded"}),
-        serde_json::json!({"id":23,"name":"Pilot-Next-linux-x64.zip","state":"uploaded"}),
+        serde_json::json!({"id":23,"name":other_archive,"state":"uploaded"}),
     ]);
     for (tag, valid) in [
         ("v0.1.1", true),

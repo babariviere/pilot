@@ -10,7 +10,10 @@ autotests = false
 
 [features]
 default = []
-native-macos = []
+native = []
+native-macos = ["native"]
+native-linux = ["native"]
+fixture = []
 
 [dependencies]
 base64 = "=0.22.1"
@@ -26,12 +29,14 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate
 [[bin]]
 name = "pilot-desktop-update-helper"
 path = "src/bin/update-helper.rs"
-required-features = ["native-macos"]
+required-features = ["native"]
+
 
 [[example]]
 name = "lifecycle-fixture"
 path = "examples/lifecycle-fixture.rs"
-required-features = ["native-macos"]
+required-features = ["native"]
+
 
 [profile.dev]
 debug = 0

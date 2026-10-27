@@ -139,7 +139,7 @@ pub(crate) enum WriteCommand {
         key: String,
         revision: u64,
     },
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", target_os = "linux"))]
     Checkpoint(u64),
     Close,
 }
@@ -401,6 +401,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         // All commands force the existing flush immediately. Do not leave an
         // obsolete timer armed after their durable save/adoption.
         autosave = Autosave::default();
+        // A checkpoint may overtake its edit's queued wake. An empty timer flush
+        // changes nothing and must not erase that still-exact acknowledgement.
+        if command.is_none() && edits.lock().is_ok_and(|pending| pending.is_empty()) {
+            continue;
+        }
         let handled = match &command {
             Some(WriteCommand::Submit { key, request, .. })
             | Some(WriteCommand::Answer { key, request, .. }) => Some((key.clone(), *request)),
@@ -608,7 +613,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         }) => store
                             .retire_answer(&key, revision, &identity, recover)
                             .map(|_| "Question reply retained or settled privately."),
-                        #[cfg(any(test, target_os = "macos"))]
+                        #[cfg(any(test, target_os = "macos", target_os = "linux"))]
                         Some(WriteCommand::Checkpoint(generation)) => {
                             if store.is_faulted() {
                                 Err("Private state durability is unconfirmed.")

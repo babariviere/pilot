@@ -86,7 +86,7 @@ pub(crate) struct Browser {
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_safe(&self, cx: &App) -> bool {
         self.creation.is_none()
             && self.lifecycle.is_empty()

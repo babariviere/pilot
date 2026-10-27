@@ -1,7 +1,8 @@
-# App-owned macOS updater
+# App-owned desktop updater
 
-Standalone Rust crate and native macOS bridge. Not registered in the desktop app,
-not a production release channel, and not an accepted end-to-end app update yet.
+Standalone Rust core with app-owned macOS and Linux platform implementations.
+Registered in the desktop app. Source wiring and synthetic native tests do not
+establish full-payload production update qualification.
 Development/unconfigured builds cannot construct a running-app worker or enable the
 helper. No default points at the Swift application, its feed, credentials or keys.
 
@@ -188,12 +189,20 @@ is30s, COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs witho
 Helper EOF/abort is delivered through a blocking status watcher with generation fencing,
 not an idle polling timer; prepared/authorized UI cannot remain falsely ready after
 helper death. A lost COMMIT receipt is uncertain, not an undo of durable intent.
-There is no elevated install, Linux installer/updater implementation/validation,
-production feed/key provisioning, automatic provider-credential discovery, daemon
+There is no elevated install, automatic provider-credential discovery, daemon
 replacement, rollback UI or production GUI update acceptance claim. GUI Settings,
 explicit quit coordination, session-only repository access, retained-runtime proof and
 startup/recovery handling are integrated; synthetic component/helper checks do not
 establish full production-bundle, Gatekeeper, notarization or macOS-version acceptance.
+
+## Linux platform
+
+The Linux implementation reuses the signed manifest/archive/controller/journal core,
+with signed full inventories, native pidfd parent-exit monitoring and atomic
+renameat2 directory exchange. See [Linux updates](../docs/linux-updates.md) for
+the exact package/trust contract, preserved daemon and qualification boundaries.
+Linux tests use `--features native-linux`; macOS tests retain `native-macos`.
+Production configuration/qualification is separate from synthetic test success.
 
 ## Focused checks
 

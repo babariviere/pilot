@@ -1,10 +1,11 @@
 //! Exact retained-root proof and idle reservation, using only the configured
 //! private profile record. Not a provider credential lookup or remote-host API.
+#[cfg(target_os = "macos")]
+use crate::runtime;
 use crate::{
     Error,
-    installer::{self, MacPlatform, Platform},
+    installer::{self, NativePlatform, Platform},
     manifest::Trust,
-    runtime,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -147,6 +148,7 @@ fn hex(value: Option<&str>) -> bool {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     })
 }
+#[cfg(target_os = "macos")]
 fn code_build(capsule: &Path) -> Result<String, Error> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     unsafe extern "C" {
@@ -174,9 +176,40 @@ fn code_build(capsule: &Path) -> Result<String, Error> {
     crate::manifest::Build::parse(&build)?;
     Ok(build)
 }
+#[cfg(target_os = "linux")]
+fn code_build(capsule: &Path) -> Result<String, Error> {
+    let value: Value = serde_json::from_slice(
+        &fs::read(capsule.join(crate::linux::INVENTORY)).map_err(|_| Error::Identity)?,
+    )
+    .map_err(|_| Error::Identity)?;
+    let build = value["bundle_build"]
+        .as_str()
+        .ok_or(Error::Identity)?
+        .to_owned();
+    crate::manifest::Build::parse(&build)?;
+    Ok(build)
+}
+fn capsule_root(runtime_root: &Path) -> Result<PathBuf, Error> {
+    runtime_root
+        .ancestors()
+        .nth(crate::layout::RUNTIME.split('/').count())
+        .map(Path::to_owned)
+        .ok_or(Error::Identity)
+}
+#[cfg(target_os = "linux")]
+fn capsule_identity(root: &Path) -> Result<String, Error> {
+    use sha2::{Digest, Sha256};
+    Ok(crate::transport::hex(&Sha256::digest(
+        fs::read(root.join(crate::linux::INVENTORY)).map_err(|_| Error::Identity)?,
+    )))
+}
+#[cfg(target_os = "macos")]
+fn capsule_identity(root: &Path) -> Result<String, Error> {
+    runtime::identity(root)
+}
 pub fn policy(bundle: &Path) -> Result<(Vec<String>, String), Error> {
     use sha2::{Digest, Sha256};
-    let path = bundle.join("Contents/Resources/update-runtime-policy.json");
+    let path = bundle.join(crate::layout::POLICY);
     let mut file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -219,13 +252,10 @@ pub fn selected(location: &Location, current: &Path, trust: &Trust) -> Result<Pa
     let runtime_root = record["runtimeRoot"]
         .as_str()
         .ok_or(Error::RuntimeUnverified)?;
-    let root = Path::new(runtime_root)
-        .ancestors()
-        .nth(3)
-        .ok_or(Error::RuntimeUnverified)?;
+    let root = capsule_root(Path::new(runtime_root))?;
     let (accepted, _) = policy(current)?;
-    let current_id = runtime::identity(current)?;
-    validate_capsule(root, trust, &accepted, Some(&current_id))?;
+    let current_id = capsule_identity(current)?;
+    validate_capsule(&root, trust, &accepted, Some(&current_id))?;
     Ok(root.to_owned())
 }
 fn validate_capsule(
@@ -234,23 +264,51 @@ fn validate_capsule(
     accepted: &[String],
     current: Option<&str>,
 ) -> Result<(String, String), Error> {
+    #[cfg(target_os = "macos")]
     installer::validate_target(root, trust)?;
+    #[cfg(target_os = "linux")]
+    {
+        if root.file_name().is_none_or(|name| name != "payload")
+            || root.canonicalize().map_err(|_| Error::Identity)? != root
+        {
+            return Err(Error::Identity);
+        }
+        installer::validate_parents(root)?;
+        let meta = fs::symlink_metadata(root).map_err(|_| Error::Filesystem)?;
+        if meta.uid() != unsafe { libc::geteuid() } {
+            return Err(Error::Identity);
+        }
+    }
     let directory = root.parent().ok_or(Error::RuntimeUnverified)?;
     let id = directory
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or(Error::RuntimeUnverified)?;
     let store = directory.parent().ok_or(Error::RuntimeUnverified)?;
-    if store.file_name().is_none_or(|s| s != runtime::STORE_NAME) || !hex(Some(id)) {
+    #[cfg(target_os = "macos")]
+    let store_name = runtime::STORE_NAME;
+    #[cfg(target_os = "linux")]
+    let store_name = "runtimes";
+    if store.file_name().is_none_or(|s| s != store_name) || !hex(Some(id)) {
         return Err(Error::RuntimeUnverified);
     }
+    #[cfg(target_os = "macos")]
     runtime::validate_store(store)?;
+    #[cfg(target_os = "linux")]
+    {
+        installer::validate_parents(store)?;
+        let meta = fs::symlink_metadata(store).map_err(|_| Error::Identity)?;
+        if meta.mode() & 0o077 != 0 || meta.uid() != unsafe { libc::geteuid() } {
+            return Err(Error::Identity);
+        }
+        installer::acl_policy(store, 2)?;
+    }
     if current != Some(id) && !accepted.iter().any(|v| v == id) {
         return Err(Error::Version);
     }
     let build = code_build(root)?;
-    MacPlatform.verify(root, trust, &build, None)?;
-    if runtime::identity(root)? != id {
+    NativePlatform.verify(root, trust, &build, None)?;
+    if capsule_identity(root)? != id {
         return Err(Error::Identity);
     }
     Ok((id.to_owned(), build))
@@ -267,17 +325,15 @@ impl Guard {
         let runtime_root = record["runtimeRoot"]
             .as_str()
             .ok_or(Error::RuntimeUnverified)?;
-        let capsule = Path::new(runtime_root)
-            .ancestors()
-            .nth(3)
-            .ok_or(Error::RuntimeUnverified)?
-            .to_path_buf();
-        if capsule.join("Contents/Resources/runtime") != Path::new(runtime_root) {
+        let capsule = capsule_root(Path::new(runtime_root))?;
+        if capsule.join(crate::layout::RUNTIME) != Path::new(runtime_root) {
             return Err(Error::Identity);
         }
         let (accepted, policy_hash) = policy(candidate)?;
         let (capsule_id, bundle_build) = validate_capsule(&capsule, trust, &accepted, None)?;
-        let stamp = capsule.join("Contents/Resources/runtime/runtime-build.json");
+        let stamp = capsule
+            .join(crate::layout::RUNTIME)
+            .join("runtime-build.json");
         if fs::metadata(&stamp).map_err(|_| Error::Identity)?.len() > 4096 {
             return Err(Error::Identity);
         }
@@ -306,7 +362,7 @@ impl Guard {
     fn verify_process(&self, r: &Value) -> Result<(), Error> {
         if r["boot"] != self.boot
             || r["build"] != self.build
-            || r["runtimeRoot"].as_str() != self.capsule.join("Contents/Resources/runtime").to_str()
+            || r["runtimeRoot"].as_str() != self.capsule.join(crate::layout::RUNTIME).to_str()
         {
             return Err(Error::RuntimeUnverified);
         }
@@ -314,19 +370,11 @@ impl Guard {
             .as_i64()
             .filter(|p| *p > 1 && *p <= i32::MAX as i64)
             .ok_or(Error::RuntimeUnverified)? as i32;
-        let mut bytes = [0_u8; 4096];
-        // SAFETY: bounded native process executable identity read, never a signal.
-        if unsafe { libc::proc_pidpath(pid, bytes.as_mut_ptr().cast(), bytes.len() as u32) } <= 0 {
-            return Err(Error::RuntimeUnverified);
-        }
-        let end = bytes.iter().position(|v| *v == 0).ok_or(Error::Identity)?;
-        use std::os::unix::ffi::OsStrExt;
-        if Path::new(std::ffi::OsStr::from_bytes(&bytes[..end]))
-            .canonicalize()
-            .map_err(|_| Error::Identity)?
+        if crate::helper::process_executable(pid)?
             != self
                 .capsule
-                .join("Contents/Resources/runtime/node/bin/node")
+                .join(crate::layout::RUNTIME)
+                .join("node/bin/node")
                 .canonicalize()
                 .map_err(|_| Error::Identity)?
         {
@@ -464,6 +512,16 @@ impl Guard {
         )?)
         .map_err(|_| Error::Identity)?;
         let (accepted, hash) = policy(candidate)?;
+        #[cfg(feature = "fixture")]
+        if crate::fixture::enabled() {
+            eprintln!(
+                "fixture-guard-config={} transaction={} build={} policy={}",
+                guard.configuration == configuration(trust),
+                guard.transaction == transaction,
+                guard.target_build == build,
+                guard.policy_hash == hash
+            );
+        }
         if guard.configuration != configuration(trust)
             || guard.transaction != transaction
             || guard.target_build != build
@@ -492,7 +550,7 @@ impl Guard {
             transaction,
             &trust.current_build,
             trust,
-            &MacPlatform,
+            &NativePlatform,
             target,
         )?;
         guard.cancel();
@@ -503,7 +561,7 @@ impl Guard {
         target: &Path,
         trust: &Trust,
     ) -> Result<(PathBuf, Location), Error> {
-        MacPlatform.verify(target, trust, &trust.current_build, None)?;
+        NativePlatform.verify(target, trust, &trust.current_build, None)?;
         let guard = Self::load_checked(transaction, target, &trust.current_build, trust, false)?;
         Ok((guard.capsule, guard.location))
     }
@@ -518,9 +576,27 @@ fn random_hex() -> Result<String, Error> {
 }
 fn configuration(trust: &Trust) -> String {
     use sha2::{Digest, Sha256};
-    let bytes=serde_json::to_vec(&json!({"application":trust.application_id,"channel":trust.channel,"repository":trust.repository,"key":trust.public_key,"requirement":trust.code_requirement})).expect("public configuration serializes");
+    // Struct field order is stable even when the GUI enables serde_json's
+    // preserve_order feature and the standalone helper does not.
+    #[derive(Serialize)]
+    struct Configuration<'a> {
+        application: &'a str,
+        channel: &'a str,
+        repository: &'a str,
+        key: &'a [u8; 32],
+        requirement: &'a str,
+    }
+    let bytes = serde_json::to_vec(&Configuration {
+        application: &trust.application_id,
+        channel: &trust.channel,
+        repository: &trust.repository,
+        key: &trust.public_key,
+        requirement: &trust.code_requirement,
+    })
+    .expect("public configuration serializes");
     crate::transport::hex(&Sha256::digest(bytes))
 }
+
 fn random_operation() -> Result<String, Error> {
     let s = random_hex()?;
     Ok(format!(
@@ -534,6 +610,33 @@ fn random_operation() -> Result<String, Error> {
 }
 
 #[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn public_configuration_fingerprint_is_independent_of_json_map_features() {
+        let trust = Trust {
+            application_id: "com.example.synthetic.next".into(),
+            channel: "desktop-stable".into(),
+            repository: "synthetic/fixture-only".into(),
+            public_key: [7; 32],
+            code_requirement: "signed-linux-inventory-v1".into(),
+            current_build: "100.1".into(),
+            bundle_name: "Pilot Next".into(),
+        };
+        assert_eq!(
+            configuration(&trust),
+            "449aa55cf231edc8b52a5c1dca6420757eddf877307a35ba9ac9ca4fbce80ef9"
+        );
+        let mut next = trust.clone();
+        next.current_build = "101.1".into();
+        assert_eq!(configuration(&next), configuration(&trust));
+        next.repository = "synthetic/other".into();
+        assert_ne!(configuration(&next), configuration(&trust));
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

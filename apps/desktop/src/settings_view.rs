@@ -26,11 +26,11 @@ actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
 
 /// Non-rendering state owner retained by the Local window and any open Settings window.
 pub(crate) struct SettingsPreferences {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) updater: Option<Entity<crate::updates_view::Updates>>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) update_location: Option<pilot_desktop_updater::coordination::Location>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     update_events: Vec<Subscription>,
     pub(crate) restart_locked: bool,
     pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
@@ -45,11 +45,11 @@ pub(crate) struct SettingsPreferences {
 impl SettingsPreferences {
     pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
         Self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             updater: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_location: None,
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_events: Vec::new(),
             restart_locked: false,
             models: None,
@@ -66,7 +66,7 @@ impl SettingsPreferences {
         self.source.is_some() && self.state.loaded() && !self.restart_locked
     }
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.updater.is_none() {
             let location = self.update_location.clone();
             let updater = cx.new(|cx| crate::updates_view::Updates::new(location, cx));
@@ -140,7 +140,7 @@ impl SettingsPreferences {
             _ => return,
         };
         if let Some(preferences) = committed {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             if let Some(updater) = &self.updater {
                 updater.update(cx, |updater, cx| {
                     updater.automatic(preferences.automatic_update_checks, cx)
@@ -166,7 +166,7 @@ impl SettingsPreferences {
         };
         self.dispatch_save(request, cx);
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn persist_update_checkpoint(&mut self, cx: &mut Context<Self>) {
         if !self.writable() {
             return;
@@ -218,7 +218,7 @@ impl SettingsPreferences {
         self.load(cx);
     }
     pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self
             .updater
             .as_ref()
@@ -243,7 +243,7 @@ impl SettingsPreferences {
         ready
     }
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 impl EventEmitter<crate::updates_view::Event> for SettingsPreferences {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -423,7 +423,7 @@ impl SettingsView {
             .update(cx, |owner, cx| owner.request_close(cx))
     }
     fn models_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self
             .preferences
             .read(cx)
@@ -552,7 +552,7 @@ impl SettingsView {
             )
     }
     fn status(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.preferences.read(cx).close_notice
             && self
                 .preferences
@@ -686,7 +686,7 @@ impl SettingsView {
         let owner = preferences.read(cx);
         let writable = owner.writable() && !owner.state.unconfirmed();
         let automatic = owner.state.current().automatic_update_checks;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let updater = owner.updater.clone();
         let mut view = div()
             .v_flex()
@@ -710,7 +710,7 @@ impl SettingsView {
                 Text::Caption,
                 "Installation requires confirmation.",
             ));
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             if let Some(updater) = updater {
                 view = view.child(updater);

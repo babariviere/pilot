@@ -95,6 +95,12 @@ pub struct Transport {
 
 impl Transport {
     pub fn new() -> Result<Self, Error> {
+        #[cfg(feature = "fixture")]
+        if crate::fixture::enabled() {
+            return Ok(Self {
+                network: Box::new(crate::fixture::Fixture::open()?),
+            });
+        }
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()

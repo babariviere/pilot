@@ -10,7 +10,7 @@ harness = false
 required-features = ["native-probes"]
 
 [features]
-native-probes = ["gpui-kit/test-support"]
+native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[example]]
 name = "artifact_scroll_native"
@@ -88,6 +88,9 @@ tokio-tungstenite = { version = "=0.28.0", default-features = false, features = 
 
 [dev-dependencies]
 gpui-kit = { version = "=0.8.0", features = ["test-support"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pilot-desktop-updater = { path = "updater", features = ["native-linux"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 pilot-desktop-updater = { path = "updater", features = ["native-macos"] }

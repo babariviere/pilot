@@ -182,7 +182,7 @@ pub(crate) struct Book {
     pub(crate) abandoned: Vec<String>,
 }
 impl Book {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_settled(&self) -> bool {
         self.pending.is_empty()
             && self.model_changes.is_empty()

@@ -5,6 +5,12 @@ Linux release, installer, working bundled Local launch or supported updater.
 The old `Pilot-linux-x64.tar.gz` is a headless runtime, not this GUI package.
 No production release workflow, feed, signing key or installed app is changed.
 
+Configured production assembly now adds the update helper, exact-source helper
+receipt and signed update policy through the [Linux updater contract](linux-updates.md).
+The development mode described below retains its explicit unqualified policy.
+Production release wiring is documented in [releases](releases.md); source wiring
+is not a qualification acknowledgement.
+
 ## Minimal relocatable layout
 
 ```text

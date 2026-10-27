@@ -50,6 +50,19 @@ pub trait Platform {
         build: &str,
         short: Option<&str>,
     ) -> Result<(), Error>;
+    fn verify_candidate(
+        &self,
+        bundle: &Path,
+        trust: &Trust,
+        manifest: &crate::manifest::Manifest,
+    ) -> Result<(), Error> {
+        self.verify(
+            bundle,
+            trust,
+            &manifest.build,
+            Some(&manifest.short_version),
+        )
+    }
     fn swap(&self, parent: &File, staged_relative: &Path, target_name: &Path) -> Result<(), Error>;
     fn relaunch(&self, app: &Path, transaction: &Path) -> Result<(), Error>;
 }
@@ -141,12 +154,7 @@ pub fn finish_stage(
         return Err(Error::Version);
     }
     let bundle = archive::extract(&archive, &root.join("payload"), &trust.bundle_name, cancel)?;
-    platform.verify(
-        &bundle,
-        trust,
-        &verified.manifest().build,
-        Some(&verified.manifest().short_version),
-    )?;
+    platform.verify_candidate(&bundle, trust, verified.manifest())?;
     cancel.check()?;
     write_new(&root.join("manifest.json"), verified.envelope())?;
     let original = fs::symlink_metadata(&target).map_err(|_| Error::Filesystem)?;
@@ -382,12 +390,7 @@ impl Staged {
             &trust.bundle_name,
             &cancel,
         )?;
-        platform.verify(
-            &candidate,
-            trust,
-            self.build(),
-            Some(&self.verified.manifest().short_version),
-        )?;
+        platform.verify_candidate(&candidate, trust, self.verified.manifest())?;
         check(&candidate)?;
         // Keep the old app in the same directory as the actually swapped candidate.
         let relative = candidate
@@ -416,6 +419,10 @@ impl Staged {
             return Err(Error::RecoveryRequired);
         }
         parent.sync_all().map_err(|_| Error::RecoveryRequired)?;
+        // The exchange crosses directory entries, even on one volume. Persist
+        // both parents before recording the durable Swapped phase.
+        sync_directory(candidate.parent().ok_or(Error::Filesystem)?)
+            .map_err(|_| Error::RecoveryRequired)?;
         journal.phase = Phase::Swapped;
         write_journal(&self.root, &journal)?;
         // Persist intent BEFORE launching. A fast new app may acknowledge startup
@@ -430,7 +437,13 @@ impl Staged {
         Ok(())
     }
 
-    #[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
+    #[cfg(any(
+        test,
+        any(
+            all(target_os = "macos", feature = "native-macos"),
+            all(target_os = "linux", feature = "native-linux")
+        )
+    ))]
     pub(crate) fn mark_committed(&self) -> Result<(), Error> {
         let _guard = journal_guard(&self.root)?;
         let mut journal = read_journal(&self.root)?;
@@ -509,12 +522,7 @@ pub fn acknowledge_startup(
     if manifest.manifest().build != active_build {
         return Err(Error::Version);
     }
-    platform.verify(
-        target,
-        trust,
-        active_build,
-        Some(&manifest.manifest().short_version),
-    )?;
+    platform.verify_candidate(target, trust, manifest.manifest())?;
     let mut journal = read_journal(root)?;
     if journal.phase == Phase::StartupAcknowledged {
         return Ok(());
@@ -641,7 +649,14 @@ pub(crate) fn acl_policy(path: &Path, policy: i32) -> Result<(), Error> {
             Err(Error::Filesystem)
         }
     }
-    #[cfg(not(all(target_os = "macos", feature = "native-macos")))]
+    #[cfg(all(target_os = "linux", feature = "native-linux"))]
+    {
+        crate::linux::acl_policy(path, policy)
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    )))]
     {
         let _ = (path, policy);
         Ok(())
@@ -650,7 +665,13 @@ pub(crate) fn acl_policy(path: &Path, policy: i32) -> Result<(), Error> {
 
 /// Only a freshly created, still-unpublished failed preparation may be discarded.
 /// Durable ready/pending/committed transactions are always retained for explicit recovery.
-#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
+#[cfg(any(
+    test,
+    any(
+        all(target_os = "macos", feature = "native-macos"),
+        all(target_os = "linux", feature = "native-linux")
+    )
+))]
 pub(crate) fn discard_incomplete(root: &Path, target: &Path) -> Result<(), Error> {
     validate_root(root, target)?;
     if root
@@ -743,6 +764,11 @@ impl Platform for MacPlatform {
         )
     }
 }
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub use MacPlatform as NativePlatform;
+
+#[cfg(all(target_os = "linux", feature = "native-linux"))]
+pub use crate::linux::LinuxPlatform as NativePlatform;
 #[cfg(test)]
 mod identity_tests {
     use super::*;

@@ -10,6 +10,9 @@ fn main() {
         println!("cargo:rerun-if-env-changed={variable}");
     }
     println!("cargo:rerun-if-changed=native/platform.m");
+    if env::var_os("CARGO_FEATURE_NATIVE_LINUX").is_some() {
+        assert_eq!(env::var("CARGO_CFG_TARGET_OS").unwrap(), "linux");
+    }
     if env::var_os("CARGO_FEATURE_NATIVE_MACOS").is_none() {
         return;
     }

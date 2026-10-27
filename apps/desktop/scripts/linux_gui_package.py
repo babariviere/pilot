@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Relocatable Linux GUI candidate assembly. No install, daemon launch or updater."""
 import argparse
+import base64
 import platform
 from pathlib import Path
 import re
@@ -86,8 +87,25 @@ def runtime_identity(runtime, expected):
     return build
 
 
-def assemble(runtime, executables, runtime_receipt, output, expected):
+def assemble(runtime, executables, runtime_receipt, output, expected, updater=None, bundle_build=None, application_id=None, accepted_capsules=()):
     source(expected)
+    production = updater is not None
+    if production:
+        if (not bundle_build or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", bundle_build)
+                or not application_id or application_id == "com.babariviere.pilot"
+                or not re.fullmatch(r"[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+", application_id)
+                or output.name != "Pilot Next"
+                or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in accepted_capsules)):
+            raise ValueError("Linux update identity/policy is invalid")
+        receipt = read_json(updater / "manifest.json")
+        helper = updater / "pilot-desktop-update-helper"
+        matches = [entry for entry in receipt.get("binaries", []) if entry.get("name") == helper.name]
+        if (receipt.get("tested_sha") != expected or receipt.get("target") != TARGET or len(matches) != 1
+                or not helper.is_file() or helper.is_symlink() or matches[0].get("sha256") != digest(helper)
+                or matches[0].get("bytes") != helper.stat().st_size):
+            raise ValueError("Updater source/target/hash mismatch")
+    elif bundle_build or application_id or accepted_capsules:
+        raise ValueError("Production update options require updater inputs")
     if output.exists() or output.is_symlink():
         raise ValueError("Output must be fresh")
     # Reuse the macOS packaging seam's bounded inventory and identity conventions,
@@ -100,6 +118,16 @@ def assemble(runtime, executables, runtime_receipt, output, expected):
     receipt = read_json(executables / "manifest.json")
     if receipt.get("tested_sha") != expected or receipt.get("target") != TARGET:
         raise ValueError("Executable source/target mismatch")
+    if production:
+        config = receipt.get("updater_configuration")
+        helper_config = read_json(updater / "manifest.json").get("updater_configuration")
+        if (not isinstance(config, dict) or config != helper_config or config.get("schema") != 1
+                or config.get("mode") != "configured" or config.get("build") != bundle_build
+                or config.get("application_id") != application_id
+                or config.get("code_requirement") != "signed-linux-inventory-v1"
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", config.get("repository", ""))
+                or len(base64.b64decode(config.get("public_key", ""), validate=True)) != 32):
+            raise ValueError("GUI/helper compiled update configuration mismatch")
     inventory(executables)
     for name in BINARIES:
         entries = [item for item in receipt.get("binaries", []) if item.get("name") == name]
@@ -114,14 +142,20 @@ def assemble(runtime, executables, runtime_receipt, output, expected):
         for name in BINARIES:
             shutil.copyfile(executables / name, output / "libexec" / name)
             (output / "libexec" / name).chmod(0o755)
+        if production:
+            shutil.copyfile(updater / "pilot-desktop-update-helper", output / "libexec/pilot-desktop-update-helper")
+            (output / "libexec/pilot-desktop-update-helper").chmod(0o755)
+            write_json(output / "updater-inputs.json", read_json(updater / "manifest.json"))
+            write_json(output / "update-runtime-policy.json", dict(schema=1, accepted_capsules=list(accepted_capsules)))
         shutil.copytree(runtime, output / "runtime", symlinks=True)
         (output / "bin/pilot-next").write_text(LAUNCHER)
         (output / "bin/pilot-next").chmod(0o755)
         write_json(output / "rust-inputs.json", receipt)
         write_json(output / "runtime-inputs.json", proof)
-        write_json(output / MANIFEST, dict(schema=1, kind="unqualified-linux-gui-candidate",
-                   source=expected, target=TARGET, build=build, bundled_launch=False,
-                   installer=False, updater=False, native_visual_execution=False, files=inventory(output)))
+        write_json(output / MANIFEST, dict(schema=1, kind="linux-gui-distribution" if production else "unqualified-linux-gui-candidate",
+                   source=expected, target=TARGET, build=build, bundled_launch=production,
+                   installer=production, updater=production, native_visual_execution=False, files=inventory(output),
+                   **(dict(bundle_build=bundle_build, application_id=application_id, short_version=build["version"]) if production else {})))
         verify(output)
     except BaseException:
         shutil.rmtree(output)
@@ -130,10 +164,12 @@ def assemble(runtime, executables, runtime_receipt, output, expected):
 
 def verify(output):
     value = read_json(output / MANIFEST)
-    actual = [item for item in inventory(output) if item["path"] != MANIFEST]
-    if (value.get("schema") != 1 or value.get("kind") != "unqualified-linux-gui-candidate"
+    actual = [item for item in inventory(output) if item["path"] not in (MANIFEST, "linux-gui-package.sig")]
+    production = value.get("kind") == "linux-gui-distribution"
+    if (value.get("schema") != 1 or value.get("kind") not in ("unqualified-linux-gui-candidate", "linux-gui-distribution")
             or value.get("target") != TARGET or value.get("files") != actual
-            or any(value.get(key) is not False for key in ("bundled_launch", "installer", "updater", "native_visual_execution"))):
+            or value.get("native_visual_execution") is not False
+            or any(value.get(key) is not production for key in ("bundled_launch", "installer", "updater"))):
         raise ValueError("Package inventory/policy mismatch")
     if runtime_identity(output / "runtime", value["source"]) != value["build"]:
         raise ValueError("Package runtime identity mismatch")
@@ -149,6 +185,17 @@ def verify(output):
         path = output / "libexec" / name
         if len(matches) != 1 or matches[0].get("sha256") != digest(path) or matches[0].get("bytes") != path.stat().st_size:
             raise ValueError("Copied executable differs from immutable input receipt")
+    if production:
+        helper_receipt = read_json(output / "updater-inputs.json")
+        helper = output / "libexec/pilot-desktop-update-helper"
+        entries = [item for item in helper_receipt.get("binaries", []) if item.get("name") == helper.name]
+        if (helper_receipt.get("tested_sha") != value["source"] or helper_receipt.get("target") != TARGET
+                or len(entries) != 1 or entries[0].get("sha256") != digest(helper)
+                or entries[0].get("bytes") != helper.stat().st_size
+                or not re.fullmatch(r"(?:0|[1-9][0-9]{0,8})(?:\.(?:0|[1-9][0-9]{0,8})){0,3}", value.get("bundle_build", ""))
+                or value.get("short_version") != value["build"]["version"]
+                or not value.get("application_id") or value["application_id"] == "com.babariviere.pilot"):
+            raise ValueError("Copied updater/identity differs from immutable input receipt")
 
 
 def main():
@@ -158,12 +205,16 @@ def main():
     for name in ("runtime", "executables", "runtime-receipt", "output"):
         build.add_argument("--" + name, type=Path, required=True)
     build.add_argument("--source", required=True)
+    build.add_argument("--updater", type=Path)
+    build.add_argument("--bundle-build")
+    build.add_argument("--application-id")
+    build.add_argument("--accepted-capsule", action="append", default=[])
     for name in ("verify", "dependencies"):
         commands.add_parser(name).add_argument("output", type=Path)
     args = parser.parse_args()
     if args.action == "assemble":
         assemble(args.runtime.resolve(), args.executables.resolve(), args.runtime_receipt,
-                 args.output.absolute(), args.source)
+                 args.output.absolute(), args.source, args.updater, args.bundle_build, args.application_id, args.accepted_capsule)
     elif args.action == "verify":
         verify(args.output.resolve())
     else:

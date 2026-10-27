@@ -384,12 +384,6 @@ fn failure(code: &str) -> Failure {
 /// One bounded worker calls this; no environment mutation, shell, PATH lookup or production restart.
 pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::LocalOptions, Failure> {
     let deadline = Instant::now() + Duration::from_secs(45);
-    #[cfg(target_os = "linux")]
-    if update_receipt().is_some() {
-        return Err(
-            "Verified Linux update runtime handoff is unavailable in this build. No daemon was started or update acknowledged.",
-        );
-    }
     if !cfg!(any(
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "linux", target_arch = "x86_64")
@@ -409,7 +403,7 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         .ok_or("Cannot locate Linux package.")?;
     #[cfg(not(target_os = "linux"))]
     validate(root, &cancel, deadline)?;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let pinned = if let Some(receipt) = update_receipt() {
         let trust = pilot_desktop_updater::helper::compiled_trust()
             .map_err(|_| "Update startup trust is unconfigured.")?;
@@ -439,19 +433,27 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         runtime_root
     };
     #[cfg(target_os = "linux")]
-    let runtime_root = {
+    let runtime_root = if let Some((root, _)) = &pinned {
+        root.clone()
+    } else {
         let data = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .unwrap_or(
                 PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?)
                     .join(".local/share"),
             );
-        linux::publish(
+        let capsule = linux::publish(
             &runtime_root,
             &data.join("pilot-next/runtimes"),
             &cancel,
             deadline,
-        )?
+        )?;
+        if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
+            pilot_desktop_updater::coordination::selected(&runtime_location()?, &capsule, &trust)
+                .map_err(|_| "The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
+        } else {
+            capsule
+        }
     };
     #[cfg(target_os = "linux")]
     let runtime = runtime_root.join("runtime");
@@ -490,7 +492,7 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
         }
         command.env(name, value);
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if let Some((_, location)) = &pinned {
         // A relaunch receipt, not the launch-service environment, owns the exact
         // configured profile and denial policies. Never silently retarget Local.
@@ -514,14 +516,14 @@ pub fn start(executable: PathBuf, cancel: Arc<AtomicBool>) -> Result<crate::Loca
             .spawn()
             .map_err(|_| "Cannot launch bundled Node runtime.")?;
         supervise(&mut child, &cancel, deadline).await?;
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some((_, location)) = pinned {
             return crate::LocalOptions::discover_at(location);
         }
         crate::LocalOptions::discover()
     })
 }
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, Failure> {
     let port = std::env::var("PILOT_PORT")
         .unwrap_or_else(|_| "4319".into())
