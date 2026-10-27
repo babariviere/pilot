@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.70.0](https://github.com/babariviere/pilot/compare/v1.69.0...v1.70.0) (2026-10-27)
+
+
+### Features
+
+* **kernel:** default bounded coordinator memory ([920efef](https://github.com/babariviere/pilot/commit/920efefed42fd7623b3acb27648d9f74c636e231))
+
+
+### Bug Fixes
+
+* **desktop:** remove chat footer and routine delivery noise ([f89d7b6](https://github.com/babariviere/pilot/commit/f89d7b66e89166579df19332c4be0bf533f8a0ba))
+* **desktop:** remove hello and history response caps ([3565475](https://github.com/babariviere/pilot/commit/3565475b08844f5a895b94f0567cb6d2aec6bb87))
+* **desktop:** remove lifetime form-count restrictions ([db07b17](https://github.com/babariviere/pilot/commit/db07b172e8f553371b00ab3743fcb914b5ab6988))
+* **desktop:** size Local read envelopes by route ([0607671](https://github.com/babariviere/pilot/commit/0607671229f569f18ddcb12e23a0d6511688ce9f))
+
 ## [1.69.0](https://github.com/babariviere/pilot/compare/v1.68.0...v1.69.0) (2026-10-26)
 
 
