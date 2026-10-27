@@ -84,10 +84,10 @@ test("tests never block a release and Release Please never waits for tests", () 
 	assert.doesNotMatch(job("release-please"), /^    needs:/m);
 	assert.match(job("target"), /^    needs: release-please$/m);
 	assert.match(job("macos-app"), /^    needs: target$/m);
-	assert.match(job("linux-package"), /^    needs: target$/m);
 	assert.match(job("macos-publish"), /^    needs: \[target, macos-app\]$/m);
-	assert.match(job("linux-publish"), /^    needs: \[target, linux-package\]$/m);
-	assert.match(job("publish"), /^    needs: \[target, linux-publish, macos-publish\]$/m);
+	assert.match(job("macos-gui"), /^    needs: target$/m);
+	assert.match(job("gui-publish"), /^    needs: \[target, macos-gui\]$/m);
+	assert.match(job("publish"), /^    needs: \[target, gui-publish, macos-publish\]$/m);
 	for (const name of ["pr.yaml", "main.yaml", "tests.yaml"]) {
 		assert.doesNotMatch(read(name), /release-please-action|contents: write|secrets\./, name);
 	}
@@ -129,10 +129,7 @@ test("portable tests run on Linux and native coverage plus packaging stay on mac
 	assert.match(macos, /node --test apps\/macos\/scripts\/tests\/\*\.test\.mjs/);
 	assert.match(macos, /Verify packaged dependency updates/);
 	assert.doesNotMatch(linux, /ditto|Packaging and release metadata tests|Verify packaged dependency updates/);
-	const headless = job("linux-headless");
-	assert.match(headless, /PILOT_REQUIRE_LINUX_ISOLATION: "1"/);
-	assert.match(headless, /native-runtime\.test\.ts/);
-	assert.doesNotMatch(headless, /linux-package|production/);
+	assert.doesNotMatch(read("tests.yaml"), /^  linux-headless:/m);
 });
 
 test("both Node lanes install architecture-matched checksum-verified jj before testing", () => {
@@ -318,7 +315,7 @@ test("release builds run only for newly created stable drafts or explicit retrie
 	c.github.ref = "refs/heads/main";
 	c.github.event.repository.fork = true;
 	assert.equal(evaluate(source, c), false);
-	for (const name of ["macos-app", "macos-publish", "linux-package", "linux-publish", "publish"]) {
+	for (const name of ["macos-app", "macos-publish", "macos-gui", "gui-publish", "publish"]) {
 		assert.doesNotMatch(job(name), /^    if:/m, `${name} runs only after target succeeds`);
 	}
 });
@@ -346,11 +343,11 @@ test("the release target resolves the tagged commit and rejects unstable or mism
 
 test("release jobs build and publish the tagged commit, never this run's newer main", () => {
 	const job = jobOf(read("release.yaml"));
-	for (const name of ["macos-app", "macos-publish", "linux-publish"]) {
+	for (const name of ["macos-app", "macos-publish", "gui-publish"]) {
 		assert.match(job(name), /- uses: actions\/checkout@v4\n        with:\n(?:          .*\n)*?          ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
 	}
-	assert.match(job("linux-package"), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/);
-	for (const name of ["macos-publish", "linux-publish", "publish"]) {
+	assert.match(job("macos-gui"), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/);
+	for (const name of ["macos-publish", "gui-publish", "publish"]) {
 		assert.match(job(name), /RELEASE_TAG: \$\{\{ needs\.target\.outputs\.tag \}\}/, name);
 	}
 	assert.doesNotMatch(read("release.yaml"), /linux-release-rebuild|rebuild=true|production-source/);
@@ -383,21 +380,16 @@ test("production packages are built once without private keys and publishing pro
 	assert.doesNotMatch(publish, /--draft=false|finalize-release|concurrency:/);
 });
 
-test("Linux release signing follows successful package verification", () => {
+test("GUI release signing follows successful package verification", () => {
 	const job = jobOf(read("release.yaml"));
-	assert.doesNotMatch(job("linux-package"), /secrets\.|contents: write/);
-	const publish = job("linux-publish");
+	assert.doesNotMatch(job("macos-gui"), /secrets\.|contents: write/);
+	const publish = job("gui-publish");
 	assert.match(publish, /contents: write/);
-	assert.match(publish, /name: linux-production-runtime/);
-	assert.ok(publish.indexOf("release-manifest.mjs sign") < publish.indexOf("gh release upload"));
-	assert.ok(publish.indexOf("Require Linux runtime signing configuration") < publish.indexOf("uses: actions/checkout"));
-	assert.match(publish, /Only stable drafts may receive runtime assets/);
-	assert.match(publish, /runtime-manifest\.json\.sig/);
-	const verification = read("linux-package.yml");
-	assert.match(verification, /permissions:\n  contents: read/);
-	assert.doesNotMatch(verification, /contents: write|secrets\.|gh release upload|PRIVATE_KEY/);
-	assert.match(verification, /check-runtime\.mjs/);
-	assert.doesNotMatch(verification, /verify-service\.sh|openssh-server/);
+	assert.match(publish, /name: gui-production-\$\{\{ matrix\.platform \}\}/);
+	assert.ok(publish.indexOf("gui-release-manifest.mjs") < publish.indexOf("gh release upload"));
+	const packaging = read("gui-package.yml");
+	assert.match(packaging, /permissions:\n  contents: read/);
+	assert.doesNotMatch(packaging, /contents: write|gh release upload/);
 });
 
 test("one serialized job publishes the complete draft after both platforms upload", () => {

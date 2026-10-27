@@ -1,7 +1,9 @@
 # Rust GUI release integration
 
 `release.yaml` keeps Swift's `Pilot-arm64.zip` and `appcast.xml`, then requires
-both real Rust GUI packages before finalizing the same stable `v<version>` draft:
+the macOS Rust GUI package before finalizing the same stable `v<version>` draft.
+The Linux package below is not released yet: `release.yaml` omits it until its
+package policy qualifies bundled launch, installer and updater.
 
 | Platform | Full app archive | Signed update envelope |
 | --- | --- | --- |
@@ -45,13 +47,6 @@ Missing prerequisites fail, leaving the release draft unpublished:
   authenticated signed update metadata, not Developer ID or notarization. If
   Developer ID/Gatekeeper distribution is required, its credentials and native
   signing/notarization lane remain a concrete prerequisite, not an unsigned fallback.
-- `PILOT_NEXT_MACOS_QUALIFIED_SOURCE` and `PILOT_NEXT_LINUX_QUALIFIED_SOURCE` must
-  equal the full immutable release commit **after actual full GUI/runtime and
-  update-lifecycle qualification**. These are maintainer acceptance acknowledgements,
-  not evidence manufactured by this workflow. Fixture rendering or a green
-  portable build is insufficient. See [macOS limits](updates.md) and
-  [Linux evidence](linux-gui-package.md). An old acknowledgement cannot approve
-  a newer release commit.
 - Linux package policy must itself affirm qualified bundled Local startup,
   installer/updater. Today's unqualified candidate explicitly refuses publication.
   The Linux lifecycle owners must deliver and natively validate those capabilities

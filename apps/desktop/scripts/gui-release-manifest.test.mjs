@@ -85,15 +85,23 @@ test("finalization requires authenticated GUI envelopes matching current uploade
 		});
 		envelopes[manifestName] = envelope(value, pem, publicBase64);
 	}
-	verifyRelease(release, envelopes, publicBase64, source, "v1.2.3");
+	const both = ["macos", "linux"];
+	verifyRelease(release, envelopes, publicBase64, source, "v1.2.3", both);
+	verifyRelease(
+		release,
+		{ "desktop-macos-arm64-update.json": envelopes["desktop-macos-arm64-update.json"] },
+		publicBase64,
+		source,
+		"v1.2.3",
+	);
 	for (const change of [{ id: 999 }, { digest: `sha256:${"0".repeat(64)}` }, { size: 1 }, { state: "new" }]) {
 		const changed = structuredClone(release);
 		Object.assign(changed.assets[0], change);
-		assert.throws(() => verifyRelease(changed, envelopes, publicBase64, source, "v1.2.3"));
+		assert.throws(() => verifyRelease(changed, envelopes, publicBase64, source, "v1.2.3", both));
 	}
-	assert.throws(() => verifyRelease({ ...release, draft: false }, envelopes, publicBase64, source, "v1.2.3"));
-	assert.throws(() => verifyRelease(release, envelopes, Buffer.alloc(32).toString("base64"), source, "v1.2.3"));
-	assert.throws(() => verifyRelease(release, envelopes, publicBase64, "b".repeat(40), "v1.2.3"));
+	assert.throws(() => verifyRelease({ ...release, draft: false }, envelopes, publicBase64, source, "v1.2.3", both));
+	assert.throws(() => verifyRelease(release, envelopes, Buffer.alloc(32).toString("base64"), source, "v1.2.3", both));
+	assert.throws(() => verifyRelease(release, envelopes, publicBase64, "b".repeat(40), "v1.2.3", both));
 });
 
 test("Linux inventory signature covers raw bytes, refusal flags and identity", () => {

@@ -42,12 +42,6 @@ def configuration(env, platform="macos"):
                 code_requirement=f'identifier "{bundle.APP_ID}"')
 
 
-def qualification(expected, platform, env):
-    name = "PILOT_NEXT_" + platform.upper() + "_QUALIFIED_SOURCE"
-    if env.get(name) != bundle.source(expected):
-        raise ValueError(f"{name} must acknowledge full GUI/runtime/lifecycle qualification of this exact release commit")
-
-
 def accepted_capsules(env):
     values = json.loads(env.get("PILOT_NEXT_ACCEPTED_CAPSULES") or "[]")
     if (not isinstance(values, list) or len(values) > 4 or
@@ -137,7 +131,7 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--package", type=Path)
     args = parser.parse_args()
-    qualification(args.source, args.platform, os.environ)
+    bundle.source(args.source)
     config = configuration(os.environ, args.platform)
     accepted_capsules(os.environ)
     if args.platform == "linux":

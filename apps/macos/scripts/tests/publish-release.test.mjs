@@ -1,9 +1,30 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { envelope, metadata } from "../../../desktop/scripts/gui-release-manifest.mjs";
+
+// A synthetic, correctly signed macOS GUI draft for finalize-release.sh.
+function signedGuiDraft() {
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+	const publicBase64 = publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64");
+	const source = "a".repeat(40);
+	const bytes = Buffer.from("synthetic GUI archive");
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const record = { schema: 1, platform: "macos", source, version: "0.2.0", archive: "Pilot-Next-macos-arm64.zip", build: "1", bytes: bytes.length, sha256 };
+	const value = metadata(record, bytes, "macos", 123, source, "v0.2.0");
+	const release = {
+		draft: true,
+		prerelease: false,
+		tag_name: "v0.2.0",
+		assets: [{ id: 123, name: "Pilot-Next-macos-arm64.zip", state: "uploaded", size: bytes.length, digest: `sha256:${sha256}` }],
+	};
+	return { publicBase64, source, release: JSON.stringify(release), envelope: envelope(value, pem, publicBase64) };
+}
 
 test("dev publishing is rejected before any packaging or remote calls", () => {
 	const result = spawnSync("bash", [new URL("../publish-release.sh", import.meta.url).pathname], {
@@ -88,6 +109,7 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-build", "api-error", "incomplete"]) {
 	test("publication safety: " + scenario, () => {
 		const dir = mkdtempSync(join(tmpdir(), "pilot-publication-test-"));
+		const gui = signedGuiDraft();
 		try {
 			const bin = join(dir, "bin");
 			mkdirSync(bin);
@@ -102,12 +124,18 @@ appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + "\n");
 const feed = (build) => '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>' +
   '<sparkle:version>' + build + '</sparkle:version><sparkle:shortVersionString>0.2.0</sparkle:shortVersionString></item></channel></rss>';
 if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") + 1] === "isDraft,isPrerelease,assets") {
-  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-linux-x64.tar.gz", "runtime-manifest.json", "runtime-manifest.json.sig"];
+  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-Next-macos-arm64.zip", "desktop-macos-arm64-update.json"];
   console.log(JSON.stringify({isDraft: true, isPrerelease: false,
-    assets: names.filter((name) => scenario !== "incomplete" || !name.startsWith("runtime-"))
+    assets: names.filter((name) => scenario !== "incomplete" || !name.startsWith("desktop-"))
       .map((name) => ({name, state: "uploaded"}))}));
 } else if (args[0] === "release" && args[1] === "view") {
   console.log("12345");
+} else if (args[0] === "api" && args[1].endsWith("/releases/12345")) {
+  console.log(process.env.GUI_RELEASE);
+} else if (args[0] === "api" && args[1].endsWith("/12345/assets") && args.join(" ").includes("desktop-macos-arm64-update.json")) {
+  console.log("556");
+} else if (args[0] === "api" && args[1].endsWith("/assets/556")) {
+  process.stdout.write(process.env.GUI_ENVELOPE);
 } else if (args[0] === "api" && args[1].endsWith("/12345/assets")) {
   console.log("555");
 } else if (args[0] === "api" && args[1].endsWith("/assets/555")) {
@@ -141,6 +169,10 @@ if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") +
 					GH_TOKEN: "test-only-token",
 					RELEASE_TAG: "v0.2.0",
 					PILOT_UPDATE_REPOSITORY: "owner/repo",
+					RELEASE_SOURCE: gui.source,
+					PILOT_NEXT_UPDATER_PUBLIC_KEY: gui.publicBase64,
+					GUI_RELEASE: gui.release,
+					GUI_ENVELOPE: gui.envelope,
 				},
 			});
 			if (["api-error", "incomplete"].includes(scenario)) assert.notEqual(result.status, 0);

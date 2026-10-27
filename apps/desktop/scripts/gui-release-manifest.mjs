@@ -9,6 +9,10 @@ export const assets = {
 	linux: ["Pilot-Next-linux-x64.zip", "desktop-linux-x64-update.json"],
 };
 
+// Platforms a stable release publishes. Linux returns once its package policy
+// qualifies bundled launch, installer and updater (see docs/releases.md).
+export const releasePlatforms = ["macos"];
+
 export function metadata(record, bytes, platform, assetId, source, tag) {
 	const names = assets[platform];
 	if (
@@ -85,7 +89,7 @@ export function sealLinux(directory, source, build, privatePem, publicBase64) {
 	writeFileSync(join(directory, "linux-gui-package.sig"), signature.toString("base64"));
 }
 
-export function verifyRelease(release, envelopes, publicBase64, source, tag) {
+export function verifyRelease(release, envelopes, publicBase64, source, tag, platforms = releasePlatforms) {
 	const raw = Buffer.from(publicBase64, "base64");
 	if (raw.length !== 32) throw new Error("Missing pinned GUI release verification key");
 	const key = createPublicKey({
@@ -95,7 +99,7 @@ export function verifyRelease(release, envelopes, publicBase64, source, tag) {
 	});
 	if (!release.draft || release.prerelease || release.tag_name !== tag)
 		throw new Error("Expected matching stable draft");
-	for (const platform of ["macos", "linux"]) {
+	for (const platform of platforms) {
 		const [archiveName, manifestName] = assets[platform];
 		const selected = release.assets.filter((a) => a.name === archiveName && a.state === "uploaded");
 		if (selected.length !== 1) throw new Error("Expected exactly one GUI archive");
@@ -127,7 +131,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 	const [platform, directory, id] = process.argv.slice(2);
 	if (platform === "verify-release") {
 		const envelopes = Object.fromEntries(
-			Object.values(assets).map(([, name]) => [name, readFileSync(join(directory, name))]),
+			releasePlatforms.map((platform) => [assets[platform][1], readFileSync(join(directory, assets[platform][1]))]),
 		);
 		verifyRelease(
 			JSON.parse(readFileSync(join(directory, "release-api.json"))),

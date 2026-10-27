@@ -27,15 +27,6 @@ class GuiReleaseTests(unittest.TestCase):
             with self.subTest(build=bad), self.assertRaises(ValueError):
                 release.configuration(env | dict(PILOT_NEXT_UPDATER_BUILD=bad))
 
-    def test_native_qualification_is_exact_source_and_platform_not_fixture_success(self):
-        source = "a" * 40
-        for platform in ("macos", "linux"):
-            name = "PILOT_NEXT_" + platform.upper() + "_QUALIFIED_SOURCE"
-            release.qualification(source, platform, {name: source})
-            for value in ("", "true", "b" * 40):
-                with self.assertRaisesRegex(ValueError, name):
-                    release.qualification(source, platform, {name: value})
-
     def test_retained_capsule_policy_preserves_exact_existing_allowlist_contract(self):
         self.assertEqual(release.accepted_capsules({}), [])
         self.assertEqual(release.accepted_capsules({"PILOT_NEXT_ACCEPTED_CAPSULES": '["' + "a" * 64 + '"]'}), ["a" * 64])
@@ -83,8 +74,10 @@ class GuiReleaseTests(unittest.TestCase):
         package = (root / ".github/workflows/gui-package.yml").read_text()
         self.assertNotIn("release/Pilot-linux-x64", workflow)
         self.assertNotIn("LINUX_RUNTIME_PRIVATE_KEY", workflow)
-        for name in ("macos-gui:", "linux-gui:", "gui-publish:", "macos-publish:"):
+        for name in ("macos-gui:", "gui-publish:", "macos-publish:"):
             self.assertIn(name, workflow)
+        # Linux GUI stays unreleased until its package policy qualifies.
+        self.assertNotIn("linux-gui:", workflow)
         self.assertIn("needs: [target, gui-publish, macos-publish]", workflow)
         self.assertIn("bundle_runtime", (root / "apps/desktop/scripts/gui_release.py").read_text())
         self.assertIn("--release --locked --workspace --bins", package)

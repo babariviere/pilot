@@ -237,23 +237,15 @@ jobs:
       platform: macos
       build: ${{ github.run_number }}.${{ github.run_attempt }}
 
-  linux-gui:
-    needs: target
-    uses: ./.github/workflows/gui-package.yml
-    with:
-      ref: ${{ needs.target.outputs.sha }}
-      platform: linux
-      build: ${{ github.run_number }}.${{ github.run_attempt }}
-    secrets:
-      PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}
-
+  # Linux GUI packaging (gui-package.yml, platform: linux) is not released until its
+  # package policy qualifies bundled launch, installer and updater.
   gui-publish:
-    needs: [target, macos-gui, linux-gui]
+    needs: [target, macos-gui]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       matrix:
-        platform: [macos, linux]
+        platform: [macos]
     permissions:
       contents: write
     env:

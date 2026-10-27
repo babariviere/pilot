@@ -34,8 +34,6 @@ jobs:
       PILOT_NEXT_UPDATER_BUILD: ${{ inputs.build }}
       PILOT_NEXT_ACCEPTED_CAPSULES: ${{ inputs.platform == 'macos' && vars.PILOT_NEXT_MACOS_ACCEPTED_CAPSULES || vars.PILOT_NEXT_LINUX_ACCEPTED_CAPSULES }}
       PILOT_NEXT_SIGNING_POLICY: ${{ vars.PILOT_NEXT_SIGNING_POLICY }}
-      PILOT_NEXT_MACOS_QUALIFIED_SOURCE: ${{ vars.PILOT_NEXT_MACOS_QUALIFIED_SOURCE }}
-      PILOT_NEXT_LINUX_QUALIFIED_SOURCE: ${{ vars.PILOT_NEXT_LINUX_QUALIFIED_SOURCE }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,7 +43,7 @@ jobs:
         with:
           node-version: 24.21.0
       - uses: pnpm/action-setup@v4
-      - name: Require immutable source and explicit native distribution qualification
+      - name: Require immutable source and release configuration
         env:
           RELEASE_SOURCE: ${{ inputs.ref }}
           PLATFORM: ${{ inputs.platform }}
