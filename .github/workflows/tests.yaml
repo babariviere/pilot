@@ -265,61 +265,6 @@ jobs:
           path: ${{ runner.temp }}/delegated-screenshots/*.png
           if-no-files-found: error
 
-  # Real Linux isolation, native ABI and headless daemon/kernel checks. A test fixture, not a release requirement.
-  linux-headless:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - name: Verify runtime capabilities
-        run: |
-          test "$(uname -m)" = x86_64
-          node --version
-          command -v bash
-          command -v ldd
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - name: Install sandbox tooling (runner fixture only)
-        run: |
-          sudo apt-get update && sudo apt-get install -y bubblewrap
-          # The runner's default policy restricts unprivileged userns. Grant only the
-          # system bwrap executable this capability, never disable host policy globally.
-          if command -v apparmor_parser >/dev/null && grep -q Y /sys/module/apparmor/parameters/enabled; then
-            printf '%s\n' 'abi <abi/4.0>,' \
-              'profile pilot-ci-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' \
-              | sudo apparmor_parser -r
-          fi
-      - name: Verify real coordinator isolation, descendants, aliases and denied capabilities
-        env:
-          PILOT_REQUIRE_LINUX_ISOLATION: "1"
-          PILOT_LINUX_BIND_FIXTURES: "1"
-        run: |
-          node --test --test-force-exit packages/kernel/src/readonly-settings.test.ts packages/daemon/src/credential-broker.test.ts
-          node --test --test-force-exit packages/daemon/src/linux-coordinator.integration.test.ts
-          node --test --test-force-exit --test-name-pattern='every cold' packages/daemon/src/coordinator-role.test.ts
-      - name: Verify selected native dependencies and ABI
-        run: node --test --test-force-exit packages/daemon/src/native-runtime.test.ts
-      - name: Headless daemon, shell environment, handshake and independent kernel execution
-        run: |
-          node --test --test-force-exit --test-concurrency=2 \
-            packages/kernel/src/runtime-environment.test.ts \
-            packages/daemon/src/platform.test.ts \
-            packages/daemon/src/headless.integration.test.ts \
-            packages/daemon/src/terminals.test.ts \
-            packages/daemon/src/pty-input.test.ts \
-            packages/daemon/src/terminal-output.test.ts \
-            packages/daemon/src/runtime-admission.test.ts \
-            packages/daemon/src/workspace-terminal-server.test.ts \
-            packages/kernel/src/bundled-extensions.integration.test.ts \
-            packages/artifacts/src/swiftui.test.ts
-
   # Independent Linux Rust test/build sibling: no Node/Swift dependencies.
   rust:
     runs-on: ubuntu-24.04

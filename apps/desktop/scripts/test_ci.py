@@ -428,7 +428,7 @@ class WorkflowTests(unittest.TestCase):
         source = WORKFLOW.read_text()
         jobs = source.split("\njobs:\n", 1)[1]
         self.assertEqual(re.findall(r'^  ([\w-]+):$', jobs, flags=re.M),
-                         ["node", "macos", "linux-headless", "rust", "rust-macos-native", "rust-macos-release"])
+                         ["node", "macos", "rust", "rust-macos-native", "rust-macos-release"])
         self.assertNotRegex(jobs, r'(?m)^    needs:')
         self.assertIn("  workflow_call:", source)
         self.assertFalse(WORKFLOW.with_name("desktop-rust.yml").exists())
