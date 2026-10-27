@@ -41,6 +41,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
     sync::Arc,
     time::Instant,
 };
@@ -70,6 +71,9 @@ pub(crate) struct ArtifactPane {
     slider_synced: Option<(u64, u64, bool)>,
     slider_wake: Option<(Instant, Task<()>)>,
     slider_wake_serial: u64,
+    /// Chart under the pointer: generation, presentation, node path and x entry.
+    /// Local presentation only; it never reaches the visual's state.
+    chart_hover: Option<(u64, bool, String, usize)>,
     #[cfg(feature = "native-probes")]
     slider_dispatches: VecDeque<(Instant, Instant, String)>,
 }
@@ -123,6 +127,7 @@ impl ArtifactPane {
             slider_synced: None,
             slider_wake: None,
             slider_wake_serial: 0,
+            chart_hover: None,
             #[cfg(feature = "native-probes")]
             slider_dispatches: VecDeque::new(),
         }
@@ -741,6 +746,50 @@ impl ArtifactPane {
             cx.notify();
         }
     }
+    fn hover_chart(
+        &mut self,
+        generation: u64,
+        inline: bool,
+        path: String,
+        index: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.generation || inline != self.inline {
+            return;
+        }
+        // Leaving one chart never clears another chart's readout.
+        if index.is_none() && self.chart_hover.as_ref().is_none_or(|h| h.2 != path) {
+            return;
+        }
+        let next = index.map(|i| (generation, inline, path, i));
+        if self.chart_hover != next {
+            self.chart_hover = next;
+            cx.notify();
+        }
+    }
+    /// The hovered x entry of the chart at `path` in this presentation, if current.
+    fn chart_hovered(&self, path: &str) -> Option<usize> {
+        self.chart_hover
+            .as_ref()
+            .filter(|(generation, inline, hovered, _)| {
+                *generation == self.generation && *inline == self.inline && hovered == path
+            })
+            .map(|h| h.3)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_chart_readout(&self) -> Option<(String, crate::visual_chart::Readout)> {
+        let (_, _, path, _) = self.chart_hover.as_ref()?;
+        let index = self.chart_hovered(path)?;
+        let chart = self
+            .snapshot
+            .scene
+            .as_ref()?
+            .charts
+            .get(path)?
+            .as_ref()
+            .ok()?;
+        Some((path.clone(), chart.readout(index)?))
+    }
     fn text(&self, id: String, text: String) -> AnyElement {
         let focus = self.focus.clone();
         let mut hash = DefaultHasher::new();
@@ -1292,7 +1341,20 @@ impl ArtifactPane {
                         )
                     } else {
                         *budget -= points;
-                        crate::visual_chart_view::render_scaled(chart.clone(), path, scale, cx)
+                        let weak = cx.weak_entity();
+                        let key = path.to_owned();
+                        crate::visual_chart_view::render_scaled(
+                            chart.clone(),
+                            path,
+                            scale,
+                            self.chart_hovered(path),
+                            Rc::new(move |index, _, cx| {
+                                let _ = weak.update(cx, |view, cx| {
+                                    view.hover_chart(generation, inline, key.clone(), index, cx)
+                                });
+                            }),
+                            cx,
+                        )
                     }
                 }
                 Some(Err(message)) => Self::note(message),

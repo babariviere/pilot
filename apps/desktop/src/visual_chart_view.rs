@@ -1,13 +1,16 @@
 //! Trusted native primitives over a finite normalized plan. No dynamic SVG or image-cache churn.
-use crate::visual_chart::Chart;
+use crate::visual_chart::{Chart, Readout};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Corners, Hsla, IntoElement, ParentElement, PathBuilder,
-    SharedString, Styled, canvas,
+    AnyElement, App, Bounds, Context, Corners, DispatchPhase, HitboxBehavior, Hsla, IntoElement,
+    MouseExitEvent, MouseMoveEvent, ParentElement, PathBuilder, ScrollWheelEvent, SharedString,
+    Styled, Window, canvas,
     component::{ActiveTheme, StyledExt},
     div, fill, point, px, relative, size,
 };
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
+/// Reports the x entry under the pointer, or `None` when it leaves the plot.
+pub(crate) type OnHover = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
 pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
     let t = cx.theme();
     match name {
@@ -30,6 +33,8 @@ pub(crate) fn render_scaled<T: 'static>(
     chart: Arc<Chart>,
     key: &str,
     scale: f32,
+    hover: Option<usize>,
+    on_hover: OnHover,
     cx: &Context<T>,
 ) -> AnyElement {
     let colors = chart
@@ -62,10 +67,18 @@ pub(crate) fn render_scaled<T: 'static>(
     let positions = chart.label_positions.clone();
     let x_label = chart.x_label.clone();
     let chart_label_count = labels.len();
+    let readout = hover
+        .filter(|&i| i < chart.positions.len())
+        .and_then(|i| Some((i, chart.readout(i)?)));
+    let hover = readout.as_ref().map(|(i, _)| *i);
+    let rule = cx.theme().muted_foreground;
+    let card =
+        readout.map(|(i, readout)| readout_card(chart.positions[i], readout, &colors, scale, cx));
     let plot = {
         use gpui_kit::InteractiveElement;
         use gpui_kit::TestSupportExt;
         div()
+            .relative()
             .w_full()
             .h(px(height))
             .overflow_hidden()
@@ -75,8 +88,8 @@ pub(crate) fn render_scaled<T: 'static>(
     view.child(
         plot.child(
             canvas(
-                |_, _, _| {},
-                move |bounds, _, window, _| {
+                |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                move |bounds, hitbox, window, _| {
                     #[cfg(feature = "native-probes")]
                     let _timing =
                         crate::transcript_view::inline_visual::probe::scroll::work("chart_paint");
@@ -174,10 +187,68 @@ pub(crate) fn render_scaled<T: 'static>(
                             }
                         }
                     }
+                    if let Some(i) = hover {
+                        let top = p((chart.positions[i], 1.));
+                        let mut line = rule;
+                        line.a *= 0.6;
+                        window.paint_quad(fill(Bounds::new(top, size(px(1.), px(h))), line));
+                        if chart.kind == "line" || chart.kind == "area" {
+                            for (s, c) in chart.series.iter().zip(&colors) {
+                                if let Some(at) = s.points[i] {
+                                    let mut dot = fill(
+                                        Bounds::new(
+                                            p(at) - point(px(3.5), px(3.5)),
+                                            size(px(7.), px(7.)),
+                                        ),
+                                        *c,
+                                    );
+                                    dot.corner_radii = Corners::all(px(3.5));
+                                    window.paint_quad(dot);
+                                }
+                            }
+                        }
+                    }
+                    // Hover is local presentation: it never reaches the visual's
+                    // state, takes focus or changes selection.
+                    // Observe in the capture phase, so an element that handles the
+                    // move (or scroll) elsewhere cannot leave a stale readout.
+                    let at = move |x: gpui_kit::Pixels| f32::from(x - origin.x) / w;
+                    let plan = chart.clone();
+                    let report = on_hover.clone();
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Capture {
+                            return;
+                        }
+                        let next = if hitbox.is_hovered(window) {
+                            plan.nearest(at(e.position.x).clamp(0., 1.))
+                        } else {
+                            None
+                        };
+                        if next != hover {
+                            report(next, window, cx);
+                        }
+                    });
+                    if hover.is_some() {
+                        // Content moving under a still pointer, or the pointer
+                        // leaving the window, hides the readout until it moves again.
+                        let report = on_hover.clone();
+                        window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Capture {
+                                report(None, window, cx);
+                            }
+                        });
+                        let report = on_hover.clone();
+                        window.on_mouse_event(move |_: &MouseExitEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Capture {
+                                report(None, window, cx);
+                            }
+                        });
+                    }
                 },
             )
             .size_full(),
-        ),
+        )
+        .children(card),
     )
     .child(
         div()
@@ -225,4 +296,78 @@ pub(crate) fn render_scaled<T: 'static>(
 }
 pub(crate) fn number(value: f64) -> String {
     crate::visual_chart::format_number(value)
+}
+/// Swift's readout card: the x label, then each series' colour, name and value.
+/// It sits beside the rule on the side with more room, inside the plot.
+fn readout_card<T: 'static>(
+    at: f32,
+    readout: Readout,
+    colors: &[Hsla],
+    scale: f32,
+    cx: &Context<T>,
+) -> AnyElement {
+    use gpui_kit::{InteractiveElement, TestSupportExt};
+    let theme = cx.theme();
+    let mut card = div()
+        .id("chart-readout")
+        .test_support()
+        .v_flex()
+        .gap(px(2. * scale))
+        .px(px(8. * scale))
+        .py(px(6. * scale))
+        .min_w_0()
+        .max_w(px(260. * scale))
+        .rounded(px(crate::appearance::Radius::CONTROL * scale))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.popover)
+        .shadow_sm()
+        .text_size(px(11. * scale))
+        .text_color(theme.popover_foreground)
+        .child(
+            div()
+                .font_semibold()
+                .truncate()
+                .child(SharedString::from(readout.label)),
+        );
+    for (series, name, value) in readout.rows {
+        card = card.child(
+            div()
+                .h_flex()
+                .gap(px(4. * scale))
+                .min_w_0()
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .size(px(6. * scale))
+                        .rounded_full()
+                        .bg(colors[series]),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.muted_foreground)
+                        .child(SharedString::from(name)),
+                )
+                .child(div().flex_shrink_0().child(SharedString::from(value))),
+        );
+    }
+    let side = div().absolute().top_0().h_flex().items_start();
+    let side = if at <= 0.5 {
+        side.left(relative(at)).right_0().pl(px(8. * scale))
+    } else {
+        side.left_0()
+            .right(relative(1. - at))
+            .pr(px(8. * scale))
+            .justify_end()
+    };
+    div()
+        .absolute()
+        .top(px(6. * scale))
+        .bottom_0()
+        .left(px(12.))
+        .right(px(12.))
+        .child(side.child(card))
+        .into_any_element()
 }

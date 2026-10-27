@@ -160,6 +160,31 @@ fn frame(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     cx.run_until_parked();
     cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
 }
+/// Moves the pointer over the chart plot in `scope` at a normalized x and
+/// returns the pane's readout.
+fn hover_chart(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    p: &Entity<ArtifactPane>,
+    scope: &'static str,
+    at: f32,
+) -> Option<(String, crate::visual_chart::Readout)> {
+    use gpui_kit::test::TestEventExt;
+    cx.update_window(h, |_, w, cx| {
+        let b = w.within(scope).find("chart-plot").bounds();
+        let x = b.left() + px(12.) + (b.size.width - px(24.)) * at;
+        w.pointer_move(point(x, b.center().y), None, cx);
+    })
+    .unwrap();
+    frame(cx, h);
+    cx.update(|cx| p.read(cx).probe_chart_readout())
+}
+fn readout_rows(rows: &[(&str, &str)]) -> Vec<(usize, String, String)> {
+    rows.iter()
+        .enumerate()
+        .map(|(i, (name, value))| (i, (*name).into(), (*value).into()))
+        .collect()
+}
 #[track_caller]
 fn wait(cx: &mut HeadlessAppContext, h: AnyWindowHandle, test: impl Fn(&gpui_kit::App) -> bool) {
     let end = Instant::now() + Duration::from_secs(12);
@@ -679,6 +704,115 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                             .is_some_and(|n| n >= 8.)
                     })
             });
+            wait(cx, h, |cx| p.read(cx).inline_probe_idle());
+            // Chart hover readout: local presentation over the current scene. It
+            // dispatches nothing, keeps state/focus, follows the pointer and the
+            // values the controls produce, and clears on leave and scroll.
+            let before = cx.update(|cx| p.read(cx).inline_probe_snapshot());
+            let units = crate::visual_chart::format_number(
+                before.scene.as_ref().unwrap().root["children"][3]["value"]
+                    .as_f64()
+                    .unwrap(),
+            );
+            let focus = cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap();
+            let (path, north) = hover_chart(cx, h, &p, "inline-visual", 1. / 6.).expect("North");
+            assert_eq!(path, "0.2");
+            assert_eq!(north.label, "North");
+            assert_eq!(
+                north.rows,
+                readout_rows(&[("Observed", &units), ("Forecast", "6")])
+            );
+            cx.update_window(h, |_, w, _| {
+                let plot = w.find("chart-plot").bounds();
+                let card = w.find("chart-readout").bounds();
+                let rule = plot.left() + px(12.) + (plot.size.width - px(24.)) / 6.;
+                assert!(
+                    card.left() > rule && card.right() <= plot.right() && card.top() >= plot.top(),
+                    "readout sits beside the rule inside the plot: {card:?} {plot:?}"
+                );
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-readout.png")))
+                    .unwrap();
+            }
+            let (_, west) = hover_chart(cx, h, &p, "inline-visual", 5. / 6.).expect("West");
+            assert_eq!(west.label, "West");
+            assert_eq!(
+                west.rows,
+                readout_rows(&[("Observed", "5"), ("Forecast", "8")])
+            );
+            cx.update_window(h, |_, w, _| {
+                let plot = w.find("chart-plot").bounds();
+                let rule = plot.left() + px(12.) + (plot.size.width - px(24.)) * (5. / 6.);
+                assert!(w.find("chart-readout").bounds().right() < rule);
+            })
+            .unwrap();
+            let (_, south) = hover_chart(cx, h, &p, "inline-visual", 0.5).expect("South");
+            assert_eq!(
+                south.rows,
+                readout_rows(&[("Observed", "7"), ("Forecast", "9")])
+            );
+            let after = cx.update(|cx| p.read(cx).inline_probe_snapshot());
+            assert_eq!(
+                (after.version, &after.state),
+                (before.version, &before.state)
+            );
+            assert!(
+                cx.update(|cx| p.read(cx).inline_probe_idle()),
+                "no dispatch"
+            );
+            assert_eq!(
+                cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap(),
+                focus
+            );
+            cx.update_window(h, |_, w, cx| {
+                use gpui_kit::InputEvent;
+                let at = w.find("chart-plot").bounds().center();
+                w.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position: at,
+                        delta: ScrollDelta::Pixels(point(px(0.), px(-1.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            })
+            .unwrap();
+            frame(cx, h);
+            assert!(cx.update(|cx| p.read(cx).probe_chart_readout()).is_none());
+            assert!(
+                cx.update_window(h, |_, w, _| w.try_find("chart-readout"))
+                    .unwrap()
+                    .is_none(),
+                "scrolling under a still pointer hides the readout"
+            );
+            assert!(hover_chart(cx, h, &p, "inline-visual", 0.5).is_some());
+            // The toggle drives the Forecast series. Leaving the plot clears the
+            // readout, and hovering again reads the re-rendered values.
+            cx.update_window(h, |_, w, cx| w.click_at("0.1.0", point(px(7.), px(7.)), cx))
+                .unwrap();
+            assert!(cx.update(|cx| p.read(cx).probe_chart_readout()).is_none());
+            wait(cx, h, |cx| {
+                let s = p.read(cx).inline_probe_snapshot();
+                !s.state.as_ref().is_some_and(|s| s.contains("\"on\":true"))
+                    && p.read(cx).inline_probe_idle()
+            });
+            let (_, south) = hover_chart(cx, h, &p, "inline-visual", 0.5).expect("South off");
+            assert_eq!(
+                south.rows,
+                readout_rows(&[("Observed", "7"), ("Forecast", "0")])
+            );
+            cx.update_window(h, |_, w, cx| w.click_at("0.1.0", point(px(7.), px(7.)), cx))
+                .unwrap();
+            wait(cx, h, |cx| {
+                let s = p.read(cx).inline_probe_snapshot();
+                s.state.as_ref().is_some_and(|s| s.contains("\"on\":true"))
+                    && p.read(cx).inline_probe_idle()
+            });
             if let Some(dir) = &captures {
                 cx.capture_screenshot(h)
                     .unwrap()
@@ -723,6 +857,22 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.find("artifact-detail").bounds().size.width > px(300.));
             })
             .unwrap();
+            let (_, expanded) =
+                hover_chart(cx, h, &p, "artifact-detail", 0.5).expect("expanded readout");
+            assert_eq!(expanded.label, "South");
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-expanded-readout.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                use gpui_kit::test::TestEventExt;
+                w.pointer_move(point(px(1.), px(1.)), None, cx)
+            })
+            .unwrap();
+            frame(cx, h);
+            assert!(cx.update(|cx| p.read(cx).probe_chart_readout()).is_none());
             cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
                 .unwrap();
             frame(cx, h);
@@ -1020,7 +1170,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             println!(
-                "inline_visual {width} dark={dark}: pinned helper, pointer/keyboard controls, slider drag, table/canvas, source, transfer, revision, prepend, offscreen, error, inert legacy passed"
+                "inline_visual {width} dark={dark}: pinned helper, pointer/keyboard controls, slider drag, chart readout, table/canvas, source, transfer, revision, prepend, offscreen, error, inert legacy passed"
             );
         }
     }

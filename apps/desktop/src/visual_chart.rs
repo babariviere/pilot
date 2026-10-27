@@ -6,6 +6,8 @@ pub(crate) struct Series {
     pub(crate) color: String,
     pub(crate) points: Vec<Option<(f32, f32)>>,
     pub(crate) bases: Vec<f32>,
+    /// Published values, one per x; `None` is a gap. Read by the hover readout.
+    pub(crate) values: Vec<Option<f64>>,
 }
 #[derive(Debug)]
 pub(crate) struct Chart {
@@ -19,6 +21,18 @@ pub(crate) struct Chart {
     pub(crate) label_positions: Vec<f32>,
     pub(crate) x_label: String,
     pub(crate) unit: String,
+    /// Display label and normalized plot position of every x entry.
+    pub(crate) x: Vec<String>,
+    pub(crate) positions: Vec<f32>,
+    /// The published `unit`, appended to readout values.
+    pub(crate) value_unit: String,
+}
+/// The values at one x entry, for the hover readout.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Readout {
+    pub(crate) label: String,
+    /// Series index, name and formatted value. Series with a gap here are omitted.
+    pub(crate) rows: Vec<(usize, String, String)>,
 }
 fn normal(value: f64, min: f64, max: f64) -> f32 {
     if min == max {
@@ -48,6 +62,36 @@ pub(crate) fn format_number(value: f64) -> String {
     }
 }
 impl Chart {
+    /// The x entry nearest a normalized plot position that has at least one value,
+    /// matching Swift's readout: the category under the pointer, or the nearest
+    /// scatter x.
+    pub(crate) fn nearest(&self, at: f32) -> Option<usize> {
+        (0..self.positions.len())
+            .filter(|&j| self.series.iter().any(|s| s.values[j].is_some()))
+            .min_by(|&a, &b| {
+                (self.positions[a] - at)
+                    .abs()
+                    .total_cmp(&(self.positions[b] - at).abs())
+            })
+    }
+    pub(crate) fn readout(&self, index: usize) -> Option<Readout> {
+        let label = self.x.get(index)?.clone();
+        let rows = self
+            .series
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                let value = (*s.values.get(index)?)?;
+                let mut text = format_number(value);
+                if !self.value_unit.is_empty() {
+                    text.push(' ');
+                    text.push_str(&self.value_unit);
+                }
+                Some((i, s.name.clone(), text))
+            })
+            .collect::<Vec<_>>();
+        (!rows.is_empty()).then_some(Readout { label, rows })
+    }
     pub(crate) fn parse(v: &Value) -> Result<Self, &'static str> {
         let kind = v["kind"].as_str().unwrap_or("line");
         let stacked = v["stacked"] == true;
@@ -179,6 +223,12 @@ impl Chart {
                         .unwrap_or_else(|| format!("chart{}", i % 6 + 1)),
                     points,
                     bases,
+                    values: s["values"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(Value::as_f64)
+                        .collect(),
                 }
             })
             .collect();
@@ -226,6 +276,9 @@ impl Chart {
                     .or_else(|| v["unit"].as_str())
                     .unwrap_or(""),
             ),
+            x: x.iter().map(label).collect(),
+            positions: (0..x.len()).map(position).collect(),
+            value_unit: display_label(v["unit"].as_str().unwrap_or("")),
         })
     }
 }
@@ -347,5 +400,39 @@ mod tests {
         let c=Chart::parse(&json!({"kind":"line","x":["a","b"],"series":[{"name":"s","values":[null,2]}],"height":100})).unwrap();
         assert_eq!(c.series[0].points[0], None);
         assert_eq!(c.series[0].points[1], Some((1., 1.)));
+    }
+    #[test]
+    fn readout_picks_the_nearest_entry_with_values_and_formats_every_series() {
+        let bars = Chart::parse(&json!({"kind":"bar","stacked":true,"unit":"ms","x":["North","South","West"],"series":[{"name":"Observed","values":[4,7,null]},{"name":"Forecast","values":[6,null,null]}]})).unwrap();
+        assert_eq!(bars.nearest(0.), Some(0));
+        assert_eq!(bars.nearest(0.5), Some(1));
+        // West has no values, so the pointer over it reads its nearest neighbour.
+        assert_eq!(bars.nearest(1.), Some(1));
+        assert_eq!(
+            bars.readout(0),
+            Some(Readout {
+                label: "North".into(),
+                rows: vec![
+                    (0, "Observed".into(), "4 ms".into()),
+                    (1, "Forecast".into(), "6 ms".into())
+                ],
+            })
+        );
+        assert_eq!(bars.readout(1).unwrap().rows.len(), 1, "gaps are omitted");
+        assert_eq!(bars.readout(2), None);
+        assert_eq!(bars.readout(9), None);
+        let scatter = Chart::parse(
+            &json!({"kind":"scatter","yLabel":"Value","x":[100,-5,2],"series":[{"name":"s","values":[1.5,2,3]}]}),
+        )
+        .unwrap();
+        // Positions follow the numeric domain, not input order.
+        assert_eq!(scatter.nearest(0.), Some(1));
+        assert_eq!(scatter.nearest(0.07), Some(2));
+        assert_eq!(scatter.nearest(0.9), Some(0));
+        let r = scatter.readout(0).unwrap();
+        assert_eq!((r.label.as_str(), r.rows[0].2.as_str()), ("100", "1.5"));
+        let line = Chart::parse(&json!({"kind":"line","x":["a","b","c","d","e"],"series":[{"name":"s","values":[1,2,3,4,5]}]})).unwrap();
+        assert_eq!(line.positions, vec![0., 0.25, 0.5, 0.75, 1.]);
+        assert_eq!(line.nearest(0.6), Some(2));
     }
 }

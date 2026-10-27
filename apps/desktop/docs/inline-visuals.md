@@ -83,6 +83,17 @@ raster renderer is reused when an untyped pin resolves to an image.
 Pane expansion preserves local state and source mode. Back closes the pane;
 the visible inline reader resumes from that exact revision's remembered state.
 
+Charts show Swift's hover readout: a rule at the x entry nearest the pointer
+(the category under it, or the nearest scatter x with a value), dots on line and
+area series, and a small card with the x label and every series' colour, name
+and published value plus `unit`. Series with a gap there are omitted. The card
+sits inside the plot, beside the rule on the side with more room. Hover is pane-
+local presentation keyed by reader generation, presentation and node path: it
+never reaches the visual's state or worker, takes focus or changes selection.
+It follows re-rendered values while the pointer stays over the same chart, and
+clears when the pointer leaves the plot or window, or content scrolls under it.
+There is no keyboard readout yet.
+
 Nothing is written to conversation history by a visual control. No control can
 run tools, access files/network or change revision. Host/chat changes fence the
 whole inline cache. Unsupported stored sources remain accessible without a
@@ -104,7 +115,9 @@ PILOT_NEXT_INLINE_DIR=/tmp/inline-captures python3 scripts/check-scoped.py \
 
 The library tests target exact provenance, stale callbacks, retired surfaces and
 presentation transfer. The native target covers the 680/1100 light/dark mounted
-matrix, native controls, keyboard activation, slider dragging, table/canvas
+matrix, native controls, keyboard activation, slider dragging, chart hover
+readout (values, placement, state-driven updates, leave/scroll, no dispatch or
+focus change, expanded pane), table/canvas
 scrolling, exact source and selection, pinning, Find, prepend, pane transfer,
 offscreen closure, duplicate/multiple pins, cache eviction and inert legacy data.
 No performance, visible smoothness, OS IME, Linux or release acceptance is
