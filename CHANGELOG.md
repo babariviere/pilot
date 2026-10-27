@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.78.0](https://github.com/babariviere/pilot/compare/v1.77.0...v1.78.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** add a Linux menu entry and icon on launch ([898e06d](https://github.com/babariviere/pilot/commit/898e06d613eb66aa318cd59f1ff9d4814b3d59d1))
+
+
+### Bug Fixes
+
+* **desktop:** let Linux version changes start with the running daemon ([5f95321](https://github.com/babariviere/pilot/commit/5f953210192d7ebbcc15a6d7f858dbc66ebb41a7))
+* **desktop:** make Linux updates work for renamed installs without a token ([522b725](https://github.com/babariviere/pilot/commit/522b725ed4f5373b5e0bee5e68c4b1a5e9e6586b))
+* **desktop:** use the Pilot app icon for the Linux menu entry ([431c7a3](https://github.com/babariviere/pilot/commit/431c7a3dcb26f2513fdcf522ee1e65ea993e9d00))
+
 ## [1.77.0](https://github.com/babariviere/pilot/compare/v1.76.0...v1.77.0) (2026-10-27)
 
 
