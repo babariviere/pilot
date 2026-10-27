@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.71.0](https://github.com/babariviere/pilot/compare/v1.70.0...v1.71.0) (2026-10-27)
+
+
+### Features
+
+* **release:** package Rust GUI apps with signed update assets ([9411b34](https://github.com/babariviere/pilot/commit/9411b34966e3aa77466d6be060369a611a5b850e))
+
+
+### Bug Fixes
+
+* **desktop:** enlarge inline conversation images ([44850fd](https://github.com/babariviere/pilot/commit/44850fd6d41d3a50f9abb745b5f2f4aa362b9909))
+* **desktop:** remove conversation source byte limits ([88fc4ff](https://github.com/babariviere/pilot/commit/88fc4ffc71064863557f3aa855c958a2a5d726ee))
+* **missions:** retire delivered members and batch coordinator wakes ([ff719d5](https://github.com/babariviere/pilot/commit/ff719d55725c35aa9d8d74e36ccc784c60b57998))
+
 ## [1.70.0](https://github.com/babariviere/pilot/compare/v1.69.0...v1.70.0) (2026-10-27)
 
 
