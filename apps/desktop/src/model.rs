@@ -42,6 +42,7 @@ pub(crate) struct Message {
     tool_ids: Option<Arc<Vec<String>>>,
     work_note: bool,
     artifact: Option<Arc<crate::artifact_model::Reference>>,
+    artifact_size: Option<crate::artifact_model::RasterSize>,
     image: Option<Arc<crate::conversation_images::Source>>,
 }
 
@@ -68,6 +69,7 @@ impl Message {
             tool_ids: None,
             work_note: false,
             artifact: None,
+            artifact_size: None,
             image: None,
         }
     }
@@ -159,6 +161,17 @@ impl Message {
         );
         row.artifact = Some(Arc::new(reference));
         row
+    }
+    /// The publication's raster size hint, reserved before the revision is read.
+    pub(crate) fn with_artifact_size(
+        mut self,
+        size: Option<crate::artifact_model::RasterSize>,
+    ) -> Self {
+        self.artifact_size = size;
+        self
+    }
+    pub(crate) fn artifact_size(&self) -> Option<crate::artifact_model::RasterSize> {
+        self.artifact_size
     }
     pub(crate) fn tool_ids(&self) -> Option<&[String]> {
         self.tool_ids.as_ref().map(|ids| ids.as_slice())
@@ -314,6 +327,7 @@ impl Transcript {
             tool_ids: None,
             work_note: false,
             artifact: None,
+            artifact_size: None,
             image: None,
         });
     }
@@ -400,6 +414,7 @@ fn history_message(ix: usize) -> Message {
         tool_ids: None,
         work_note: false,
         artifact: None,
+        artifact_size: None,
         image: None,
     }
 }

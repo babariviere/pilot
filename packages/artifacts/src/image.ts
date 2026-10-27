@@ -2,6 +2,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { resolve } from "node:path";
+import type { ArtifactImageSize } from "@pilot/protocol";
 
 export const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 export const MAX_IMAGE_SOURCE_BYTES = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 32;
@@ -23,6 +24,89 @@ export function validateImageSource(source: string): void {
 	if (bytes.length > MAX_IMAGE_BYTES) throw new Error("Artifact image exceeds 16 MiB");
 	if (bytes.toString("base64") !== match[2] || imageMime(bytes) !== match[1])
 		throw new Error("Artifact image data does not match its declared format");
+}
+
+/**
+ * Upright pixel size from a validated PNG, JPEG or GIF data URL's header, as decoders report it (EXIF orientation
+ * applied, GIF logical screen). Undefined for other formats or unreadable headers. Never decodes pixels.
+ */
+export function imageSize(source: string): ArtifactImageSize | undefined {
+	const match = /^data:(image\/(?:png|jpeg|gif));base64,/.exec(source);
+	if (!match) return undefined;
+	const mimeType = match[1] as ArtifactImageSize["mimeType"];
+	const bytes = Buffer.from(source.slice(match[0].length), "base64");
+	try {
+		const size =
+			mimeType === "image/png" ? pngSize(bytes) : mimeType === "image/jpeg" ? jpegSize(bytes) : gifSize(bytes);
+		return size && size.width > 0 && size.height > 0 ? { mimeType, ...size } : undefined;
+	} catch {
+		// A truncated header reads past the buffer. Publication never depends on this hint.
+		return undefined;
+	}
+}
+
+type Size = { width: number; height: number };
+
+function upright(width: number, height: number, orientation: number): Size {
+	return orientation >= 5 && orientation <= 8 ? { width: height, height: width } : { width, height };
+}
+
+/** EXIF orientation tag from a TIFF structure, 1 when absent. */
+function orientation(tiff: Buffer): number {
+	const order = tiff.toString("latin1", 0, 2);
+	if (order !== "II" && order !== "MM") return 1;
+	const u16 = (at: number) => (order === "II" ? tiff.readUInt16LE(at) : tiff.readUInt16BE(at));
+	const ifd = order === "II" ? tiff.readUInt32LE(4) : tiff.readUInt32BE(4);
+	const count = u16(ifd);
+	for (let i = 0; i < count; i++) {
+		const at = ifd + 2 + i * 12;
+		if (u16(at) === 0x0112) return u16(at + 8);
+	}
+	return 1;
+}
+
+function pngSize(bytes: Buffer): Size | undefined {
+	if (bytes.toString("latin1", 12, 16) !== "IHDR") return undefined;
+	const width = bytes.readUInt32BE(16);
+	const height = bytes.readUInt32BE(20);
+	// Decoders apply an eXIf chunk that precedes the image data.
+	for (let at = 8; at + 8 <= bytes.length; ) {
+		const length = bytes.readUInt32BE(at);
+		const type = bytes.toString("latin1", at + 4, at + 8);
+		if (type === "IDAT" || type === "IEND") break;
+		if (type === "eXIf") return upright(width, height, orientation(bytes.subarray(at + 8, at + 8 + length)));
+		at += 12 + length;
+	}
+	return { width, height };
+}
+
+function jpegSize(bytes: Buffer): Size | undefined {
+	let turn = 1;
+	for (let at = 2; at + 4 <= bytes.length; ) {
+		if (bytes[at] !== 0xff) return undefined;
+		const marker = bytes[at + 1]!;
+		if (marker === 0xff) {
+			at++;
+			continue;
+		}
+		if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) {
+			at += 2;
+			continue;
+		}
+		if (marker === 0xd9 || marker === 0xda) return undefined;
+		const length = bytes.readUInt16BE(at + 2);
+		const data = bytes.subarray(at + 4, at + 2 + length);
+		if (marker === 0xe1 && data.toString("latin1", 0, 6) === "Exif\0\0") turn = orientation(data.subarray(6));
+		// Start of frame, excluding DHT (c4), JPG (c8) and DAC (cc): precision, height, width.
+		else if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc)
+			return upright(data.readUInt16BE(3), data.readUInt16BE(1), turn);
+		at += 2 + length;
+	}
+	return undefined;
+}
+
+function gifSize(bytes: Buffer): Size {
+	return { width: bytes.readUInt16LE(6), height: bytes.readUInt16LE(8) };
 }
 
 /** The agent tool alone resolves local paths, relative to its session working directory. */

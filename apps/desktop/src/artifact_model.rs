@@ -45,6 +45,34 @@ impl Reference {
         Self::parse_kind(value, value["sessionId"].as_str()?, "unknown")
     }
 }
+/// Upright raster size an inline pin reserves before its revision is read: the
+/// publication's header hint, or the exact revision's decoded size. Only layout
+/// uses it; the read keeps its identity, kind and codec checks, and decoding wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RasterSize {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// GIF previews show their first frame, with a note.
+    pub(crate) first_frame: bool,
+}
+impl RasterSize {
+    /// A publication entry's `data.image`, for formats and sizes this client decodes.
+    pub(crate) fn hint(value: &Value) -> Option<Self> {
+        let first_frame = match value["mimeType"].as_str()? {
+            "image/png" | "image/jpeg" => false,
+            "image/gif" => true,
+            _ => return None,
+        };
+        let axis = |key| value[key].as_u64().and_then(|n| u32::try_from(n).ok());
+        let (width, height) = (axis("width")?, axis("height")?);
+        crate::artifact_image::dimensions(width, height).ok()?;
+        Some(Self {
+            width,
+            height,
+            first_frame,
+        })
+    }
+}
 pub(crate) fn summaries(value: &Value, owner: &str) -> Arc<Vec<Reference>> {
     Arc::new(
         value
@@ -210,5 +238,35 @@ mod tests {
         let mut future = v;
         future["visual"]["api"] = json!(2);
         assert!(!Revision::parse(future, &expected).unwrap().visual_supported);
+    }
+    #[test]
+    fn raster_size_hints_cover_only_decodable_formats_and_sizes() {
+        let hint = |v| RasterSize::hint(&v);
+        assert_eq!(
+            hint(json!({"mimeType":"image/png","width":1024,"height":640})),
+            Some(RasterSize {
+                width: 1024,
+                height: 640,
+                first_frame: false
+            })
+        );
+        assert!(
+            hint(json!({"mimeType":"image/gif","width":3,"height":2}))
+                .unwrap()
+                .first_frame
+        );
+        assert!(hint(json!({"mimeType":"image/jpeg","width":3,"height":2})).is_some());
+        for v in [
+            json!(null),
+            json!({"mimeType":"image/webp","width":3,"height":2}),
+            json!({"mimeType":"image/png","width":0,"height":2}),
+            json!({"mimeType":"image/png","width":8193,"height":2}),
+            json!({"mimeType":"image/png","width":4096,"height":4096}),
+            json!({"mimeType":"image/png","width":-3,"height":2}),
+            json!({"mimeType":"image/png","width":3.5,"height":2}),
+            json!({"mimeType":"image/png","width":"3","height":2}),
+        ] {
+            assert_eq!(hint(v.clone()), None, "{v}");
+        }
     }
 }

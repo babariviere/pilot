@@ -454,14 +454,18 @@ export class KernelSession {
 				store: artifacts,
 				readReference: hooks.readArtifactReference,
 				onArtifactsChanged: hooks.onArtifactsChanged,
-				onArtifactPublished: async (artifact) => {
+				onArtifactPublished: async (artifact, image) => {
 					if (!artifactConversation) throw new Error("Artifact publication requires a bound Harness conversation");
 					// Passive write admission places publications at the post-tools boundary.
 					await artifactConversation.submit(
 						{
 							type: "write",
 							requestId: `artifact:${artifact.id}:${artifact.revision}`,
-							entry: { kind: "pilot.artifact", data: { artifact: { ...artifact } }, model: [] },
+							entry: {
+								kind: "pilot.artifact",
+								data: { artifact: { ...artifact }, ...(image ? { image: { ...image } } : {}) },
+								model: [],
+							},
 						},
 						context,
 					);

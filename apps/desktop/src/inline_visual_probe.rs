@@ -417,6 +417,64 @@ fn three_visible_readers(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("three-{width}-{dark}-raster.png")))
                     .unwrap();
             }
+            // A pin with its publication size reserves the decoded geometry before
+            // admission and while loading. A decoded pin without one remembers its
+            // exact revision's size, so a re-read after eviction keeps that geometry.
+            let row = |cx: &mut HeadlessAppContext, id: u64| {
+                cx.update_window(h, |_, w, _| {
+                    let scope = w.within(("message", id));
+                    (
+                        scope.find("inline-visual").bounds().size,
+                        scope.try_find("artifact-raster-pixels").is_some(),
+                    )
+                })
+                .unwrap()
+            };
+            let decoded = |cx: &App| {
+                let panes = t.read(cx).inline_probe_panes();
+                panes.len() == 2 && panes.iter().all(|(_, p)| p.read(cx).inline_raster_ready())
+            };
+            let size = crate::artifact_model::RasterSize {
+                width: 1024,
+                height: 640,
+                first_frame: false,
+            };
+            let pins = vec![
+                Message::artifact(991, reference("raster-large-hinted", 1))
+                    .with_artifact_size(Some(size)),
+                Message::artifact(992, reference("raster-large-legacy", 1)),
+            ];
+            cx.update(|cx| {
+                t.update(cx, |t, cx| {
+                    t.replace_readonly(pins, true, cx);
+                    t.inline_probe_scroll(0, cx);
+                })
+            });
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+            let (reserved, pixels) = row(cx, 991);
+            assert!(!pixels, "placeholder before the read");
+            wait(cx, h, decoded);
+            assert_eq!(
+                row(cx, 991),
+                (reserved, true),
+                "hinted pin keeps its geometry"
+            );
+            let legacy = row(cx, 992);
+            assert!(legacy.1);
+            let reads = server.reads.lock().unwrap().len();
+            cx.update(|cx| t.update(cx, |t, cx| t.inline_probe_evict(cx)));
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+            assert_eq!(
+                row(cx, 992),
+                (legacy.0, false),
+                "evicted revision reserves its size"
+            );
+            wait(cx, h, decoded);
+            assert_eq!(row(cx, 992), legacy);
+            assert!(
+                server.reads.lock().unwrap().len() > reads,
+                "evicted revision re-reads"
+            );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
         }

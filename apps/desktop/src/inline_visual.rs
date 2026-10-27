@@ -1,14 +1,77 @@
 //! Conversation presentation of the existing exact-revision reader, not a second runtime.
 use super::*;
+use crate::artifact_model::RasterSize;
 use gpui_kit::component::scroll::ScrollableElement;
 
 pub(crate) const HEIGHT: f32 = 440.;
 pub(crate) struct Expand(pub(crate) Reference);
 impl gpui_kit::EventEmitter<Expand> for ArtifactPane {}
 
+/// Title row shared by the pre-admission placeholder and the inline reader.
+pub(crate) fn header(label: String, expand: Button) -> gpui_kit::Div {
+    div()
+        .h_flex()
+        .gap_2()
+        .items_start()
+        .child(
+            crate::ui::text(crate::ui::Text::Label, label)
+                .flex_1()
+                .min_w_0(),
+        )
+        .child(expand)
+}
+/// Raster body from one known size. The placeholder row, loading reader and decoded
+/// pixels all use it, so the row keeps its geometry through read and decode.
+pub(crate) fn raster_body<E: ParentElement + Styled>(
+    view: E,
+    size: RasterSize,
+    fill: AnyElement,
+    on_click: impl Fn(&gpui_kit::ClickEvent, &mut Window, &mut gpui_kit::App) + 'static,
+    cx: &gpui_kit::App,
+) -> E {
+    let mut view = view.h_auto();
+    if size.first_frame {
+        view = view.child(
+            crate::ui::text(crate::ui::Text::Caption, "First frame only")
+                .id("inline-image-frame-note")
+                .test_support()
+                .text_color(cx.theme().muted_foreground),
+        );
+    }
+    view.child(
+        div()
+            .id("inline-visual-content")
+            .test_support()
+            .w_full()
+            .min_w_0()
+            .child(crate::artifact_image_view::inline_frame(size.width, size.height).child(fill))
+            .cursor_pointer()
+            .on_click(on_click),
+    )
+}
+pub(crate) fn raster_loading(cx: &gpui_kit::App) -> AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            crate::ui::text(crate::ui::Text::Caption, "Loading image…")
+                .id("inline-raster-loading")
+                .test_support()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .into_any_element()
+}
+
 impl ArtifactPane {
     pub(crate) fn inline_raster_ready(&self) -> bool {
         self.snapshot.raster.is_some()
+    }
+    pub(crate) fn inline_raster_size(&self) -> Option<RasterSize> {
+        self.snapshot.raster.as_ref().map(|r| RasterSize {
+            width: r.width,
+            height: r.height,
+            first_frame: r.first_frame,
+        })
     }
     pub(crate) fn suspend_inline(&mut self, cx: &mut Context<Self>) {
         #[cfg(feature = "native-probes")]
@@ -75,6 +138,7 @@ impl ArtifactPane {
     pub(crate) fn open_inline(
         &mut self,
         reference: Reference,
+        reserve: Option<RasterSize>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -88,6 +152,7 @@ impl ArtifactPane {
         self.close();
         self.flush_image(window, cx);
         self.reference = Some(reference);
+        self.inline_reserve = reserve;
         self.busy = true;
         self.begin_after_drain(window, cx);
         cx.notify();
@@ -132,31 +197,18 @@ impl ArtifactPane {
                     }
                 }),
             )
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_start()
-                    .child(
-                        crate::ui::text(
-                            crate::ui::Text::Label,
-                            format!("{} · r{}", title, reference.revision),
-                        )
-                        .flex_1()
-                        .min_w_0(),
-                    )
-                    .child(
-                        Button::new("inline-expand")
-                            .ghost()
-                            .small()
-                            .label("Expand")
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if v.generation == generation {
-                                    cx.emit(Expand(reference.clone()));
-                                }
-                            })),
-                    ),
-            );
+            .child(header(
+                format!("{} · r{}", title, reference.revision),
+                Button::new("inline-expand")
+                    .ghost()
+                    .small()
+                    .label("Expand")
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        if v.generation == generation {
+                            cx.emit(Expand(reference.clone()));
+                        }
+                    })),
+            ));
         if let Some(error) = &self.snapshot.error {
             view = view.child(
                 crate::ui::text(crate::ui::Text::Caption, error.message.clone())
@@ -172,10 +224,33 @@ impl ArtifactPane {
                         if v.generation == generation && !v.busy {
                             let reference = v.reference.clone().unwrap();
                             v.close();
-                            v.open_inline(reference, window, cx);
+                            v.open_inline(reference, v.inline_reserve, window, cx);
                         }
                     })),
             );
+        }
+        // A still raster keeps its known geometry from placeholder to pixels.
+        let raster = self
+            .inline_raster_size()
+            .or(self.inline_reserve.filter(|_| {
+                self.snapshot.error.is_none()
+                    && self
+                        .snapshot
+                        .revision
+                        .as_ref()
+                        .is_none_or(|r| r.reference.kind == "image")
+            }));
+        if let Some(size) = raster {
+            let fill = match &self.snapshot.raster {
+                Some(raster) => crate::artifact_image_view::preview(raster),
+                None => raster_loading(cx),
+            };
+            let expand = cx.listener(move |v: &mut Self, _: &gpui_kit::ClickEvent, _, cx| {
+                if v.generation == generation {
+                    cx.emit(Expand(v.reference.clone().unwrap()));
+                }
+            });
+            return raster_body(view, size, fill, expand, cx).into_any_element();
         }
         if self.busy && self.snapshot.revision.is_none() {
             view = view.child("Loading native preview…");
@@ -189,40 +264,7 @@ impl ArtifactPane {
                 .min_w_0()
                 .gap_3()
                 .overflow_y_scroll();
-            if let Some(raster) = &self.snapshot.raster {
-                view = view.h_auto();
-                if raster.first_frame {
-                    view = view.child(
-                        crate::ui::text(crate::ui::Text::Caption, "First frame only")
-                            .id("inline-image-frame-note")
-                            .test_support()
-                            .text_color(cx.theme().muted_foreground),
-                    );
-                }
-
-                return view
-                    .child(
-                        div()
-                            .id("inline-visual-content")
-                            .test_support()
-                            .w_full()
-                            .min_w_0()
-                            .child(
-                                crate::artifact_image_view::inline_frame(
-                                    raster.width,
-                                    raster.height,
-                                )
-                                .child(crate::artifact_image_view::preview(raster)),
-                            )
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if v.generation == generation {
-                                    cx.emit(Expand(v.reference.clone().unwrap()));
-                                }
-                            })),
-                    )
-                    .into_any_element();
-            } else if !revision.visual_supported {
+            if !revision.visual_supported {
                 content = content.child(crate::ui::text(crate::ui::Text::Caption, "No native inline preview for this artifact. Source is retained; Expand opens its detail."));
             } else if let Some(scene) = self.snapshot.scene.clone() {
                 content = content.child(self.node(&scene.root, "0", &mut 4096, cx));

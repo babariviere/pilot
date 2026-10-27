@@ -48,8 +48,13 @@ share one owner and one mounted control tree. All distinct visible previews are 
 content visibility limit. Scrolling
 away closes readers, preserving bounded local state by exact revision. A decoded
 still raster has no worker, so it stays bound to its row offscreen within the
-same eight-entry cache; returning neither re-reads nor resizes it. Its first load
-still uses the 440pt viewport, since a pin carries no image size before its read. New
+same eight-entry cache; returning neither re-reads nor resizes it. New publication
+entries carry the image's upright header size (`data.image`, PNG/JPEG/GIF), so the
+row reserves its fitted frame before the read and keeps it through decode. Each
+exact revision's decoded size is also remembered per host, so a re-read after cache
+eviction keeps its geometry. Only legacy pins without a size, on first load, still
+start at the 440pt viewport. The hint is layout only: the read keeps its identity,
+kind and codec checks, and decoded pixels win. New
 readers wait for canceled readers' completion receivers before starting. The
 existing two-process semaphore queues FIFO. Idle readers release their helper
 before publication, retaining the validated scene/state, not a VM. A control or

@@ -5,6 +5,7 @@ import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil
 import {
 	ArtifactNotFound,
 	type ArtifactStore,
+	imageSize,
 	isArtifactPreviewAvailable,
 	isBrowserPreviewAvailable,
 	loadArtifactImage,
@@ -13,6 +14,7 @@ import {
 } from "@pilot/artifacts";
 import type {
 	ArtifactData,
+	ArtifactImageSize,
 	ArtifactReference,
 	ArtifactRevision,
 	ArtifactSummary,
@@ -77,8 +79,9 @@ export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
 	/** Read-only daemon lookup for references linked to the caller's current mission. */
 	readReference?: (id: string, revision?: number) => Promise<Omit<ArtifactRevision, "html"> | undefined>;
-	/** Persist a display-only transcript reference, including publications nested inside codemode. */
-	onArtifactPublished?: (artifact: ArtifactReference) => Promise<void>;
+	/** Persist a display-only transcript reference, including publications nested inside codemode. Image revisions
+	 * pass their header size so apps can reserve layout before reading the source. */
+	onArtifactPublished?: (artifact: ArtifactReference, image?: ArtifactImageSize) => Promise<void>;
 	onArtifactsChanged?: () => void;
 	/** Override the renderer for tests, or disable preview. By default, require an installed renderer. */
 	preview?: typeof previewArtifact | false;
@@ -153,7 +156,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		// Await durable admission before returning, even when called inside codemode. The store is
 		// already committed: display failures must not report a failed write or encourage duplicates.
 		try {
-			await options.onArtifactPublished?.(artifact);
+			await options.onArtifactPublished?.(artifact, value.kind === "image" ? imageSize(value.source) : undefined);
 		} catch (error) {
 			console.warn("pilot: artifact transcript reference could not be admitted", error);
 		}

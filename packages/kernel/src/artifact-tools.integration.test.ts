@@ -869,7 +869,7 @@ test("busy codemode publications and automatic completion survive native tool re
 			fauxToolCall("codemode", {
 				code: `
 const created = await tools.artifact({action:"create",title:"Graph",kind:"html",source:"<h1>Graph</h1>"});
-await tools.artifact({action:"update",id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"html",source:"<h1>Updated</h1>"});
+await tools.artifact({action:"update",id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"image",source:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg=="});
 text("Published two revisions");
 `,
 			}),
@@ -922,7 +922,11 @@ text("Published two revisions");
 		entries.map((entry) => entry.data),
 		[
 			{ artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph", revision: 1 } },
-			{ artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph updated", revision: 2 } },
+			{
+				artifact: { id: summary.id, sessionId: spec.sessionId, title: "Graph updated", revision: 2 },
+				// Image revisions carry their header size so apps reserve layout before reading the source.
+				image: { mimeType: "image/png", width: 3, height: 2 },
+			},
 		],
 	);
 	for (const entry of entries) {

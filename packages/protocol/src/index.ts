@@ -836,6 +836,17 @@ export interface ArtifactReference {
 }
 
 /**
+ * Optional `data.image` of a `pilot.artifact` transcript entry, beside `data.artifact`. Upright pixel size (EXIF
+ * orientation applied) read from the committed revision's PNG, JPEG or GIF header at publication. Clients may use it
+ * only to reserve layout before reading the revision; the revision itself stays authoritative. Older entries omit it.
+ */
+export interface ArtifactImageSize {
+	mimeType: "image/png" | "image/jpeg" | "image/gif";
+	width: number;
+	height: number;
+}
+
+/**
  * Data of a `pilot.question` transcript entry, written by the agent's ask_user tool. The question is pending until a
  * later user message; that message is the reply.
  */

@@ -457,7 +457,9 @@ impl LiveTranscript {
             if let Some(reference) =
                 crate::artifact_model::Reference::pinned(&entry["data"]["artifact"])
             {
-                rows.push(Message::artifact(id * 64, reference));
+                rows.push(Message::artifact(id * 64, reference).with_artifact_size(
+                    crate::artifact_model::RasterSize::hint(&entry["data"]["image"]),
+                ));
             } else {
                 self.unsupported += 1;
                 rows.push(Message::live(
@@ -1340,6 +1342,22 @@ mod tests {
         let key = row.id();
         assert_eq!(row.artifact_data().unwrap().revision, 3);
         assert_eq!(row.artifact_data().unwrap().session, "owner");
+        assert_eq!(
+            row.artifact_size(),
+            None,
+            "legacy publications carry no size"
+        );
+        let sized = json!({"id":4,"kind":"pilot.artifact","data":{"artifact":{"id":"sized","sessionId":"owner","revision":1,"title":"Sized"},"image":{"mimeType":"image/png","width":1024,"height":640}},"model":[]});
+        let mut sized_model = LiveTranscript::default();
+        sized_model.apply(&json!({"type":"snapshot","entries":[sized]}));
+        assert_eq!(
+            sized_model.rows()[0].artifact_size(),
+            Some(crate::artifact_model::RasterSize {
+                width: 1024,
+                height: 640,
+                first_frame: false
+            })
+        );
         model.apply(&json!({"type":"entry_appended","entry":publication}));
         let rows = model.rows();
         assert_eq!(

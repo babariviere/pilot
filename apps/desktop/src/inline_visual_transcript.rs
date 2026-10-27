@@ -1,10 +1,14 @@
 //! Bounded, paint-admitted readers. Hydration creates no workers. Pane and inline
 //! surfaces transfer one Entity, never clone its runtime or dispatch ownership.
 use super::*;
-use crate::{artifact_model::Reference, artifact_view::ArtifactPane};
+use crate::{
+    artifact_model::{RasterSize, Reference},
+    artifact_view::ArtifactPane,
+};
 use gpui_kit::{AnyElement, canvas};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
 };
 #[cfg(feature = "native-probes")]
@@ -52,8 +56,26 @@ pub(super) struct State {
     pub(super) revision: u64,
     surveyed: Rc<Cell<Option<Survey>>>,
     admission_pending: bool,
+    /// Decoded size of each exact revision seen on this host. Revisions are
+    /// immutable, so a re-read after cache eviction reserves the same geometry.
+    sizes: HashMap<(String, String, u32), RasterSize>,
+}
+fn size_key(r: &Reference) -> (String, String, u32) {
+    (r.session.clone(), r.id.clone(), r.revision)
 }
 impl TranscriptView {
+    /// Geometry a raster pin reserves before its read: its decoded size, else the publication hint.
+    fn inline_reserve(
+        &self,
+        reference: &Reference,
+        hint: Option<RasterSize>,
+    ) -> Option<RasterSize> {
+        self.inline_visuals
+            .sizes
+            .get(&size_key(reference))
+            .copied()
+            .or(hint)
+    }
     pub(super) fn clear_inline(&mut self, cx: &mut App) {
         self.inline_visuals.waiting = None;
         for entry in self.inline_visuals.entries.drain(..) {
@@ -77,6 +99,13 @@ impl TranscriptView {
             s.scroll_to_item(index, cx);
         });
     }
+    /// Drops every cached reader, as cache eviction does, retaining remembered sizes.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_evict(&mut self, cx: &mut Context<Self>) {
+        self.clear_inline(cx);
+        self.inline_visuals.surveyed.set(None);
+        cx.notify();
+    }
     pub(crate) fn inline_context(
         &mut self,
         options: Option<crate::LocalOptions>,
@@ -86,13 +115,16 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) {
         let enabled = enabled && options.is_some() && owner.is_some();
-        let changed = self.inline_visuals.owner != owner
-            || self
-                .inline_visuals
-                .options
-                .as_ref()
-                .map(crate::LocalOptions::host)
-                != options.as_ref().map(crate::LocalOptions::host);
+        let host_changed = self
+            .inline_visuals
+            .options
+            .as_ref()
+            .map(crate::LocalOptions::host)
+            != options.as_ref().map(crate::LocalOptions::host);
+        if host_changed {
+            self.inline_visuals.sizes.clear();
+        }
+        let changed = self.inline_visuals.owner != owner || host_changed;
         if changed {
             for entry in self.inline_visuals.entries.drain(..) {
                 if Some(entry.pane.entity_id()) != self.inline_visuals.adopted {
@@ -262,6 +294,14 @@ impl TranscriptView {
                         },
                     );
                     let admission = cx.observe_in(&pane, window, |view, pane, window, cx| {
+                        if let Some(size) = pane.read(cx).inline_raster_size()
+                            && let Some(entry) =
+                                view.inline_visuals.entries.iter().find(|e| e.pane == pane)
+                        {
+                            view.inline_visuals
+                                .sizes
+                                .insert(size_key(&entry.reference), size);
+                        }
                         if pane.read(cx).inline_raster_ready()
                             && let Some(id) = view
                                 .inline_visuals
@@ -318,11 +358,18 @@ impl TranscriptView {
                 continue;
             }
             changed |= opening;
+            let hint = self
+                .transcript
+                .messages()
+                .iter()
+                .find(|r| r.id() == id)
+                .and_then(|r| r.artifact_size());
+            let reserve = self.inline_reserve(&reference, hint);
             let entry = &mut self.inline_visuals.entries[index];
             entry.row = Some(id);
             entry
                 .pane
-                .update(cx, |p, cx| p.open_inline(reference, window, cx));
+                .update(cx, |p, cx| p.open_inline(reference, reserve, window, cx));
         }
         if changed {
             cx.notify();
@@ -380,6 +427,7 @@ impl TranscriptView {
         &self,
         id: u64,
         reference: &Reference,
+        hint: Option<RasterSize>,
         cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
@@ -434,6 +482,41 @@ impl TranscriptView {
                 .border_color(cx.theme().border);
         }
         let reference = reference.clone();
+        if candidate
+            && self.inline_visuals.enabled
+            && let Some(size) = self.inline_reserve(&reference, hint)
+        {
+            // Before admission, the same header and frame the reader will paint.
+            let open = {
+                let (owner, reference) = (owner.clone(), reference.clone());
+                move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut App| {
+                    let _ = owner.update(cx, |_, cx| cx.emit(ArtifactOpen(reference.clone())));
+                }
+            };
+            let open_header = open.clone();
+            let view = div()
+                .id("inline-visual")
+                .test_support()
+                .v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .child(crate::artifact_view::inline_visual::header(
+                    format!("{} · r{}", reference.title, reference.revision),
+                    Button::new("inline-expand")
+                        .ghost()
+                        .small()
+                        .label("Expand")
+                        .on_click(open_header),
+                ));
+            return row.child(crate::artifact_view::inline_visual::raster_body(
+                view,
+                size,
+                crate::artifact_view::inline_visual::raster_loading(cx),
+                open,
+                cx,
+            ));
+        }
         row = row.child(
             Button::new(("open-artifact", id))
                 .ghost()

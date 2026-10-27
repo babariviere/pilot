@@ -740,7 +740,7 @@ impl TranscriptView {
             return image;
         }
         if let Some(reference) = row.artifact_data() {
-            return self.inline_row(row.id(), reference, cx, owner);
+            return self.inline_row(row.id(), reference, row.artifact_size(), cx, owner);
         }
         if let Some(view) = self.work_ui.groups.get(&row.id()) {
             return div()

@@ -465,49 +465,57 @@ pub fn run(cx: &mut App) {
         let retained = cx.update(|cx| t.read(cx).images.entries.values().filter(|e| e.raster.is_some()).count());
         cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
 
-        // Inline raster artifacts beside conversation images, through the real reader.
-        let server = crate::transcript_view::inline_visual::probe::Server::new();
-        let mut rows = Vec::new();
-        for n in 0..12u64 {
-            let id = 3000 + n * 4;
-            rows.push(text_row(id, n));
-            let mut r = crate::transcript_view::inline_visual::probe::reference(&format!("raster-large-{n}"), 1);
-            r.kind = "image".into();
-            rows.push(Message::artifact(id + 1, r));
-        }
-        let options = server.options.clone();
-        let (h, viewer) = cx.update(|cx| {
-            let window = window();
-            gpui_kit::open_window(window, cx, |w, cx| {
-                cx.new(|cx| crate::LocalViewer::inline_visual_fixture(options.clone(), rows.clone(), w, cx))
-            })
-            .unwrap()
-        });
-        let t = cx.update(|cx| viewer.read(cx).inline_probe_transcript());
-        cx.update(|cx| {
-            viewer.update(cx, |v, cx| v.inline_probe_enable(server.options.clone(), cx));
-            t.update(cx, |t, cx| t.inline_probe_scroll(0, cx));
-        });
+        // Inline raster artifacts beside conversation images, through the real reader:
+        // pins with their publication size, then legacy pins without one.
         let mut artifacts = Journal::default();
-        let mut run = Run { executor, h, t: t.clone(), probe: artifact_rows, journal: &mut artifacts };
-        run.settle(cx, "artifact-mount", 4).await;
-        let reads = || server.reads.lock().unwrap().len();
-        let r0 = reads();
-        run.traverse(cx, "artifact-cold").await;
-        let r1 = reads();
-        cx.update(|cx| t.update(cx, |v, cx| v.scroller.update(cx, |s, cx| { s.restore_anchor(9, px(0.), cx); })));
-        run.settle(cx, "artifact-position", 20).await;
-        let r2 = reads();
-        run.oscillate(cx, "artifact-nearby").await;
-        let r3 = reads();
-        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
-        drop(server);
+        let mut artifact_reads = serde_json::Map::new();
+        for (prefix, hinted) in [("artifact", true), ("legacy", false)] {
+            let server = crate::transcript_view::inline_visual::probe::Server::new();
+            let mut rows = Vec::new();
+            for n in 0..12u64 {
+                let id = 3000 + n * 4;
+                rows.push(text_row(id, n));
+                let mut r = crate::transcript_view::inline_visual::probe::reference(&format!("raster-large-{prefix}-{n}"), 1);
+                r.kind = "image".into();
+                let size = crate::artifact_model::RasterSize { width: 1024, height: 640, first_frame: false };
+                rows.push(Message::artifact(id + 1, r).with_artifact_size(hinted.then_some(size)));
+            }
+            let options = server.options.clone();
+            let (h, viewer) = cx.update(|cx| {
+                let window = window();
+                gpui_kit::open_window(window, cx, |w, cx| {
+                    cx.new(|cx| crate::LocalViewer::inline_visual_fixture(options.clone(), rows.clone(), w, cx))
+                })
+                .unwrap()
+            });
+            let t = cx.update(|cx| viewer.read(cx).inline_probe_transcript());
+            cx.update(|cx| {
+                viewer.update(cx, |v, cx| v.inline_probe_enable(server.options.clone(), cx));
+                t.update(cx, |t, cx| t.inline_probe_scroll(0, cx));
+            });
+            artifacts.previous.clear();
+            artifacts.shown.clear();
+            let mut run = Run { executor: executor.clone(), h, t: t.clone(), probe: artifact_rows, journal: &mut artifacts };
+            run.settle(cx, &format!("{prefix}-mount"), 4).await;
+            let reads = || server.reads.lock().unwrap().len();
+            let r0 = reads();
+            run.traverse(cx, &format!("{prefix}-cold")).await;
+            let r1 = reads();
+            cx.update(|cx| t.update(cx, |v, cx| v.scroller.update(cx, |s, cx| { s.restore_anchor(9, px(0.), cx); })));
+            run.settle(cx, &format!("{prefix}-position"), 20).await;
+            let r2 = reads();
+            run.oscillate(cx, &format!("{prefix}-nearby")).await;
+            let r3 = reads();
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            drop(server);
+            artifact_reads.insert(prefix.into(), json!({"cold": r1 - r0, "position": r2 - r1, "nearby": r3 - r2}));
+        }
 
         let mut phases = serde_json::Map::new();
         for p in ["cold", "warm", "nearby", "nearby-released", "nearby-again", "prepended", "switch-back", "resized"] {
             phases.insert(p.into(), images.phase(p));
         }
-        for p in ["artifact-cold", "artifact-nearby"] {
+        for p in ["artifact-cold", "artifact-nearby", "legacy-cold", "legacy-nearby"] {
             phases.insert(p.into(), artifacts.phase(p));
         }
         let first = |j: &Journal| json!({
@@ -520,7 +528,7 @@ pub fn run(cx: &mut App) {
             "phases": phases,
             "prepend": {"before": [before.0, before.1, before.2], "after": [after.0, after.1, after.2], "visible_top_shift": prepend_shift},
             "retained_decoded_conversation_images": retained,
-            "artifact_reads": {"cold": r1 - r0, "position": r2 - r1, "nearby": r3 - r2},
+            "artifact_reads": artifact_reads,
             "first_images": first(&images),
             "first_artifacts": first(&artifacts),
             "note": "Explicit Window::draw CPU time on hidden native windows, not presentation/VSync.",

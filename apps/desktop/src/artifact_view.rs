@@ -46,6 +46,8 @@ use std::{
 };
 pub(crate) struct ArtifactPane {
     inline: bool,
+    /// Raster geometry an inline preview reserves while its revision loads.
+    inline_reserve: Option<crate::artifact_model::RasterSize>,
     gallery: gallery::State,
     focus: Option<gpui_kit::FocusHandle>,
     options: Option<LocalOptions>,
@@ -98,6 +100,7 @@ impl ArtifactPane {
     pub(crate) fn new() -> Self {
         Self {
             inline: false,
+            inline_reserve: None,
             gallery: gallery::State::default(),
             focus: None,
             options: None,

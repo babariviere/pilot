@@ -568,6 +568,31 @@ test("publication waits for asynchronous durable admission before returning and 
 	assert.equal(f.notifications, 1);
 });
 
+test("image publications pass their header size for display only; the model result is unchanged", async () => {
+	const published: unknown[][] = [];
+	const f = fixture({
+		onArtifactPublished: async (...args) => {
+			published.push(args);
+		},
+	});
+	const image = {
+		...revision,
+		kind: "image" as const,
+		source:
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg==",
+		libraries: [],
+	};
+	f.store.create = async () => image;
+	const result = await f.call("create", { title: "Image", kind: "image", source: image.source });
+	await f.call("update", { id: revision.id, expectedRevision: 3, ...write });
+	const artifact = { id: "artifact-1", sessionId: "session-1", title: "Chart", revision: 3 };
+	assert.deepEqual(published, [
+		[artifact, { mimeType: "image/png", width: 3, height: 2 }],
+		[artifact, undefined],
+	]);
+	assert.deepEqual(result.structuredContent, { artifact });
+});
+
 test("committed publication keeps its metadata fallback when display admission fails", async (t) => {
 	const warnings = t.mock.method(console, "warn", () => {});
 	const f = fixture({

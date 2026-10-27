@@ -152,6 +152,21 @@ re-reads to 1–2 and from 6 height jumps to 1–3; reloads that remain come fro
 existing eight-entry cache. A raster artifact's first load still grows from the
 440pt viewport once, because its pin has no size before the read.
 
+New publication entries now carry the image's upright header size, computed by
+the kernel from the committed source (`data.image`). Rows reserve that fitted
+frame before admission and the read, and each exact revision's decoded size is
+remembered per host for re-reads after cache eviction. The same journey now
+runs twice: `artifact-*` phases with the size, `legacy-*` phases without it.
+
+| Inline raster artifacts (12 × 1024×640) | Before: height jumps | After |
+| --- | ---: | ---: |
+| Cold traversal, with publication size | 16 (12 first loads, 4 eviction re-reads) | 0 |
+| Cold traversal, legacy pin | 16 | 12 (first loads only) |
+| Repeated nearby scrolling | 1 | 0 |
+
+Remaining cold-pass row shifts (3) are the list's tail settle, 1.5–4px. Eviction
+re-reads still show the loading caption briefly, now inside the final frame.
+
 Main-thread CPU time of each `Window::draw` stayed about 3–4ms median in both
 arms (for example, warm traversal 2.95/3.94ms before, 3.84/2.98ms after). These
 are synchronous draw/layout timings, not presentation, VSync or dropped-frame
