@@ -231,11 +231,7 @@ impl ListDelegate for ChatList {
             .flatten()
             .and_then(|id| self.projects.iter().find(|p| &p.id == id))
             .map(|p| p.name.clone());
-        let reason = chat
-            .attention
-            .as_ref()
-            .map(|a| a.label.clone())
-            .or_else(|| chat.signal.map(|_| chat.signal_label().to_owned()));
+        let reason = chat.row_reason().map(str::to_owned);
         let state = reason
             .into_iter()
             .chain(chat.archived.then(|| "Archived".to_owned()))

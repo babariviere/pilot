@@ -470,12 +470,13 @@ impl Render for Inbox {
             .gap(px(Space::SIDEBAR))
             .child(div().v_flex().gap(px(Space::META))
                 .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()
-                .child(div().flex_1().min_w_0().child(ui::heading("inbox-title", "Inbox", Text::Title)))
+                // Coverage caveat lives in the title tooltip, not as permanent copy.
+                .child(div().id("inbox-scope-note").test_support().flex_1().min_w_0()
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Loaded Local chats and ready primary PRs. Opening a chat does not mark it reviewed.").build(w, cx))
+                    .child(ui::heading("inbox-title", "Inbox", Text::Title)))
                 // Select's refinement sizes the inner input, not its Base wrapper.
                 // Bound both so native hit testing matches the visible control.
-                .child(div().w(px(220.)).min_w(px(220.)).max_w(px(220.)).child(Select::new(&self.picker).id("inbox-project-filter").small().w_full().focus_ring(false).menu_max_h(px(300.)).accessibility_label("Inbox project filter").search_placeholder("Find a project…"))))
-                .child(ui::text(Text::Caption, "Loaded Local chats only. Opening does not mark them reviewed.")
-                    .id("inbox-scope-note").test_support().text_color(cx.theme().muted_foreground)))
+                .child(div().w(px(220.)).min_w(px(220.)).max_w(px(220.)).child(Select::new(&self.picker).id("inbox-project-filter").small().w_full().focus_ring(false).menu_max_h(px(300.)).accessibility_label("Inbox project filter").search_placeholder("Find a project…")))))
             .when(missing || self.projects_error, |this| this.child(
                 div().id("inbox-project-notice").test_support().h_flex().items_start().gap(px(Space::CONTROL))
                     .child(AppIcon::Error.inline().text_color(cx.theme().danger))
@@ -487,8 +488,6 @@ impl Render for Inbox {
                             "Last received names and exact filters are retained. Loaded chats remain available."
                         }).text_color(cx.theme().muted_foreground)))))
             .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list)))
-            .child(ui::text(Text::Caption, "Chat attention and ready primary PRs only. More Inbox sources and actions remain in Swift.")
-                .id("inbox-availability-note").test_support().text_color(cx.theme().muted_foreground))
     }
 }
 
@@ -577,9 +576,9 @@ mod tests {
                 let pane = w.find("inbox-page").bounds();
                 let filter = w.find("inbox-project-filter").bounds();
                 let note = w.find("inbox-scope-note").bounds();
-                let footer = w.find("inbox-availability-note").bounds();
                 assert_eq!(filter.size.width, px(220.));
-                for bounds in [filter, note, footer] {
+                assert!(w.try_find("inbox-availability-note").is_none(), "no permanent coverage footer");
+                for bounds in [filter, note] {
                     assert!(bounds.left() >= pane.left() && bounds.right() <= pane.right());
                     assert!(bounds.bottom() <= pane.bottom());
                 }

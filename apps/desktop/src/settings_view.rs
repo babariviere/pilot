@@ -251,21 +251,14 @@ pub(super) enum Category {
     Appearance,
     Models,
     Updates,
-    Availability,
 }
 impl Category {
-    const ALL: [Self; 4] = [
-        Self::Appearance,
-        Self::Models,
-        Self::Updates,
-        Self::Availability,
-    ];
+    const ALL: [Self; 3] = [Self::Appearance, Self::Models, Self::Updates];
     fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
             Self::Models => "Scoped models",
             Self::Updates => "Updates",
-            Self::Availability => "Other settings",
         }
     }
     fn id(self) -> &'static str {
@@ -273,7 +266,6 @@ impl Category {
             Self::Appearance => "settings-appearance",
             Self::Models => "settings-models",
             Self::Updates => "settings-updates",
-            Self::Availability => "settings-availability",
         }
     }
 }
@@ -551,7 +543,8 @@ impl SettingsView {
                 }),
             )
     }
-    fn status(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
+    /// None when there is nothing to say or do: the footer then disappears.
+    fn status(&mut self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.preferences.read(cx).close_notice
             && self
@@ -561,7 +554,7 @@ impl SettingsView {
                 .as_ref()
                 .is_some_and(|u| u.read(cx).unsaved_access(cx))
         {
-            return div().child(Notice::new("Use or clear the update access field before closing. It is never saved to disk.").tone(Tone::Warning));
+            return Some(div().child(Notice::new("Use or clear the update access field before closing. It is never saved to disk.").tone(Tone::Warning)));
         }
         let owner = self.preferences.read(cx);
         let state = &owner.state;
@@ -598,8 +591,13 @@ impl SettingsView {
                 .models
                 .as_ref()
                 .is_some_and(|m| m.read(cx).unsettled(cx));
-            return div().v_flex().gap_2()
-                .children((close_notice&&models_unsettled).then(||Notice::new("Finish or review your scoped-model changes before closing. No request is resent by closing.").tone(Tone::Warning)));
+            return (close_notice&&models_unsettled).then(||div().v_flex().gap_2()
+                .child(Notice::new("Finish or review your scoped-model changes before closing. No request is resent by closing.").tone(Tone::Warning)));
+        }
+        // Save/Revert appear only once something changed, is saving or failed.
+        let show_actions = dirty || saving || unconfirmed || error.is_some();
+        if status.is_none() && !show_actions && !self.confirm_reload {
+            return None;
         }
         let mut panel = div().v_flex().gap_3().children(status.map(|status| {
             ui::text(Text::Caption, status)
@@ -672,11 +670,11 @@ impl SettingsView {
                     .tone(Tone::Warning),
             );
         }
-        if self.preferences.read(cx).category == Category::Appearance || dirty || error.is_some() {
+        Some(if show_actions {
             panel.child(actions)
         } else {
             panel
-        }
+        })
     }
 }
 impl SettingsView {
@@ -738,9 +736,6 @@ impl Render for SettingsView {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
             Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
             Category::Updates => self.updates(cx).into_any_element(),
-            Category::Availability => div().v_flex().gap_4()
-                .child(ui::header("settings-page-title", "Other settings", Text::Title))
-                .child(Notice::new("Notifications, Connections, Diagnostics, Energy and project settings are available in the Swift app.")).into_any_element(),
         };
         let status = self.status(cx);
         div()
@@ -792,6 +787,7 @@ impl Render for SettingsView {
                     .h_full()
                     .border_r_1()
                     .border_color(cx.theme().border)
+                    .pt(gpui_kit::px(crate::ui::Space::SIDEBAR))
                     .child(div().flex_1().min_h_0().child(List::new(&self.categories))),
             )
             .child(
@@ -818,13 +814,13 @@ impl Render for SettingsView {
                                     .child(ui::page().child(detail)),
                             ),
                     )
-                    .child(
+                    .children(status.map(|status| {
                         div()
                             .p_4()
                             .border_t_1()
                             .border_color(cx.theme().border)
-                            .child(status),
-                    ),
+                            .child(status)
+                    })),
             )
     }
 }

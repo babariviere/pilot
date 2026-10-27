@@ -3,7 +3,7 @@ use crate::app_icon::AppIcon;
 use crate::local_model::{Chat, Project};
 use gpui_kit::{
     App, Context, EventEmitter, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, TestSupportExt, Window,
+    SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, IndexPath, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -204,14 +204,9 @@ impl EventEmitter<ShellEvent> for Overview {}
 /// Loaded public row context only. Never infer ownership from a shared folder.
 /// Work is bounded by the existing visible-row and project-catalog limits.
 fn chat_row_detail(chat: &Chat, projects: &[Project], include_project: bool) -> String {
-    let reason = chat
-        .attention
-        .as_ref()
-        .map(|a| a.label.as_str())
-        .filter(|label| !label.is_empty())
-        .unwrap_or_else(|| chat.signal_label());
+    let reason = chat.row_reason();
     if !include_project {
-        return reason.to_owned();
+        return reason.unwrap_or_default().to_owned();
     }
     let project = chat
         .project_id
@@ -224,7 +219,10 @@ fn chat_row_detail(chat: &Chat, projects: &[Project], include_project: bool) -> 
                 .unwrap_or("Project unavailable")
         })
         .unwrap_or("No project");
-    format!("{project} · {reason}")
+    match reason {
+        Some(reason) => format!("{project} · {reason}"),
+        None => project.to_owned(),
+    }
 }
 impl Overview {
     pub(crate) fn new() -> Self {
@@ -433,6 +431,12 @@ impl Overview {
             .v_flex()
             .gap(px(Space::CONTROL))
             .child(self.heading(id, title));
+        // Working chats appear once, under Working now.
+        let rows: Vec<usize> = rows
+            .iter()
+            .copied()
+            .filter(|ix| working || !self.working.contains(ix))
+            .collect();
         if rows.is_empty() {
             section = section.child(
                 div()
@@ -447,7 +451,7 @@ impl Overview {
                     }),
             );
         }
-        for ix in rows {
+        for ix in &rows {
             section = section.child(
                 div()
                     .border_b(crate::appearance::hairline(w))
@@ -499,34 +503,26 @@ impl Render for Overview {
                     .child(SharedString::from(p.path.clone())),
             );
         }
-        if self.project.is_none() {
-            header = header.child(
-                div()
-                    .text_size(px(TextRole::LABEL))
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Across all projects"),
-            );
-        }
-        header = header
-            .child(
-                div()
-                    .id("home-loaded-qualifier")
-                    .test_support()
-                    .text_size(px(TextRole::CAPTION))
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Local · loaded chat summaries only"),
-            )
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(TextRole::BODY))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if self.chats_loaded {
-                        counts.line()
-                    } else {
-                        "Loading Local chats…".into()
-                    }),
-            );
+        // One count line; its coverage caveat lives in the tooltip.
+        header = header.child(
+            div()
+                .id("home-loaded-qualifier")
+                .truncate()
+                .text_size(px(TextRole::BODY))
+                .text_color(cx.theme().muted_foreground)
+                .tooltip(|w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(
+                        "Loaded Local chat summaries, not full dashboard totals.",
+                    )
+                    .build(w, cx)
+                })
+                .child(if self.chats_loaded {
+                    counts.line()
+                } else {
+                    "Loading Local chats…".into()
+                })
+                .test_support(),
+        );
         if let Some(error) = self.error {
             header = header.child(
                 div()
@@ -547,8 +543,7 @@ impl Render for Overview {
                 .child(self.chat_section(w, true, cx))
                 .child(self.chat_section(w, false, cx));
         }
-        body=body.child(crate::ui::action("home-all-chats", "All chats", crate::ui::Action::Quiet).self_start().on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))))
-            .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Loaded Local activity, not full dashboard totals. Full Inbox, missions and project settings remain available in Swift."));
+        body=body.child(crate::ui::action("home-all-chats", "All chats", crate::ui::Action::Quiet).self_start().on_click(cx.listener(|_,_,_,cx|cx.emit(ShellEvent::AllChats))));
         div()
             .v_flex()
             .size_full()
@@ -750,11 +745,14 @@ mod workbench_tests {
             "Working in background"
         );
         chat.signal = None;
+        chat.state = "stopped".into();
         assert_eq!(
             chat_row_detail(&chat, &projects, false),
             chat.signal_label(),
             "unknown/quiet fallback is not an invented completion"
         );
+        chat.state = "idle".into();
+        assert_eq!(chat_row_detail(&chat, &projects, false), "", "plain idle says nothing");
     }
     #[gpui_kit::test]
     fn home_row_context_preserves_mounted_frame_and_exact_pointer_activation(

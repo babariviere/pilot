@@ -161,10 +161,10 @@ impl SettingsView {
             .child(ui::heading(SharedString::from(format!("settings-{prefix}-heading")), title, Text::Headline))
             .child(FieldRow::new(SharedString::from(format!("settings-{prefix}-family-field")), "Font", picker)
                 .layout(if wide {FieldLayout::Inline} else {FieldLayout::Stacked})
-                .description(if code {"Common installed monospaced fonts."} else {"Up to 256 installed choices. Restart after installing fonts."}))
+                .description(if code {"Monospaced fonts."} else {"Restart after installing fonts."}))
             .child(FieldRow::new(SharedString::from(format!("settings-{prefix}-size-field")), "Size", div().h_flex().gap_2().items_center().child(ui::text(Text::Body, size_label)).child(sizes))
                 .layout(if wide {FieldLayout::Inline} else {FieldLayout::Stacked})
-                .description(if code {"9–20 pt. Code blocks and tool output; inline code keeps its proportional chat size."} else {"11–22 pt. Conversation text only, not the composer or app controls."}))
+                .description(if code {"Code blocks and tool output."} else {"Conversation text only."}))
             .when(!ready, |d| d.child(Notice::new("Loading installed fonts…").tone(Tone::Quiet)))
             .when(ready && !crate::typography::available(family, cx), |d| d.child(Notice::new("Selected font is unavailable. Using the app default without changing your saved choice.").tone(Tone::Quiet)))
     }

@@ -237,13 +237,7 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                     "saved preferences need no routine status narration"
                 );
                 let detail = window.find("settings-detail").bounds();
-                for id in [
-                    "settings-system",
-                    "settings-light",
-                    "settings-dark",
-                    "settings-save",
-                    "settings-revert",
-                ] {
+                for id in ["settings-system", "settings-light", "settings-dark"] {
                     let bounds = window.find(id).bounds();
                     assert!(
                         bounds.left() >= detail.left()
@@ -253,7 +247,11 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
                         "{id} mounted inside Settings detail"
                     );
                 }
-                assert_eq!(window.find("settings-save").disabled(), Some(true));
+                assert!(
+                    window.try_find("settings-save").is_none()
+                        && window.try_find("settings-revert").is_none(),
+                    "Save and Revert appear only once something changed"
+                );
                 window.click(
                     if next == AppearancePreference::Dark {
                         "settings-dark"
@@ -400,7 +398,7 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(handle, |_, window, cx| {
                 pane.update(cx, |pane, cx| pane.focus_categories(window, cx));
-                window.press("down", cx);
+                window.press("up", cx);
                 window.press("enter", cx);
             })
             .unwrap();
@@ -408,14 +406,14 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| {
                 assert_eq!(
                     owner.read(cx).category,
-                    crate::settings_view::Category::Availability
+                    crate::settings_view::Category::Models
                 )
             });
             capture(
                 cx,
                 handle,
                 &captures,
-                &screenshot_name(width, mode, "other-settings"),
+                &screenshot_name(width, mode, "models-keyboard"),
             );
             cx.update_window(handle, |_, window, cx| {
                 window.click("settings-appearance", cx);

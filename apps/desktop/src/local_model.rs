@@ -116,6 +116,18 @@ pub(crate) struct Chat {
     pub(crate) project_id: Option<String>,
 }
 impl Chat {
+    /// Row reason: attention, else live signal, else a non-routine raw state.
+    /// A plain idle chat has nothing to say.
+    pub(crate) fn row_reason(&self) -> Option<&str> {
+        self.attention
+            .as_ref()
+            .map(|a| a.label.as_str())
+            .filter(|label| !label.is_empty())
+            .or_else(|| self.signal.map(|_| self.signal_label()))
+            .or_else(|| {
+                (!self.state.is_empty() && self.state != "idle").then_some(self.state.as_str())
+            })
+    }
     pub(crate) fn signal_label(&self) -> &str {
         use crate::dither::Signal;
         match self.signal {
