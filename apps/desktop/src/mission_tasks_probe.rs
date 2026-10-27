@@ -178,6 +178,16 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             reveal(cx, h, "mission-tasks-list");
+            // A page-centred wheel can land on the inner list: bring it back to its first row.
+            cx.update_window(h, |_, w, cx| {
+                w.scroll(
+                    "mission-tasks-list",
+                    ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                    cx,
+                )
+            })
+            .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("mission-tasks-list").bounds();
                 assert!(b.left() >= px(0.) && b.right() <= px(width) && b.size.height > px(200.));

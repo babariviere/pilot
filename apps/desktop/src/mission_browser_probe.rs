@@ -370,14 +370,18 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
+            cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("mission-goal").is_some());
                 assert!(
                     w.find("missions-snapshot-note").visible(),
                     "offline warning stays visible"
                 );
                 assert_eq!(w.find("mission-chat-chat-A").disabled(), Some(true));
-                w.click("mission-copy-goal", cx);
+            })
+            .unwrap();
+            // Copy goal stays available offline, from the overview … menu.
+            crate::mission_browser_view::probe_menu_command(cx, h, "Copy goal");
+            cx.update_window(h, |_, w, cx| {
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().unwrap(),
                     f::detail("mission-A")["mission"]["goal"].as_str().unwrap()
@@ -394,9 +398,12 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                 server.state.lock().unwrap().seen.len(),
                 "offline/online presentation never polls or reloads"
             );
-            cx.update_window(h, |_, w, cx| {
+            cx.update_window(h, |_, w, _| {
                 assert_eq!(w.find("mission-chat-not-loaded").disabled(), Some(true));
-                w.click("mission-copy-goal", cx);
+            })
+            .unwrap();
+            crate::mission_browser_view::probe_menu_command(cx, h, "Copy goal");
+            cx.update_window(h, |_, w, cx| {
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().unwrap(),
                     f::detail("mission-A")["mission"]["goal"].as_str().unwrap()

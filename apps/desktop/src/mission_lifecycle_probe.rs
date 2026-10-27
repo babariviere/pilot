@@ -104,7 +104,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             until(cx, h, |cx| b.read(cx).detail.is_some() && !b.read(cx).busy);
-            click(cx, h, "mission-archive");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Archive mission…");
             let form = cx.update(|cx| b.read(cx).lifecycle[0].clone());
             until(cx, h, |cx| form.read(cx).snapshot.is_some());
             assert!(
@@ -126,7 +126,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             settle(cx, h);
             assert!(!cx.update(|cx| form.read(cx).visible));
-            click(cx, h, "mission-archive");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Archive mission…");
             cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
                 .unwrap();
             settle(cx, h);
@@ -158,7 +158,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|d| d.key == f::key("mission-A"))
                     && !b.read(cx).busy
             });
-            click(cx, h, "mission-archive");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Archive mission…");
             assert!(cx.update(|cx| matches!(
                 form.read(cx).state.attempt.as_ref(),
                 Some((_, Outcome::Ack))
@@ -203,7 +203,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
                 "/api/missions/mission-A/lifecycle",
                 Reply::json(400, serde_json::json!({"error":"post-commit fault"})),
             );
-            click(cx, h, "mission-reopen");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Reopen mission…");
             until(cx, h, |cx| {
                 form.read(cx)
                     .snapshot
@@ -218,7 +218,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             click(cx, h, "lifecycle-close");
-            click(cx, h, "mission-reopen");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Reopen mission…");
             click(cx, h, "lifecycle-submit");
             assert!(cx.update(|cx| matches!(
                 form.read(cx).state.attempt.as_ref(),
@@ -278,7 +278,7 @@ fn root(cx: &mut HeadlessAppContext) {
     until(cx, h, |cx| {
         browser.read(cx).detail.is_some() && !browser.read(cx).busy
     });
-    click(cx, h, "mission-edit-metadata");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
     let metadata = cx.update(|cx| browser.read(cx).metadata[0].clone());
     until(cx, h, |cx| metadata.read(cx).loaded);
     cx.update_window(h, |_, w, cx| {
@@ -300,13 +300,13 @@ fn root(cx: &mut HeadlessAppContext) {
     .unwrap();
     settle(cx, h);
     click(cx, h, "metadata-close");
-    click(cx, h, "mission-archive");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Archive mission…");
     let form = cx.update(|cx| browser.read(cx).lifecycle[0].clone());
     until(cx, h, |cx| form.read(cx).snapshot.is_some());
     click(cx, h, "lifecycle-close");
     cx.update_window(h, |_, w, cx| assert!(w.focused(cx).is_some()))
         .unwrap();
-    click(cx, h, "mission-archive");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Archive mission…");
     cx.update_window(h, |_, w, cx| w.click("nav-home", cx))
         .unwrap();
     settle(cx, h);

@@ -138,8 +138,7 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|d| d.key == f::key("mission-A"))
                     && !v.busy
             });
-            cx.update_window(h, |_, w, cx| w.click("mission-open-activity", cx))
-                .unwrap();
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, &view, |v, cx| {
                 v.activity_open && activity(v).read(cx).state.loaded
             });
@@ -343,8 +342,7 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|d| d.key == f::key("mission-B"))
                     && !v.busy
             });
-            cx.update_window(h, |_, w, cx| w.click("mission-open-activity", cx))
-                .unwrap();
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, &view, |v, cx| activity(v).read(cx).state.loaded);
             cx.update(|cx| {
                 let a = activity(view.read(cx)).read(cx);

@@ -319,7 +319,7 @@ fn component(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Opt
             .and_then(|e| e.known.as_ref())
             .is_some_and(|a| matches!(&a.outcome,Outcome::Confirmed(b) if b.revision.number==5))
     });
-    click(cx, h, "mission-open-activity");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
     cx.update_window(h, |_, w, _| {
         assert!(w.try_find("mission-activity-page").is_some())
     })

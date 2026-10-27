@@ -155,7 +155,7 @@ pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, |cx| {
                 browser.read(cx).detail.is_some() && !browser.read(cx).busy
             });
-            click(cx, h, "mission-open-activity");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             let activity = cx.update(|cx| browser.read(cx).activity_browser.clone().unwrap());
             until(cx, h, |cx| activity.read(cx).state.loaded);
             click(cx, h, "activity-post-update");
@@ -208,7 +208,7 @@ pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             route(cx, h, &browser, "mission-B");
             until(cx, h, |cx| !browser.read(cx).busy);
-            click(cx, h, "mission-open-activity");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, |cx| activity.read(cx).state.loaded);
             click(cx, h, "activity-post-update");
             let other = cx.update(|cx| shelf.read(cx).current.clone().unwrap());
@@ -218,7 +218,7 @@ pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| assert_eq!(shelf.read(cx).current.as_ref(), Some(&other)));
             route(cx, h, &browser, "mission-A");
             until(cx, h, |cx| !browser.read(cx).busy);
-            click(cx, h, "mission-open-activity");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, |cx| activity.read(cx).state.loaded);
             click(cx, h, "activity-post-update");
             cx.update(|cx| {
@@ -258,7 +258,7 @@ pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
             });
             route(cx, h, &browser, "mission-A");
             until(cx, h, |cx| !browser.read(cx).busy);
-            click(cx, h, "mission-open-activity");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, |cx| activity.read(cx).state.loaded);
             click(cx, h, "activity-post-update");
             reveal(cx, h, "mission-update-result");
@@ -271,7 +271,7 @@ pub fn run_mission_update_probe(cx: &mut HeadlessAppContext) {
             // Other mission owns an independent Unknown operation. Timeline refresh cannot settle it.
             route(cx, h, &browser, "mission-B");
             until(cx, h, |cx| !browser.read(cx).busy);
-            click(cx, h, "mission-open-activity");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
             until(cx, h, |cx| activity.read(cx).state.loaded);
             click(cx, h, "activity-post-update");
             server.reply(
@@ -383,7 +383,7 @@ fn root(cx: &mut HeadlessAppContext) {
     until(cx, h, |cx| {
         browser.read(cx).detail.is_some() && !browser.read(cx).busy
     });
-    click(cx, h, "mission-open-activity");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Activity");
     let activity = cx.update(|cx| browser.read(cx).activity_browser.clone().unwrap());
     until(cx, h, |cx| activity.read(cx).state.loaded);
     click(cx, h, "activity-post-update");

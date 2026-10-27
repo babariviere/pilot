@@ -169,7 +169,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, |cx| b.read(cx).catalog.is_some() && !b.read(cx).busy);
             route(cx, h, &b, "mission-A");
             until(cx, h, |cx| b.read(cx).detail.is_some() && !b.read(cx).busy);
-            click(cx, h, "mission-edit-metadata");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
             let form = cx.update(|cx| b.read(cx).metadata[0].clone());
             until(cx, h, |cx| form.read(cx).loaded);
             assert_eq!(
@@ -211,7 +211,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
             paste(cx, h, &form, false, title);
             click(cx, h, "metadata-close");
             assert!(!cx.update(|cx| form.read(cx).visible));
-            click(cx, h, "mission-edit-metadata");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
             assert_eq!(cx.update(|cx| b.read(cx).metadata.len()), 1);
             assert_eq!(
                 cx.update(|cx| form.read(cx).body.read(cx).value().to_string()),
@@ -242,7 +242,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|d| d.key == f::key("mission-B"))
                     && !b.read(cx).busy
             });
-            click(cx, h, "mission-edit-metadata");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
             let other = cx.update(|cx| b.read(cx).metadata[1].clone());
             until(cx, h, |cx| other.read(cx).loaded);
             assert_eq!(
@@ -258,7 +258,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|d| d.key == f::key("mission-A"))
                     && !b.read(cx).busy
             });
-            click(cx, h, "mission-edit-metadata");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
             assert!(cx.update(|cx| matches!(
                 form.read(cx).state.attempt.as_ref(),
                 Some((_, Outcome::Saved(_)))
@@ -283,7 +283,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             click(cx, h, "metadata-close");
-            click(cx, h, "mission-edit-metadata");
+            crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
             assert!(cx.update(|cx| form.read(cx).state.blocked()));
             assert_eq!(
                 cx.update(|cx| form.read(cx).title.read(cx).value().to_string()),
@@ -342,7 +342,7 @@ fn root(cx: &mut HeadlessAppContext) {
     until(cx, h, |cx| {
         browser.read(cx).detail.is_some() && !browser.read(cx).busy
     });
-    click(cx, h, "mission-edit-metadata");
+    crate::mission_browser_view::probe_menu_command(cx, h, "Edit…");
     let form = cx.update(|cx| browser.read(cx).metadata[0].clone());
     until(cx, h, |cx| form.read(cx).loaded);
     paste(cx, h, &form, false, "Root draft 日本語 👩‍💻");

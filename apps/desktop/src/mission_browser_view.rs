@@ -23,7 +23,10 @@ use gpui_kit::{
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
     TestSupportExt, Window,
     base::SelectableText,
-    component::{ActiveTheme, Disableable, StyledExt},
+    component::{
+        ActiveTheme, Disableable, StyledExt,
+        menu::{DropdownMenu, PopupMenuItem},
+    },
     div,
     prelude::FluentBuilder,
     px,
@@ -591,6 +594,82 @@ impl Browser {
         self.tasks_browser
             .update(cx, |tasks, cx| tasks.sync(key, self.options.clone(), w, cx));
     }
+    /// Secondary overview commands live in one … menu beside Refresh.
+    fn overview_menu(&self, generation: u64, cx: &Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let d = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())))?;
+        let weak = cx.weak_entity();
+        let enabled = self.online && self.current(generation);
+        let status = d.status.clone();
+        let key = d.key.clone();
+        let goal = (!d.goal.is_empty()).then(|| d.goal.clone());
+        Some(
+            ui::icon_action(
+                "mission-more",
+                "More",
+                crate::app_icon::AppIcon::More,
+                Action::Quiet,
+            )
+            .dropdown_menu(move |mut menu, _, _| {
+                let edit = weak.clone();
+                menu = menu.item(PopupMenuItem::new("Edit…").disabled(!enabled).on_click(
+                    move |_, w, cx| {
+                        let _ = edit.update(cx, |v, cx| {
+                            if v.generation == generation {
+                                v.open_metadata(w, cx);
+                            }
+                        });
+                    },
+                ));
+                let activity = weak.clone();
+                let activity_key = key.clone();
+                menu = menu.item(PopupMenuItem::new("Activity").disabled(!enabled).on_click(
+                    move |_, w, cx| {
+                        let _ = activity.update(cx, |v, cx| {
+                            v.open_activity(&activity_key, generation, w, cx)
+                        });
+                    },
+                ));
+                for (action, label) in [
+                    (
+                        crate::mission_lifecycle::Action::Archive,
+                        "Archive mission…",
+                    ),
+                    (crate::mission_lifecycle::Action::Reopen, "Reopen mission…"),
+                ] {
+                    if action.allowed(&status) {
+                        let lifecycle = weak.clone();
+                        menu = menu.item(PopupMenuItem::new(label).disabled(!enabled).on_click(
+                            move |_, w, cx| {
+                                let _ = lifecycle.update(cx, |v, cx| {
+                                    if v.generation == generation {
+                                        v.open_lifecycle(action, w, cx);
+                                    }
+                                });
+                            },
+                        ));
+                    }
+                }
+                if let Some(text) = goal.clone() {
+                    let copy = weak.clone();
+                    let copy_key = key.clone();
+                    menu = menu.item(PopupMenuItem::new("Copy goal").on_click(move |_, _, cx| {
+                        let _ = copy.update(cx, |v, cx| {
+                            if v.generation == generation
+                                && v.route == Some(Route::Detail(copy_key.clone()))
+                            {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                            }
+                        });
+                    }));
+                }
+                menu
+            })
+            .into_any_element(),
+        )
+    }
     fn open_activity(
         &mut self,
         key: &Key,
@@ -774,13 +853,14 @@ impl Render for Browser {
                             crate::app_icon::AppIcon::Retry,
                             Action::Quiet,
                         )
-                            .disabled(self.options.is_none() || self.busy)
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                if v.generation == generation {
-                                    v.read(w, cx);
-                                }
-                            })),
+                        .disabled(self.options.is_none() || self.busy)
+                        .on_click(cx.listener(move |v, _, w, cx| {
+                            if v.generation == generation {
+                                v.read(w, cx);
+                            }
+                        })),
                     )
+                    .when(!is_list, |d| d.children(self.overview_menu(generation, cx)))
                     .when(is_list, |d| {
                         d.child(
                             ui::action("missions-new", "New mission…", Action::Secondary)
@@ -849,18 +929,18 @@ impl Render for Browser {
                 }
                 for r in rows {
                     let key = r.key.clone();
-                let detail = format!(
-                    "{}{}{}",
-                    capitalized(&r.status),
-                    if local.as_ref() == Some(&key.home) {
-                        ""
-                    } else {
-                        " · Home unavailable"
-                    },
-                    r.counts
-                        .map(|(d, t)| format!(" · {d} of {t} tasks done"))
-                        .unwrap_or_default()
-                );
+                    let detail = format!(
+                        "{}{}{}",
+                        capitalized(&r.status),
+                        if local.as_ref() == Some(&key.home) {
+                            ""
+                        } else {
+                            " · Home unavailable"
+                        },
+                        r.counts
+                            .map(|(d, t)| format!(" · {d} of {t} tasks done"))
+                            .unwrap_or_default()
+                    );
                     content = content.child(
                         ui::action(
                             SharedString::from(format!("mission-row-{}", key.tag())),
@@ -898,84 +978,26 @@ impl Render for Browser {
             .as_ref()
             .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
         {
-            content = content
-                .child(ui::text(
+            content = content.child(
+                ui::text(
                     Text::Caption,
                     SharedString::from(format!(
                         "{} · {}",
                         capitalized(&d.status),
                         self.project_name(&d.project)
                     )),
-                ).text_color(cx.theme().muted_foreground));
-            // Secondary commands share one quiet row instead of a stacked list.
-            let mut commands = div().h_flex().flex_wrap().items_center().gap_1();
-            for (action, label, id) in [
-                (
-                    crate::mission_lifecycle::Action::Archive,
-                    "Archive mission…",
-                    "mission-archive",
-                ),
-                (
-                    crate::mission_lifecycle::Action::Reopen,
-                    "Reopen mission…",
-                    "mission-reopen",
-                ),
-            ] {
-                if action.allowed(&d.status) {
-                    commands = commands.child(
-                        ui::action(id, label, Action::Quiet)
-                            .disabled(!self.online || !self.current(generation))
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                if v.generation == generation {
-                                    v.open_lifecycle(action, w, cx);
-                                }
-                            })),
-                    );
-                }
-            }
-            let activity_key = d.key.clone();
-            commands = commands.child(
-                ui::action("mission-edit-metadata", "Edit", Action::Quiet)
-                    .disabled(!self.online || !self.current(generation))
-                    .on_click(cx.listener(move |v, _, w, cx| {
-                        if v.generation == generation {
-                            v.open_metadata(w, cx);
-                        }
-                    })),
+                )
+                .text_color(cx.theme().muted_foreground),
             );
-            commands = commands.child(
-                ui::action("mission-open-activity", "Activity", Action::Quiet)
-                    .disabled(!self.online || !self.current(generation))
-                    .on_click(cx.listener(move |v, _, w, cx| {
-                        v.open_activity(&activity_key, generation, w, cx)
-                    })),
-            );
-            content = content
-                .child(commands)
-                .child(self.decisions_view(cx))
-                .child(self.plain(
-                    "mission-goal",
-                    if d.goal.is_empty() {
-                        "No goal saved.".into()
-                    } else {
-                        d.goal.clone()
-                    },
-                ));
-            if !d.goal.is_empty() {
-                let text = d.goal.clone();
-                let key = d.key.clone();
-                content = content.child(
-                    ui::icon_action("mission-copy-goal", "Copy goal", crate::app_icon::AppIcon::Copy, Action::Quiet)
-                        .self_start()
-                        .on_click(cx.listener(move |v, _, _, cx| {
-                            if v.generation == generation
-                                && v.route == Some(Route::Detail(key.clone()))
-                            {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                            }
-                        })),
-                );
-            }
+            // Edit, Activity, Archive/Reopen and Copy goal live in the title's … menu.
+            content = content.child(self.decisions_view(cx)).child(self.plain(
+                "mission-goal",
+                if d.goal.is_empty() {
+                    "No goal saved.".into()
+                } else {
+                    d.goal.clone()
+                },
+            ));
             content = content.child(ui::heading(
                 "mission-chats-heading",
                 "Chats",
@@ -1059,7 +1081,10 @@ impl Render for Browser {
                         Text::Headline,
                     )))
                     .when(d.brief.is_none(), |row| {
-                        row.child(ui::text(Text::Caption, "None saved").text_color(cx.theme().muted_foreground))
+                        row.child(
+                            ui::text(Text::Caption, "None saved")
+                                .text_color(cx.theme().muted_foreground),
+                        )
                     })
                     .child(
                         ui::action("mission-open-brief", "Open brief", Action::Secondary)
@@ -1072,7 +1097,12 @@ impl Render for Browser {
                     ),
             );
             if d.clipped {
-                content=content.child(Notice::new("The goal is clipped for display; copy keeps only the visible text.").tone(Tone::Warning));
+                content = content.child(
+                    Notice::new(
+                        "The goal is clipped for display; copy keeps only the visible text.",
+                    )
+                    .tone(Tone::Warning),
+                );
             }
         }
         div()
@@ -1107,4 +1137,45 @@ fn capitalized(s: &str) -> String {
         .next()
         .map(|first| first.to_uppercase().chain(chars).collect())
         .unwrap_or_default()
+}
+
+/// Open the overview … menu and choose an item by its visible label, through
+/// the real native menu. A disabled choice leaves the menu open; dismiss it.
+#[cfg(feature = "native-probes")]
+pub(crate) fn probe_menu_command(
+    cx: &mut gpui_kit::HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+    label: &str,
+) {
+    use gpui_kit::test::TestWindowExt;
+    let settle = |cx: &mut gpui_kit::HeadlessAppContext| {
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.advance_clock(std::time::Duration::from_millis(16));
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+        }
+    };
+    cx.update_window(h, |_, w, cx| w.click("mission-more", cx))
+        .unwrap();
+    settle(cx);
+    cx.update_window(h, |_, w, cx| {
+        let item = (0..16usize)
+            .find(|i| {
+                w.within("popup-menu")
+                    .try_find(*i)
+                    .is_some_and(|e| e.label() == Some(label))
+            })
+            .unwrap_or_else(|| panic!("overview menu has no {label:?} item"));
+        w.within("popup-menu").click(item, cx);
+    })
+    .unwrap();
+    settle(cx);
+    if cx
+        .update_window(h, |_, w, _| w.try_find("popup-menu").is_some())
+        .unwrap()
+    {
+        cx.update_window(h, |_, w, cx| w.press("escape", cx))
+            .unwrap();
+        settle(cx);
+    }
 }
