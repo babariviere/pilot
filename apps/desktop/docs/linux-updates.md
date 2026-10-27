@@ -102,13 +102,14 @@ It refuses other compiled identities/keys and nonprivate temporary targets.
 Keep closed fixture evidence on private disk: one full run uses about 2.6 GiB,
 and `/tmp` may be memory-backed. The script reaps only its owned descendants.
 
-Native x86_64 Wayland qualification passed all five cases on exact-source builds
-of this change: actual old/new GPUI buffers, signed
+Native x86_64 Wayland qualification passed all five cases on exact-source builds,
+both debug and optimized (`--release`, with the test-only `native-probes`/`fixture`
+features): actual old/new GPUI buffers, signed
 whole-payload exchange after explicit COMMIT and OS parent exit, durable startup
 ACK, retained Unicode draft/history, and one unchanged daemon boot/process/root.
 Each invalid candidate affirmatively failed without installation or GUI exit.
-These were debug/native-probe packages on a temporary filesystem, not optimized
-release, distro-wide, power-loss, physical IME or production-feed qualification.
+These ran on a temporary filesystem, not distro-wide, power-loss, physical IME
+or production-feed qualification.
 `release.yaml` publishes the Linux GUI beside macOS on stable releases.
 
 Two cross-binary regressions are covered: public trust fingerprints serialize a
