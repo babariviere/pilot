@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.74.0](https://github.com/babariviere/pilot/compare/v1.73.0...v1.74.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** one quiet chat header row ([3213b05](https://github.com/babariviere/pilot/commit/3213b0575a24632cb821355f142b0143988284ce))
+* reserve inline image artifact size before the first read ([1fe1956](https://github.com/babariviere/pilot/commit/1fe19562bb598cd38c7376aa9e460295834271b4))
+
 ## [1.73.0](https://github.com/babariviere/pilot/compare/v1.72.0...v1.73.0) (2026-10-27)
 
 
