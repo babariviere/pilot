@@ -43,10 +43,13 @@ impl Text {
 }
 pub fn text(role: Text, label: impl Into<SharedString>) -> Div {
     let view = div().text_size(px(role.size())).child(label.into());
-    if matches!(role, Text::Display | Text::Title | Text::Headline) {
-        view.font_semibold()
-    } else {
-        view
+    match role {
+        // Inter's display cut is drawn for 20pt and up: tighter, crisper page titles.
+        Text::Display | Text::Title => view
+            .font_family(crate::appearance::DISPLAY_FONT)
+            .font_semibold(),
+        Text::Headline => view.font_semibold(),
+        _ => view,
     }
 }
 pub fn heading(

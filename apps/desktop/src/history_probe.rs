@@ -125,7 +125,11 @@ fn contextual_scrollbar(
     let scale = idle.width() as f32 / width;
     let mut changed = 0;
     let mut idle_ink = 0;
-    let expected = cx.update(|cx| if cx.theme().is_dark() { 38 } else { 255 });
+    // The page background token, not a literal: the palette is tinted.
+    let expected = cx.update(|cx| {
+        let page: gpui_kit::Rgba = cx.theme().background.into();
+        [page.r, page.g, page.b].map(|c| (c * 255.).round() as u8)
+    });
     for y in (f32::from(bounds.top() + px(2.)) * scale) as u32
         ..(f32::from(bounds.bottom() - px(2.)) * scale) as u32
     {
@@ -134,7 +138,7 @@ fn contextual_scrollbar(
         {
             let pixel = idle.get_pixel(x, y);
             changed += usize::from(active.get_pixel(x, y) != pixel);
-            idle_ink += usize::from(pixel.0[..3] != [expected; 3]);
+            idle_ink += usize::from(pixel.0[..3] != expected);
         }
     }
     assert!(changed > 0, "scrolling must paint a contextual thumb");

@@ -1,9 +1,58 @@
 //! Portable chrome tokens from Swift Theme.swift / DitherCorner.swift.
 //! Bounded app-owned dither motion is implemented in dither_view, without shaders.
+//! Pilot's identity comes from its icon: the dithered sky supplies the one accent,
+//! and the embedded Inter / JetBrains Mono faces carry interface and code text.
 use crate::settings_state::AppearancePreference;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
 use gpui_kit::{App, AssetSource, SharedString, Window};
 use std::{borrow::Cow, rc::Rc};
+
+/// Interface, page-title and code families. The files are embedded (licenses/INTER.txt,
+/// licenses/JETBRAINS-MONO.txt), so the identity never depends on installed fonts.
+pub const UI_FONT: &str = "Inter";
+pub const DISPLAY_FONT: &str = "Inter Display";
+pub const CODE_FONT: &str = "JetBrains Mono";
+const FONTS: [&[u8]; 9] = [
+    include_bytes!("../assets/fonts/Inter-Regular.ttf"),
+    include_bytes!("../assets/fonts/Inter-Italic.ttf"),
+    include_bytes!("../assets/fonts/Inter-Medium.ttf"),
+    include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/Inter-Bold.ttf"),
+    include_bytes!("../assets/fonts/InterDisplay-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
+    include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf"),
+];
+
+/// Sky accent from the app icon: its deep sky on light pages, its base sky on dark.
+/// Used for commit actions (including Send), links, text selection and the caret.
+/// Navigation, row selection and chat-state tints keep their own neutral/state roles.
+pub(crate) struct Accent {
+    pub fill: &'static str,
+    pub hover: &'static str,
+    pub pressed: &'static str,
+    pub on_fill: &'static str,
+    pub selection: &'static str,
+}
+pub(crate) const fn accent(dark: bool) -> Accent {
+    if dark {
+        Accent {
+            fill: "#7db9e8",
+            hover: "#93c6ee",
+            pressed: "#a9d2f2",
+            on_fill: "#23262c",
+            selection: "#7db9e84d",
+        }
+    } else {
+        Accent {
+            fill: "#2f6fc6",
+            hover: "#285fab",
+            pressed: "#22518f",
+            on_fill: "#ffffff",
+            selection: "#2f6fc638",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct CommittedAppearance(AppearancePreference);
@@ -64,59 +113,78 @@ impl Radius {
     pub const BUBBLE: f32 = 12.;
     pub const TRAY: f32 = 14.;
 }
-pub(crate) fn tray(cx: &App) -> gpui_kit::Hsla {
-    gpui_kit::rgb(if cx.theme().is_dark() {
-        0x2c2c2c
+/// Sky-tinted neutrals: the icon's blue at very low chroma, slate "night sky" in dark.
+/// The hierarchy is unchanged: darker sidebar, white/lifted editor card on a soft tray.
+pub(crate) struct Palette {
+    pub page: &'static str,
+    pub sidebar: &'static str,
+    pub ink: &'static str,
+    pub meta: &'static str,
+    pub muted: &'static str,
+    pub selected: &'static str,
+    pub border: &'static str,
+    pub popover: &'static str,
+    pub tray: u32,
+    pub card: u32,
+    pub code: u32,
+}
+pub(crate) const fn palette(dark: bool) -> Palette {
+    if dark {
+        Palette {
+            page: "#23262c",
+            sidebar: "#1c1f24",
+            ink: "#d6dbe3",
+            meta: "#a3acba",
+            muted: "#c8dcff0d",
+            selected: "#c8dcff17",
+            border: "#c8dcff17",
+            popover: "#30343b",
+            tray: 0x2a2e35,
+            // Lifts the editor clearly off the tray, as white does in light.
+            card: 0x363b44,
+            code: 0x2a2e35,
+        }
     } else {
-        0xf5f5f5
-    })
-    .into()
+        Palette {
+            page: "#ffffff",
+            sidebar: "#f6f8fb",
+            ink: "#1f2633",
+            meta: "#5f6b7d",
+            muted: "#143c780b",
+            selected: "#143c7812",
+            border: "#0f285019",
+            popover: "#ffffff",
+            tray: 0xf1f4f8,
+            card: 0xffffff,
+            code: 0xf6f8fb,
+        }
+    }
+}
+pub(crate) fn tray(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::rgb(palette(cx.theme().is_dark()).tray).into()
 }
 pub(crate) fn card(cx: &App) -> gpui_kit::Hsla {
-    // Dark lifts the editor/card clearly off the #2c2c2c tray, as white does in light.
-    gpui_kit::rgb(if cx.theme().is_dark() {
-        0x383838
-    } else {
-        0xffffff
-    })
-    .into()
+    gpui_kit::rgb(palette(cx.theme().is_dark()).card).into()
 }
 pub(crate) fn code(cx: &App) -> gpui_kit::Hsla {
-    gpui_kit::rgb(if cx.theme().is_dark() {
-        0x2c2c2c
-    } else {
-        0xfafafa
-    })
-    .into()
+    gpui_kit::rgb(palette(cx.theme().is_dark()).code).into()
 }
 
-fn config(dark: bool) -> Rc<ThemeConfig> {
-    let (page, sidebar, ink, meta, muted, selected, border, card, error) = if dark {
-        (
-            "#262626",
-            "#202020",
-            "#d4d4d4",
-            "#9a9a9a",
-            "#ffffff0d",
-            "#ffffff14",
-            "#ffffff14",
-            "#303030",
-            "#f87171",
-        )
-    } else {
-        (
-            "#ffffff",
-            "#fafafa",
-            "#262626",
-            "#6b6b6b",
-            "#0000000a",
-            "#0000000f",
-            "#00000014",
-            "#ffffff",
-            "#dc2626",
-        )
-    };
+fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
+    let Palette {
+        page,
+        sidebar,
+        ink,
+        meta,
+        muted,
+        selected,
+        border,
+        popover: card,
+        ..
+    } = palette(dark);
+    let error = if dark { "#f87171" } else { "#dc2626" };
     let s = |value: &'static str| Some(SharedString::from(value));
+    let accent = accent(dark);
     Rc::new(ThemeConfig {
         name: if dark {
             "Desktop dark".into()
@@ -130,6 +198,8 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
         },
         font_size: Some(14.),
         mono_font_size: Some(13.),
+        font_family: fonts.then(|| UI_FONT.into()),
+        mono_font_family: fonts.then(|| CODE_FONT.into()),
         radius: Some(Radius::CONTROL as usize),
         radius_lg: Some(Radius::CARD as usize),
         shadow: Some(false),
@@ -145,10 +215,11 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
             colors.border = s(border);
             colors.input = s(border);
             colors.ring = s("#00000000");
-            colors.primary = s(ink);
-            colors.primary_hover = s(ink);
-            colors.primary_active = s(ink);
-            colors.primary_foreground = s(page);
+            colors.primary = s(accent.fill);
+            colors.primary_hover = s(accent.hover);
+            colors.primary_active = s(accent.pressed);
+            colors.primary_foreground = s(accent.on_fill);
+            colors.caret = s(accent.fill);
             colors.secondary = s(muted);
             colors.secondary_hover = s(selected);
             colors.secondary_foreground = s(ink);
@@ -162,12 +233,13 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
             colors.list_hover = s(muted);
             colors.accent = s(muted);
             colors.accent_foreground = s(ink);
-            colors.selection = s(if dark { "#ffffff26" } else { "#0000001f" });
+            colors.selection = s(accent.selection);
             colors.danger = s(error);
             colors.danger_foreground = s(page);
             colors.popover = s(card);
             colors.popover_foreground = s(ink);
-            colors.link = s(ink);
+            colors.link = s(accent.fill);
+            colors.link_active = s(accent.pressed);
             colors.chart_1 = s(if dark { "#60A5FA" } else { "#2563EB" });
             colors.success = s(if dark { "#34D399" } else { "#047857" });
             colors.warning = s(if dark { "#FBBF24" } else { "#B45309" });
@@ -175,7 +247,7 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
             colors.chart_3 = s(if dark { "#34D399" } else { "#059669" });
             colors.chart_4 = s(if dark { "#A78BFA" } else { "#7C3AED" });
             colors.chart_5 = s(if dark { "#FB7185" } else { "#E11D48" });
-            colors.link_hover = s(ink);
+            colors.link_hover = s(accent.hover);
             colors
         },
         ..Default::default()
@@ -184,10 +256,15 @@ fn config(dark: bool) -> Rc<ThemeConfig> {
 pub fn init_appearance(cx: &mut App) {
     cx.set_global(CommittedAppearance::default());
     crate::dither_view::prepare(cx);
+    // Before any layout: an unregistered family would fall back to another face.
+    let fonts = cx
+        .text_system()
+        .add_fonts(FONTS.iter().map(|font| Cow::Borrowed(*font)).collect())
+        .is_ok();
     Theme::update(cx, |theme| {
-        let mut light = (*config(false)).clone();
+        let mut light = (*config(false, fonts)).clone();
         light.highlight = theme.light_theme.highlight.clone();
-        let mut dark = (*config(true)).clone();
+        let mut dark = (*config(true, fonts)).clone();
         dark.highlight = theme.dark_theme.highlight.clone();
         theme.light_theme = Rc::new(light);
         theme.dark_theme = Rc::new(dark);
@@ -210,11 +287,10 @@ pub fn follow_appearance(window: &mut Window, cx: &mut App) {
         .detach();
 }
 pub(crate) fn selected(cx: &App) -> gpui_kit::Hsla {
-    if cx.theme().is_dark() {
-        gpui_kit::rgba(0xffffff14).into()
-    } else {
-        gpui_kit::rgba(0x0000000f).into()
-    }
+    let selected = palette(cx.theme().is_dark()).selected;
+    gpui_kit::Rgba::try_from(selected)
+        .unwrap_or_default()
+        .into()
 }
 /// Selected static app glyphs plus Kit's embedded primitive icons. No external fallback.
 pub struct ChromeAssets;
@@ -280,8 +356,16 @@ mod tests {
             [26., 22., 15., 13., 12., 11., 10.]
         );
         for dark in [false, true] {
-            assert_eq!(config(dark).font_size, Some(14.));
-            assert_eq!(config(dark).mono_font_size, Some(13.));
+            assert_eq!(config(dark, true).font_size, Some(14.));
+            assert_eq!(config(dark, true).mono_font_size, Some(13.));
+            assert_eq!(config(dark, true).font_family.as_deref(), Some(UI_FONT));
+            assert_eq!(
+                config(dark, true).mono_font_family.as_deref(),
+                Some(CODE_FONT)
+            );
+            // A failed registration keeps the platform families instead of a missing name.
+            assert!(config(dark, false).font_family.is_none());
+            assert!(config(dark, false).mono_font_family.is_none());
         }
         assert_eq!(Radius::TRAY, 14.);
     }
@@ -304,7 +388,9 @@ mod tests {
         ));
     }
     #[gpui_kit::test]
-    fn appearance_switches_both_palettes_without_blue_focus(cx: &mut gpui_kit::TestAppContext) {
+    fn appearance_switches_both_palettes_with_sky_accent_and_no_focus_ring(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             init_appearance(cx);
@@ -312,11 +398,76 @@ mod tests {
                 Theme::change(mode, None, cx);
                 assert!(!cx.theme().focus_ring);
                 assert_eq!(cx.theme().is_dark(), mode.is_dark());
-                let p: gpui_kit::Rgba = cx.theme().primary.into();
-                assert_eq!(p.r, p.g);
-                assert_eq!(p.g, p.b);
+                let accent = accent(mode.is_dark());
+                let hex = |c: gpui_kit::Hsla| {
+                    let c: gpui_kit::Rgba = c.into();
+                    let byte = |v: f32| (v * 255.).round() as u8;
+                    format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b))
+                };
+                for color in [cx.theme().primary, cx.theme().link, cx.theme().caret] {
+                    assert_eq!(hex(color), accent.fill);
+                }
+                assert_eq!(hex(cx.theme().primary_foreground), accent.on_fill);
+                // Navigation and list selection keep the faint neutral wash, not the accent.
+                let list: gpui_kit::Rgba = cx.theme().list_active.into();
+                let muted = gpui_kit::Rgba::try_from(palette(mode.is_dark()).muted).unwrap();
+                assert_eq!(hex(cx.theme().list_active), hex(muted.into()));
+                assert!(list.a < 0.1);
                 assert_eq!(cx.theme().ring.a, 0.);
             }
         });
+    }
+    #[test]
+    fn accent_meets_contrast_on_pages_and_fills() {
+        fn luminance(hex: &str) -> f64 {
+            let v = u32::from_str_radix(&hex[1..7], 16).unwrap();
+            let channel = |shift: u32| {
+                let c = ((v >> shift) & 0xff) as f64 / 255.;
+                if c <= 0.03928 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+        }
+        let ratio = |a: &str, b: &str| {
+            let (a, b) = (luminance(a), luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for dark in [false, true] {
+            let Palette {
+                page,
+                sidebar,
+                ink,
+                meta,
+                tray,
+                card,
+                ..
+            } = palette(dark);
+            let tray = format!("#{tray:06x}");
+            let card = format!("#{card:06x}");
+            for surface in [page, sidebar, tray.as_str(), card.as_str()] {
+                assert!(ratio(ink, surface) >= 7., "{ink} text on {surface}");
+                assert!(ratio(meta, surface) >= 4.5, "{meta} metadata on {surface}");
+            }
+            assert_ne!(tray, card, "editor card stays distinct from its tray");
+            let accent = accent(dark);
+            for surface in [page, sidebar] {
+                for color in [accent.fill, accent.hover, accent.pressed] {
+                    assert!(
+                        ratio(color, surface) >= 4.5,
+                        "{color} link text on {surface}"
+                    );
+                }
+            }
+            for fill in [accent.fill, accent.hover, accent.pressed] {
+                assert!(
+                    ratio(accent.on_fill, fill) >= 4.5,
+                    "{} on {fill}",
+                    accent.on_fill
+                );
+            }
+        }
     }
 }

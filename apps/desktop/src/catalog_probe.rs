@@ -245,6 +245,32 @@ pub fn run_catalog_probe(cx: &mut HeadlessAppContext) {
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
     }
+    // Identity faces are embedded and resolved directly, never via another family.
+    cx.update(|cx| {
+        use crate::appearance::{CODE_FONT, DISPLAY_FONT, UI_FONT};
+        use gpui_kit::component::ActiveTheme;
+        assert_eq!(cx.theme().font_family.as_ref(), UI_FONT);
+        assert_eq!(cx.theme().mono_font_family.as_ref(), CODE_FONT);
+        let fallback = cx
+            .text_system()
+            .resolve_font(&gpui_kit::font("Pilot missing family"));
+        let mut faces = Vec::new();
+        for (family, weight) in [
+            (UI_FONT, gpui_kit::FontWeight::NORMAL),
+            (UI_FONT, gpui_kit::FontWeight::SEMIBOLD),
+            (DISPLAY_FONT, gpui_kit::FontWeight::SEMIBOLD),
+            (CODE_FONT, gpui_kit::FontWeight::NORMAL),
+        ] {
+            let mut face = gpui_kit::font(family);
+            face.weight = weight;
+            let id = cx.text_system().resolve_font(&face);
+            assert!(
+                id != fallback && !faces.contains(&id),
+                "{family} {weight:?}"
+            );
+            faces.push(id);
+        }
+    });
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));

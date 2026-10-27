@@ -247,9 +247,9 @@ impl LocalViewer {
             .child(self.chat_actions.clone())
             // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()
-                // A narrow sidebar with history has no room for the words: keep
-                // the glyph rather than truncating the label to a bare ellipsis.
-                .child(sidebar_row("sidebar-jump",if width<px(200.)&&(self.navigation.can_move(false)||self.navigation.can_move(true)){""}else{"Jump to…"},AppIcon::Search)
+                // With history arrows the footer has no room for the words at either
+                // sidebar width: keep the glyph rather than truncating the label.
+                .child(sidebar_row("sidebar-jump",if self.navigation.can_move(false)||self.navigation.can_move(true){""}else{"Jump to…"},AppIcon::Search)
                     .flex_1().accessibility_label("Jump to…").tooltip("Jump to a page, project or chat (⌘K)")
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
                 .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()

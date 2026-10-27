@@ -15,15 +15,27 @@ This is the existing calm native workbench, not a new visual direction. Reconcil
 
 | Role | Light / dark | Authority |
 | --- | --- | --- |
-| Page | `#ffffff` / `#262626` | `appearance.rs` theme |
-| Sidebar | `#fafafa` / `#202020` | same |
-| Card | `#ffffff` / `#383838` | `appearance::card` |
-| Tray | `#f5f5f5` / `#2c2c2c` | `appearance::tray` |
-| Text | `#262626` / `#d4d4d4` | active theme foreground |
-| Metadata | `#6b6b6b` / `#9a9a9a` | active theme muted foreground |
+| Page | `#ffffff` / `#23262c` | `appearance::palette` |
+| Sidebar | `#f6f8fb` / `#1c1f24` | same |
+| Card | `#ffffff` / `#363b44` | `appearance::card` |
+| Tray | `#f1f4f8` / `#2a2e35` | `appearance::tray` |
+| Text | `#1f2633` / `#d6dbe3` | active theme foreground |
+| Metadata | `#5f6b7d` / `#a3acba` | active theme muted foreground |
+| Accent | `#2f6fc6` / `#7db9e8` | `appearance::accent`, the app icon's sky |
 
-Use the system family through Kit. Shell typography is the existing26/22/15/
-13/12/11/10pt scale (`Text` routes to `appearance::TextRole`, not a second scale).
+Pilot's identity comes from its icon: the Bayer-dithered sky (Home sky, row
+state), neutrals tinted toward that sky (a slate night sky in dark) and its sky
+colour as the one accent. The accent marks commit actions
+(Kit primary buttons, including Send), links, the caret and text selection, and
+Kit's checked/slider controls follow it. Navigation, row selection, hover and
+chat-state tints stay neutral or keep their state colours; never use the accent
+as decoration, status or a focus ring.
+
+Type is embedded, not installed: Inter for the interface and conversation,
+Inter Display (semibold) for the `Display`/`Title` page roles, JetBrains Mono
+for code (`appearance::{UI_FONT, DISPLAY_FONT, CODE_FONT}`, licences in
+`licenses/`). Shell typography is the existing26/22/15/13/12/11/10pt scale
+(`Text` routes to `appearance::TextRole`, not a second scale).
 Inputs/editors/Markdown keep their existing native metrics and selection rules.
 Conversation content uses `typography::Content::{Chat,PlainChat,Code}` over the existing
 TextView renderer. Optional user-chosen font sizes are physical point values, not app zoom;
@@ -64,9 +76,10 @@ The transcript opts into Kit's scrolling scrollbar mode, even when global chrome
 requests permanent scrollbars: wheel input reveals it, a visible track supports
 hover/drag, and idle fades it away without changing layout or scroll ownership.
 
-Plan critique: a generic card grid or new accent palette would compete with the
-conversation and fail the approved brief. Keep the existing neutral hierarchy,
-physical hairlines, restrained icon family and shared meaningful Bayer activity.
+Plan critique: a generic card grid or a second accent would compete with the
+conversation and fail the approved brief. Keep the neutral hierarchy, the one
+sky accent, physical hairlines, restrained icon family and shared meaningful
+Bayer activity.
 No marketing headings, all-caps labels, automatic entrance animations or broad
 transitions of live transcript geometry.
 
