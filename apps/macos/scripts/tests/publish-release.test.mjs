@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { envelope, metadata } from "../../../desktop/scripts/gui-release-manifest.mjs";
 
-// A synthetic, correctly signed macOS GUI draft for finalize-release.sh.
+// A synthetic, correctly signed macOS and Linux GUI draft for finalize-release.sh.
 function signedGuiDraft() {
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const pem = privateKey.export({ type: "pkcs8", format: "pem" });
@@ -15,15 +15,17 @@ function signedGuiDraft() {
 	const source = "a".repeat(40);
 	const bytes = Buffer.from("synthetic GUI archive");
 	const sha256 = createHash("sha256").update(bytes).digest("hex");
-	const record = { schema: 1, platform: "macos", source, version: "0.2.0", archive: "Pilot-Next-macos-arm64.zip", build: "1", bytes: bytes.length, sha256 };
-	const value = metadata(record, bytes, "macos", 123, source, "v0.2.0");
-	const release = {
-		draft: true,
-		prerelease: false,
-		tag_name: "v0.2.0",
-		assets: [{ id: 123, name: "Pilot-Next-macos-arm64.zip", state: "uploaded", size: bytes.length, digest: `sha256:${sha256}` }],
-	};
-	return { publicBase64, source, release: JSON.stringify(release), envelope: envelope(value, pem, publicBase64) };
+	const release = { draft: true, prerelease: false, tag_name: "v0.2.0", assets: [] };
+	const envelopes = {};
+	for (const [platform, archive, id] of [
+		["macos", "Pilot-Next-macos-arm64.zip", 123],
+		["linux", "Pilot-Next-linux-x64.zip", 124],
+	]) {
+		const record = { schema: 1, platform, source, version: "0.2.0", archive, build: "1", bytes: bytes.length, sha256 };
+		envelopes[platform] = envelope(metadata(record, bytes, platform, id, source, "v0.2.0"), pem, publicBase64);
+		release.assets.push({ id, name: archive, state: "uploaded", size: bytes.length, digest: `sha256:${sha256}` });
+	}
+	return { publicBase64, source, release: JSON.stringify(release), envelopes };
 }
 
 test("dev publishing is rejected before any packaging or remote calls", () => {
@@ -124,7 +126,8 @@ appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + "\n");
 const feed = (build) => '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>' +
   '<sparkle:version>' + build + '</sparkle:version><sparkle:shortVersionString>0.2.0</sparkle:shortVersionString></item></channel></rss>';
 if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") + 1] === "isDraft,isPrerelease,assets") {
-  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-Next-macos-arm64.zip", "desktop-macos-arm64-update.json"];
+  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-Next-macos-arm64.zip", "desktop-macos-arm64-update.json",
+    "Pilot-Next-linux-x64.zip", "desktop-linux-x64-update.json"];
   console.log(JSON.stringify({isDraft: true, isPrerelease: false,
     assets: names.filter((name) => scenario !== "incomplete" || !name.startsWith("desktop-"))
       .map((name) => ({name, state: "uploaded"}))}));
@@ -135,7 +138,11 @@ if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") +
 } else if (args[0] === "api" && args[1].endsWith("/12345/assets") && args.join(" ").includes("desktop-macos-arm64-update.json")) {
   console.log("556");
 } else if (args[0] === "api" && args[1].endsWith("/assets/556")) {
-  process.stdout.write(process.env.GUI_ENVELOPE);
+  process.stdout.write(process.env.GUI_MACOS_ENVELOPE);
+} else if (args[0] === "api" && args[1].endsWith("/12345/assets") && args.join(" ").includes("desktop-linux-x64-update.json")) {
+  console.log("557");
+} else if (args[0] === "api" && args[1].endsWith("/assets/557")) {
+  process.stdout.write(process.env.GUI_LINUX_ENVELOPE);
 } else if (args[0] === "api" && args[1].endsWith("/12345/assets")) {
   console.log("555");
 } else if (args[0] === "api" && args[1].endsWith("/assets/555")) {
@@ -172,7 +179,8 @@ if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") +
 					RELEASE_SOURCE: gui.source,
 					PILOT_NEXT_UPDATER_PUBLIC_KEY: gui.publicBase64,
 					GUI_RELEASE: gui.release,
-					GUI_ENVELOPE: gui.envelope,
+					GUI_MACOS_ENVELOPE: gui.envelopes.macos,
+					GUI_LINUX_ENVELOPE: gui.envelopes.linux,
 				},
 			});
 			if (["api-error", "incomplete"].includes(scenario)) assert.notEqual(result.status, 0);

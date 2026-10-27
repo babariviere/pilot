@@ -22,10 +22,10 @@ fi
 python3 "$here/scripts/release_metadata.py" complete-draft "$stage/release.json"
 # Draft releases may not have a Git tag yet, so use the numeric REST ID from gh release view.
 release_id="$(gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json databaseId --jq '.databaseId')"
-# Verify the signed GUI envelope against GitHub's current immutable asset IDs/digests.
+# Verify both signed GUI envelopes against GitHub's current immutable asset IDs/digests.
 # This also refuses a retry that replaced an archive without replacing its envelope.
 gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id" > "$stage/release-api.json"
-for platform in macos-arm64; do
+for platform in macos-arm64 linux-x64; do
 	name="desktop-$platform-update.json"
 	asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" \
 		--jq ".[] | select(.name == \"$name\" and .state == \"uploaded\") | .id")"

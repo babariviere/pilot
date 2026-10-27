@@ -119,8 +119,7 @@ jobs:
         env:
           RELEASE_SOURCE: ${{ inputs.ref }}
         run: |
-          # Refuses today's unqualified bundled-launch/updater/confinement policy.
-          # Native fixture rendering alone must never make this a usable release.
+          # Refuses any package whose policy does not affirm bundled launch, installer and updater.
           python3 apps/desktop/scripts/gui_release.py linux-archive --platform linux --source "$RELEASE_SOURCE" --package "$RUNNER_TEMP/Pilot Next" --output "$RUNNER_TEMP/gui-release"
       - uses: actions/upload-artifact@v4
         with:

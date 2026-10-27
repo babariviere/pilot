@@ -13,13 +13,14 @@ import xml.etree.ElementTree as ET
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
-# Every published platform's assets must be on the draft before it is published.
-# Linux GUI assets join once the Linux package qualifies (apps/desktop/docs/releases.md).
+# Every platform's assets must be on the draft before it is published.
 DRAFT_ASSETS = (
     "Pilot-arm64.zip",
     "appcast.xml",
     "Pilot-Next-macos-arm64.zip",
     "desktop-macos-arm64-update.json",
+    "Pilot-Next-linux-x64.zip",
+    "desktop-linux-x64-update.json",
 )
 
 

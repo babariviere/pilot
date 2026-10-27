@@ -9,8 +9,8 @@ an explicit trust configuration remain unconfigured.
 
 ## Signed full payload
 
-The Linux update asset is `Pilot-Next-linux-x64.zip` (not yet published; see
-[releases](releases.md)), with exactly one
+The Linux release asset is `Pilot-Next-linux-x64.zip` (see [releases](releases.md)),
+with exactly one
 `Pilot Next/` root. It contains the GUI, visual helper, update helper, Node and
 the entire daemon/kernel/resources/dependency runtime, using the existing
 `bin/`, `libexec/`, `runtime/` layout. It is not the old headless archive.
@@ -109,8 +109,7 @@ ACK, retained Unicode draft/history, and one unchanged daemon boot/process/root.
 Each invalid candidate affirmatively failed without installation or GUI exit.
 These were debug/native-probe packages on a temporary filesystem, not optimized
 release, distro-wide, power-loss, physical IME or production-feed qualification.
-Linux GUI publication stays disabled in `release.yaml`; this evidence does not
-enable it.
+`release.yaml` publishes the Linux GUI beside macOS on stable releases.
 
 Two cross-binary regressions are covered: public trust fingerprints serialize a
 fixed-order struct (GUI and helper may enable different JSON map features), and

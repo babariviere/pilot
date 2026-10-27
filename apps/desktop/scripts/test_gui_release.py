@@ -74,10 +74,8 @@ class GuiReleaseTests(unittest.TestCase):
         package = (root / ".github/workflows/gui-package.yml").read_text()
         self.assertNotIn("release/Pilot-linux-x64", workflow)
         self.assertNotIn("LINUX_RUNTIME_PRIVATE_KEY", workflow)
-        for name in ("macos-gui:", "gui-publish:", "macos-publish:"):
+        for name in ("macos-gui:", "linux-gui:", "gui-publish:", "macos-publish:"):
             self.assertIn(name, workflow)
-        # Linux GUI stays unreleased until its package policy qualifies.
-        self.assertNotIn("linux-gui:", workflow)
         self.assertIn("needs: [target, gui-publish, macos-publish]", workflow)
         self.assertIn("bundle_runtime", (root / "apps/desktop/scripts/gui_release.py").read_text())
         self.assertIn("--release --locked --workspace --bins", package)

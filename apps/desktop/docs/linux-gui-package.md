@@ -1,15 +1,13 @@
 # Linux Wayland GUI package candidates
 
-This is source tooling for an **unqualified development candidate**, not a
-Linux release, installer, working bundled Local launch or supported updater.
+This describes Linux GUI package assembly. The development mode below builds an
+**unqualified candidate**; release builds use configured production assembly.
 The old `Pilot-linux-x64.tar.gz` is a headless runtime, not this GUI package.
-No production release workflow, feed, signing key or installed app is changed.
 
 Configured production assembly now adds the update helper, exact-source helper
 receipt and signed update policy through the [Linux updater contract](linux-updates.md).
 The development mode described below retains its explicit unqualified policy.
-Production release wiring is documented in [releases](releases.md); source wiring
-is not a qualification acknowledgement.
+Production release wiring is documented in [releases](releases.md).
 
 ## Minimal relocatable layout
 
@@ -146,8 +144,7 @@ Remaining acceptance gates:
 2. Qualify native visual confinement separately. Keep refusal until then.
 3. Real Wayland GPU/distribution, keyboard/IME and frame-pacing acceptance remain
    outstanding. Headless Weston software buffers do not establish those.
-4. Installer/update design and implementation need separate qualification. Do
-   not publish/install this candidate or relabel it as a production update.
+4. Never publish the development candidate or relabel it as a production update.
 
 macOS packaging and retained-runtime integration remain owned by the existing
 [bundled runtime](bundled-runtime.md) and

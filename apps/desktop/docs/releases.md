@@ -1,9 +1,7 @@
 # Rust GUI release integration
 
 `release.yaml` keeps Swift's `Pilot-arm64.zip` and `appcast.xml`, then requires
-the macOS Rust GUI package before finalizing the same stable `v<version>` draft.
-The Linux package below is not released yet: `release.yaml` omits it until its
-package policy qualifies bundled launch, installer and updater.
+both Rust GUI packages before finalizing the same stable `v<version>` draft:
 
 | Platform | Full app archive | Signed update envelope |
 | --- | --- | --- |
@@ -47,10 +45,10 @@ Missing prerequisites fail, leaving the release draft unpublished:
   authenticated signed update metadata, not Developer ID or notarization. If
   Developer ID/Gatekeeper distribution is required, its credentials and native
   signing/notarization lane remain a concrete prerequisite, not an unsigned fallback.
-- Linux package policy must itself affirm qualified bundled Local startup,
-  installer/updater. Today's unqualified candidate explicitly refuses publication.
-  The Linux lifecycle owners must deliver and natively validate those capabilities
-  first. Native visual execution remains disabled pending separate confinement
+- The Linux package policy must affirm bundled Local startup, installer and
+  updater; production assembly does so and the signer refuses anything else.
+  The development candidate keeps its unqualified policy and cannot be published.
+  Native visual execution remains disabled pending separate confinement
   qualification; this release wiring cannot enable it or claim it works.
 - Optional platform-specific `PILOT_NEXT_MACOS_ACCEPTED_CAPSULES` and
   `PILOT_NEXT_LINUX_ACCEPTED_CAPSULES` variables are JSON lists of exact already
@@ -63,8 +61,7 @@ Build versions use this workflow's monotonically increasing run number/attempt,
 independently of Sparkle. The app still requires explicit **Install and restart**,
 fresh durability/admission receipts and retained-runtime verification. Ordinary
 Quit never installs; existing daemons are never stopped, migrated or replaced.
-Linux updater wiring is conditional on its separate native implementation and
-qualification, not a claim it works today.
+The Linux updater's native evidence and limits are in [Linux updates](linux-updates.md).
 
 No release trigger, production variable/secret mutation, published-asset deletion,
 live app/daemon installation or restart is part of this change. Retrying an older

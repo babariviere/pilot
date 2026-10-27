@@ -86,7 +86,8 @@ test("tests never block a release and Release Please never waits for tests", () 
 	assert.match(job("macos-app"), /^    needs: target$/m);
 	assert.match(job("macos-publish"), /^    needs: \[target, macos-app\]$/m);
 	assert.match(job("macos-gui"), /^    needs: target$/m);
-	assert.match(job("gui-publish"), /^    needs: \[target, macos-gui\]$/m);
+	assert.match(job("linux-gui"), /^    needs: target$/m);
+	assert.match(job("gui-publish"), /^    needs: \[target, macos-gui, linux-gui\]$/m);
 	assert.match(job("publish"), /^    needs: \[target, gui-publish, macos-publish\]$/m);
 	for (const name of ["pr.yaml", "main.yaml", "tests.yaml"]) {
 		assert.doesNotMatch(read(name), /release-please-action|contents: write|secrets\./, name);
@@ -315,7 +316,7 @@ test("release builds run only for newly created stable drafts or explicit retrie
 	c.github.ref = "refs/heads/main";
 	c.github.event.repository.fork = true;
 	assert.equal(evaluate(source, c), false);
-	for (const name of ["macos-app", "macos-publish", "macos-gui", "gui-publish", "publish"]) {
+	for (const name of ["macos-app", "macos-publish", "macos-gui", "linux-gui", "gui-publish", "publish"]) {
 		assert.doesNotMatch(job(name), /^    if:/m, `${name} runs only after target succeeds`);
 	}
 });
@@ -346,7 +347,9 @@ test("release jobs build and publish the tagged commit, never this run's newer m
 	for (const name of ["macos-app", "macos-publish", "gui-publish"]) {
 		assert.match(job(name), /- uses: actions\/checkout@v4\n        with:\n(?:          .*\n)*?          ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
 	}
-	assert.match(job("macos-gui"), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/);
+	for (const name of ["macos-gui", "linux-gui"]) {
+		assert.match(job(name), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
+	}
 	for (const name of ["macos-publish", "gui-publish", "publish"]) {
 		assert.match(job(name), /RELEASE_TAG: \$\{\{ needs\.target\.outputs\.tag \}\}/, name);
 	}

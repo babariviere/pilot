@@ -86,13 +86,23 @@ test("finalization requires authenticated GUI envelopes matching current uploade
 		envelopes[manifestName] = envelope(value, pem, publicBase64);
 	}
 	const both = ["macos", "linux"];
-	verifyRelease(release, envelopes, publicBase64, source, "v1.2.3", both);
+	verifyRelease(release, envelopes, publicBase64, source, "v1.2.3");
 	verifyRelease(
 		release,
 		{ "desktop-macos-arm64-update.json": envelopes["desktop-macos-arm64-update.json"] },
 		publicBase64,
 		source,
 		"v1.2.3",
+		["macos"],
+	);
+	assert.throws(() =>
+		verifyRelease(
+			release,
+			{ "desktop-macos-arm64-update.json": envelopes["desktop-macos-arm64-update.json"] },
+			publicBase64,
+			source,
+			"v1.2.3",
+		),
 	);
 	for (const change of [{ id: 999 }, { digest: `sha256:${"0".repeat(64)}` }, { size: 1 }, { state: "new" }]) {
 		const changed = structuredClone(release);

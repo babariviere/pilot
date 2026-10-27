@@ -9,9 +9,8 @@ export const assets = {
 	linux: ["Pilot-Next-linux-x64.zip", "desktop-linux-x64-update.json"],
 };
 
-// Platforms a stable release publishes. Linux returns once its package policy
-// qualifies bundled launch, installer and updater (see docs/releases.md).
-export const releasePlatforms = ["macos"];
+// Platforms a stable release publishes.
+export const releasePlatforms = ["macos", "linux"];
 
 export function metadata(record, bytes, platform, assetId, source, tag) {
 	const names = assets[platform];
