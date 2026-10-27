@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.73.0](https://github.com/babariviere/pilot/compare/v1.72.0...v1.73.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** add verified Linux GUI updates ([b63a282](https://github.com/babariviere/pilot/commit/b63a282ef8c1092580c1b749359f53eeb27dd9bb))
+* **desktop:** quiet composer with lifted dark editor and no dither ([b91a592](https://github.com/babariviere/pilot/commit/b91a5927473f999abc22fabcc47417bc74f200c1))
+* **release:** publish the Linux GUI and its signed update ([d220d86](https://github.com/babariviere/pilot/commit/d220d8663643c0572049c3fbc372cb966cd3f03a))
+
+
+### Bug Fixes
+
+* **ci:** update stale tests and satisfy fmt and clippy ([df44dd9](https://github.com/babariviere/pilot/commit/df44dd9d7443ccb43eea565d0eac8f8ade92e89e))
+* **desktop:** keep conversation image rows stable while scrolling ([793f866](https://github.com/babariviere/pilot/commit/793f866d584d53553664ad310e497374aa7bfa5b))
+* **desktop:** remove phantom gaps between chat header actions ([de0bf10](https://github.com/babariviere/pilot/commit/de0bf10b31352805ed8a385f1788901c96b1cc87))
+* **release:** drop per-commit qualification gate and unqualified Linux GUI from releases ([032fda3](https://github.com/babariviere/pilot/commit/032fda3c7273ae3b5515f4c3718724bc72d81598))
+
 ## [1.72.0](https://github.com/babariviere/pilot/compare/v1.71.0...v1.72.0) (2026-10-27)
 
 
