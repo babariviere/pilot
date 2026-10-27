@@ -71,7 +71,8 @@ def macos(expected, output, config):
         shutil.rmtree(directory)  # Only this fresh release's private inputs.
     bundle.verify(moved)
     bundle.native_closure(moved)
-    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R", config["code_requirement"], str(moved)], check=True)
+    # A leading "=" makes codesign parse the requirement as text rather than a file path.
+    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R=" + config["code_requirement"], str(moved)], check=True)
     subprocess.run(["/bin/bash", str(bundle.ROOT / "apps/macos/scripts/check-runtime.sh"), str(moved / "Contents/Resources/runtime")], check=True, timeout=300)
     subprocess.run(["/usr/bin/ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent", str(moved), str(output / MAC_ARCHIVE)], check=True, timeout=300)
     artifact(output, expected, "macos", config["build"], MAC_ARCHIVE)
