@@ -18,7 +18,8 @@ ARCHIVES = {
     ("Darwin", "arm64"): ("darwin_arm64", "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f"),
     ("Linux", "x86_64"): ("linux_amd64", "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"),
 }
-WORKFLOWS = [ROOT / ".github/workflows" / f"{name}.yaml" for name in ("pr", "main", "tests")]
+WORKFLOWS = [ROOT / ".github/workflows" / name for name in
+             ("pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml")]
 
 
 def prepare():
@@ -62,7 +63,7 @@ def main():
     if result.returncode:
         raise SystemExit(result.returncode)
     # Mutation regression: real validator MUST catch the original fatal context.
-    source = WORKFLOWS[-1].read_text()
+    source = (ROOT / ".github/workflows/tests.yaml").read_text()
     prefix, rust = source.split("  rust:\n", 1)
     invalid = prefix + "  rust:\n" + rust.replace("    env:\n", "    env:\n      INVALID_TEMP: ${{ runner.temp }}\n", 1)
     if invalid == source:
@@ -70,7 +71,7 @@ def main():
     rejected = validate(binary, source=invalid)
     if rejected.returncode == 0 or 'context "runner" is not allowed here' not in rejected.stdout + rejected.stderr:
         raise RuntimeError("Validator failed to reject invalid job-env runner context")
-    print(f"actionlint {VERSION}: PR/Main/shared workflows valid; original job-env context regression rejected")
+    print(f"actionlint {VERSION}: CI/release/package workflows valid; original job-env context regression rejected")
 
 
 if __name__ == "__main__":

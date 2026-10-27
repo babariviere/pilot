@@ -1036,7 +1036,10 @@ apps/macos/scripts/build.sh       # native app build
 CI runs portable Node tests and typechecking on Linux, with a smaller macOS lane for native behavior
 and packaging, on PRs (`pr.yaml`) and after merging (`main.yaml`). Tests never block a release:
 `release.yaml` runs Release Please on every main push and, for a new stable draft, builds the macOS ZIP
-and Linux runtime once from the release tag, then signs and publishes those same artifacts.
+and the macOS/Linux Rust GUI packages from the release tag, then signs and publishes those same artifacts.
+Rust GUI signing/trust and native full-payload qualification are explicit publication prerequisites;
+future releases no longer publish a standalone headless Linux runtime. Swift distribution is preserved.
+See [Rust GUI releases](apps/desktop/docs/releases.md) for the required configuration and remaining gates.
 
 See [testing](docs/testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](docs/performance-check.md) and [I/O](docs/io-performance-check.md) audits for measurement methods.

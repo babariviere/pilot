@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -131,6 +132,63 @@ class BundleRuntimeTests(unittest.TestCase):
         for policy in [["wrong"], ["a" * 64] * 2, [str(i) * 64 for i in range(5)]]:
             with self.subTest(policy=policy), self.assertRaisesRegex(ValueError, "exact bounded"):
                 bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source, accepted_capsules=policy)
+
+    def test_production_requires_matching_configured_optimized_inputs(self):
+        config = dict(schema=1, mode="configured", build="200.1", repository="owner/repo")
+        path = self.executables / "manifest.json"
+        original = bundle.read_json(path)
+        for changes in ({}, dict(updater_configuration=config),
+                        dict(updater_configuration=config, profile="dev", kind="production-rust-inputs")):
+            bundle.write_json(path, original | changes)
+            with self.assertRaisesRegex(ValueError, "Production"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                                bundle_build="200.1", production=config)
+            self.assertFalse(self.output.exists())
+        bundle.write_json(path, original | dict(updater_configuration=config, profile="release", kind="production-rust-inputs"))
+        with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                            bundle_build="200.1", production=config)
+        self.assertEqual(bundle.read_json(self.output / bundle.MANIFEST)["kind"], "production-bundled-runtime")
+        bundle.verify(self.output)
+
+    def test_immutable_rust_commands_build_release_with_only_explicit_public_trust(self):
+        repository = self.root / "repository"
+        tools = repository / "apps/desktop/.tools"
+        (tools / "bin").mkdir(parents=True)
+        (tools / "bin/mbx").touch()
+        (tools / "rustup").mkdir()
+        config = dict(schema=1, mode="configured", public_key="public-only", repository="owner/repo",
+                      application_id=bundle.APP_ID, build="200.1", code_requirement="explicit")
+        calls = []
+        def command(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:2] == ["git", "archive"]:
+                with tarfile.open(fileobj=kwargs["stdout"], mode="w"):
+                    pass
+            if "build" in args:
+                desktop = kwargs["cwd"] / "apps/desktop"
+                output = desktop / "target/dev/release"
+                output.mkdir(parents=True, exist_ok=True)
+                for name in ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper"):
+                    (output / name).write_text("synthetic build output, never executed or qualified")
+        def query(*args, **kwargs):
+            return "commit" if "cat-file" in args else "arm64"
+        with patch.object(bundle, "ROOT", repository), patch.object(bundle.sys, "platform", "darwin"), \
+             patch.object(bundle, "run", side_effect=query), patch.object(bundle.subprocess, "run", side_effect=command), \
+             patch.dict(os.environ, {"PILOT_NEXT_UPDATER_PRIVATE_KEY": "must-not-inherit", "PILOT_NEXT_UPDATER_PUBLIC_KEY": "wrong-ambient"}):
+            bundle.snapshot_rust(self.source, self.root / "release-inputs", production=config)
+        builds = [(args, opts) for args, opts in calls if "build" in args]
+        self.assertEqual(len(builds), 2)
+        for args, options in builds:
+            self.assertIn("--locked", args)
+            self.assertIn("--release", args)
+            self.assertNotIn("PILOT_NEXT_UPDATER_PRIVATE_KEY", options["env"])
+            self.assertEqual(options["env"]["PILOT_NEXT_UPDATER_PUBLIC_KEY"], config["public_key"])
+        self.assertTrue(any(args[-1] == "--fetch" and "prepare-patches.py" in args[-2] for args, _ in calls))
+        receipt = bundle.read_json(self.root / "release-inputs/manifest.json")
+        self.assertEqual(receipt["profile"], "release")
+        self.assertEqual(receipt["source"], self.source)
+        self.assertEqual(receipt["updater_configuration"], config)
 
     def test_escape_links_and_unsafe_file_objects_are_refused_before_copy(self):
         link = self.runtime / "escape"

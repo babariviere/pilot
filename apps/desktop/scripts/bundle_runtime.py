@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Immutable macOS runtime staging and ad-hoc development app bundles, never installation."""
+"""Immutable macOS runtime staging and explicitly configured GUI bundles, never installation."""
 import argparse
 import hashlib
 import json
@@ -182,7 +182,7 @@ def receipt(directory, expected_source, names):
             raise ValueError(f"Executable receipt mismatch: {name}")
 
 
-def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=()):
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None):
     if output.exists() or output.is_symlink() or output.name != "Pilot Next.app":
         raise ValueError("Use a fresh output named Pilot Next.app")
     build = validate_runtime(runtime, expected_source)
@@ -200,7 +200,14 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
     helper_config = read_json(updater / "manifest.json").get("updater_configuration")
     if app_config != helper_config:
         raise ValueError("App/helper updater configuration receipts differ")
-    if app_config != dict(schema=1, mode="unconfigured"):
+    if production is not None:
+        if app_config != production or app_config.get("build") != bundle_build:
+            raise ValueError("Production compiled updater configuration/build mismatch")
+        for directory in (executables, updater):
+            inputs = read_json(directory / "manifest.json")
+            if inputs.get("profile") != "release" or inputs.get("kind") != "production-rust-inputs":
+                raise ValueError("Production requires optimized source-matched Rust inputs")
+    elif app_config != dict(schema=1, mode="unconfigured"):
         raise ValueError("Development assembly requires explicit unconfigured app/helper input receipts")
     receipt(native, expected_source, ["PilotPower", "PilotSystemEvents"])
     inventory(runtime)  # Admission before any recursive copy can follow external input.
@@ -238,7 +245,8 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot Next", CFBundleDisplayName="Pilot Next",
                                CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
                                CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True), stream)
-        # Only ad-hoc development signing, never access a signing key or alter a production identity.
+        # Production private distribution requires an explicitly approved ad-hoc
+        # policy plus independently signed update metadata. No ambient signing identity.
         for binary in native_closure(output):
             # Signing the bundle's main executable by its file path can also
             # create the enclosing app resource seal. Seal that only at the end.
@@ -248,7 +256,7 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         # The main executable's outer signature seals resources and cannot hash itself.
         payload = [item for item in inventory(output) if item["path"] != "Contents/MacOS/pilot-desktop"
                    and not item["path"].startswith("Contents/_CodeSignature")]
-        write_json(output / MANIFEST, dict(schema=1, kind="development-bundled-runtime", build=build, files=payload))
+        write_json(output / MANIFEST, dict(schema=1, kind="production-bundled-runtime" if production else "development-bundled-runtime", build=build, files=payload))
         run("/usr/bin/codesign", "--force", "--sign", "-", str(output))
         run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(output))
         verify(output)
@@ -261,7 +269,7 @@ def verify(output):
     value = read_json(output / MANIFEST)
     actual = [item for item in inventory(output) if item["path"] not in (MANIFEST, "Contents/MacOS/pilot-desktop")
               and not item["path"].startswith("Contents/_CodeSignature")]
-    if value.get("schema") != 1 or value.get("kind") != "development-bundled-runtime" or value.get("files") != actual:
+    if value.get("schema") != 1 or value.get("kind") not in ("development-bundled-runtime", "production-bundled-runtime") or value.get("files") != actual:
         expected = {item["path"]: item for item in value.get("files", [])}
         observed = {item["path"]: item for item in actual}
         changed = [name for name in sorted(expected.keys() | observed.keys()) if expected.get(name) != observed.get(name)]
@@ -316,8 +324,8 @@ def snapshot_build(expected_source, output, native=False):
             validate_runtime(output, expected_source)
 
 
-def snapshot_rust(expected_source, output):
-    """Build all three Rust inputs from immutable objects, unconfigured and non-release only."""
+def snapshot_rust(expected_source, output, production=None):
+    """Build all three Rust inputs from immutable objects; production is explicit only."""
     source(expected_source)
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Rust bundle inputs require native arm64 macOS")
@@ -341,15 +349,21 @@ def snapshot_rust(expected_source, output):
         (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
         (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
         env = {key: value for key, value in os.environ.items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
-        # No trust/feed/public-key variables are inherited. This lane cannot
-        # become a production release or configured updater by ambient state.
+        # No trust/feed/public-key variables are inherited. Only explicit
+        # production configuration may enable the configured optimized lane.
+        if production is not None:
+            for key in ("public_key", "repository", "application_id", "build", "code_requirement"):
+                env["PILOT_NEXT_UPDATER_" + key.upper()] = production[key]
+        # Bootstrap downloads live in the original checkout's private .tools,
+        # not necessarily Cargo's cache. Materialize the immutable snapshot too.
+        subprocess.run([sys.executable, str(desktop / "scripts/prepare-patches.py"), "--fetch"], env=env, check=True, timeout=120)
         subprocess.run([sys.executable, str(desktop / "scripts/prepare-visual-worker.py")], env=env, check=True, timeout=120)
         slot = str(ROOT / "scripts/verification-slot.py")
         cargo = str(desktop / "scripts/cargo.sh")
         for command in (["build", "--locked", "-p", "pilot-desktop", "-p", "pilot-visual-worker"],
                         ["build", "--manifest-path", "updater/Cargo.toml", "--locked", "--features", "native-macos", "--bin", "pilot-desktop-update-helper"]):
-            subprocess.run([sys.executable, slot, "swift", "--", "/bin/bash", cargo, *command], cwd=checkout, env=env, check=True, timeout=1200)
-        paths = [desktop / "target/dev/debug" / name for name in
+            subprocess.run([sys.executable, slot, "swift", "--", "/bin/bash", cargo, *command, *(["--release"] if production else [])], cwd=checkout, env=env, check=True, timeout=2400)
+        paths = [desktop / ("target/dev/release" if production else "target/dev/debug") / name for name in
                  ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper")]
         for path in paths:
             if run("/usr/bin/lipo", "-archs", str(path)) != "arm64":
@@ -360,9 +374,9 @@ def snapshot_rust(expected_source, output):
             shutil.copyfile(path, output / path.name)
             (output / path.name).chmod(0o755)
             binaries.append(dict(name=path.name, bytes=path.stat().st_size, sha256=digest(path)))
-        write_json(output / "manifest.json", dict(schema=1, kind="development-rust-inputs", source=expected_source,
-                   target="aarch64-apple-darwin", deployment_target="15.0", profile="dev", installable_update=False,
-                   updater_configuration=dict(schema=1, mode="unconfigured"), binaries=binaries))
+        write_json(output / "manifest.json", dict(schema=1, kind="production-rust-inputs" if production else "development-rust-inputs", source=expected_source,
+                   target="aarch64-apple-darwin", deployment_target="15.0", profile="release" if production else "dev", installable_update=bool(production),
+                   updater_configuration=production or dict(schema=1, mode="unconfigured"), binaries=binaries))
 
 
 def main():

@@ -96,8 +96,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             {"name": name, "state": "uploaded"} for name in DRAFT_ASSETS
         ]}
         self.assertEqual(complete_draft(draft), "complete")
-        self.assertIn("Pilot-linux-x64.tar.gz", DRAFT_ASSETS)
-        self.assertIn("runtime-manifest.json.sig", DRAFT_ASSETS)
+        self.assertIn("Pilot-Next-linux-x64.zip", DRAFT_ASSETS)
+        self.assertIn("desktop-macos-arm64-update.json", DRAFT_ASSETS)
+        self.assertNotIn("runtime-manifest.json.sig", DRAFT_ASSETS)
+        self.assertNotIn("Pilot-linux-x64.tar.gz", DRAFT_ASSETS)
         for name in DRAFT_ASSETS:
             with self.subTest(missing=name), self.assertRaises(ValueError):
                 complete_draft({**draft, "assets": [a for a in draft["assets"] if a["name"] != name]})

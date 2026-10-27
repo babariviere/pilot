@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publish a stable draft once the macOS update and Linux runtime jobs have both uploaded their assets.
+# Publish a stable draft once the Swift and Rust GUI jobs have uploaded their signed assets.
 # Only run for trusted main-branch CI builds. Needs gh and python3, not macOS tools.
 set +x
 set -euo pipefail
@@ -22,6 +22,17 @@ fi
 python3 "$here/scripts/release_metadata.py" complete-draft "$stage/release.json"
 # Draft releases may not have a Git tag yet, so use the numeric REST ID from gh release view.
 release_id="$(gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json databaseId --jq '.databaseId')"
+# Verify both signed GUI envelopes against GitHub's current immutable asset IDs/digests.
+# This also refuses a retry that replaced an archive without replacing its envelope.
+gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id" > "$stage/release-api.json"
+for platform in macos-arm64 linux-x64; do
+	name="desktop-$platform-update.json"
+	asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" \
+		--jq ".[] | select(.name == \"$name\" and .state == \"uploaded\") | .id")"
+	gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/assets/$asset_id" \
+		-H 'Accept: application/octet-stream' > "$stage/$name"
+done
+node "$here/../desktop/scripts/gui-release-manifest.mjs" verify-release "$stage"
 appcast_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" \
 	--jq '.[] | select(.name == "appcast.xml") | .id')"
 gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/assets/$appcast_id" \

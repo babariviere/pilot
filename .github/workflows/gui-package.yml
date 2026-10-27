@@ -1,0 +1,135 @@
+name: Rust GUI release package
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      platform:
+        type: string
+        required: true
+      build:
+        type: string
+        required: true
+
+    secrets:
+      PILOT_NEXT_UPDATER_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      PILOT_SWIFT_JOBS: '2'
+      MAKEFLAGS: -j2
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      PILOT_NEXT_UPDATER_PUBLIC_KEY: ${{ vars.PILOT_NEXT_UPDATER_PUBLIC_KEY }}
+      PILOT_NEXT_UPDATER_REPOSITORY: ${{ github.repository }}
+      PILOT_NEXT_UPDATER_BUILD: ${{ inputs.build }}
+      PILOT_NEXT_ACCEPTED_CAPSULES: ${{ inputs.platform == 'macos' && vars.PILOT_NEXT_MACOS_ACCEPTED_CAPSULES || vars.PILOT_NEXT_LINUX_ACCEPTED_CAPSULES }}
+      PILOT_NEXT_SIGNING_POLICY: ${{ vars.PILOT_NEXT_SIGNING_POLICY }}
+      PILOT_NEXT_MACOS_QUALIFIED_SOURCE: ${{ vars.PILOT_NEXT_MACOS_QUALIFIED_SOURCE }}
+      PILOT_NEXT_LINUX_QUALIFIED_SOURCE: ${{ vars.PILOT_NEXT_LINUX_QUALIFIED_SOURCE }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - uses: pnpm/action-setup@v4
+      - name: Require immutable source and explicit native distribution qualification
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
+          python3 apps/desktop/scripts/gui_release.py prerequisites --platform "$PLATFORM" --source "$RELEASE_SOURCE"
+          echo "XDG_CACHE_HOME=$RUNNER_TEMP/gui-release-cache" >> "$GITHUB_ENV"
+          echo 'PILOT_NEXT_UPDATER_APPLICATION_ID=com.babariviere.pilot-next' >> "$GITHUB_ENV"
+          if [ "$PLATFORM" = linux ]; then
+            echo 'PILOT_NEXT_UPDATER_CODE_REQUIREMENT=signed-linux-inventory-v1' >> "$GITHUB_ENV"
+          fi
+      - name: Install Linux build and owned Wayland fixture dependencies
+        if: inputs.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake pkg-config libasound2-dev libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libx11-xcb-dev libx11-dev libxi-dev libxrandr-dev libxinerama-dev libxcursor-dev libxcomposite-dev libxdamage-dev libxfixes-dev libxrender-dev libegl1-mesa-dev libvulkan-dev weston
+      - name: Bootstrap pinned Rust and native visual inputs
+        run: bash apps/desktop/scripts/ci.sh bootstrap
+      - name: Build optimized macOS GUI, updater helper and immutable native/runtime closure
+        if: inputs.platform == 'macos'
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+        run: |
+          python3 apps/desktop/scripts/gui_release.py macos --platform macos --source "$RELEASE_SOURCE" --output "$RUNNER_TEMP/gui-release"
+      - name: Build optimized Linux GUI binaries
+        if: inputs.platform == 'linux'
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verification-slot.py node -- bash apps/desktop/scripts/cargo.sh build --release --locked --workspace --bins
+          python3 scripts/verification-slot.py node -- bash apps/desktop/scripts/cargo.sh build --release --locked --manifest-path updater/Cargo.toml --features native-linux --bin pilot-desktop-update-helper
+          python3 apps/desktop/scripts/linux_gui_package_native.py --source "$RELEASE_SOURCE" --binaries apps/desktop/target/dev/release --output "$RUNNER_TEMP/linux-native.json"
+          python3 - "$RELEASE_SOURCE" "$RUNNER_TEMP/linux-rust" <<'PY'
+          import hashlib, json, pathlib, shutil, sys
+          output = pathlib.Path(sys.argv[2]); output.mkdir(mode=0o700)
+          entries = []
+          for name in ('pilot-desktop', 'pilot-visual-worker', 'pilot-desktop-update-helper'):
+              path = output / name
+              shutil.copyfile(pathlib.Path('apps/desktop/target/dev/release') / name, path)
+              path.chmod(0o755)
+              entries.append(dict(name=name, bytes=path.stat().st_size, sha256=hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()))
+          (output / 'manifest.json').write_text(json.dumps(dict(schema=1, tested_sha=sys.argv[1], target='x86_64-unknown-linux-gnu', profile='release', binaries=entries, updater_configuration=dict(schema=1, mode='configured', public_key=__import__('os').environ['PILOT_NEXT_UPDATER_PUBLIC_KEY'], repository=__import__('os').environ['PILOT_NEXT_UPDATER_REPOSITORY'], application_id='com.babariviere.pilot-next', build=__import__('os').environ['PILOT_NEXT_UPDATER_BUILD'], code_requirement='signed-linux-inventory-v1'))))
+          PY
+      - name: Build immutable Linux runtime input and assemble the full GUI package
+        if: inputs.platform == 'linux'
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/linux-runtime-input"
+          # Reuse the existing ABI toolchain; the headless archive stays a private intermediate.
+          python3 scripts/verification-slot.py node -- docker run --rm --cpus=2 --memory=4g --pids-limit=512 --cap-drop=ALL --security-opt=no-new-privileges \
+            --user "$(id -u):$(id -g)" -v "$PWD:/source:ro" -v "$RUNNER_TEMP/linux-runtime-input:/output" \
+            -e RELEASE_SOURCE="$RELEASE_SOURCE" \
+            quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \
+            /opt/python/cp313-cp313/bin/python3 /source/apps/desktop/scripts/linux_gui_package_runtime.py --repository /source --source "$RELEASE_SOURCE" --output /output/stage
+          digests="$(python3 -c 'import os,sys; sys.path.insert(0,"apps/desktop/scripts"); from gui_release import accepted_capsules; print("\n".join(accepted_capsules(os.environ)))')"
+          capsule_args=()
+          while IFS= read -r digest; do
+            if [ -n "$digest" ]; then capsule_args+=(--accepted-capsule "$digest"); fi
+          done <<< "$digests"
+          python3 apps/desktop/scripts/linux_gui_package.py assemble --source "$RELEASE_SOURCE" --runtime "$RUNNER_TEMP/linux-runtime-input/stage/runtime" --runtime-receipt "$RUNNER_TEMP/linux-runtime-input/stage/runtime-receipt.json" --executables "$RUNNER_TEMP/linux-rust" --updater "$RUNNER_TEMP/linux-rust" --bundle-build "$PILOT_NEXT_UPDATER_BUILD" --application-id "$PILOT_NEXT_UPDATER_APPLICATION_ID" "${capsule_args[@]}" --output "$RUNNER_TEMP/Pilot Next"
+      - name: Sign qualified Linux full-payload inventory
+        if: inputs.platform == 'linux'
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+          PILOT_NEXT_UPDATER_PRIVATE_KEY: ${{ secrets.PILOT_NEXT_UPDATER_PRIVATE_KEY }}
+        run: node apps/desktop/scripts/gui-release-manifest.mjs seal-linux "$RUNNER_TEMP/Pilot Next"
+      - name: Archive qualified Linux GUI and signed inventory
+        if: inputs.platform == 'linux'
+        env:
+          RELEASE_SOURCE: ${{ inputs.ref }}
+        run: |
+          # Refuses today's unqualified bundled-launch/updater/confinement policy.
+          # Native fixture rendering alone must never make this a usable release.
+          python3 apps/desktop/scripts/gui_release.py linux-archive --platform linux --source "$RELEASE_SOURCE" --package "$RUNNER_TEMP/Pilot Next" --output "$RUNNER_TEMP/gui-release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-production-${{ inputs.platform }}
+          path: |
+            ${{ runner.temp }}/gui-release/Pilot-Next-*
+            ${{ runner.temp }}/gui-release/gui-release-artifact.json
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true

@@ -173,7 +173,7 @@ impl Transport {
         let mut response = self.response(asset_url(trust, assets.0)?, trust, access, cancel)?;
         let bytes = bounded(&mut response.body, MAX_MANIFEST, cancel)?;
         let manifest = VerifiedManifest::parse(&bytes, trust, assets.1)?;
-        if release.tag_name != format!("desktop-v{}", manifest.manifest().short_version) {
+        if release.tag_name != format!("v{}", manifest.manifest().short_version) {
             return Err(Error::Version);
         }
         let offered = crate::manifest::Build::parse(&manifest.manifest().build)?;
@@ -359,7 +359,7 @@ struct Asset {
 }
 impl Release {
     fn assets(&self, _trust: &Trust) -> Result<(u64, u64), Error> {
-        if self.draft || self.prerelease || !self.tag_name.starts_with("desktop-v") {
+        if self.draft || self.prerelease || !self.tag_name.starts_with("v") {
             return Err(Error::Identity);
         }
         let select = |name: &str| {

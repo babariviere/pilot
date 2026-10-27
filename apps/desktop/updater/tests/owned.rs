@@ -280,8 +280,45 @@ fn network(replies: Vec<Result<transport::Reply, Error>>) -> (transport::Transpo
     )
 }
 fn release() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({"draft":false,"prerelease":false,"tag_name":"desktop-v0.1.1","assets":[
+    serde_json::to_vec(&serde_json::json!({"draft":false,"prerelease":false,"tag_name":"v0.1.1","assets":[
     {"id":11,"name":manifest::MANIFEST_ASSET,"state":"uploaded"},{"id":12,"name":manifest::ARCHIVE_ASSET,"state":"uploaded"}]})).unwrap()
+}
+
+#[test]
+fn stable_shared_release_selects_only_rust_gui_assets_and_matches_signed_version() {
+    let mut release: serde_json::Value = serde_json::from_slice(&release()).unwrap();
+    release["assets"].as_array_mut().unwrap().extend([
+        serde_json::json!({"id":21,"name":"Pilot-arm64.zip","state":"uploaded"}),
+        serde_json::json!({"id":22,"name":"appcast.xml","state":"uploaded"}),
+        serde_json::json!({"id":23,"name":"Pilot-Next-linux-x64.zip","state":"uploaded"}),
+    ]);
+    for (tag, valid) in [
+        ("v0.1.1", true),
+        ("v0.1.2", false),
+        ("desktop-v0.1.1", false),
+    ] {
+        release["tag_name"] = tag.into();
+        let (transport, _) = network(vec![
+            reply(200, None, serde_json::to_vec(&release).unwrap()),
+            reply(200, None, envelope(&metadata(&archive()))),
+        ]);
+        let result = transport.discover(&trust(), &access(), &Default::default());
+        assert_eq!(result.is_ok(), valid, "{tag}");
+    }
+    release["tag_name"] = "v0.1.1".into();
+    release["assets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|asset| asset["name"] != manifest::ARCHIVE_ASSET);
+    let (transport, _) = network(vec![reply(
+        200,
+        None,
+        serde_json::to_vec(&release).unwrap(),
+    )]);
+    assert!(matches!(
+        transport.discover(&trust(), &access(), &Default::default()),
+        Err(Error::Identity)
+    ));
 }
 
 #[test]

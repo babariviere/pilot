@@ -71,12 +71,12 @@ downloaded framework, global install, gpui-updater dependency or signing secret.
 
 ## Signed release contract (separate Rust identity)
 
-Latest release must be non-draft/non-prerelease, tagged `desktop-v<short_version>`,
+Latest release must be non-draft/non-prerelease, tagged `v<short_version>`,
 with exactly one uploaded `desktop-macos-arm64-update.json` and
 `Pilot-Next-macos-arm64.zip`. No fallback to Swift `appcast.xml`, `Pilot-arm64.zip`
-or arbitrary browser URLs. A latest Swift/incomplete release fails identity policy,
-not an implicit search for another release. Packaging must settle a dedicated release
-repository/discovery policy before enabling automatic checks.
+or arbitrary browser URLs. The stable release can also contain the independent Swift and Linux assets. A release
+missing the exact Rust GUI pair fails identity policy, never falling back or searching
+for Swift assets. See [release wiring and prerequisites](../docs/releases.md).
 
 Envelope, max128KiB, both fields standard base64:
 

@@ -183,7 +183,10 @@ fn validate(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<(), F
         serde_json::from_slice(&raw).map_err(|_| "Bundled runtime manifest is malformed.")?;
     let build = &manifest.build;
     if manifest.schema != 1
-        || manifest.kind != "development-bundled-runtime"
+        || !matches!(
+            manifest.kind.as_str(),
+            "development-bundled-runtime" | "production-bundled-runtime"
+        )
         || build.schema != 1
         || build.source.len() != 40
         || !build
@@ -790,6 +793,17 @@ mod tests {
             b"tampered bytes",
         )
         .unwrap();
+        assert!(fixture.validate().is_err());
+    }
+    #[test]
+    fn production_runtime_keeps_full_inventory_validation() {
+        let fixture = Fixture::new();
+        fixture.edit(|m| m["kind"] = json!("production-bundled-runtime"));
+        assert_eq!(fixture.validate(), Ok(()));
+        fs::write(fixture.root.join("unexpected"), "extra").unwrap();
+        assert!(fixture.validate().is_err());
+        fs::remove_file(fixture.root.join("unexpected")).unwrap();
+        fixture.edit(|m| m["kind"] = json!("unknown-bundled-runtime"));
         assert!(fixture.validate().is_err());
     }
     #[test]

@@ -17,9 +17,10 @@ ET.register_namespace("sparkle", SPARKLE)
 DRAFT_ASSETS = (
     "Pilot-arm64.zip",
     "appcast.xml",
-    "Pilot-linux-x64.tar.gz",
-    "runtime-manifest.json",
-    "runtime-manifest.json.sig",
+    "Pilot-Next-macos-arm64.zip",
+    "desktop-macos-arm64-update.json",
+    "Pilot-Next-linux-x64.zip",
+    "desktop-linux-x64-update.json",
 )
 
 
