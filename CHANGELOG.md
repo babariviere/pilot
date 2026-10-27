@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.76.0](https://github.com/babariviere/pilot/compare/v1.75.0...v1.76.0) (2026-10-27)
+
+
+### Features
+
+* **desktop:** single artifact reader toolbar and tidy gallery tiles ([732ec19](https://github.com/babariviere/pilot/commit/732ec19ad4a568672c24ee82f82d8e589a459614))
+
+
+### Bug Fixes
+
+* **release:** pass the macOS GUI code requirement to codesign as text ([dd66475](https://github.com/babariviere/pilot/commit/dd664751221505c2a3dc411558269914f269e97d))
+* **release:** run Linux runtime builder without pidfd and retry drafts with current GUI helpers ([505fac6](https://github.com/babariviere/pilot/commit/505fac66b812a84c2605993299e328936a2c806c))
+
 ## [1.75.0](https://github.com/babariviere/pilot/compare/v1.74.0...v1.75.0) (2026-10-27)
 
 
