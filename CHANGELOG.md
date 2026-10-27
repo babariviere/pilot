@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.72.0](https://github.com/babariviere/pilot/compare/v1.71.0...v1.72.0) (2026-10-27)
+
+
+### Features
+
+* **daemon:** prune archived build outputs at once and gc shared repositories daily ([1556571](https://github.com/babariviere/pilot/commit/1556571a338c428e3313b8fadcc03d74db4675c3))
+* **desktop:** retain Linux bundled Local runtime safely ([b522a09](https://github.com/babariviere/pilot/commit/b522a09a1196117cf10f631c092b8cdd7e066afe))
+
+
+### Performance Improvements
+
+* **desktop:** avoid redundant artifact selection and table work ([a551e84](https://github.com/babariviere/pilot/commit/a551e84f9623780e4ee11cac8967e85544d33d39))
+
 ## [1.71.0](https://github.com/babariviere/pilot/compare/v1.70.0...v1.71.0) (2026-10-27)
 
 
