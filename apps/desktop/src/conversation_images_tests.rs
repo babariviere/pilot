@@ -6,6 +6,7 @@ const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFA
 fn inline_contract_and_no_external_loader() {
     let source = Source::read(2, &json!({"mimeType":"image/png","data":PNG}));
     assert_eq!(source.block, 2);
+    assert_eq!(source.size, Some((1, 1)), "header size known before decode");
     assert_eq!(source.data.as_deref().unwrap().as_str(), PNG);
     let raster = source.decode(|| false).unwrap();
     assert_eq!((raster.width, raster.height), (1, 1));
@@ -32,6 +33,7 @@ fn large_inline_source_is_exact_and_codec_limits_remain_distinct() {
     let data = fixture::large_png();
     let source = Source::read(0, &json!({"mimeType":"image/png","data":data}));
     assert!(source.problem.is_none());
+    assert_eq!(source.size, Some((640, 640)));
     assert_eq!(source.data.as_deref().unwrap().as_str(), data);
     let raster = source.decode(|| false).unwrap();
     assert_eq!((raster.width, raster.height), (640, 640));
@@ -39,6 +41,7 @@ fn large_inline_source_is_exact_and_codec_limits_remain_distinct() {
     let oversize = "A".repeat(crate::artifact_image::SOURCE_CAP + 1);
     let source = Source::read(0, &json!({"mimeType":"image/png","data":oversize}));
     assert!(source.problem.is_none());
+    assert_eq!(source.size, None);
     assert!(source.hash.is_some());
     assert_eq!(source.data.as_deref().unwrap().as_str(), oversize);
     assert_eq!(

@@ -1,4 +1,5 @@
-//! Paint-admitted stored images. One FIFO decode lane, all visible rows retained.
+//! Paint-admitted stored images. One FIFO decode lane, all visible rows retained,
+//! recently visible pixels kept for re-entry.
 use super::*;
 use gpui_kit::{
     AnyElement, ObjectFit, StyledImage, TestSupportExt, canvas, component::WindowExt, img,
@@ -12,12 +13,17 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+/// Decoded pixels kept for rows scrolled out of view, so scrolling back shows
+/// them without reloading. The least recently visible are released first;
+/// visible rows never are.
+const OFFSCREEN_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) struct Entry {
     key: crate::model::ReaderKey,
     source: Arc<crate::conversation_images::Source>,
     raster: Option<crate::artifact_image::Raster>,
     error: Option<&'static str>,
     stop: Arc<AtomicBool>,
+    seen: u64,
     _task: Task<()>,
 }
 impl Drop for Entry {
@@ -29,20 +35,9 @@ impl Drop for Entry {
 pub(super) struct Preview {
     serial: u64,
     scope: u64,
+    tick: u64,
     entries: BTreeMap<u64, Entry>,
     pub(super) painted: Rc<RefCell<Vec<u64>>>,
-}
-impl Preview {
-    pub(super) fn selected_id_source_missing(&self, rows: &[Message], scope: u64) -> bool {
-        self.scope != scope
-            || self.entries.iter().any(|(id, e)| {
-                !rows.iter().any(|r| {
-                    r.id() == *id
-                        && r.reader_key().as_ref() == Some(&e.key)
-                        && r.image_data() == Some(&e.source)
-                })
-            })
-    }
 }
 impl TranscriptView {
     pub(super) fn clear_image(&mut self, cx: &mut App) {
@@ -54,21 +49,71 @@ impl TranscriptView {
             }
         }
     }
-    pub(super) fn reconcile_images(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
-        let retired: Vec<_> = self
+    fn retire_image(&mut self, id: u64, cx: &mut App) {
+        if let Some(e) = self.images.entries.remove(&id)
+            && let Some(raster) = &e.raster
+        {
+            let image = raster.image.clone();
+            cx.defer(move |cx| cx.drop_image(image, None));
+        }
+    }
+    /// Keeps previews whose row still has the same identity and source.
+    pub(super) fn retain_images(&mut self, rows: &[Message], cx: &mut App) {
+        if self.images.scope != self.history_scope {
+            self.clear_image(cx);
+            return;
+        }
+        let stale: Vec<_> = self
             .images
             .entries
-            .keys()
-            .copied()
-            .filter(|id| !ids.contains(id))
+            .iter()
+            .filter(|(id, e)| {
+                !rows.iter().any(|r| {
+                    r.id() == **id
+                        && r.reader_key().as_ref() == Some(&e.key)
+                        && r.image_data() == Some(&e.source)
+                })
+            })
+            .map(|(id, _)| *id)
             .collect();
-        for id in retired {
-            if let Some(e) = self.images.entries.remove(&id)
-                && let Some(raster) = &e.raster
-            {
-                let image = raster.image.clone();
-                cx.defer(move |cx| cx.drop_image(image, None));
+        for id in stale {
+            self.retire_image(id, cx);
+        }
+    }
+    pub(super) fn reconcile_images(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
+        self.images.tick += 1;
+        let tick = self.images.tick;
+        for id in &ids {
+            if let Some(e) = self.images.entries.get_mut(id) {
+                e.seen = tick;
             }
+        }
+        // Offscreen rows still waiting cancel their decode. Decoded or failed
+        // rows stay, so re-entry neither reloads nor changes height.
+        let mut pending = Vec::new();
+        let mut decoded = Vec::new();
+        let mut bytes = 0;
+        for (id, e) in self.images.entries.iter().filter(|(_, e)| e.seen != tick) {
+            match &e.raster {
+                Some(r) => {
+                    let size = u64::from(r.width) * u64::from(r.height) * 4;
+                    bytes += size;
+                    decoded.push((e.seen, *id, size));
+                }
+                None if e.error.is_none() => pending.push(*id),
+                None => {}
+            }
+        }
+        for id in pending {
+            self.retire_image(id, cx);
+        }
+        decoded.sort_unstable();
+        for (_, id, size) in decoded {
+            if bytes <= OFFSCREEN_BYTES {
+                break;
+            }
+            bytes -= size;
+            self.retire_image(id, cx);
         }
         for id in ids {
             self.open_image(id, cx);
@@ -146,6 +191,7 @@ impl TranscriptView {
                 raster: None,
                 error: None,
                 stop: entry_stop,
+                seen: self.images.tick,
                 _task: task,
             },
         );
@@ -272,8 +318,13 @@ impl TranscriptView {
             );
         if supported {
             let raster = entry.and_then(|e| e.raster.as_ref());
-            let mut viewport = raster
-                .map(crate::artifact_image_view::inline_frame)
+            // Header size and decoded pixels share one geometry, so loading never
+            // resizes the row. A failed decode uses the compact status row.
+            let size = raster
+                .map(|r| (r.width, r.height))
+                .or(source.size.filter(|_| error.is_none()));
+            let mut viewport = size
+                .map(|(w, h)| crate::artifact_image_view::inline_frame(w, h))
                 .unwrap_or_else(|| div().w_full().h_48())
                 .id(("conversation-image-viewport", id))
                 .test_support()
@@ -292,11 +343,15 @@ impl TranscriptView {
                         .min_h_0(),
                 );
             } else {
-                viewport = viewport.child(
+                let status =
                     crate::ui::text(crate::ui::Text::Caption, error.unwrap_or("Loading image…"))
                         .id(("conversation-image-status", id))
-                        .test_support(),
-                );
+                        .test_support();
+                viewport = if size.is_some() {
+                    viewport.child(div().absolute().inset_0().child(status))
+                } else {
+                    viewport.child(status)
+                };
             }
             content = content.child(viewport.cursor_pointer().on_click(move |_, w, cx| {
                 let _ = owner.update(cx, |v, cx| {

@@ -268,12 +268,10 @@ impl TranscriptView {
     ) {
         self.inline_visuals.revision += 1;
         assert!(self.readonly);
-        if reset
-            || self
-                .images
-                .selected_id_source_missing(&rows, self.history_scope)
-        {
+        if reset {
             self.clear_image(cx);
+        } else {
+            self.retain_images(&rows, cx);
         }
         if reset {
             self.invalidate_find();

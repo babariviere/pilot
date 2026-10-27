@@ -49,10 +49,13 @@ No animation-frame collection or WebP decoder is introduced.
 
 One FIFO global read/decode permit is shared with artifact previews. Every
 paint-visible supported row queues automatically, not just a selected image.
-The transcript retains decoded pixels only for visible rows, retiring them on
-scroll-out, replacement, scope change or reset. Each raster keeps its existing
-32 MiB maximum; the viewport and existing row counts bound the number
-of visible entries. There is no eager whole-history decoding or image LRU.
+Rows that scroll out before decoding cancel their queued work. Decoded pixels
+stay after scroll-out, so returning paints them in the same frame instead of
+reloading. Offscreen pixels are released least recently visible first once they
+exceed 256 MiB of decoded BGRA; visible rows are never released. Replacement,
+changed source identity, scope change and reset retire them as before. Each
+raster keeps its existing 32 MiB maximum. There is no eager whole-history
+decoding.
 Source strings and pixels are Arc-backed. Rendering does not decode pixels.
 Cancellation retains admission until bounded codec work finishes. Source,
 scope and cancellation-token checks reject late results, including same-row
@@ -62,7 +65,11 @@ uses Kit's normal window-selection clearing on modal entry/exit. Composer draft
 text, its selection and active preedit remain with the existing editor owner;
 marked text prevents sibling reader opening before pointer blur.
 
-Loading rows reserve a 12-rem viewport. Decoded images hug their aspect-fitted
+The Local reader also reads each supported image's header size off-UI (full
+base64 decode plus codec header and EXIF orientation, never pixels), so loading
+rows reserve their final aspect-fitted frame and decoding never moves the
+reading position. Rows whose header cannot be read reserve a 12-rem viewport;
+a decode failure shows the compact status row. Decoded images hug their aspect-fitted
 size, using the available conversation width and a 720pt height ceiling without
 enlarging small images (48pt minimum click target). This follows Swift's actual
 transcript `ArtifactCard` / `ArtifactViewerLayout.inlineSize(image: true)` policy,
@@ -102,3 +109,54 @@ six large image rows from the same pinned faux Local source and await real
 decode. Codec rejection remains separate: 16 MiB compressed input (including
 its base64 envelope admission), axis/pixel/output and GIF scratch bounds are
 unchanged; rejected sources remain retained rather than source-budget placeholders.
+
+## Scroll stability evidence
+
+Image-heavy chats used to visibly reload and resize while scrolling. Two
+measured causes: every scrolled-out preview dropped its pixels, and loading rows
+reserved a 12-rem box until decode remeasured them to their real height. Rows
+entering from the top then pushed the reading position by the difference.
+Inline raster artifacts were closed on scroll-out and re-read on every return.
+
+`examples/image_scroll_native.rs` reproduces this in a hidden native macOS window
+with production dispatchers: 30 mixed portrait/landscape/small PNG messages
+(14.2 MB of source, including noise PNGs over the old 1 MiB limit), then 12
+inline raster artifacts through the faux Local reader. It records every frame's
+visible image rows and anchor across cold and warm full traversals, repeated
+scrolling near one position, a 12-row history prepend, a chat switch and back,
+and a column resize. It counts rows showing a placeholder after their pixels had
+been shown (reversions), height changes of an already visible row, and visible
+rows that did not move by the wheel delta.
+
+```sh
+bash scripts/cargo.sh build --locked --features native-probes --example image_scroll_native
+PILOT_NEXT_IMAGE_SCROLL_DIR=/tmp/fresh-image-scroll target/dev/debug/examples/image_scroll_native
+```
+
+Two interleaved runs per arm, same fixture, unoptimized dev profile, Mac15,6:
+
+| Conversation images | Before: reversions / height jumps | After |
+| --- | ---: | ---: |
+| Cold traversal | 140–147 / 63–64 | 0 / 0 |
+| Warm traversal | 216–265 / 63 | 0 / 0 |
+| Repeated nearby scrolling | 71–77 / 16–17 | 0 / 0 |
+| After history prepend | 149–151 / 64–65 | 0 / 0 |
+| After chat switch (cold again) | 1 / 31 | 0 / 0 |
+| After resize | 179–193 / 69–73 | 0 / 0 |
+
+After the fix, visible rows moved by exactly the wheel delta, except at most
+2px during the list's own tail/top settle, which the original arm shows too.
+The prepend kept the same anchor row and offset with no visible row movement in
+both arms. Repeated nearby scrolling over inline raster artifacts fell from 6
+re-reads to 1–2 and from 6 height jumps to 1–3; reloads that remain come from the
+existing eight-entry cache. A raster artifact's first load still grows from the
+440pt viewport once, because its pin has no size before the read.
+
+Main-thread CPU time of each `Window::draw` stayed about 3–4ms median in both
+arms (for example, warm traversal 2.95/3.94ms before, 3.84/2.98ms after). These
+are synchronous draw/layout timings, not presentation, VSync or dropped-frame
+measurements. Earlier runs launched from a background job runner showed about
+10ms wall-clock draw medians in the fixed arm only, without CPU-time recording;
+from an interactive shell with CPU timing, both arms matched. That scheduling
+difference was not isolated further. The example asks for user-interactive QoS,
+like a visible app's main thread, and records both wall and CPU draw time.

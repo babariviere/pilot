@@ -208,8 +208,11 @@ impl ArtifactPane {
                             .w_full()
                             .min_w_0()
                             .child(
-                                crate::artifact_image_view::inline_frame(raster)
-                                    .child(crate::artifact_image_view::preview(raster)),
+                                crate::artifact_image_view::inline_frame(
+                                    raster.width,
+                                    raster.height,
+                                )
+                                .child(crate::artifact_image_view::preview(raster)),
                             )
                             .cursor_pointer()
                             .on_click(cx.listener(move |v, _, _, cx| {

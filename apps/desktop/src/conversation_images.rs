@@ -11,6 +11,8 @@ pub(crate) struct Source {
     pub(crate) hash: Option<String>,
     pub(crate) data: Option<Arc<String>>,
     pub(crate) problem: Option<&'static str>,
+    /// Upright header size, known before decode so the row keeps its geometry.
+    pub(crate) size: Option<(u32, u32)>,
 }
 impl PartialEq for Source {
     fn eq(&self, other: &Self) -> bool {
@@ -37,6 +39,7 @@ impl Source {
             hash: None,
             data: None,
             problem: None,
+            size: None,
         };
         let Some(data) = data else {
             result.problem =
@@ -55,6 +58,7 @@ impl Source {
             _ => Some("Unsupported stored image format. No external image is loaded."),
         };
         if result.problem.is_none() {
+            result.size = crate::artifact_image::intrinsic_size(mime, data);
             result.data = Some(Arc::new(data.into()));
         }
         result

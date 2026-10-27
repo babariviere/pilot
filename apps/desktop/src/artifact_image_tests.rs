@@ -157,6 +157,45 @@ fn maintained_codecs_make_one_bounded_bgra_frame() {
     }
 }
 #[test]
+fn header_size_matches_decoded_upright_pixels_without_decoding() {
+    for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Gif] {
+        let (prefix, data) = source(format)
+            .split_once(',')
+            .map(|(p, d)| (p.to_owned(), d.to_owned()))
+            .unwrap();
+        let mime = prefix
+            .trim_start_matches("data:")
+            .trim_end_matches(";base64");
+        assert_eq!(intrinsic_size(mime, &data), Some((3, 2)));
+    }
+    // EXIF Rotate90 swaps the axes exactly as decode's orientation does.
+    let mut bytes = Vec::new();
+    let mut jpeg = image::codecs::jpeg::JpegEncoder::new(&mut bytes);
+    image::ImageEncoder::set_exif_metadata(
+        &mut jpeg,
+        b"MM\0\x2a\0\0\0\x08\0\x01\x01\x12\0\x03\0\0\0\x01\0\x06\0\0\0\0\0\0".to_vec(),
+    )
+    .unwrap();
+    jpeg.encode_image(&image::RgbImage::from_pixel(
+        40,
+        20,
+        image::Rgb([20, 90, 200]),
+    ))
+    .unwrap();
+    let data = STANDARD.encode(bytes);
+    let raster = decode(&format!("data:image/jpeg;base64,{data}"), || false).unwrap();
+    assert_eq!((raster.width, raster.height), (20, 40));
+    assert_eq!(intrinsic_size("image/jpeg", &data), Some((20, 40)));
+    // Unknown or invalid headers reserve nothing; decode still reports the failure.
+    assert_eq!(intrinsic_size("image/png", "AAAA"), None);
+    assert_eq!(intrinsic_size("image/webp", &data), None);
+    let png = source(ImageFormat::Png);
+    let mut header = STANDARD.decode(png.split_once(',').unwrap().1).unwrap();
+    header[16..20].copy_from_slice(&9000u32.to_be_bytes());
+    fix_ihdr_crc(&mut header);
+    assert_eq!(intrinsic_size("image/png", &STANDARD.encode(header)), None);
+}
+#[test]
 fn webp_is_truthfully_unsupported_before_unbounded_adapter_metadata() {
     assert!(
         decode("data:image/webp;base64,AAAA", || false)

@@ -176,6 +176,18 @@ impl TranscriptView {
                 .find(|(_, r)| r.same_revision(&entry.reference))
                 .map(|(id, _)| *id);
             if entry.row != row {
+                // A decoded still image has no worker. It stays bound to its row
+                // while scrolled out, so scrolling back neither reloads nor resizes it.
+                let scrolled_out = entry.row.is_some_and(|id| {
+                    self.transcript.messages().iter().any(|r| {
+                        r.id() == id
+                            && r.artifact_data()
+                                .is_some_and(|a| a.same_revision(&entry.reference))
+                    })
+                });
+                if row.is_none() && scrolled_out && entry.pane.read(cx).inline_raster_ready() {
+                    continue;
+                }
                 changed = true;
                 if row.is_none() {
                     append_drains(
@@ -225,16 +237,22 @@ impl TranscriptView {
             let index = match index {
                 Some(index) => index,
                 None => {
-                    if self.inline_visuals.entries.len() >= CACHED
-                        && self.inline_visuals.entries.iter().any(|e| e.row.is_none())
-                    {
-                        let index = self
+                    let offscreen = |e: &Entry| {
+                        !self
                             .inline_visuals
-                            .entries
+                            .desired
                             .iter()
-                            .position(|e| e.row.is_none())
-                            .unwrap();
-                        self.inline_visuals.entries.remove(index);
+                            .any(|(_, r)| r.same_revision(&e.reference))
+                    };
+                    if self.inline_visuals.entries.len() >= CACHED
+                        && let Some(index) = self.inline_visuals.entries.iter().position(offscreen)
+                    {
+                        let evicted = self.inline_visuals.entries.remove(index);
+                        if evicted.row.is_some()
+                            && Some(evicted.pane.entity_id()) != self.inline_visuals.adopted
+                        {
+                            evicted.pane.update(cx, |p, cx| p.suspend_inline(cx));
+                        }
                     }
                     let pane = cx.new(|_| ArtifactPane::new());
                     let expand = cx.subscribe(

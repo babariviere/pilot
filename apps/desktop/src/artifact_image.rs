@@ -1,7 +1,7 @@
 //! Stored raster bytes only. No resource/URI loader, SVG or animation execution.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gpui_kit::RenderImage;
-use image::{ImageDecoder, ImageFormat, ImageReader};
+use image::{ImageDecoder, ImageFormat, ImageReader, metadata::Orientation};
 use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
@@ -82,6 +82,50 @@ fn signature(bytes: &[u8]) -> Option<&'static str> {
         None
     }
 }
+fn reader(bytes: &[u8], format: ImageFormat) -> ImageReader<Cursor<&[u8]>> {
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(AXIS_CAP);
+    limits.max_image_height = Some(AXIS_CAP);
+    // GIF's first frame rectangle can exceed its logical canvas. Its adapter
+    // explicitly reserves this independent scratch buffer against max_alloc.
+    limits.max_alloc = Some(if format == ImageFormat::Gif {
+        BUFFER_CAP
+    } else {
+        ADVISORY_CODEC_LIMIT
+    });
+    reader.limits(limits);
+    reader
+}
+/// Upright pixel size from the header alone, without decoding pixels. Off-UI
+/// readers use it so a row reserves its final geometry before pixels decode.
+pub(crate) fn intrinsic_size(mime: &str, data: &str) -> Option<(u32, u32)> {
+    let format = match mime {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/gif" => ImageFormat::Gif,
+        _ => return None,
+    };
+    if data.len() > SOURCE_CAP {
+        return None;
+    }
+    let bytes = STANDARD.decode(data).ok()?;
+    let mut decoder = reader(&bytes, format).into_decoder().ok()?;
+    let (width, height) = decoder.dimensions();
+    dimensions(width, height).ok()?;
+    let turned = matches!(
+        decoder.orientation().ok()?,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    );
+    Some(if turned {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
 pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'static str> {
     cancelled(&stop)?;
     if source.len() > SOURCE_CAP {
@@ -132,19 +176,7 @@ pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'
         return Err("Image bytes do not match their declared format.");
     }
     cancelled(&stop)?;
-    let mut reader = ImageReader::with_format(Cursor::new(&bytes), format);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(AXIS_CAP);
-    limits.max_image_height = Some(AXIS_CAP);
-    // GIF's first frame rectangle can exceed its logical canvas. Its adapter
-    // explicitly reserves this independent scratch buffer against max_alloc.
-    limits.max_alloc = Some(if format == ImageFormat::Gif {
-        BUFFER_CAP
-    } else {
-        ADVISORY_CODEC_LIMIT
-    });
-    reader.limits(limits);
-    let mut decoder = reader
+    let mut decoder = reader(&bytes, format)
         .into_decoder()
         .map_err(|_| "Image header is invalid or exceeds the decoder budget.")?;
     let (width, height) = decoder.dimensions();

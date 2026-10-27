@@ -307,6 +307,8 @@ pub use mission_lifecycle_probe::run_mission_lifecycle_probe;
 mod conversation_images;
 
 #[cfg(feature = "native-probes")]
+pub use transcript_view::conversation_images_view::probe::native::run as run_native_image_scroll_probe;
+#[cfg(feature = "native-probes")]
 pub use transcript_view::conversation_images_view::probe::run_conversation_images_probe;
 
 #[cfg(feature = "native-probes")]

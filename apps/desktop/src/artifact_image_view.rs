@@ -9,20 +9,20 @@ use gpui_kit::{
 /// Swift ArtifactViewerLayout's inline image ceiling, without enlarging small images.
 /// Measure against the resolved width: a CSS aspect ratio alone leaves the virtual
 /// list's first measurement at the unconstrained image height, reserving blank space.
-pub(crate) fn inline_frame(raster: &Raster) -> gpui_kit::Div {
-    let ratio = raster.width as f32 / raster.height as f32;
+/// Takes the upright pixel size, so a header-sized placeholder and its decoded
+/// pixels occupy the same row geometry.
+pub(crate) fn inline_frame(width: u32, height: u32) -> gpui_kit::Div {
+    let (width, height) = (width as f32, height as f32);
+    let ratio = width / height;
     div()
         .relative()
         .flex()
         .flex_col()
         .flex_shrink_0()
         .w_full()
-        .max_w(px((raster.width as f32).min(720. * ratio).max(48.)))
+        .max_w(px(width.min(720. * ratio).max(48.)))
         .overflow_hidden()
-        .child(InlineSize {
-            width: raster.width as f32,
-            height: raster.height as f32,
-        })
+        .child(InlineSize { width, height })
 }
 
 struct InlineSize {

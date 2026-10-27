@@ -1,5 +1,7 @@
 //! Mounted production images, FIFO admission and reader geometry. Synthetic only.
 use super::*;
+#[path = "conversation_images_native.rs"]
+pub(crate) mod native;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gpui_kit::test::TestEventExt;
 use gpui_kit::{
@@ -129,6 +131,34 @@ fn fitted_layout(
         frame(cx, h);
     }
     assert!(cx.update(|cx| view.read(cx).history_probe_anchor(cx).2));
+    // Before any pixels decode, each row already reserves its final fitted frame.
+    let fitted = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| {
+            dimensions
+                .iter()
+                .enumerate()
+                .map(|(n, &(iw, ih))| {
+                    let id = 100 + n as u64;
+                    let row = w.find(("conversation-image", id)).bounds();
+                    let b = w.find(("conversation-image-viewport", id)).bounds();
+                    let scale = 1f32
+                        .min(f32::from(row.size.width) / iw as f32)
+                        .min(720. / ih as f32);
+                    assert!((f32::from(b.size.width) - iw as f32 * scale).abs() < 1.);
+                    assert!((f32::from(b.size.height) - ih as f32 * scale).abs() < 1.);
+                    row
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+    };
+    let reserved = fitted(cx);
+    cx.update_window(h, |_, w, _| {
+        for id in 100u64..103 {
+            assert!(w.try_find(("conversation-image-status", id)).is_some());
+        }
+    })
+    .unwrap();
     drop(permit);
     wait(cx, h, |cx| {
         view.read(cx).images.entries.len() == 3
@@ -145,6 +175,11 @@ fn fitted_layout(
     assert!(
         cx.update(|cx| view.read(cx).history_probe_anchor(cx).2),
         "decode remeasure retains tail follow"
+    );
+    assert_eq!(
+        reserved,
+        fitted(cx),
+        "decoding never moves or resizes a row"
     );
     let check = |cx: &mut HeadlessAppContext| {
         cx.update_window(h, |_, w, _| {
@@ -233,6 +268,94 @@ fn fitted_layout(
         frame(cx, h);
     }
     assert!(!cx.update(|cx| view.read(cx).history_probe_anchor(cx).2));
+    // Scrolled-out pixels stay decoded. Returning paints them in the same frame,
+    // with no decode admission available and unchanged row geometry.
+    let heights = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| {
+            (100u64..103)
+                .map(|id| w.find(("conversation-image", id)).bounds().size)
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+    };
+    let shown = heights(cx);
+    cx.update(|cx| view.update(cx, |v, cx| v.latest(cx)));
+    for _ in 0..8 {
+        frame(cx, h);
+    }
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.try_find(("conversation-image", 100u64)).is_none(),
+            "scrolled out"
+        );
+    })
+    .unwrap();
+    assert!(cx.update(|cx| {
+        view.read(cx)
+            .images
+            .entries
+            .values()
+            .all(|e| e.raster.is_some())
+    }));
+    let permit = crate::artifact_image::Permit::acquire().unwrap();
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.scroller
+                .update(cx, |s, cx| s.restore_anchor(0, px(0.), cx));
+        })
+    });
+    frame(cx, h);
+    cx.update_window(h, |_, w, _| {
+        for id in 100u64..103 {
+            assert!(
+                w.try_find(("conversation-image-status", id)).is_none(),
+                "no reload"
+            );
+            assert!(w.try_find(("conversation-image-pixels", id)).is_some());
+        }
+    })
+    .unwrap();
+    assert_eq!(shown, heights(cx), "re-entry keeps row geometry");
+    // A changed source resizes at once from its header, before its pixels decode.
+    let changed = sized_source(base, 1600, 400);
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            let mut changed_rows = v.transcript.messages().to_vec();
+            changed_rows[1] = Message::image(101, "Portrait".into(), changed)
+                .anchored(crate::model::ReaderKey::model(1, 0, Some(1)));
+            v.replace_readonly(changed_rows, false, cx);
+        })
+    });
+    frame(cx, h);
+    cx.update_window(h, |_, w, _| {
+        let row = w.find(("conversation-image", 101u64)).bounds();
+        let b = w.find(("conversation-image-viewport", 101u64)).bounds();
+        let scale = 1f32.min(f32::from(row.size.width) / 1600.);
+        assert!(w.try_find(("conversation-image-status", 101u64)).is_some());
+        assert!(
+            (f32::from(b.size.height) - 400. * scale).abs() < 1.,
+            "new header size {b:?}"
+        );
+    })
+    .unwrap();
+    drop(permit);
+    wait(cx, h, |cx| {
+        view.read(cx)
+            .images
+            .entries
+            .get(&101)
+            .and_then(|e| e.raster.as_ref())
+            .is_some_and(|r| r.height == 400)
+    });
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.scroller
+                .update(cx, |s, cx| s.restore_anchor(0, px(0.), cx));
+        })
+    });
+    for _ in 0..8 {
+        frame(cx, h);
+    }
     let anchor = cx.update(|cx| view.read(cx).history_probe_anchor(cx));
     let changed = sized_source(base, 1600, 400);
     cx.update(|cx| {
@@ -474,6 +597,9 @@ fn large_sources(cx: &mut HeadlessAppContext) {
     cx.run_until_parked();
 }
 pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
+    // Dialog entrance motion runs on wall-clock time, not the test clock. Settle
+    // it at once so reader geometry is not measured mid-animation on busy hosts.
+    cx.update(|cx| cx.set_reduce_motion(true));
     large_sources(cx);
     let server = crate::conversation_images::fixture::Server::start(encoded([24, 110, 220]));
     let capture = crate::local_client::read_local_capture(server.options.clone(), "owner").unwrap();
@@ -610,14 +736,23 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 let before = w.find("artifact-raster-pixels").bounds();
-                assert!((f32::from(before.size.width) - 1600. / w.scale_factor()).abs() < 1.);
+                assert!(
+                    (f32::from(before.size.width) - 1600. / w.scale_factor()).abs() < 1.,
+                    "actual {before:?} scale {} viewport {:?}",
+                    w.scale_factor(),
+                    w.find("reader-viewport").bounds()
+                );
                 w.click("reader-in", cx);
             })
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 let before = w.find("artifact-raster-pixels").bounds();
-                assert!((f32::from(before.size.width) - 2000. / w.scale_factor()).abs() < 1.);
+                assert!(
+                    (f32::from(before.size.width) - 2000. / w.scale_factor()).abs() < 1.,
+                    "zoomed {before:?} scale {}",
+                    w.scale_factor()
+                );
                 w.scroll(
                     "reader-viewport",
                     ScrollDelta::Pixels(point(px(-80.), px(0.))),
@@ -733,7 +868,7 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                         .values()
                         .all(|e| e.raster.is_some())
             });
-            // Offscreen retirement, then revisit. No whole-history decoding.
+            // Scrolled-out pixels stay for the return; nothing new starts offscreen.
             let mut history = changed.clone();
             history.extend(
                 (200..240)
@@ -745,19 +880,28 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                     v.scroller.update(cx, |s, cx| s.scroll_to_item(30, cx));
                 })
             });
-            wait(cx, h, |cx| view.read(cx).images.entries.is_empty());
+            for _ in 0..8 {
+                frame(cx, h);
+            }
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find(("conversation-image", 100u64)).is_none());
+            })
+            .unwrap();
+            assert!(cx.update(|cx| {
+                let entries = &view.read(cx).images.entries;
+                entries.len() == 3 && entries.values().all(|e| e.raster.is_some())
+            }));
             cx.update(|cx| {
                 view.update(cx, |v, cx| {
                     v.scroller.update(cx, |s, cx| s.scroll_to_item(0, cx))
                 })
             });
-            wait(cx, h, |cx| {
-                view.read(cx)
-                    .images
-                    .entries
-                    .values()
-                    .any(|e| e.raster.is_some())
-            });
+            frame(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find(("conversation-image-status", 100u64)).is_none());
+                assert!(w.try_find(("conversation-image-pixels", 100u64)).is_some());
+            })
+            .unwrap();
             // Unsupported and malformed sources stay truthful, not blank.
             for (mime, data) in [("image/webp", "AAAA"), ("image/png", "AAAA")] {
                 let mut s = crate::conversation_images::Source::read(

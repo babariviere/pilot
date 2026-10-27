@@ -30,17 +30,17 @@ return()=>ui.column({gap:8},[
  ui.canvas({height:80,label:'Study drawing',draw:(g,f)=>{g.rect(8,8,f.width-16,45,{fill:'chart1'});g.text(16,70,'Native canvas',{color:'text'});}})
 ]);
 }"#;
-struct Server {
+pub(crate) struct Server {
     raster: Arc<String>,
     scroll_raster: Arc<String>,
-    options: crate::LocalOptions,
-    reads: Arc<Mutex<Vec<(String, u32)>>>,
+    pub(crate) options: crate::LocalOptions,
+    pub(crate) reads: Arc<Mutex<Vec<(String, u32)>>>,
     stop: Option<async_channel::Sender<()>>,
     done: std::sync::mpsc::Receiver<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         listener.set_nonblocking(true).unwrap();
         let options = crate::LocalOptions::synthetic(listener.local_addr().unwrap().port());
@@ -135,7 +135,7 @@ impl Drop for Server {
         self.thread.take().unwrap().join().unwrap();
     }
 }
-fn reference(id: &str, revision: u32) -> Reference {
+pub(crate) fn reference(id: &str, revision: u32) -> Reference {
     Reference {
         id: id.into(),
         session: "owner".into(),
@@ -349,7 +349,7 @@ fn three_visible_readers(cx: &mut HeadlessAppContext) {
             frame(cx, h);
             cx.update(|cx| {
                 t.update(cx, |t, cx| {
-                    let rows = ["raster-a", "raster-b", "raster-c"]
+                    let mut rows: Vec<_> = ["raster-a", "raster-b", "raster-c"]
                         .into_iter()
                         .enumerate()
                         .map(|(ix, id)| {
@@ -358,6 +358,9 @@ fn three_visible_readers(cx: &mut HeadlessAppContext) {
                             Message::artifact(950 + ix as u64, r)
                         })
                         .collect();
+                    rows.extend((960..990).map(|id| {
+                        Message::live(id, "Assistant".into(), "Readable text\n".repeat(12))
+                    }));
                     t.replace_readonly(rows, true, cx);
                     t.inline_probe_scroll(0, cx);
                 })
@@ -371,6 +374,41 @@ fn three_visible_readers(cx: &mut HeadlessAppContext) {
                         s.raster.is_some()
                     })
             });
+            // Decoded rasters stay bound offscreen. Returning paints them in the
+            // same frame, without another read, reload or placeholder height.
+            let reads = server.reads.lock().unwrap().len();
+            let rows = |cx: &mut HeadlessAppContext| {
+                cx.update_window(h, |_, w, _| {
+                    (950u64..953)
+                        .map(|id| {
+                            let scope = w.within(("message", id));
+                            assert!(scope.try_find("artifact-raster-pixels").is_some());
+                            scope.find("inline-visual").bounds().size
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap()
+            };
+            let shown = rows(cx);
+            cx.update(|cx| t.update(cx, |t, cx| t.inline_probe_scroll(32, cx)));
+            for _ in 0..8 {
+                frame(cx, h);
+            }
+            cx.update_window(h, |_, w, _| {
+                assert!(
+                    w.find_all("artifact-raster-pixels").is_empty(),
+                    "scrolled out"
+                );
+            })
+            .unwrap();
+            cx.update(|cx| t.update(cx, |t, cx| t.inline_probe_scroll(0, cx)));
+            frame(cx, h);
+            assert_eq!(shown, rows(cx), "re-entry keeps raster geometry");
+            assert_eq!(
+                server.reads.lock().unwrap().len(),
+                reads,
+                "no reload on re-entry"
+            );
             if let Some(dir) =
                 std::env::var_os("PILOT_NEXT_INLINE_DIR").map(std::path::PathBuf::from)
             {
