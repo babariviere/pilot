@@ -243,8 +243,41 @@ for (const scenario of [
 				assert.equal(readFileSync(join(a.path, "own.txt"), "utf8"), "newer implementation\n");
 				assert.equal(jj(a.path, "log", "--no-graph", "-r", "fix/completed", "-T", "commit_id"), completed);
 			}
-			if (scenario === "clean")
+			if (scenario === "clean") {
 				assert.equal(git(a.shared!.repository, "rev-parse", "refs/heads/fix/sibling"), a.base);
+				// Only the newest base keeps an import bookmark; the earlier base stays visible without one.
+				assert.equal(
+					git(a.shared!.repository, "for-each-ref", "--format=%(refname)", "refs/remotes/pilot-base/"),
+					`refs/remotes/pilot-base/${main}`,
+				);
+				const control = join(a.shared!.repository, ".jj/pilot-control");
+				assert.equal(
+					jj(
+						control,
+						"--ignore-working-copy",
+						"bookmark",
+						"list",
+						"--remote",
+						"pilot-base",
+						"-T",
+						'name ++ "\\n"',
+					),
+					main,
+				);
+				assert.equal(
+					jj(
+						control,
+						"--ignore-working-copy",
+						"log",
+						"--no-graph",
+						"-r",
+						`${a.base} & ::visible_heads()`,
+						"-T",
+						"commit_id",
+					),
+					a.base,
+				);
+			}
 		} finally {
 			f.close();
 		}

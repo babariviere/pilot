@@ -661,9 +661,11 @@ export class SharedWorkspaceStore {
 	}
 
 	/**
-	 * jj cannot resolve a previously unseen Git hash without indexing it. Give it a private, immutable base ref
-	 * via a tiny local remote borrowing only this owned repository's objects. A filtered jj fetch imports that
-	 * hash alone, not stale/deleted Git refs belonging to agents. Never prune or rewrite these base refs.
+	 * jj cannot resolve a previously unseen Git hash without indexing it. Give it a private base ref via a tiny
+	 * local remote borrowing only this owned repository's objects. A filtered jj fetch imports that hash alone,
+	 * not stale/deleted Git refs belonging to agents. The remote holds only the newest base, so the same fetch
+	 * prunes earlier base bookmarks, which would otherwise be copied into every later operation's view. Their
+	 * commits stay visible because unreachable commits are never abandoned here.
 	 */
 	private async importBase(repository: string, control: string, commitId: string, signal?: AbortSignal) {
 		// Repeated launches normally reuse an indexed base. Avoid a local fetch and extra ref metadata then.
@@ -676,18 +678,12 @@ export class SharedWorkspaceStore {
 		)
 			return;
 		const directory = join(repository, ".jj/pilot-base.git");
-		for (const file of ["config", "HEAD", "packed-refs", "objects/info/alternates", `refs/heads/${commitId}`]) {
-			const entry = await stat(join(directory, file));
-			if (entry && (!entry.isFile() || entry.isSymbolicLink())) throw new Error("Unsafe base import metadata");
-		}
+		await rm(directory, { recursive: true, force: true });
 		await this.runner("git", ["init", "--bare", "--quiet", "--template=", directory], repository);
-		const alternates = join(directory, "objects/info/alternates");
-		if ((await stat(alternates))?.isSymbolicLink()) throw new Error("Unsafe base import alternates file");
-		await writeFile(alternates, `${join(repository, ".git/objects")}\n`);
+		await writeFile(join(directory, "objects/info/alternates"), `${join(repository, ".git/objects")}\n`);
 		const args = [`--git-dir=${directory}`];
 		const ref = `refs/heads/${commitId}`;
-		if (!(await this.optional("git", [...args, "rev-parse", "--verify", ref], repository)))
-			await this.runner("git", [...args, "update-ref", ref, commitId, "0".repeat(40)], repository);
+		await this.runner("git", [...args, "update-ref", ref, commitId, "0".repeat(40)], repository);
 		if ((await this.runner("git", [...args, "rev-parse", "--verify", ref], repository)) !== commitId)
 			throw new Error("Base import ref mismatch");
 		const url = await this.optional("git", ["remote", "get-url", baseRemote], repository);
@@ -704,7 +700,7 @@ export class SharedWorkspaceStore {
 				"--remote",
 				`exact:${baseRemote}`,
 				"--branch",
-				`exact:${commitId}`,
+				"glob:*",
 			],
 			control,
 			signal,
