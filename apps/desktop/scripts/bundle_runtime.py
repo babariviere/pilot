@@ -337,8 +337,9 @@ def snapshot_build(expected_source, output, native=False):
             subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/bundle-runtime.sh"), str(output)], env=env, check=True, timeout=1200)
             thin_universal(output)
             (output / "desktop-assets").mkdir()
-            subprocess.run([sys.executable, str(checkout / "apps/desktop/scripts/make_dev_icon.py"),
-                            str(output / "desktop-assets/AppIcon.icns")], check=True, timeout=10)
+            # Shared plane asset from the same immutable source, not a development mark.
+            shutil.copyfile(checkout / "apps/macos/Resources/AppIcon.icns",
+                            output / "desktop-assets/AppIcon.icns")
             version = read_json(checkout / "package.json")["version"]
             node = run(str(output / "node/bin/node"), "--version").removeprefix("v")
             write_json(output / "runtime-build.json", dict(schema=1, source=expected_source, version=version, protocol=1, platform="darwin", arch="arm64", node=node))

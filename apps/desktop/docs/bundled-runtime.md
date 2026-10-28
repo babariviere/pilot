@@ -39,6 +39,11 @@ trees. Runtime assembly reuses Swift's production-runtime installer, never live
 workspace modules. Its smoke uses a temporary HOME/config/data and faux providers,
 with inherited broker/Node hooks removed. Native helpers are rebuilt from the
 same source, not copied from an installed app. Existing destinations are refused.
+Both development and production macOS bundles use the shared plane icon at
+`apps/macos/Resources/AppIcon.icns` from that same source snapshot, not the
+generated N development mark. Retain this shared asset (or move it with both
+packaging callers) when retiring the Swift app; the Next bundle identity stays
+`com.babariviere.pilot-next`.
 Native closure verification rejects the wrong architecture and unexplained
 non-system dynamic-library dependencies. Ad-hoc leaf signing precedes inventory
 generation; the outer app seal comes last, without `--deep` re-signing helpers.

@@ -167,6 +167,57 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertEqual(bundle.read_json(self.output / bundle.MANIFEST)["kind"], "production-bundled-runtime")
         bundle.verify(self.output)
 
+    def test_production_plane_icon_comes_from_immutable_source(self):
+        plane = bundle.ROOT / "apps/macos/Resources/AppIcon.icns"
+        approved = plane.read_bytes()
+        self.assertEqual(approved[:4], b"icns")
+        self.assertNotEqual(approved, make_dev_icon.icon())
+        # A live checkout has a different icon. Only the archived source is authoritative.
+        repository = self.root / "repository"
+        live_icon = repository / "apps/macos/Resources/AppIcon.icns"
+        live_icon.parent.mkdir(parents=True)
+        live_icon.write_bytes(b"uncommitted icon must not ship")
+        staged = self.root / "staged-runtime"
+
+        def command(args, **kwargs):
+            if args[:2] == ["git", "archive"]:
+                self.assertEqual(args[-1], self.source)
+                self.assertEqual(kwargs["cwd"], repository)
+                with tarfile.open(fileobj=kwargs["stdout"], mode="w") as archive:
+                    archive.add(plane, arcname="apps/macos/Resources/AppIcon.icns")
+                    archive.add(self.runtime / "package.json", arcname="package.json")
+            elif args[:1] == ["/bin/bash"] and args[1].endswith("/apps/macos/scripts/bundle-runtime.sh"):
+                shutil.copytree(self.runtime, staged)
+                # The installer does not stage desktop assets; snapshot_build owns them.
+                shutil.rmtree(staged / "desktop-assets")
+            else:
+                self.fail(f"Unexpected build command: {args}")
+
+        def query(*args, **kwargs):
+            if args[:2] == ("git", "cat-file"):
+                return "commit"
+            return "v24.21.0" if args[-1] == "--version" else "arm64"
+
+        with patch.object(bundle, "ROOT", repository), patch.object(bundle.sys, "platform", "darwin"), \
+             patch.object(bundle, "run", side_effect=query), patch.object(bundle.subprocess, "run", side_effect=command), \
+             patch.object(bundle, "thin_universal"):
+            bundle.snapshot_build(self.source, staged)
+        self.assertEqual((staged / "desktop-assets/AppIcon.icns").read_bytes(), approved)
+
+        config = dict(schema=1, mode="configured", build="200.1", repository="owner/repo")
+        receipt_path = self.executables / "manifest.json"
+        bundle.write_json(receipt_path, bundle.read_json(receipt_path) | dict(
+            updater_configuration=config, profile="release", kind="production-rust-inputs"))
+        with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
+            bundle.assemble(staged, self.executables, self.native, self.output, self.source,
+                            bundle_build="200.1", production=config)
+        with (self.output / "Contents/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        self.assertEqual(info["CFBundleIdentifier"], "com.babariviere.pilot-next")
+        self.assertEqual(info["CFBundleIconFile"], "AppIcon")
+        self.assertEqual((self.output / "Contents/Resources/AppIcon.icns").read_bytes(), approved)
+        bundle.verify(self.output)
+
     def test_immutable_rust_commands_build_release_with_only_explicit_public_trust(self):
         repository = self.root / "repository"
         tools = repository / "apps/desktop/.tools"
