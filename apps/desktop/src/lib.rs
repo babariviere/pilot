@@ -173,8 +173,6 @@ mod settings_worker;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_model_probe::run_chat_model_probe;
 #[cfg(feature = "native-probes")]
-pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
-#[cfg(feature = "native-probes")]
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_inspector_probe::run_mission_inspector_probe;
@@ -186,6 +184,8 @@ pub use local_view::project_add_probe::run_project_add_probe;
 pub use local_view::scoped_models_probe::run_scoped_models_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::settings_probe::run_settings_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
 #[cfg(test)]
 mod reader_identity_tests;
 mod tool_presentation;
