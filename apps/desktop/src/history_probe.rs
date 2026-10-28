@@ -152,6 +152,102 @@ fn contextual_scrollbar(
     println!("contextual scrollbar {key}: {changed} changed pixels; idle strip clean");
 }
 
+/// Newer entries omitted while reading older ones: an ordinary wheel back to
+/// the bottom rereads the newest window once; a failed read offers a readable,
+/// opaque retry over the retained text.
+fn newest_window(
+    cx: &mut HeadlessAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    commands: &async_channel::Receiver<Command>,
+    captures: Option<&std::path::Path>,
+    key: &str,
+) {
+    let reads = |commands: &async_channel::Receiver<Command>| {
+        std::iter::from_fn(|| commands.try_recv().ok()).collect::<Vec<_>>()
+    };
+    up(cx, handle, view);
+    settle(cx, handle);
+    reads(commands);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            let mut state = v.state.clone();
+            state.rows = v.transcript.read(cx).link_snapshot_rows();
+            state.behind = true;
+            v.accept(state, w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, handle);
+    assert!(
+        reads(commands).is_empty(),
+        "no reread while reading older rows"
+    );
+    cx.update_window(handle, |_, w, cx| {
+        w.scroll(
+            "viewport",
+            ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
+            cx,
+        )
+    })
+    .unwrap();
+    settle(cx, handle);
+    let sent = reads(commands);
+    assert!(
+        matches!(sent.as_slice(), [Command::Open { generation: 11, .. }]),
+        "bottom wheel rereads the newest window exactly once"
+    );
+    cx.update_window(handle, |_, w, _| {
+        assert!(
+            w.try_find("latest").is_none(),
+            "routine loading is not Retry"
+        )
+    })
+    .unwrap();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            let mut state = v.state.clone();
+            state.generation = 11;
+            state.loaded = false;
+            state.chat_issue = true;
+            state.chat_status = "Local disconnected. Reconnecting with identity validation…".into();
+            v.accept(state, w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, handle);
+    let image = cx.capture_screenshot(handle).unwrap();
+    let (bounds, label, width) = cx
+        .update_window(handle, |_, w, _| {
+            let control = w.find("latest");
+            (
+                control.bounds(),
+                control.label().map(str::to_owned),
+                f32::from(w.viewport_size().width),
+            )
+        })
+        .unwrap();
+    assert_eq!(label.as_deref(), Some("Retry latest"));
+    // A row just inside the border, above the label glyphs, is one solid
+    // surface: transcript text never shows through the control.
+    let scale = image.width() as f32 / width;
+    let y = (f32::from(bounds.top() + px(3.)) * scale) as u32;
+    let xs = (f32::from(bounds.left() + px(8.)) * scale) as u32
+        ..(f32::from(bounds.right() - px(8.)) * scale) as u32;
+    let first = image.get_pixel(xs.start, y).0;
+    assert!(first[3] == 255, "opaque control surface");
+    assert!(
+        xs.clone().all(|x| image.get_pixel(x, y).0 == first),
+        "uniform control surface"
+    );
+    if let Some(dir) = captures {
+        image
+            .save(dir.join(format!("{key}-retry-latest.png")))
+            .unwrap();
+    }
+    assert!(reads(commands).is_empty());
+}
+
 pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     let only = std::env::var("PILOT_NEXT_HISTORY_CASE").ok();
     if let Some(case) = &only {
@@ -228,6 +324,9 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                                 view.state.generation = 10;
                                 view.state.loaded = true;
                                 view.state.cursor = Some(100);
+                                // A newest window that trimmed older entries is
+                                // current: it never needs a persistent control.
+                                view.state.limited = true;
                                 view.state.rows = initial.clone();
                                 view.transcript.update(cx, |v, cx| {
                                     v.history_scope(10);
@@ -537,6 +636,7 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                     assert!(commands.try_recv().is_err());
                     cx.update(|cx| gpui_kit::component::Theme::set_scrollbar_mode(previous, cx));
                 }
+                newest_window(cx, handle, &view, &commands, captures.as_deref(), &key);
                 println!(
                     "{}",
                     json!({"width":width,"mode":mode.name(),"fitting":fitting,"native_top_scroll":true,"scrollbar_release_top":true,"page_commands":4,"anchor_before":old_y,"anchor_after":new_y,"selection_entity_retained":true,"stream_append_and_update_while_paging":true,"no_layout_fetch_or_retry_storm":true,"latest_restores_tail":true,"faux_read_channel":true})

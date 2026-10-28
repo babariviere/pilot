@@ -169,8 +169,9 @@ pub(super) fn probe_make_mission(
 impl LocalViewer {
     pub(super) fn sync_history_controls(&mut self, cx: &mut Context<Self>) {
         let presentation = crate::transcript_view::HistoryControls {
-            limited: self.state.limited,
+            behind: self.state.behind,
             refreshing: self.refreshing,
+            failed: self.refreshing && self.state.chat_issue,
             recovery: self.nav_error.is_some(),
         };
         self.transcript
@@ -300,6 +301,9 @@ pub(super) fn probe_menu_choice(
         .unwrap();
 }
 #[cfg(test)]
+#[path = "history_latest_tests.rs"]
+mod history_latest_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui_kit::{EntityInputHandler, TestAppContext, WindowOptions};
@@ -418,12 +422,12 @@ mod tests {
         })).unwrap();
     }
     #[gpui_kit::test]
-    fn latest_event_keeps_generation_fences_and_limited_reload_semantics(cx: &mut TestAppContext) {
+    fn latest_event_keeps_generation_fences_and_behind_reload_semantics(cx: &mut TestAppContext) {
         let (_, v) = setup(cx);
         let (client, reads) = LocalClient::synthetic_commands();
         v.update(cx, |v, cx| {
             v.client = Some(client);
-            v.state.limited = true;
+            v.state.behind = true;
             v.selected = Some("source".into());
             v.generation = 10;
             v.transcript.update(cx, |_, cx| {

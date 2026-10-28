@@ -245,6 +245,10 @@ pub(crate) struct Presentation {
     pub(crate) status: String,
     pub(crate) chat_status: String,
     pub(crate) limited: bool,
+    /// Newer entries were omitted from this window; reopening shows them.
+    pub(crate) behind: bool,
+    /// The chat stream reported a failure rather than a routine connection.
+    pub(crate) chat_issue: bool,
     pub(crate) omitted: usize,
     pub(crate) loaded: bool,
     pub(crate) list_loaded: bool,
@@ -261,17 +265,28 @@ pub(crate) struct Presentation {
 /// No joins, HTTP reads or file I/O occur on the UI thread.
 pub(crate) struct LocalClient {
     commands: async_channel::Sender<Command>,
+    /// `generation << 1 | holding`: the reader holds older rows of that
+    /// window. A shared value, so position reports never queue behind reads.
+    holding: Arc<std::sync::atomic::AtomicU64>,
 }
 impl LocalClient {
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic_commands() -> (Self, async_channel::Receiver<Command>) {
         let (commands, receiver) = async_channel::bounded(4);
-        (Self { commands }, receiver)
+        (
+            Self {
+                commands,
+                holding: Default::default(),
+            },
+            receiver,
+        )
     }
     pub(crate) fn start(options: LocalOptions) -> (Self, async_channel::Receiver<Presentation>) {
         let (commands, receiver) = async_channel::bounded(4);
         let (updates, output) = async_channel::bounded(1);
         let replace = output.clone();
+        let holding = Arc::<std::sync::atomic::AtomicU64>::default();
+        let worker_holding = holding.clone();
         std::thread::Builder::new()
             .name("local-read-viewer".into())
             .spawn(move || {
@@ -279,14 +294,26 @@ impl LocalClient {
                     .enable_all()
                     .build()
                 {
-                    runtime.block_on(run(options, receiver, updates, replace));
+                    runtime.block_on(run(options, receiver, updates, replace, worker_holding));
                 }
             })
             .expect("start isolated read worker");
-        (Self { commands }, output)
+        (Self { commands, holding }, output)
     }
     pub(crate) fn command(&self, command: Command) -> bool {
         self.commands.try_send(command).is_ok()
+    }
+    /// Report whether the reader follows the newest rows of `generation`.
+    pub(crate) fn follow(&self, generation: u64, following: bool) {
+        self.holding.store(
+            generation << 1 | u64::from(!following),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    #[cfg(test)]
+    pub(crate) fn holding(&self) -> (u64, bool) {
+        let value = self.holding.load(std::sync::atomic::Ordering::Relaxed);
+        (value >> 1, value & 1 == 1)
     }
 }
 
@@ -667,6 +694,7 @@ async fn run(
     commands: async_channel::Receiver<Command>,
     updates: async_channel::Sender<Presentation>,
     replace: async_channel::Receiver<Presentation>,
+    holding: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -701,7 +729,7 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
+                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.chat_issue=false;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
@@ -714,7 +742,7 @@ async fn run(
                     model = LiveTranscript::default();
                     model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
-                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.batches=0;view.queued=0;view.user_queue=Arc::default();
+                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.chat_issue=false; view.batches=0;view.queued=0;view.user_queue=Arc::default();
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
                 Ok(Command::Earlier { before, generation }) => {
@@ -752,12 +780,13 @@ async fn run(
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
-                    view.page_busy=false; view.status=text.into(); view.chat_status=text.into();view.artifact_metadata.mark_stale();
+                    view.page_busy=false; view.status=text.into(); view.chat_status=text.into();view.chat_issue=true;view.artifact_metadata.mark_stale();
                 },
                 Ok((_, Incoming::Status {generation, chat, text})) => {
                     if !chat || generation == view.generation { model.thinking=false; }
                     if chat { if generation != view.generation { continue; }
-                        if text!="Connected · Local"{view.artifact_metadata.mark_stale();view.todos.stale();} view.chat_status = text.into(); }
+                        view.chat_issue = text!="Connected · Local";
+                        if view.chat_issue{view.artifact_metadata.mark_stale();view.todos.stale();} view.chat_status = text.into(); }
                     else { view.status = text.into(); }
                 }
                 Ok((_, Incoming::Page { generation,before,result })) => {
@@ -773,6 +802,8 @@ async fn run(
                         else if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
+                            let reader = holding.load(std::sync::atomic::Ordering::Relaxed);
+                            model.holding = reader >> 1 == generation && reader & 1 == 1;
                             for event in events {
                                 view.todos.apply(event);
                                 if event["type"] != "todos_update" { model.apply(event); }
@@ -781,7 +812,7 @@ async fn run(
                             // counters. Do not publish/clone a transcript or
                             // wake the UI when the activity label is unchanged.
                             if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
-                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); view.chat_issue=true; view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
                     } else if value["type"] == "projects" {
                         match local_model::projects(&value["projects"]) {
                             Ok(projects)=>{view.projects=Arc::new(projects);view.projects_loaded=true;view.projects_error=None;},
@@ -814,6 +845,7 @@ async fn run(
             model.cursor
         };
         view.limited = model.limited;
+        view.behind = model.behind;
         view.omitted = model.unsupported;
         view.loaded = model.loaded && !model.prefix_pending;
         view.queued = model.queued;

@@ -38,10 +38,17 @@ pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
 pub(crate) struct LatestRequested(pub(crate) u64);
 impl gpui_kit::EventEmitter<LatestRequested> for TranscriptView {}
+/// Whether the reader follows the newest rows of history scope `.0`.
+pub(crate) struct Following(pub(crate) u64, pub(crate) bool);
+impl gpui_kit::EventEmitter<Following> for TranscriptView {}
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HistoryControls {
-    pub(crate) limited: bool,
+    /// Newer entries were omitted while reading older ones. Reaching the
+    /// bottom requests the newest bounded window once.
+    pub(crate) behind: bool,
     pub(crate) refreshing: bool,
+    /// The in-flight newest-window read reported a failure.
+    pub(crate) failed: bool,
     pub(crate) recovery: bool,
 }
 
@@ -65,6 +72,10 @@ pub struct TranscriptView {
     history_scope: u64,
     history_controls: HistoryControls,
     history_guard: Option<HistoryGuard>,
+    /// Last reported (scope, following) and whether Latest was already
+    /// requested for the current arrival at the bottom.
+    tail_reported: Option<(u64, bool)>,
+    latest_requested: bool,
     history_slack: gpui_kit::Pixels,
     text_subscriptions: HashMap<u64, Subscription>,
     work_ui: crate::work_view::WorkUi,
@@ -199,6 +210,8 @@ impl TranscriptView {
             history_scope: 0,
             history_controls: HistoryControls::default(),
             history_guard: None,
+            tail_reported: None,
+            latest_requested: false,
             history_slack: px(0.),
             text_subscriptions: HashMap::new(),
             work_ui: Default::default(),
@@ -420,6 +433,17 @@ impl TranscriptView {
             if reset {
                 state.reset(new_ids.len(), cx);
             } else if old_ids != new_ids {
+                // A full window admits newer rows by dropping its oldest ones.
+                // Remove those first so surviving rows keep their measurements.
+                let dropped = old_ids
+                    .iter()
+                    .take_while(|id| !new_ids.contains(id))
+                    .count();
+                let dropped = if dropped == old_ids.len() { 0 } else { dropped };
+                if dropped > 0 {
+                    state.splice(0..dropped, 0, cx);
+                }
+                let old_ids = &old_ids[dropped..];
                 let prefix = old_ids
                     .iter()
                     .zip(&new_ids)
@@ -457,6 +481,25 @@ impl TranscriptView {
             cx.notify();
         }
     }
+    /// Report tail following to the reader, and request the newest window
+    /// once per arrival at the bottom of a window that omitted newer entries.
+    fn sync_tail(&mut self, following: bool, cx: &mut Context<Self>) {
+        let scope = self.history_scope;
+        // The read worker starts every window following its tail.
+        let reported = match self.tail_reported {
+            Some((last, value)) if last == scope => value,
+            _ => true,
+        };
+        if reported != following {
+            self.tail_reported = Some((scope, following));
+            cx.emit(Following(scope, following));
+        }
+        let need = following && self.history_controls.behind && !self.history_controls.refreshing;
+        if need && !self.latest_requested {
+            cx.emit(LatestRequested(scope));
+        }
+        self.latest_requested = need;
+    }
     pub(crate) fn set_history_guard(
         &mut self,
         guard: impl Fn(&mut Window, &mut App) -> bool + 'static,
@@ -472,6 +515,16 @@ impl TranscriptView {
     }
     pub(crate) fn tool_preview_focus(&self, w: &mut Window, cx: &mut Context<Self>) {
         self.find.focus.focus(w, cx);
+    }
+    #[cfg(test)]
+    pub(crate) fn history_position(&self, cx: &App) -> (usize, f32, bool) {
+        let state = self.scroller.read(cx);
+        let top = state.logical_scroll_top();
+        (
+            top.item_ix,
+            f32::from(top.offset_in_item),
+            state.is_following_tail(),
+        )
     }
     pub(crate) fn reading_mark(&self, cx: &App) -> Option<crate::navigation::ReadingMark> {
         let s = self.scroller.read(cx);
@@ -1009,6 +1062,9 @@ impl Render for TranscriptView {
             viewport.test_support()
         };
         let following = self.scroller.read(cx).is_following_tail();
+        if self.readonly && self.history_guard.is_some() {
+            self.sync_tail(following, cx);
+        }
         // With Kit's default vertical list padding, pinned GPUI fails to resume
         // following after wheel-scrolling back to the bottom. Keep the list
         // itself unpadded; the existing row spacing remains unchanged.
@@ -1048,8 +1104,7 @@ impl Render for TranscriptView {
                 .when(
                     self.history_guard.is_some()
                         && (!following
-                            || self.history_controls.limited
-                            || self.history_controls.refreshing
+                            || self.history_controls.failed
                             || self.history_controls.recovery),
                     |v| {
                         v.child(
@@ -1057,6 +1112,11 @@ impl Render for TranscriptView {
                                 .absolute()
                                 .bottom_3()
                                 .right_3()
+                                .rounded(px(crate::appearance::Radius::CONTROL))
+                                // Opaque, so transcript text never shows through the control.
+                                .bg(crate::appearance::card(cx))
+                                .border_1()
+                                .border_color(cx.theme().border)
                                 .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
                                     if v.history_guard.as_ref().is_some_and(|guard| !guard(w, cx)) {
                                         cx.stop_propagation();
@@ -1065,10 +1125,8 @@ impl Render for TranscriptView {
                                 .child(
                                     crate::ui::action(
                                         "latest",
-                                        if self.history_controls.refreshing {
+                                        if self.history_controls.failed {
                                             "Retry latest"
-                                        } else if self.history_controls.limited {
-                                            "Refresh latest"
                                         } else {
                                             "Latest"
                                         },

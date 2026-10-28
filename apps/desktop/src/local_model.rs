@@ -307,6 +307,12 @@ pub(crate) struct LiveTranscript {
     active_head: Option<u64>,
     saved_history: Option<SavedHistory>,
     pub(crate) limited: bool,
+    /// Newer entries were omitted while the reader held an older position.
+    /// Only reopening the newest bounded window shows them.
+    pub(crate) behind: bool,
+    /// The reader holds an older position: a full window keeps its oldest
+    /// entries instead of dropping them to admit newer ones.
+    pub(crate) holding: bool,
     pub(crate) unsupported: usize,
 }
 
@@ -538,8 +544,7 @@ impl LiveTranscript {
         if self.entries.contains_key(&id) {
             return;
         }
-        if self.entries.len() >= ENTRY_CAP {
-            self.limited = true;
+        if !self.admit(id, 0) {
             return;
         }
         let kind = bounded(entry["kind"].as_str().unwrap_or("unknown"), 80);
@@ -675,9 +680,7 @@ impl LiveTranscript {
             rows.push(Message::live(id * 64, format!("{kind} · entry {id}"),
                 "[Structured entry. This viewer does not render its actions, attachments or metadata.]".into()));
         }
-        let retained_rows: usize = self.entries.values().map(Vec::len).sum();
-        if retained_rows + rows.len() > ROW_CAP - 33 {
-            self.limited = true;
+        if !self.admit(id, rows.len()) {
             return;
         }
         for row in &mut rows {
@@ -690,6 +693,29 @@ impl LiveTranscript {
             }
         }
         self.entries.insert(id, rows);
+    }
+
+    /// Make room for entry `id` with `rows` rows. A full window follows the
+    /// tail by dropping its oldest entries for a newer one. While the reader
+    /// holds an older position, the newer entry is omitted and recorded.
+    fn admit(&mut self, id: u64, rows: usize) -> bool {
+        let newer = rows <= ROW_CAP - 33
+            && self
+                .entries
+                .last_key_value()
+                .is_some_and(|(last, _)| id > *last);
+        loop {
+            let retained: usize = self.entries.values().map(Vec::len).sum();
+            if self.entries.len() < ENTRY_CAP && retained + rows <= ROW_CAP - 33 {
+                return true;
+            }
+            self.limited = true;
+            if !newer || self.holding {
+                self.behind |= newer;
+                return false;
+            }
+            self.entries.pop_first();
+        }
     }
 
     /// Returned changes are applied in sequence on one background owner.
@@ -749,6 +775,7 @@ impl LiveTranscript {
                 self.saved_history = Some(kept);
                 self.active_head = head;
                 self.limited = false;
+                self.behind = false;
                 self.unsupported = 0;
                 let start = active.len().saturating_sub(ENTRY_CAP);
                 for entry in active[start..].iter().rev() {
@@ -1306,6 +1333,8 @@ mod tests {
     fn question_projection_user_beyond_row_cap_or_invalid_identity_fails_closed() {
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        // A reader holding older rows: the window cannot admit newer ones.
+        model.holding = true;
         for id in 10..10 + ENTRY_CAP as u64 {
             model.entries.insert(id, Vec::new());
         }
@@ -1709,6 +1738,58 @@ mod tests {
             "Synthetic 6,000-entry projection bounded to {ENTRY_CAP} entries: {:?}; not a render benchmark",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn full_window_follows_newest_entries_unless_the_reader_holds_older_ones() {
+        let snapshot = |model: &mut LiveTranscript| {
+            let entries: Vec<_> = (1..=300).map(|id| entry(id, "history")).collect();
+            model.apply(&json!({"type":"snapshot","entries":entries}));
+        };
+        let mut model = LiveTranscript::default();
+        snapshot(&mut model);
+        // Trimming older entries keeps the newest window: nothing is missing below.
+        assert!(model.limited && !model.behind);
+        assert_eq!(model.entries.keys().next_back(), Some(&300));
+        model.apply(&json!({"type":"entry_appended","entry":entry(301,"newest")}));
+        assert!(!model.behind, "a following reader slides the window");
+        assert_eq!(model.entries.len(), ENTRY_CAP);
+        assert_eq!(model.entries.keys().next_back(), Some(&301));
+        assert_eq!(
+            model.entries.keys().next(),
+            Some(&(301 - ENTRY_CAP as u64 + 1))
+        );
+
+        model.holding = true;
+        let first = model.entries.keys().next().copied();
+        model.apply(&json!({"type":"entry_appended","entry":entry(302,"while reading")}));
+        assert!(
+            model.behind,
+            "a held window records the omitted newer entry"
+        );
+        assert_eq!(
+            model.entries.keys().next().copied(),
+            first,
+            "older rows stay put"
+        );
+        assert!(!model.entries.contains_key(&302));
+        // Older history never marks the window behind.
+        model.behind = false;
+        model.apply(&json!({"type":"entry_appended","entry":entry(5,"older")}));
+        assert!(!model.behind);
+
+        model.behind = true;
+        snapshot(&mut model);
+        assert!(!model.behind, "a fresh snapshot is the newest window");
+
+        // An entry that can never fit does not empty the window.
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[entry(1,"kept")]}));
+        let blocks: Vec<_> = (0..ROW_CAP)
+            .map(|i| json!({"type":"text","text":format!("b{i}")}))
+            .collect();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":2,"kind":"message","model":[{"role":"assistant","content":blocks}]}}));
+        assert!(model.entries.contains_key(&1) && !model.behind);
     }
 
     #[test]

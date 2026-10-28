@@ -678,6 +678,9 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
                 s.rows = rows;
                 s.loaded = true;
                 s.generation = generation;
+                // A fresh snapshot is the newest window.
+                s.behind = false;
+                s.chat_issue = false;
                 s.cursor = None;
                 s.limited = false;
                 s.chat_status = "Synthetic fresh reducer".into();
@@ -886,36 +889,39 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             });
             assert!(reads.try_recv().is_err(), "no restoration paging/draining");
             assert!(writes.try_recv().is_err());
-            // One contextual control still owns bounded-window refresh and retry,
-            // not merely a jump to the bottom of the old loaded rows.
+            // A window that omitted newer entries rereads the newest one as soon
+            // as the reader is at its bottom; a failed read offers a retry.
             let retained = cx
                 .update_window(h, |_, _, cx| {
                     v.update(cx, |v, cx| {
                         assert!(v.nav_error.is_some());
                         let retained = v.transcript.read(cx).history_probe_row(old_render);
-                        v.state.limited = true;
+                        assert!(v.transcript.read(cx).history_probe_anchor(cx).2);
+                        v.state.behind = true;
                         v.sync_history_controls(cx);
                         retained
                     })
                 })
                 .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
-                assert_eq!(w.find("latest").label(), Some("Refresh latest"));
-                w.click("latest", cx);
-            })
-            .unwrap();
-            settle(cx, h);
             assert!(
                 matches!(reads.try_recv(),Ok(Command::Open{id,generation:15}) if id=="synthetic")
             );
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+                assert!(
+                    w.try_find("latest").is_none(),
+                    "routine loading has no control"
+                );
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| {
                 v.update(cx, |v, cx| {
                     let mut failed = v.state.clone();
                     failed.generation = 15;
                     failed.loaded = false;
                     failed.page_busy = false;
+                    failed.chat_issue = true;
                     failed.chat_status =
                         "Synthetic latest read failed. Last loaded page retained.".into();
                     v.accept(failed, w, cx);

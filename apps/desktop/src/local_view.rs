@@ -1505,6 +1505,16 @@ impl LocalViewer {
                 }
             },
         );
+        let following_events = cx.subscribe(
+            &transcript,
+            |view, _, event: &crate::transcript_view::Following, _| {
+                if event.0 == view.generation
+                    && let Some(client) = &view.client
+                {
+                    client.follow(event.0, event.1);
+                }
+            },
+        );
         let (navigation, scope_states, reader_marks) = Self::navigation_state();
         let settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(None));
         let chat_actions = cx.new(crate::chat_actions_view::Actions::new);
@@ -1598,6 +1608,7 @@ impl LocalViewer {
                 artifact_events,
                 history_events,
                 latest_events,
+                following_events,
                 project_events,
                 shell_events,
                 inbox_events,
@@ -1771,6 +1782,7 @@ impl LocalViewer {
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
             self.state.todos = state.todos;
+            self.state.chat_issue = state.chat_issue;
         } else if state.generation == self.generation {
             if self
                 .earlier_request
@@ -1945,7 +1957,8 @@ impl LocalViewer {
     fn latest(&mut self, cx: &mut Context<Self>) {
         self.pending_reader = None;
         self.nav_error = None;
-        if self.state.limited
+        // Only a window that omitted newer entries needs the newest one reread.
+        if self.state.behind
             && let (Some(client), Some(id)) = (&self.client, &self.selected)
         {
             let generation = self.generation + 1;
@@ -1960,6 +1973,7 @@ impl LocalViewer {
                     .update(cx, |view, _| view.history_scope(generation));
                 self.refreshing = true;
                 self.state.thinking = false;
+                self.state.chat_issue = false;
                 self.editor
                     .update(cx, |editor, cx| editor.activity(false, cx));
                 self.state.page_busy = true;
@@ -1968,9 +1982,11 @@ impl LocalViewer {
                 cx.notify();
                 return;
             }
+            self.nav_error = Some("Newer messages could not be loaded. Try Latest again.");
         }
         self.transcript.update(cx, |view, cx| view.latest(cx));
         self.sync_history_controls(cx);
+        cx.notify();
     }
     fn new_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.editor.read(cx).ready() {
@@ -2760,6 +2776,7 @@ mod refresh_tests {
                         let mut view = LocalViewer::synthetic(window, cx);
                         view.client = Some(client);
                         view.state.limited = true;
+                        view.state.behind = true;
                         view.state.queued = 7;
                         view
                     })
