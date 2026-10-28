@@ -190,3 +190,64 @@ fn mission_association_name_follows_the_latest_accepted_exact_key_snapshot(
         assert_eq!(label(v), Some(("Detail rename", true)));
     });
 }
+
+#[gpui_kit::test]
+fn chat_mission_jump_opens_only_a_listed_exact_key_or_says_it_is_missing(cx: &mut TestAppContext) {
+    cx.update(gpui_kit::init);
+    let pane = cx.new(Browser::new);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        let opened = opened.clone();
+        cx.subscribe(&pane, move |_, e: &Event, _| {
+            if let Event::Open { key, generation } = e {
+                opened.borrow_mut().push((key.clone(), *generation));
+            }
+        })
+        .detach();
+    });
+    let catalog = || Data::Catalog(Arc::new(model::catalog(&f::catalog()).unwrap()));
+    pane.update(cx, |v, cx| {
+        v.options(LocalOptions::synthetic(1));
+        v.online = true;
+        v.loaded = true;
+        v.route = Some(Route::Catalog);
+        v.generation = 3;
+        v.busy = true;
+        // Waits for the list while it loads.
+        v.open_when_listed(f::key("mission-A"), cx);
+        assert_eq!(v.jump, Some(f::key("mission-A")));
+        v.busy = false;
+        v.accept(
+            Response {
+                generation: 3,
+                route: Route::Catalog,
+                result: Ok(catalog()),
+            },
+            cx,
+        );
+        assert!(v.jump.is_none() && v.jump_note.is_none());
+    });
+    cx.run_until_parked();
+    assert_eq!(*opened.borrow(), vec![(f::key("mission-A"), 3)]);
+    pane.update(cx, |v, cx| {
+        // A current list without the mission says so, with no request or guess.
+        v.open_when_listed(f::key("mission-Z"), cx);
+        assert!(v.jump.is_none());
+        assert!(v.jump_note.is_some());
+        // A failed read drops the pending jump; the error speaks for itself.
+        v.generation = 4;
+        v.busy = true;
+        v.open_when_listed(f::key("mission-A"), cx);
+        v.accept(
+            Response {
+                generation: 4,
+                route: Route::Catalog,
+                result: Err("Missions aren't available right now. Refresh to try again."),
+            },
+            cx,
+        );
+        assert!(v.jump.is_none() && v.jump_note.is_none());
+    });
+    cx.run_until_parked();
+    assert_eq!(opened.borrow().len(), 1);
+}

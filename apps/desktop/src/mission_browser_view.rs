@@ -77,6 +77,10 @@ pub(crate) struct Browser {
     catalog_current: bool,
     /// Sidebar names only: the retained Detail was accepted after the Catalog.
     detail_newer: bool,
+    /// A chat's linked mission to open once the Catalog lists it.
+    jump: Option<Key>,
+    /// Why that mission couldn't be opened from the list.
+    jump_note: Option<&'static str>,
     projects: Arc<Vec<Project>>,
     chats: Arc<Vec<Chat>>,
     online: bool,
@@ -163,6 +167,8 @@ impl Browser {
             busy: false,
             catalog_current: false,
             detail_newer: false,
+            jump: None,
+            jump_note: None,
             projects: Arc::new(Vec::new()),
             chats: Arc::new(Vec::new()),
             online: false,
@@ -245,6 +251,29 @@ impl Browser {
                         .any(|r| &r.key == key && r.in_scope(local, self.filter.as_deref()))
                 })
             })
+    }
+    /// Opens a chat's linked mission once the current Catalog lists it, or
+    /// says why it can't. The Catalog route must already be showing.
+    pub(crate) fn open_when_listed(&mut self, key: Key, cx: &mut Context<Self>) {
+        self.jump = Some(key);
+        self.jump_note = None;
+        if !self.busy && self.catalog_current {
+            self.resolve_jump(cx);
+        }
+        cx.notify();
+    }
+    fn resolve_jump(&mut self, cx: &mut Context<Self>) {
+        let Some(key) = self.jump.take() else {
+            return;
+        };
+        if self.can_open(&key, self.generation) {
+            cx.emit(Event::Open {
+                key,
+                generation: self.generation,
+            });
+        } else if self.error.is_none() && self.route == Some(Route::Catalog) {
+            self.jump_note = Some("This chat's mission isn't in this mission list.");
+        }
     }
     pub(crate) fn can_link(&self, key: &Key, id: &str, generation: u64) -> bool {
         self.current(generation)
@@ -337,6 +366,7 @@ impl Browser {
                 self.focus.focus(w, cx);
             }
             self.route = route;
+            self.jump = None;
             self.read(w, cx);
         } else if changed {
             cx.notify();
@@ -472,6 +502,7 @@ impl Browser {
         match response.result {
             Err(e) => {
                 self.error = Some(e);
+                self.jump = None;
                 if response.route == Route::Catalog {
                     self.catalog_current = false;
                 }
@@ -481,6 +512,7 @@ impl Browser {
                 self.catalog_current = true;
                 self.detail_newer = false;
                 self.error = None;
+                self.resolve_jump(cx);
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
                 self.decisions.reconcile(&d);
@@ -523,6 +555,7 @@ impl Browser {
         });
         self.generation = self.generation.saturating_add(1);
         self.error = None;
+        self.jump_note = None;
         self.busy = false;
         if let Some(Route::Detail(key)) = &self.route {
             if self.detail.as_ref().is_some_and(|d| &d.key != key) {
@@ -939,6 +972,14 @@ impl Render for Browser {
             content = content.child(
                 Notice::new("Not connected. You can read this, but chat links need a connection.")
                     .tone(Tone::Warning),
+            );
+        }
+        if let Some(note) = self.jump_note.filter(|_| is_list) {
+            content = content.child(
+                div()
+                    .id("missions-jump-note")
+                    .test_support()
+                    .child(Notice::new(note).tone(Tone::Warning)),
             );
         }
         if let Some(error) = self.error {

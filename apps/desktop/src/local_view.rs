@@ -338,6 +338,11 @@ impl ListDelegate for ChatList {
                 .sidebar_mission_name(id)
                 .map(|(title, current)| (title.to_owned(), current))
         });
+        let link = mission_link_focus(&chat, window, cx).map(|(mission, focus)| {
+            let (chat, owner) = (chat.id.clone(), self.action_owner.clone());
+            let tab_stop = self.selected == Some(ix);
+            move |segment| mission_link(chat, mission, focus, tab_stop, owner, segment)
+        });
         let has_project = project.is_some();
         let detail = project
             .iter()
@@ -549,11 +554,15 @@ impl ListDelegate for ChatList {
                                         )
                                     })
                                     .when_some(mark, |d, mark| {
-                                        d.child(mission_segment(
+                                        let segment = mission_segment(
                                             mark,
                                             !detail.is_empty(),
                                             appearance::accent_mark(cx),
-                                        ))
+                                        );
+                                        match link {
+                                            Some(link) => d.child(link(segment)),
+                                            None => d.child(segment),
+                                        }
                                     }),
                             )
                         })
@@ -2668,6 +2677,57 @@ pub(crate) fn mission_mark(
         label,
         named,
     })
+}
+/// Makes a linked chat's mission segment open that mission: one click, or
+/// Enter/Space once Tab reaches it on the selected row. Only the summary's own
+/// mission ID is used; unavailable or unlinked marks stay plain text.
+fn mission_link(
+    chat: String,
+    mission: String,
+    focus: gpui_kit::FocusHandle,
+    tab_stop: bool,
+    owner: gpui_kit::WeakEntity<LocalViewer>,
+    segment: impl IntoElement,
+) -> impl IntoElement {
+    use gpui_kit::StatefulInteractiveElement as _;
+    let open = std::rc::Rc::new(move |w: &mut Window, cx: &mut App| {
+        let _ = owner.update(cx, |v, cx| v.show_chat_mission(&mission, w, cx));
+    });
+    let confirm = open.clone();
+    div()
+        .id(SharedString::from(format!("chat-mission-link-{chat}")))
+        .test_support()
+        .track_focus(&focus.tab_stop(tab_stop))
+        .h_flex()
+        .min_w(px(appearance::Space::SECTION * 2.))
+        .cursor_pointer()
+        .hover(|s| s.text_decoration_1())
+        .focus_visible(|s| s.text_decoration_1())
+        // Pointer use neither focuses the link nor selects the row.
+        .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, _| w.prevent_default())
+        .on_click(move |_, w, cx| {
+            cx.stop_propagation();
+            open(w, cx);
+        })
+        // Enter is the list's Confirm (open the row's chat); here it opens the mission.
+        .on_action(move |_: &gpui_kit::base::actions::Confirm, w, cx| confirm(w, cx))
+        .child(segment)
+}
+/// The summary's linked mission ID and the row link's focus handle.
+fn mission_link_focus(
+    chat: &Chat,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<(String, gpui_kit::FocusHandle)> {
+    let crate::local_model::MissionAssociation::Linked(mission) = &chat.mission else {
+        return None;
+    };
+    let key = SharedString::from(format!("chat-mission-link-focus-{}", chat.id));
+    let focus = window
+        .use_keyed_state(key, cx, |_, cx| cx.focus_handle())
+        .read(cx)
+        .clone();
+    Some((mission.clone(), focus))
 }
 /// Map (member) or Compass (coordinator) and the mission name, after the
 /// project and state. A minimum width keeps a long project or state from

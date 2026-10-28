@@ -62,6 +62,41 @@ impl LocalViewer {
         self.did_navigate(cx);
         true
     }
+    /// Opens the mission a chat summary links to: its overview when the
+    /// mission list already has it, else the list, which opens it once listed
+    /// or says it isn't there. Only the summary's own mission ID is used.
+    pub(super) fn show_chat_mission(
+        &mut self,
+        mission: &str,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = self
+            .missions
+            .read(cx)
+            .local_home()
+            .map(|home| crate::mission_browser::Key {
+                home,
+                id: mission.to_owned(),
+            })
+            .filter(|key| key.valid());
+        if let Some(key) = &key {
+            if self.page == Page::Mission(key.clone()) {
+                return true;
+            }
+            if self.missions.read(cx).contains(key) {
+                return self.show_mission_overview(key.clone(), w, cx);
+            }
+        }
+        if !self.show_missions(w, cx) {
+            return false;
+        }
+        if let Some(key) = key {
+            self.missions
+                .update(cx, |v, cx| v.open_when_listed(key, cx));
+        }
+        true
+    }
     pub(super) fn sync_missions(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         let route = match &self.page {
             Page::Missions => Some(crate::mission_reader::Route::Catalog),

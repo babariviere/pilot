@@ -265,6 +265,11 @@ full wording. Without a cached name it says "Name unavailable"; malformed
 association metadata gets Info and "Mission unavailable", never a guessed link,
 UUID or row fetch. Offline names are labelled last known. Summary and
 mission-cache updates refresh the segment without changing row identity.
+A linked segment is a link to that mission: a click opens its overview (or
+the mission list, which opens it once listed or says it isn't there), and on
+the selected row Tab reaches it and Enter or Space opens it. Hover and keyboard
+focus underline it; the open chat, its draft and Back stay as they were.
+Info and plain Coordinator marks stay text.
 `examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden
 native window with production dispatchers, cold (first traversal) against warm.
 `examples/sidebar_scroll_visible.rs` (release build; from an agent, launch it
