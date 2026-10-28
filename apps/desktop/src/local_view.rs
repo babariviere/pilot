@@ -31,6 +31,9 @@ mod conversation_links_view;
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
+#[path = "draft_discard_probe.rs"]
+mod draft_discard_probe;
+#[cfg(feature = "native-probes")]
 #[path = "glass_probe.rs"]
 pub(crate) mod glass_probe;
 #[cfg(feature = "native-probes")]
@@ -453,7 +456,6 @@ impl ListDelegate for ChatList {
                                                     crate::ui::Action::Quiet,
                                                 )
                                                 .size_8()
-                                                .disabled(chat.local_draft)
                                                 .dropdown_menu(move |menu, w, cx| {
                                                     LocalViewer::chat_actions_menu(
                                                         button_owner.clone(),
@@ -1411,6 +1413,32 @@ impl LocalViewer {
         let editor_events =
             cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
                 EditorEvent::AddProject => view.open_add_project(window, cx),
+                EditorEvent::DraftDiscarded { selected } => {
+                    let focus = gpui_kit::Focusable::focus_handle(view.chats.read(cx), cx);
+                    let restore = focus.contains_focused(window, cx);
+                    view.sync_sending(cx);
+                    view.rebuild_nav(window, cx);
+                    if *selected && view.page == Page::Chat {
+                        view.show_home(window, cx);
+                        if view.page == Page::Chat {
+                            // An overlay, popup or search preedit refused navigation. The
+                            // deleted destination still leaves; its focus and query stay put.
+                            view.leave_artifacts(cx);
+                            view.page =
+                                view.project_scope.clone().map_or(Page::Home, Page::Project);
+                            view.rebuild_nav(window, cx);
+                            cx.notify();
+                        }
+                    } else if restore {
+                        view.chats.update(cx, |list, cx| list.focus(window, cx));
+                    }
+                }
+                EditorEvent::DraftDiscardFailed { key, error } => {
+                    if view.editor.read(cx).has_navigation_draft(key) {
+                        view.nav_error = Some(*error);
+                        cx.notify();
+                    }
+                }
                 EditorEvent::DraftsChanged => {
                     view.sync_sending(cx);
                     view.rebuild_nav(window, cx)

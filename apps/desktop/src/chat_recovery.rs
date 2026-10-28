@@ -202,6 +202,10 @@ impl ChatEditor {
         }
         if discardable {
             let discard_key = key.clone();
+            // Unsent new-chat slots confirm first and are deleted without a clipboard copy.
+            // Classified by identity, not readiness, so an in-flight discard or worker
+            // error never falls back to the legacy immediate discard.
+            let unsent = self.unsent_draft(&key);
             actions = actions.child(
                 div().v_flex().w_full().child(
                     Button::new("discard-draft")
@@ -209,13 +213,28 @@ impl ChatEditor {
                                     .w_full()
                         .ghost()
                         .label("Discard draft")
-                        .disabled(self.question_blocks_discard(cx))
+                        .disabled(
+                            self.question_blocks_discard(cx)
+                                || (unsent && !self.draft_discard_ready(&key)),
+                        )
                         .tooltip("Discard applies to the ordinary message draft, not a separate question reply.")
                         .icon(AppIcon::Close.asset())
-                        .accessibility_label("Discard draft and copy its text to the clipboard")
+                        .accessibility_label(if unsent {
+                            "Discard unsent draft"
+                        } else {
+                            "Discard draft and copy its text to the clipboard"
+                        })
                         .on_click(
                             cx.listener(move |view, _, window, cx| {
-                                if view.selected.as_ref() == Some(&discard_key) {
+                                // A stale popover whose classification changed does nothing.
+                                if view.selected.as_ref() != Some(&discard_key)
+                                    || view.unsent_draft(&discard_key) != unsent
+                                {
+                                    return;
+                                }
+                                if unsent {
+                                    view.request_draft_discard(discard_key.clone(), window, cx);
+                                } else {
                                     view.discard_draft(window, cx);
                                 }
                             }),

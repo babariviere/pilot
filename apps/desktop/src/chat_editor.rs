@@ -29,6 +29,8 @@ pub(crate) mod composer_probe;
 #[cfg(feature = "native-probes")]
 #[path = "delivery_probe.rs"]
 pub(crate) mod delivery_probe;
+#[path = "chat_draft_discard.rs"]
+mod draft_discard;
 #[path = "chat_model_picker.rs"]
 mod model_picker;
 #[path = "new_chat_view.rs"]
@@ -52,6 +54,13 @@ pub(crate) enum EditorEvent {
     UpdateCheckpoint,
     AddProject,
     DraftsChanged,
+    DraftDiscardFailed {
+        key: String,
+        error: &'static str,
+    },
+    DraftDiscarded {
+        selected: bool,
+    },
     OpenCreated {
         key: String,
         revision: u64,
@@ -91,6 +100,7 @@ pub(crate) struct ChatEditor {
     delivered: BTreeMap<String, (String, u64, String)>,
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
+    discarding: Option<(String, u64, u64)>,
     next_request: u64,
     /// Send's arrow lifts away and lands again once a submit is admitted.
     takeoff: crate::transition::Transition,
@@ -176,6 +186,7 @@ impl ChatEditor {
             delivered: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
+            discarding: None,
             next_request: 0,
             takeoff: Default::default(),
             state: WriteState::default(),
@@ -304,6 +315,10 @@ impl ChatEditor {
             .iter()
             .find(|(key, draft)| {
                 key.starts_with("new:")
+                    && !self
+                        .discarding
+                        .as_ref()
+                        .is_some_and(|(discarding, ..)| discarding == *key)
                     && draft.text.is_empty()
                     && draft.pending.is_none()
                     && draft.created.is_none()
@@ -480,6 +495,13 @@ impl ChatEditor {
         let Some(key) = self.selected.clone() else {
             return;
         };
+        if self
+            .discarding
+            .as_ref()
+            .is_some_and(|(discarding, ..)| discarding == &key)
+        {
+            return;
+        }
         let Some(draft) = self.cache.get(&key) else {
             return;
         };
@@ -601,6 +623,7 @@ impl ChatEditor {
         });
         self.sending.retain(|key, _| self.pending.contains_key(key));
         self.state = state;
+        self.accept_draft_discard(window, cx);
         self.note_delivered(shown);
         if self.update_checkpoint.is_some() {
             cx.emit(EditorEvent::UpdateCheckpoint);
@@ -638,6 +661,10 @@ impl ChatEditor {
             self.retiring.retain(|key, _| book.drafts.contains_key(key));
             self.cache.retain(|key, draft| {
                 book.drafts.contains_key(key)
+                    || self
+                        .discarding
+                        .as_ref()
+                        .is_some_and(|(discarding, ..)| discarding == key)
                     || self.selected.as_ref() == Some(key)
                     || !draft.text.is_empty()
                     || !draft.recovered.is_empty()
@@ -681,9 +708,13 @@ impl ChatEditor {
         self.selected.as_ref().and_then(|key| self.cache.get(key))
     }
     fn waiting(&self) -> bool {
-        self.selected
+        self.discarding
             .as_ref()
-            .is_some_and(|key| self.pending.contains_key(key))
+            .is_some_and(|(key, ..)| self.selected.as_ref() == Some(key))
+            || self
+                .selected
+                .as_ref()
+                .is_some_and(|key| self.pending.contains_key(key))
             || self.draft().is_some_and(|d| d.pending.is_some())
     }
     fn stop_button(&self, id: &'static str, cx: &mut Context<Self>) -> Button {
@@ -822,6 +853,7 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.ready()
+            || self.discarding.is_some()
             || self.marked(window, cx)
             || !self.unsaved_local.is_empty()
             || !self.pending.is_empty()
@@ -1055,7 +1087,13 @@ impl Render for ChatEditor {
         }
         let blank = Draft::default();
         let draft = self.draft().unwrap_or(&blank);
-        let can_edit = self.writable && self.state.book.is_some() && !self.closing;
+        let can_edit = self.writable
+            && self.state.book.is_some()
+            && !self.closing
+            && !self
+                .discarding
+                .as_ref()
+                .is_some_and(|(discarding, ..)| discarding == &key);
         let blocked = !self.ready() || !self.writable || self.waiting() || self.error.is_some();
         let submitting = self.pending.contains_key(&key);
         let settled = draft

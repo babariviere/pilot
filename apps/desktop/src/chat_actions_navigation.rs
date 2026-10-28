@@ -39,6 +39,29 @@ impl LocalViewer {
         w: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
+        if chat.local_draft {
+            let key = chat.id;
+            let reason = owner
+                .update(cx, |v, cx| v.editor.read(cx).draft_discard_blocked(&key))
+                .unwrap_or(Some("The source window is unavailable."));
+            return menu
+                .when_some(reason, |menu, reason| menu.label(reason))
+                .item(
+                    PopupMenuItem::new("Discard draft…")
+                        .disabled(reason.is_some())
+                        .on_click(move |_, w, cx| {
+                            let _ = owner.update(cx, |v, cx| {
+                                // The dialog returns focus here on Cancel or Escape, not to the
+                                // dismissed menu; the row trigger may disappear with the draft.
+                                v.nav_error = None;
+                                v.chats.update(cx, |list, cx| list.focus(w, cx));
+                                v.editor.update(cx, |e, cx| {
+                                    e.request_draft_discard(key.clone(), w, cx)
+                                });
+                            });
+                        }),
+                );
+        }
         let admission = owner
             .update(cx, |v, cx| {
                 let target = v

@@ -1,6 +1,8 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
 
+#[path = "interaction_draft_discard_tests.rs"]
+mod draft_discard;
 #[path = "interaction_retention_tests.rs"]
 mod retention;
 

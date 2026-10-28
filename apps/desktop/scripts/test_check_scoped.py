@@ -69,6 +69,7 @@ test=false
         flags, tests, native, worker = scoped.plan(self.args("--unit", "bundled_runtime::tests"), self.root)
         self.assertEqual(flags, ["--locked", "--color", "never", "-p", "pilot-desktop", "--lib"])
         self.assertEqual((tests, native, worker), ([], [], False))
+        self.assertFalse(scoped.plan(self.args("--unit", "draft_discard"), self.root)[3])
         for timeout in ["0", "1201", "nan"]:
             with self.assertRaises(ValueError):
                 scoped.plan(self.args("--unit", "scope", "--timeout", timeout), self.root)

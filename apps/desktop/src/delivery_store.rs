@@ -1003,6 +1003,18 @@ impl Store {
             Ok(())
         })
     }
+    /// Only local, never-submitted slots use ordinary draft deletion.
+    pub(crate) fn discard_new_draft(&mut self, key: &str, revision: u64) -> Result<(), Failure> {
+        if !key.starts_with("new:")
+            || !self.book.drafts.get(key).is_some_and(|draft| {
+                draft.editable() && draft.last.is_none() && draft.answer.is_none()
+            })
+        {
+            return Err("Only an unsent new-chat draft can be deleted here.");
+        }
+        self.discard_draft(key, revision)
+    }
+
     /// Discards a draft the user no longer wants. The caller copies its text out first.
     /// An unresolved operation is abandoned, never retried, and its id is retained so the
     /// same delivery is never prepared or executed again.

@@ -21,6 +21,7 @@ pub(crate) struct WriteState {
     pub(crate) notice: &'static str,
     pub(crate) flushed: bool,
     pub(crate) checkpoint: Option<u64>,
+    pub(crate) discard: Option<(String, u64, u64, Result<(), Failure>)>,
     pub(crate) handled: BTreeMap<String, u64>,
     pub(crate) notice_key: Option<String>,
     pub(crate) delivery_notice: Option<String>,
@@ -134,6 +135,12 @@ pub(crate) enum WriteCommand {
     Discard {
         key: String,
         revision: u64,
+    },
+    /// Delete only an ordinary local slot that has never attempted delivery.
+    DiscardNew {
+        key: String,
+        revision: u64,
+        request: u64,
     },
     RetireEmpty {
         key: String,
@@ -430,6 +437,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             _ => None,
         };
         let mut delivery_report = None;
+        let discard = match &command {
+            Some(WriteCommand::DiscardNew {
+                key,
+                revision,
+                request,
+            }) => Some((key.clone(), *revision, *request)),
+            _ => None,
+        };
         status.checkpoint = None;
         let result = if let Ok(store) = &mut store {
             match flush(store, &edits) {
@@ -602,6 +617,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         Some(WriteCommand::Discard { key, revision }) => store
                             .discard_draft(&key, revision)
                             .map(|_| "Draft discarded. Nothing was sent."),
+                        Some(WriteCommand::DiscardNew { key, revision, .. }) => {
+                            store.discard_new_draft(&key, revision).map(|_| "")
+                        }
                         Some(WriteCommand::RetireEmpty { key, revision }) => {
                             store.retire_empty(&key, revision).map(|_| "")
                         }
@@ -640,6 +658,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         };
         if let Ok(store) = &mut store {
             retain_report(&mut status, store, delivery_report);
+        }
+        if let Some((key, revision, request)) = discard {
+            status.discard = Some((key, revision, request, result.map(|_| ())));
         }
         match result {
             Ok(notice) => status.notice = notice,

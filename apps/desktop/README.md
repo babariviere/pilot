@@ -178,8 +178,13 @@ Private receipt-adoption failures keep known Local acknowledgment separate from 
 uncertainty. If diagnostic persistence is unconfirmed, the UI says so; memory-only
 details are not promised across restart. Opening the app never checks or resends an
 operation automatically. Existing **Check** and **Send again** stay explicit.
-A new-chat slot or an unresolved delivery can be **Discard draft**ed: the text is copied
-to the clipboard, the row is removed and the pending intent is abandoned, never retried.
+Unsent new-chat drafts have **Discard draft** in their sidebar row's hover/keyboard
+actions menu. Nonempty drafts require confirmation; Cancel or Escape keeps the draft.
+The row is removed only after private storage confirms deletion, including pending
+autosaves, so refresh/relaunch does not restore it. Other drafts and server chats are
+unchanged. The native new-chat draft contract currently has no attachments.
+Unresolved delivery recovery retains its separate **Discard draft** behavior: text is
+copied to the clipboard and the pending intent is abandoned, never retried.
 See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifecycle.
 
 ## Use real Local chats

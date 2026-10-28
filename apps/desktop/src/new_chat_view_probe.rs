@@ -14,6 +14,7 @@ fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
     }
 }
 pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
+    super::draft_discard_probe::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_NEW_CHAT_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -98,6 +99,17 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             let editor = cx.update(|cx| view.read(cx).editor.clone());
             let key = cx.update(|cx| editor.read(cx).navigation_key().unwrap().to_owned());
+            cx.update_window(h, |_, w, cx| {
+                w.hover(gpui_kit::SharedString::from(format!("chat-row-{key}")), cx);
+                w.render_frame(cx);
+                assert_ne!(
+                    w.find(gpui_kit::SharedString::from(format!("chat-menu-{key}")))
+                        .disabled(),
+                    Some(true),
+                    "local unsent draft actions must be available"
+                );
+            })
+            .unwrap();
             let painted = cx.capture_screenshot(h).unwrap();
             let scale = painted.width() as f32 / width;
             let (input, controls, card, tray_color) = cx
