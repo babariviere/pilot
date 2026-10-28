@@ -1303,15 +1303,58 @@ impl ArtifactPane {
                 let min = value["min"].as_f64().unwrap_or(0.);
                 let max = value["max"].as_f64().unwrap_or(1.);
                 let step = value["step"].as_f64().unwrap_or(1.);
-                let minus = id.clone();
-                let mut row = div().v_flex().gap_1().child(SharedString::from(format!(
-                    "{}: {} {}",
-                    value["label"].as_str().unwrap_or(""),
-                    crate::visual_chart_view::number(n),
-                    value["unit"].as_str().unwrap_or("")
-                )));
+                let label = value["label"].as_str().unwrap_or("");
+                // Exact steppers stay visible when the range cannot be dragged.
+                // Beside a draggable slider they appear on hover or keyboard focus.
+                let group = SharedString::from(format!("{path}-arm"));
+                let quiet = binding.is_some();
+                let stepper = |key: &str, glyph: &'static str, name: String, target: f64, off| {
+                    let (id, key) = (id.clone(), format!("{path}-{key}"));
+                    crate::ui::action(SharedString::from(key), glyph, crate::ui::Action::Quiet)
+                        .accessibility_label(name)
+                        .disabled(off)
+                        .when(quiet, |b| {
+                            b.opacity(0.)
+                                .group_hover(group.clone(), |s| s.opacity(1.))
+                                .focus_visible(|s| s.opacity(1.))
+                        })
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            let value = json!(target);
+                            v.surface_event(generation, version, id.clone(), value, inline, cx)
+                        }))
+                };
+                let mut row = div().group(group.clone()).v_flex().gap_1().child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().child(SharedString::from(format!(
+                            "{label}: {} {}",
+                            crate::visual_chart_view::number(n),
+                            value["unit"].as_str().unwrap_or("")
+                        ))))
+                        .child(
+                            div()
+                                .flex_none()
+                                .h_flex()
+                                .gap_1()
+                                .child(stepper(
+                                    "minus",
+                                    "−",
+                                    format!("Decrease {label}"),
+                                    (n - step).clamp(min, max),
+                                    !enabled || n <= min,
+                                ))
+                                .child(stepper(
+                                    "plus",
+                                    "+",
+                                    format!("Increase {label}"),
+                                    (n + step).clamp(min, max),
+                                    !enabled || n >= max,
+                                )),
+                        ),
+                );
                 if let Some(binding) = binding {
-                    let own_pending = self.slider_flow.latest(&id, binding.serial).is_some();
                     let own_flight =
                         self.slider_flow.flight.as_ref().is_some_and(|f| {
                             f.intent.id == id && f.intent.binding == binding.serial
@@ -1337,62 +1380,8 @@ impl ArtifactPane {
                                     .w_full(),
                             ),
                     );
-                    if own_pending {
-                        row = row.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Updating isolated preview…"),
-                        );
-                    }
-                } else {
-                    row = row.child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("This range/step uses precise steppers, not native dragging."),
-                    );
                 }
-                row.child(
-                    div()
-                        .h_flex()
-                        .gap_2()
-                        .child(
-                            Button::new(SharedString::from(format!("{path}-minus")))
-                                .ghost()
-                                .small()
-                                .label("−")
-                                .disabled(!enabled || n <= min)
-                                .on_click(cx.listener(move |v, _, _, cx| {
-                                    v.surface_event(
-                                        generation,
-                                        version,
-                                        minus.clone(),
-                                        json!((n - step).clamp(min, max)),
-                                        inline,
-                                        cx,
-                                    )
-                                })),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!("{path}-plus")))
-                                .ghost()
-                                .small()
-                                .label("+")
-                                .disabled(!enabled || n >= max)
-                                .on_click(cx.listener(move |v, _, _, cx| {
-                                    v.surface_event(
-                                        generation,
-                                        version,
-                                        id.clone(),
-                                        json!((n + step).clamp(min, max)),
-                                        inline,
-                                        cx,
-                                    )
-                                })),
-                        ),
-                )
-                .into_any_element()
+                row.into_any_element()
             }
             "table" => {
                 let rows = value["rows"].as_array().unwrap();

@@ -352,6 +352,159 @@ fn pacing_probe(
         .unwrap();
     cx.run_until_parked();
 }
+/// Whether anything is drawn inside `bounds` (a hidden ghost button is uniform).
+fn drawn(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f32) -> bool {
+    let (x0, y0) = (
+        (f32::from(bounds.left()) * scale) as u32,
+        (f32::from(bounds.top()) * scale) as u32,
+    );
+    let (x1, y1) = (
+        (f32::from(bounds.right()) * scale) as u32,
+        (f32::from(bounds.bottom()) * scale) as u32,
+    );
+    let first = image.get_pixel(x0, y0);
+    (y0..y1).any(|y| (x0..x1).any(|x| image.get_pixel(x, y) != first))
+}
+/// Exact steppers beside a draggable slider stay hidden until hover or keyboard
+/// focus; a range that cannot be dragged keeps them shown. Decided by pixels.
+fn stepper_reveal_probe(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+    mode: ThemeMode,
+    captures: Option<&std::path::Path>,
+) {
+    let (worker, commands) = Worker::synthetic();
+    let (handle, pane) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    point(px(0.), px(0.)),
+                    size(px(width), px(300.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |_, cx| {
+                cx.new(|cx| {
+                    let mut p = ArtifactPane::new();
+                    let reference = Reference {
+                        id: "synthetic-steppers".into(),
+                        session: "synthetic".into(),
+                        revision: 1,
+                        title: "Synthetic steppers".into(),
+                        kind: "visual".into(),
+                    };
+                    let scene = crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"column","children":[
+                        {"type":"slider","id":"0.0","label":"Load","unit":"%","min":0,"max":100,"step":1,"value":50},
+                        {"type":"slider","id":"0.1","label":"Ratio","min":0,"max":1,"step":0.3,"value":0.3}
+                    ]}}))
+                    .unwrap();
+                    p.preview(reference, "Synthetic values only; no source execution".into(), scene, cx);
+                    p.worker = Some(worker);
+                    p.snapshot.live = true;
+                    p.snapshot.state = Some("[]".into());
+                    p
+                })
+            },
+        )
+        .unwrap()
+    });
+    advance(cx);
+    let frame = |cx: &mut HeadlessAppContext| {
+        cx.update_window(handle, |_, w, cx| w.render_frame(cx))
+            .unwrap();
+        let image = cx.capture_screenshot(handle).unwrap();
+        let scale = image.width() as f32 / width;
+        cx.update_window(handle, |_, w, _| {
+            ["0.0-minus", "0.0-plus", "0.1-minus", "0.1-plus"]
+                .map(|id| drawn(&image, w.find(id).bounds(), scale))
+        })
+        .unwrap()
+    };
+    cx.update_window(handle, |_, w, _| w.activate_window())
+        .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx).sliders.contains_key("0.0") && !pane.read(cx).sliders.contains_key("0.1")
+        )
+    });
+    assert_eq!(
+        frame(cx),
+        [false, false, true, true],
+        "idle: only the non-draggable range shows steppers"
+    );
+    if let Some(dir) = captures {
+        cx.capture_screenshot(handle)
+            .unwrap()
+            .save(dir.join(format!("{}-{}-steppers.png", width as u32, mode.name())))
+            .unwrap();
+    }
+    cx.update_window(handle, |_, w, cx| w.hover("0.0-slider", cx))
+        .unwrap();
+    assert_eq!(
+        frame(cx),
+        [true, true, true, true],
+        "hovering the slider reveals its steppers"
+    );
+    cx.update_window(handle, |_, w, cx| {
+        use gpui_kit::test::TestEventExt;
+        w.pointer_move(point(px(width - 2.), px(298.)), None, cx)
+    })
+    .unwrap();
+    assert_eq!(
+        frame(cx),
+        [false, false, true, true],
+        "leaving hides them again"
+    );
+    // Tab reaches each stepper in order and shows only the focused one; Enter
+    // sends. Root's Tab moves from existing focus, as the reader has in the app.
+    cx.update_window(handle, |_, w, cx| w.focus_next(cx))
+        .unwrap();
+    for _ in 0..12 {
+        if cx
+            .update_window(handle, |_, w, _| {
+                w.find("0.0-minus").focused() == Some(true)
+            })
+            .unwrap()
+        {
+            break;
+        }
+        cx.update_window(handle, |_, w, cx| w.press("tab", cx))
+            .unwrap();
+    }
+    assert_eq!(
+        frame(cx),
+        [true, false, true, true],
+        "keyboard focus reveals Decrease"
+    );
+    cx.update_window(handle, |_, w, cx| w.press("tab", cx))
+        .unwrap();
+    assert_eq!(
+        frame(cx),
+        [false, true, true, true],
+        "keyboard focus reveals Increase"
+    );
+    assert!(commands.try_recv().is_err());
+    cx.update_window(handle, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        matches!(commands.try_recv(), Ok(Command::Event { id, value, .. }) if id == "0.0" && value == json!(51.)),
+        "Enter on the focused stepper sends one exact step"
+    );
+    assert!(commands.try_recv().is_err());
+    println!(
+        "{}",
+        json!({"width":width,"mode":mode.name(),"steppers":"hidden-idle,hover,keyboard-focus,non-draggable-shown","faux_reader_only":true})
+    );
+    cx.update(|cx| pane.update(cx, |p, _| p.close()));
+    cx.update_window(handle, |_, w, _| w.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+}
 pub fn run_slider_probe(cx: &mut HeadlessAppContext) {
     super::canvas::probe::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_SLIDER_DIR").map(std::path::PathBuf::from);
@@ -361,6 +514,7 @@ pub fn run_slider_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));
+            stepper_reveal_probe(cx, width, mode, captures.as_deref());
             let (worker, commands) = Worker::synthetic();
             let (handle, view) = cx.update(|cx| {
                 gpui_kit::open_window(
