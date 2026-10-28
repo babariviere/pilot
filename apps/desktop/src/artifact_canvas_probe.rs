@@ -1,5 +1,8 @@
 //! Mounted production canvas, real GPUI pointer dispatch, synthetic Draw replies.
 use super::*;
+thread_local! {
+    pub(super) static RENDERS: Cell<usize> = const { Cell::new(0) };
+}
 use gpui_kit::{
     HeadlessAppContext, InputEvent, MouseMoveEvent, WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
@@ -128,8 +131,14 @@ fn animated(cx: &mut HeadlessAppContext) {
         }
     }
     let before = cx.capture_screenshot(handle).unwrap();
+    // Screenshot paint can start a draw. Reply before the next display tick,
+    // rather than benchmarking a permanently late helper reply.
+    if let Ok(command) = commands.try_recv() {
+        pane.update(cx, |p, cx| ack(p, command, cx));
+    }
     let mut last = pane.read_with(cx, |p, _| p.snapshot.drawings["0.0"].t);
     let (cpu, frames) = (thread_cpu(), 60);
+    let renders = RENDERS.with(Cell::get);
     for _ in 0..frames {
         frame(cx);
         let next = commands
@@ -142,8 +151,6 @@ fn animated(cx: &mut HeadlessAppContext) {
             "t advances by frame time: {last} -> {t}"
         );
         last = t;
-        // Without a reply, later frames only advance time; nothing queues.
-        frame(cx);
         assert!(
             commands.try_recv().is_err(),
             "a frame in flight blocks the next Draw"
@@ -151,6 +158,11 @@ fn animated(cx: &mut HeadlessAppContext) {
         pane.update(cx, |p, cx| ack(p, next, cx));
     }
     let per_frame = (thread_cpu() - cpu) / frames;
+    let renders = RENDERS.with(Cell::get) - renders;
+    assert_eq!(
+        renders, frames as usize,
+        "clock-only Draw admission must not rerender the pane before its reply"
+    );
     let after = cx.capture_screenshot(handle).unwrap();
     assert_ne!(
         before.as_raw(),
@@ -161,6 +173,9 @@ fn animated(cx: &mut HeadlessAppContext) {
     frame(cx);
     let missed = commands.try_recv().unwrap();
     let missed_t = time(&missed);
+    frame(cx);
+    frame(cx);
+    assert!(commands.try_recv().is_err(), "slow helper stays one flight");
     pane.update(cx, |p, cx| {
         let (generation, reference, snapshot) = (
             p.generation,
@@ -251,6 +266,60 @@ fn animated(cx: &mut HeadlessAppContext) {
         frame(cx);
         assert!(commands.try_recv().is_err(), "Reduce Motion stays still");
     }
+    // Inject a clock-only request on the production admission path, without
+    // depending on a global Reduce Motion change invalidating this test pane.
+    pane.update(cx, |p, cx| {
+        let f = &p.snapshot.drawings["0.0"];
+        p.draw_pointer(
+            p.generation,
+            p.snapshot.version,
+            "0.0".into(),
+            f.width,
+            f.height,
+            f.t + 1.,
+            f.pointer,
+            cx,
+        );
+    });
+    let _failed = commands
+        .try_recv()
+        .expect("clock-only request before error");
+    pane.update(cx, |p, cx| {
+        let mut failed = p.snapshot.clone();
+        failed.live = false;
+        failed.error = Some(crate::visual_runtime::Fault {
+            kind: "timeout",
+            message: "Synthetic canvas timeout".into(),
+            line: None,
+            limit: None,
+        });
+        let reference = p.reference.clone().unwrap();
+        p.accept(p.generation, &reference, failed, cx);
+        assert!(!p.busy && !p.drawing && p.snapshot.error.is_some());
+    });
+    for _ in 0..10 {
+        frame(cx);
+        assert!(
+            commands.try_recv().is_err(),
+            "failed animation stops drawing"
+        );
+    }
+    // Restore a healthy still canvas so window removal is tested with live
+    // admission, not merely rejected because of the previous worker error.
+    cx.update(|cx| cx.set_reduce_motion(true));
+    pane.update(cx, |p, cx| {
+        let mut recovered = p.snapshot.clone();
+        recovered.live = true;
+        recovered.error = None;
+        let reference = p.reference.clone().unwrap();
+        p.accept(p.generation, &reference, recovered, cx);
+    });
+    for _ in 0..3 {
+        frame(cx);
+        if let Ok(command) = commands.try_recv() {
+            pane.update(cx, |p, cx| ack(p, command, cx));
+        }
+    }
     cx.update(|cx| cx.set_reduce_motion(false));
     cx.update_window(handle, |_, window, _| window.remove_window())
         .unwrap();
@@ -265,8 +334,8 @@ fn animated(cx: &mut HeadlessAppContext) {
     });
     cx.update(|cx| cx.set_reduce_motion(reduce_motion));
     println!(
-        "Native animated canvas: per-frame Draw with advancing t, one flight, slow-frame retry, offscreen/source pause with bounded catch-up, Reduce Motion t=0, window removal. UI thread CPU per animated frame (headless render+paint, two passes, synthetic replies): {:.2} ms.",
-        per_frame.as_secs_f64() * 1000.
+        "Native animated canvas: per-frame Draw with advancing t, one flight, slow-frame retry, offscreen/source pause with bounded catch-up, Reduce Motion t=0, error stop, window removal. UI thread CPU per animated frame cycle (headless, synthetic replies): {:.2} ms; canvas element renders: {renders}/{frames} cycles.",
+        per_frame.as_secs_f64() * 1000.,
     );
 }
 pub(in crate::artifact_view) fn run(cx: &mut HeadlessAppContext) {

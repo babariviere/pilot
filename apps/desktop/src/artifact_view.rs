@@ -841,6 +841,15 @@ impl ArtifactPane {
         }) {
             return;
         }
+        // A clock-only draw keeps the same visible plan and control state.
+        // Its reply will invalidate the pane when there is something to paint.
+        let clock_only = self.snapshot.drawings.get(&id).is_some_and(|f| {
+            f.version == version
+                && f.pointer == pointer
+                && f.t != t
+                && (f.width - width).abs() < 0.5
+                && (f.height - height).abs() < 0.5
+        });
         if self.worker.as_ref().is_some_and(|w| {
             w.command(Command::Draw {
                 version,
@@ -853,7 +862,9 @@ impl ArtifactPane {
         }) {
             self.busy = true;
             self.drawing = true;
-            cx.notify();
+            if !clock_only {
+                cx.notify();
+            }
         }
     }
     fn event(

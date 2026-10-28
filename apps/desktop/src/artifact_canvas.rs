@@ -74,6 +74,8 @@ impl ArtifactPane {
         plan: Option<Arc<crate::visual_canvas_plan::Plan>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        #[cfg(feature = "native-probes")]
+        probe::RENDERS.with(|count| count.set(count.get() + 1));
         let (generation, version, inline) = (self.generation, self.snapshot.version, self.inline);
         let Some(mounted) = self.canvases.get(&id) else {
             return Self::note("Canvas is no longer mounted.");
