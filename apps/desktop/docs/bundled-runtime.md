@@ -17,7 +17,7 @@ No signing secrets, existing application identifiers or permissions are changed.
 ## Build from one immutable source
 
 Run on a macOS arm64 **build/CI host**. Native helper builds use the existing
-Swift build wrapper and its shared slot; do not run them in a no-local-Swift lane.
+Swift build wrapper; do not run them in a no-local-Swift lane.
 Rust executables must have `manifest.json` identifying the same immutable
 40-character commit, configuration and binary hashes. The `rust` subcommand builds
 unconfigured development inputs from git objects using the pinned Rust/mbx tools.
@@ -134,6 +134,40 @@ unready/incompatible/corrupt profiles fail truthfully. Startup has no background
 retry timer, idle polling, service installation or PID cleanup.
 
 ## Verification and limits
+
+The `rust-macos-bundle` job in `tests.yaml` is a non-release full-payload
+assembly/relocation smoke route. It uses the exact checked-out source (the tested
+merge commit for PRs), pinned Rust tools and Node24, production dependency
+closure, and real source-matched Swift Power/System Events helpers. It calls
+`verify_macos_bundle.py`, which is CI-only and refuses another source, a
+non-arm64 host, or an existing/output path outside `RUNNER_TEMP`.
+
+The helper runs the existing `runtime`, `native`, `rust`, `bundle`, and `verify`
+stages with private HOME/config/data/cache/temp directories. Builds use two jobs
+(the existing Rust wrapper's CPU2/~4GiB policy is a scheduling target, not a
+macOS hard memory limit). Rust updater inputs remain **unconfigured**. Only
+ad-hoc code seals are created; no production keys, feeds, release workflow,
+qualification acknowledgements, Launch Services, installed apps or existing
+daemons are used. The complete app is moved to a path with spaces and the three
+staging inputs are deleted before inventory, seal and native dependency/minOS
+verification. The relocated runtime runs the existing faux-provider/offline
+smoke; the real GUI binary is executed only with `--help`, which returns before
+window/profile/daemon startup.
+
+CI retains seven-day logs, command durations, source identity, source-matched
+input receipts, full payload inventory hash and the sealed GUI hash under
+`desktop-macos-bundle-smoke-<tested SHA>`. Failed steps remain failures with
+partial logs/report retained. These are assembly-smoke records, not release
+artifacts or an acceptance ACK. `passed` means only that these specific commands
+completed; `full_acceptance` and `gui_startup_executed` remain false.
+
+**Source wiring and mocked orchestration tests do not prove hosted execution.**
+Actual hosted bundle results and hashes still need observation. Real offscreen
+GUI fresh-profile startup, retained-capsule publication/startup timings, configured
+synthetic GUI checkpoint/preedit/admission/update lifecycle and recovery,
+supported-version hosts, Gatekeeper/notarization and rollback acceptance remain
+separate, unqualified work. No performance claim follows from build durations
+or `--help`.
 
 ```sh
 node --test --test-concurrency=1 packages/daemon/src/runtime-owner.test.ts packages/daemon/src/runtime-launch.test.ts

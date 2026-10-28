@@ -445,6 +445,42 @@ jobs:
           path: apps/desktop/target/dev
           key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
 
+  # Genuine complete development bundle, no release configuration or installed-app access.
+  # Uploaded evidence is assembly/relocation smoke only, never a qualification ACK.
+  rust-macos-bundle:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Use the tested merge SHA on PRs, never substitute the PR head.
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: pnpm/action-setup@v4
+      - name: Initialize runner-local paths
+        run: |
+          echo "XDG_CACHE_HOME=$RUNNER_TEMP/desktop-rust-cache" >> "$GITHUB_ENV"
+          echo "DESKTOP_CI_OUTPUT=$RUNNER_TEMP/desktop-rust-unsigned" >> "$GITHUB_ENV"
+      - name: Bootstrap pinned build-host Rust tools
+        run: bash apps/desktop/scripts/ci.sh bootstrap
+      - name: Assemble and smoke the exact-source relocated development bundle
+        run: |
+          python3 apps/desktop/scripts/verify_macos_bundle.py --source "$GITHUB_SHA" --output "$RUNNER_TEMP/macos-bundle"
+      - name: Retain non-release bundle smoke evidence (including failures)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-macos-bundle-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/macos-bundle/evidence
+          if-no-files-found: warn
+          retention-days: 7
+
   # Opt-in reusable seam for later packaging. Normal PR/Main calls leave it OFF.
   # No signing, feeds, release publication or Linux-to-macOS artifact promotion.
   rust-macos-release:
