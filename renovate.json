@@ -1,12 +1,31 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
 	"extends": ["config:recommended"],
-	"enabledManagers": ["npm"],
+	"enabledManagers": ["npm", "cargo"],
 	"dependencyDashboard": true,
 	"minimumReleaseAge": "24 hours",
 	"automerge": false,
 	"prConcurrentLimit": 3,
 	"packageRules": [
+		{
+			"description": "GPUI upgrades require coordinated source patches and native qualification",
+			"matchManagers": ["cargo"],
+			"matchPackageNames": ["gpui-*"],
+			"enabled": false
+		},
+		{
+			"description": "ZIP admission mirrors zip 8.6.0 parser behavior; re-audit before upgrading",
+			"matchManagers": ["cargo"],
+			"matchFileNames": ["apps/desktop/updater/Cargo.toml"],
+			"matchPackageNames": ["zip"],
+			"enabled": false
+		},
+		{
+			"description": "NSH comparison fixtures retain their qualified source and dependency baseline",
+			"matchManagers": ["cargo"],
+			"matchFileNames": ["experiments/nsh-chat/**"],
+			"enabled": false
+		},
 		{
 			"description": "Use npm Git digest updates and pnpm artifacts; enable after upstream main includes embedding exports",
 			"matchManagers": ["npm"],

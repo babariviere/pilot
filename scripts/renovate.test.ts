@@ -6,7 +6,7 @@ const config = JSON.parse(readFileSync(new URL("../renovate.json", import.meta.u
 const name = "@babariviere/pi-extensions";
 
 test("Renovate uses native npm Git updates with pnpm artifact generation", () => {
-	assert.deepEqual(config.enabledManagers, ["npm"]);
+	assert.deepEqual(config.enabledManagers, ["npm", "cargo"]);
 	assert.equal(config.customManagers, undefined);
 	assert.equal(config.skipArtifactsUpdate, false);
 	assert.equal(config.statusCheckWhen.artifactError, "always");
@@ -43,6 +43,31 @@ test("Renovate groups the Pi SDK and keeps required auth pinned without automerg
 		rule.matchPackageNames?.includes("@gotgenes/pi-anthropic-auth"),
 	);
 	assert.equal(auth.rangeStrategy, "pin");
+});
+
+test("Cargo keeps ordinary crates enabled and pauses only documented baselines", () => {
+	assert.deepEqual(config.enabledManagers, ["npm", "cargo"], "toolchain updates stay manual");
+	assert.deepEqual(config.extends, ["config:recommended"]);
+	assert.equal(config.minimumReleaseAge, "24 hours");
+	assert.equal(config.prConcurrentLimit, 3);
+	assert.equal(config.schedule, undefined);
+	assert.equal(config.ignorePaths, undefined);
+	assert.equal(config.cargo, undefined, "native Cargo matching and artifact generation remain unchanged");
+	const rules = config.packageRules.filter((rule: { matchManagers?: string[] }) =>
+		rule.matchManagers?.includes("cargo"),
+	);
+	assert.equal(rules.length, 3);
+	assert.deepEqual(rules[0].matchPackageNames, ["gpui-*"]);
+	assert.deepEqual(rules[1].matchPackageNames, ["zip"]);
+	assert.deepEqual(rules[1].matchFileNames, ["apps/desktop/updater/Cargo.toml"]);
+	assert.deepEqual(rules[2].matchFileNames, ["experiments/nsh-chat/**"]);
+	for (const rule of rules) {
+		assert.equal(rule.enabled, false);
+		assert.ok(rule.description);
+	}
+	for (const rule of config.packageRules) {
+		assert.notEqual(rule.automerge, true);
+	}
 });
 
 test("Renovate changes validate offline, and update PRs check production runtime relocation", () => {
