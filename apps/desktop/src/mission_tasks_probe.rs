@@ -18,6 +18,17 @@ use std::{
     time::{Duration, Instant},
 };
 const TASKS: usize = 300;
+/// Every status, a phase-gated Blocked (stored To do) and dropped, in fill-unsorted order.
+const STATUSES: [&str; 8] = [
+    "todo",
+    "dropped",
+    "blocked",
+    "done",
+    "delegated",
+    "in_review",
+    "in_progress",
+    "gated",
+];
 struct Host {
     browser: Entity<Browser>,
     _events: Subscription,
@@ -130,7 +141,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cases += 1;
             let server = Server::start();
             let mut detail = f::detail("mission-A");
-            detail["tasks"]=json!((0..TASKS).map(|n|json!({"id":format!("exact-{n}"),"number":n+1,"title":"Same title 日本語 👩‍💻","status":if n%2==0 {"todo"} else {"blocked"},"body":format!("Exact description {n}\n\nUnicode 👩‍💻 é 日本語\nLiteral ![image](https://invalid.example) <script>no execution</script>"),"order":n,"completion":{"checks":"x".repeat(7500)}})).collect::<Vec<_>>());
+            detail["tasks"]=json!((0..TASKS).map(|n|{let s=STATUSES[n%STATUSES.len()];let mut t=json!({"id":format!("exact-{n}"),"number":n+1,"title":"Same title 日本語 👩‍💻","status":s,"body":format!("Exact description {n}\n\nUnicode 👩‍💻 é 日本語\nLiteral ![image](https://invalid.example) <script>no execution</script>"),"order":n,"completion":{"checks":"x".repeat(7500)}});if s=="gated"{t["status"]=json!("blocked");t["storedStatus"]=json!("todo");}t}).collect::<Vec<_>>());
             // Beyond 256 rows and 2 MiB: every received task stays reachable.
             assert!(serde_json::to_vec(&detail).unwrap().len() > 2 * 1024 * 1024);
             server.reply("/api/missions/mission-A", Reply::json(200, detail.clone()));
@@ -180,6 +191,48 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     TASKS
                 )
             });
+            // The pane legend matches the overview: bar order, work status, dropped excluded.
+            let progress = cx.update(|cx| {
+                let s = pane.read(cx).state.snapshot.clone().unwrap();
+                let b = host.read(cx).browser.read(cx);
+                assert_eq!(s.progress, b.detail.as_ref().unwrap().summary.counts);
+                s.progress.clone()
+            });
+            assert_eq!(
+                progress.iter().map(|c| c.0).collect::<Vec<_>>(),
+                [
+                    "done",
+                    "in_review",
+                    "in_progress",
+                    "blocked",
+                    "todo",
+                    "delegated"
+                ]
+            );
+            assert_eq!(progress[4].1, 75, "phase-gated tasks count as stored To do");
+            reveal(cx, h, "mission-tasks-coverage");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("mission-tasks-legend-dropped").is_none());
+                let mut last = None;
+                for (status, _) in &progress {
+                    let id = gpui_kit::SharedString::from(format!("mission-tasks-legend-{status}"));
+                    let b = w.find(id).bounds();
+                    if let Some((top, left)) = last {
+                        assert!(
+                            b.top() > top || (b.top() == top && b.left() > left),
+                            "{status} legend follows reading order"
+                        );
+                    }
+                    last = Some((b.top(), b.left()));
+                }
+            })
+            .unwrap();
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("{name}-legend.png")))
+                    .unwrap();
+            }
             reveal(cx, h, "mission-tasks-list");
             // A page-centred wheel can land on the inner list: bring it back to its first row.
             cx.update_window(h, |_, w, cx| {

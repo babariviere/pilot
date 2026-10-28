@@ -65,6 +65,46 @@ fn every_received_task_is_admitted_in_order_at_and_beyond_256() {
     assert!(s.task("filler-0").unwrap().context.contains("filler-299"));
 }
 #[test]
+fn progress_matches_overview_bar_order_without_dropped_and_with_work_status() {
+    let key = f::key("mission-A");
+    let mut v = f::detail("mission-A");
+    // Fill-sorted legends put to do before blocked; the bar order does not.
+    let statuses = [
+        "todo",
+        "dropped",
+        "blocked",
+        "done",
+        "delegated",
+        "in_review",
+        "in_progress",
+        "todo",
+    ];
+    v["tasks"] = json!(statuses
+        .iter()
+        .enumerate()
+        .map(|(n, s)| json!({"id":format!("t-{n}"),"number":n+1,"title":"Same","status":s,"order":n}))
+        .collect::<Vec<_>>());
+    // Phase gating projects Blocked; its work status is the stored To do.
+    v["tasks"][7]["status"] = json!("blocked");
+    v["tasks"][7]["storedStatus"] = json!("todo");
+    let s = parse(&key, &v).unwrap();
+    assert_eq!(
+        s.progress,
+        [
+            ("done", 1),
+            ("in_review", 1),
+            ("in_progress", 1),
+            ("blocked", 1),
+            ("todo", 2),
+            ("delegated", 1),
+        ]
+    );
+    let overview = crate::mission_browser::detail(&key, &v).unwrap();
+    assert_eq!(s.progress, overview.summary.counts);
+    v["tasks"] = json!([]);
+    assert!(parse(&key, &v).unwrap().progress.is_empty());
+}
+#[test]
 fn stale_generation_mission_switch_errors_and_removed_selection_are_fenced() {
     let a = f::key("mission-A");
     let b = f::key("mission-B");

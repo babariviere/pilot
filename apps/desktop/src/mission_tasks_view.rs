@@ -656,30 +656,31 @@ impl Render for Pane {
             );
         }
         if let Some(s) = &self.state.snapshot {
-            // Progress bar and legend in the shared status ladder colours.
-            let mut counts: Vec<(SharedString, f32, gpui_kit::Hsla, usize)> = Vec::new();
-            for t in s.tasks.iter() {
-                let (label, fill, color) = ui::task_status(&t.status, cx);
-                match counts.iter_mut().find(|c| c.0 == label) {
-                    Some(c) => c.3 += 1,
-                    None => counts.push((label, fill, color, 1)),
-                }
-            }
-            counts.sort_by(|a, b| b.1.total_cmp(&a.1));
+            // Progress bar and legend as in the overview: bar order, work status, no dropped.
+            let counts: Vec<_> = s
+                .progress
+                .iter()
+                .map(|(status, n)| {
+                    let (label, fill, color) = ui::task_status(status, cx);
+                    (label, fill, color, *n, *status)
+                })
+                .collect();
             let mut track = cx.theme().muted_foreground;
             track.a *= 0.25;
+            // To do and delegated leave the track showing.
             let bar: Vec<_> = counts
                 .iter()
-                .filter(|c| c.1 > 0. || c.0 == "Blocked")
+                .filter(|c| (c.1 > 0. && c.4 != "delegated") || c.4 == "blocked")
                 .map(|c| (c.3, c.2))
                 .collect();
+            let total = counts.iter().map(|c| c.3).sum();
             root = root.child(
                 div()
                     .id("mission-tasks-coverage")
                     .test_support()
                     .v_flex()
                     .gap_2()
-                    .child(ui::progress_bar(&bar, s.tasks.len(), track))
+                    .child(ui::progress_bar(&bar, total, track))
                     .child(
                         div()
                             .h_flex()
@@ -687,8 +688,12 @@ impl Render for Pane {
                             .gap_3()
                             .text_size(px(crate::appearance::TextRole::CAPTION))
                             .text_color(cx.theme().muted_foreground)
-                            .children(counts.iter().map(|(label, _, color, n)| {
+                            .children(counts.iter().map(|(label, _, color, n, status)| {
                                 div()
+                                    .id(SharedString::from(format!(
+                                        "mission-tasks-legend-{status}"
+                                    )))
+                                    .test_support()
                                     .h_flex()
                                     .items_center()
                                     .gap_1()

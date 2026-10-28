@@ -22,6 +22,8 @@ pub(crate) struct Task {
 pub(crate) struct Snapshot {
     pub(crate) key: Key,
     pub(crate) tasks: Vec<Task>,
+    /// Work-status counts in the overview's bar order, zeros omitted, dropped excluded.
+    pub(crate) progress: Vec<(&'static str, usize)>,
 }
 impl Snapshot {
     pub(crate) fn task(&self, id: &str) -> Option<&Task> {
@@ -115,9 +117,15 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     // The mission header still validates; the overview already shows it.
     text(&v["mission"]["title"], 800)?;
     text(&v["mission"]["status"], 40)?;
+    let progress = crate::mission_browser::BAR_ORDER
+        .iter()
+        .map(|s| (*s, tasks.iter().filter(|t| t.work_status == *s).count()))
+        .filter(|c| c.1 > 0)
+        .collect();
     Ok(Snapshot {
         key: key.clone(),
         tasks,
+        progress,
     })
 }
 
