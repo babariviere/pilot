@@ -21,6 +21,14 @@ mod subscription;
 mod tests;
 /// Disabled menu row that explains a busy chat's locked model/thinking to keyboard users.
 const BUSY_ITEM: &str = ":busy";
+/// Presentation only: catalog IDs remain unchanged for selection and saving.
+fn thinking_title(level: &str) -> String {
+    let mut chars = level.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
 fn busy_item() -> Item {
     Item {
         id: BUSY_ITEM.into(),
@@ -585,9 +593,9 @@ impl ChatEditor {
             levels.extend(option.thinking_levels.iter().map(|l| Item {
                 id: l.clone(),
                 title: if option.thinking_levels.len() == 1 {
-                    format!("{l} (fixed)").into()
+                    format!("{} (fixed)", thinking_title(l)).into()
                 } else {
-                    l.clone().into()
+                    thinking_title(l).into()
                 },
                 detail: String::new().into(),
                 disabled: !editable,
@@ -965,7 +973,7 @@ impl ChatEditor {
             let field = div().id(id);
             #[cfg(any(test, feature = "native-probes"))]
             let field = field.test_support();
-            field.flex_1().min_w_0().when(waiting, |d| {
+            field.min_w_0().when(waiting, |d| {
                 d.tooltip(|w, cx| {
                     gpui_kit::component::tooltip::Tooltip::element(|_, _| {
                         let help = ui::text(ui::Text::Caption, chat_models::BUSY)
@@ -990,7 +998,7 @@ impl ChatEditor {
         let thinking_label: SharedString = actual
             .as_ref()
             .and_then(|c| c.thinking.as_ref())
-            .map(|l| format!("{l} (not in catalog)"))
+            .map(|l| format!("{} (not in catalog)", thinking_title(l)))
             .unwrap_or_else(|| {
                 if actual.is_none() {
                     "Default thinking".into()
@@ -1016,7 +1024,6 @@ impl ChatEditor {
                     Select::new(&p.models)
                         .id("chat-model")
                         .small()
-                        .w_full()
                         .appearance(false)
                         .focus_ring(false)
                         .disabled(p.catalog.is_none())
@@ -1032,7 +1039,6 @@ impl ChatEditor {
                     Select::new(&p.thinking)
                         .id("chat-thinking")
                         .small()
-                        .w_full()
                         .appearance(false)
                         .focus_ring(false)
                         .disabled(p.catalog.is_none() || levels < 2)

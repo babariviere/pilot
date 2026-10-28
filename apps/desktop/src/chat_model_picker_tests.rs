@@ -2,6 +2,21 @@ use super::*;
 use crate::chat_models_fixture::{Mode, Server};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{AnyWindowHandle, TestAppContext};
+
+#[test]
+fn thinking_titles_do_not_change_catalog_values() {
+    for (value, title) in [
+        ("off", "Off"),
+        ("minimal", "Minimal"),
+        ("low", "Low"),
+        ("medium", "Medium"),
+        ("high", "High"),
+        ("xhigh", "Xhigh"),
+        ("", ""),
+    ] {
+        assert_eq!(thinking_title(value), title);
+    }
+}
 fn setup(
     cx: &mut TestAppContext,
 ) -> (

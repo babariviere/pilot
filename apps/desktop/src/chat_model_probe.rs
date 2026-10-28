@@ -163,6 +163,31 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                 let input = w.find("composer-input").bounds();
                 let model = w.find("chat-model").bounds();
                 let thinking = w.find("chat-thinking").bounds();
+                assert!(
+                    model.size.width > px(70.),
+                    "readable model trigger: {model:?}"
+                );
+                assert!(
+                    model.size.width < px(150.),
+                    "model hugs short label: {model:?}"
+                );
+                assert!(
+                    thinking.size.width > px(35.),
+                    "usable thinking trigger: {thinking:?}"
+                );
+                assert!(
+                    thinking.size.width < px(85.),
+                    "thinking hugs short label: {thinking:?}"
+                );
+                assert_eq!(model.top(), thinking.top(), "aligned control baseline");
+                assert_eq!(model.size.height, px(21.), "retain Kit small hit target");
+                assert_eq!(thinking.size.height, model.size.height);
+                assert!(
+                    thinking.left() - model.right() <= px(4.),
+                    "compact selector gap"
+                );
+                // The fixture session starts at catalog value "high"; only the title is cased.
+                assert_eq!(w.find("chat-thinking").value(), Some("High"));
                 assert_eq!(tray.size.height, px(76.));
                 assert_eq!(input.size.height, px(34.));
                 for b in [
@@ -196,6 +221,109 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             let anchor = cx.update(|cx| transcript.read(cx).history_probe_anchor(cx));
             assert_eq!(server.posts(), 0);
+            // Long Unicode labels stay compact: titles truncate inside the field caps and never
+            // overlap each other, Send or the measured tray. The full title stays the AX value.
+            let short = cx
+                .update_window(h, |_, w, _| {
+                    (
+                        w.find("chat-model").bounds(),
+                        w.find("chat-thinking").bounds(),
+                    )
+                })
+                .unwrap();
+            let long_model =
+                "p/Aurora 日本語 extended reasoning preview 👩‍💻 with a long synthetic name";
+            cx.update_window(h, |_, w, cx| {
+                let mut raw = server.seen.lock().unwrap().session();
+                raw["model"] = serde_json::json!(long_model);
+                raw["thinking"] = serde_json::json!("xhigh");
+                editor.update(cx, |e, cx| {
+                    e.model_context(
+                        "source",
+                        "/synthetic/project",
+                        crate::chat_models::SessionModel::read(&raw),
+                        w,
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                let tray = w.find("composer-tray").bounds();
+                let model = w.find("chat-model").bounds();
+                let thinking = w.find("chat-thinking").bounds();
+                let send = w.find("local-send").bounds();
+                assert!(
+                    w.find("chat-model")
+                        .value()
+                        .is_some_and(|v| v.starts_with(long_model)),
+                    "full long model title remains the accessible value"
+                );
+                assert_eq!(
+                    w.find("chat-thinking").value(),
+                    Some("Xhigh (not in catalog)")
+                );
+                assert!(
+                    model.size.width > short.0.size.width && model.size.width <= px(160.),
+                    "long model title truncates at its cap: {model:?}"
+                );
+                assert!(
+                    thinking.size.width > short.1.size.width && thinking.size.width <= px(128.),
+                    "long thinking title truncates at its cap: {thinking:?}"
+                );
+                assert!(thinking.left() >= model.right(), "selectors never overlap");
+                assert!(
+                    thinking.left() - model.right() <= px(4.),
+                    "compact selector gap"
+                );
+                assert!(thinking.right() <= send.left(), "Send stays reachable");
+                assert_eq!(model.top(), thinking.top(), "aligned control baseline");
+                assert_eq!(model.size.height, px(21.), "retain Kit small hit target");
+                assert_eq!(thinking.size.height, model.size.height);
+                assert_eq!(tray.size.height, px(76.));
+                assert!(
+                    model.left() >= tray.left() && thinking.right() <= tray.right(),
+                    "long labels stay in the measured tray"
+                );
+            })
+            .unwrap();
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!(
+                        "{}-{}-model-long-label.png",
+                        width as u32,
+                        mode.name()
+                    )))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                let raw = server.seen.lock().unwrap().session();
+                editor.update(cx, |e, cx| {
+                    e.model_context(
+                        "source",
+                        "/synthetic/project",
+                        crate::chat_models::SessionModel::read(&raw),
+                        w,
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-thinking").value(), Some("High"));
+                assert_eq!(
+                    w.find("chat-model").bounds(),
+                    short.0,
+                    "selector hugs again"
+                );
+                assert_eq!(w.find("chat-thinking").bounds(), short.1);
+            })
+            .unwrap();
+            assert_eq!(server.posts(), 0);
+            cx.update(|cx| assert_eq!(text.read(cx).selected_range(), selection));
             // Mounted inspection is safe in blocked states. No model, start,
             // continuation or send request is made; the main input is untouched.
             for (state, writable, working, extra, reason) in [
@@ -384,6 +512,10 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("chat-thinking", cx))
                 .unwrap();
             settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-thinking").value(), Some("Low"));
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| w.click("model-option-high", cx))
                 .unwrap();
             until(cx, h, &editor, |e| {
@@ -394,6 +526,10 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                         .is_some_and(|c| c.thinking.as_deref() == Some("high"))
             });
             assert_eq!(server.posts(), 2);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-thinking").value(), Some("High"));
+            })
+            .unwrap();
             cx.update(|cx| assert_eq!(text.read(cx).selected_range(), selection));
             cx.update_window(h, |_, w, cx| {
                 text.update(cx, |t, cx| t.focus(w, cx));
@@ -455,6 +591,11 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                         .is_some_and(|c| c.model == "q/c")
             });
             assert_eq!(server.posts(), 3);
+            // A single catalog level is still title-cased and marked fixed.
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-thinking").value(), Some("Off (fixed)"));
+            })
+            .unwrap();
             server.seen.lock().unwrap().mode = Mode::Empty;
             cx.update(|cx| {
                 let scope = v.read(cx).settings.read(cx).models.clone().unwrap();
