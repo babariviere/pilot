@@ -324,6 +324,15 @@ impl ListDelegate for ChatList {
             .and_then(|id| self.projects.iter().find(|p| &p.id == id))
             .map(|p| p.name.clone());
         let (state, full_state) = chat_order::row_state(&chat, section);
+        // Named only from the cached Local mission snapshot; no row reads.
+        let mark = mission_mark(&chat, |id| {
+            let owner = self.action_owner.upgrade()?;
+            let missions = owner.read(cx).missions.read(cx);
+            missions
+                .sidebar_mission_name(id)
+                .map(|(title, current)| (title.to_owned(), current))
+        });
+        let has_project = project.is_some();
         let detail = project
             .iter()
             .cloned()
@@ -335,6 +344,7 @@ impl ListDelegate for ChatList {
             .iter()
             .cloned()
             .chain((!full_state.is_empty()).then_some(full_state))
+            .chain(mark.as_ref().map(|m| m.label.clone()))
             .collect::<Vec<_>>()
             .join(" · ");
         // Row actions appear on hover, or on the keyboard-selected row while
@@ -482,35 +492,58 @@ impl ListDelegate for ChatList {
                                         .test_support(),
                                 ),
                         )
-                        .when(!detail.is_empty(), |row| {
+                        .when(!detail.is_empty() || mark.is_some(), |row| {
                             row.child(
                                 div()
                                     .id("sidebar-chat-detail")
                                     .test_support()
                                     .h_flex()
+                                    .items_center()
                                     .min_w_0()
                                     // Text lane: the line fades out before the state corner.
                                     .when(has_corner, |d| d.pr(px(appearance::Space::SECTION)))
                                     .text_size(px(appearance::TextRole::CAPTION))
                                     .text_color(cx.theme().muted_foreground)
                                     // A long project name yields before the state reason.
+                                    // Beside a mission it keeps a readable start and
+                                    // its own separator, so all three stay on the line.
                                     .children(project.map(|p| {
-                                        div().min_w_0().flex_shrink(16.).truncate().child(
-                                            SharedString::from(if state.is_empty() {
-                                                p
-                                            } else {
-                                                format!("{p} · ")
-                                            }),
-                                        )
+                                        let split = mark.is_some() && !state.is_empty();
+                                        div()
+                                            .id("sidebar-chat-project")
+                                            .test_support()
+                                            .min_w_0()
+                                            .when(mark.is_some(), |d| {
+                                                d.min_w(px(appearance::Space::SECTION))
+                                            })
+                                            .flex_shrink(16.)
+                                            .truncate()
+                                            .child(SharedString::from(
+                                                if state.is_empty() || split {
+                                                    p
+                                                } else {
+                                                    format!("{p} · ")
+                                                },
+                                            ))
                                     }))
+                                    .when(mark.is_some() && has_project && !state.is_empty(), |d| {
+                                        d.child(div().flex_none().child(" · "))
+                                    })
                                     .when(!state.is_empty(), |d| {
                                         d.child(
                                             div()
-                                                .flex_shrink_0()
+                                                .id("sidebar-chat-state")
+                                                .test_support()
+                                                // Beside a mission it shares the line instead.
+                                                .when(mark.is_none(), |d| d.flex_shrink_0())
+                                                .when(mark.is_some(), |d| d.min_w_0())
                                                 .max_w(gpui_kit::relative(0.7))
                                                 .truncate()
                                                 .child(SharedString::from(state.clone())),
                                         )
+                                    })
+                                    .when_some(mark, |d, mark| {
+                                        d.child(mission_segment(mark, !detail.is_empty()))
                                     }),
                             )
                         })
@@ -905,6 +938,8 @@ impl LocalViewer {
         view.state.list_loaded = true;
         view.state.chats = Arc::new(vec![
             Chat {
+                mission: Default::default(),
+                mission_coordinator: false,
                 failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
@@ -925,6 +960,8 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                mission: Default::default(),
+                mission_coordinator: false,
                 failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
@@ -945,6 +982,8 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                mission: Default::default(),
+                mission_coordinator: false,
                 failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
@@ -1142,6 +1181,8 @@ impl LocalViewer {
         let mut view = Self::synthetic(window, cx);
         let mut chats = view.state.chats.as_ref().clone();
         chats.push(Chat {
+            mission: Default::default(),
+            mission_coordinator: false,
             failure: None,
             pull_requests: Vec::new(),
             context_usage: Default::default(),
@@ -1359,6 +1400,9 @@ impl LocalViewer {
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
         let missions = cx.new(crate::mission_browser_view::Browser::new);
+        let mission_rows = cx.observe(&missions, |view, _, cx| {
+            view.chats.update(cx, |_, cx| cx.notify());
+        });
         let (mission_context, mission_context_events) = Self::mission_context_parts(window, cx);
         let missions_events = cx.subscribe_in(
             &missions,
@@ -1492,6 +1536,8 @@ impl LocalViewer {
                     }
                     view.open(
                         Chat {
+                            mission: Default::default(),
+                            mission_coordinator: false,
                             failure: None,
                             pull_requests: Vec::new(),
                             context_usage: Default::default(),
@@ -1690,6 +1736,7 @@ impl LocalViewer {
                 subscription,
                 mission_events,
                 missions_events,
+                mission_rows,
                 mission_context_events,
                 add_project_events,
                 editor_events,
@@ -2275,6 +2322,8 @@ impl LocalViewer {
             let mut all: Vec<_> = drafts
                 .into_iter()
                 .map(|(key, title)| Chat {
+                    mission: Default::default(),
+                    mission_coordinator: false,
                     failure: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
@@ -2521,6 +2570,186 @@ impl Render for LocalViewer {
             .when(self.add_project_open,|this|this.child(self.add_project_overlay(window,cx)))
     }
 }
+/// A chat row's mission segment, from the summary's association and its
+/// passive coordinator role. Only the cached Local name is shown, never an ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MissionMark {
+    pub(crate) icon: AppIcon,
+    /// Shown on the metadata line.
+    pub(crate) text: String,
+    /// The tooltip and the row's accessible name.
+    pub(crate) label: String,
+}
+/// `name` resolves a linked mission's cached name and whether it is current.
+pub(crate) fn mission_mark(
+    chat: &Chat,
+    name: impl FnOnce(&str) -> Option<(String, bool)>,
+) -> Option<MissionMark> {
+    use crate::local_model::MissionAssociation;
+    let role = if chat.mission_coordinator {
+        AppIcon::Coordinator
+    } else {
+        AppIcon::Mission
+    };
+    let (icon, text, label) = match &chat.mission {
+        MissionAssociation::Unlinked if !chat.mission_coordinator => return None,
+        MissionAssociation::Unlinked => {
+            return Some(MissionMark {
+                icon: role,
+                text: "Coordinator".into(),
+                label: "Mission coordinator".into(),
+            });
+        }
+        MissionAssociation::Unknown => (
+            AppIcon::Info,
+            "Mission unavailable".to_owned(),
+            "Mission association unavailable".to_owned(),
+        ),
+        MissionAssociation::Linked(id) => {
+            match name(id).filter(|(title, _)| !title.trim().is_empty()) {
+                Some((title, true)) => (role, title.clone(), format!("Mission: {title}")),
+                Some((title, false)) => (
+                    role,
+                    title.clone(),
+                    format!("Mission (last known): {title}"),
+                ),
+                None => (
+                    role,
+                    "Name unavailable".to_owned(),
+                    "Mission linked · name unavailable".to_owned(),
+                ),
+            }
+        }
+    };
+    let label = if chat.mission_coordinator {
+        format!("Coordinator · {label}")
+    } else {
+        label
+    };
+    Some(MissionMark { icon, text, label })
+}
+/// Map (member) or Compass (coordinator) and the mission name, after the
+/// project and state. A minimum width keeps a long project or state from
+/// hiding it; the full wording stays in the tooltip and the row's label.
+fn mission_segment(mark: MissionMark, separated: bool) -> impl IntoElement {
+    use gpui_kit::StatefulInteractiveElement as _;
+    let label = SharedString::from(mark.label);
+    div()
+        .id("chat-mission-mark")
+        .test_support()
+        .h_flex()
+        .items_center()
+        .gap_0p5()
+        .min_w(px(appearance::Space::SECTION * 2.))
+        .aria_label(label.clone())
+        .tooltip(move |w, cx| {
+            gpui_kit::component::tooltip::Tooltip::element({
+                let label = label.clone();
+                move |_, _| {
+                    div()
+                        .id("chat-mission-tooltip")
+                        .test_support()
+                        .aria_label(label.clone())
+                        .child(label.clone())
+                }
+            })
+            .build(w, cx)
+        })
+        .when(separated, |d| d.child(div().flex_none().child(" · ")))
+        .child(
+            div()
+                .id(SharedString::from(format!(
+                    "chat-mission-glyph-{:?}",
+                    mark.icon
+                )))
+                .test_support()
+                .flex_none()
+                .child(mark.icon.inline()),
+        )
+        .child(
+            div()
+                .id("chat-mission-name")
+                .test_support()
+                .min_w_0()
+                .truncate()
+                .child(SharedString::from(mark.text)),
+        )
+}
+#[cfg(test)]
+mod mission_association_mark_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mission_association_mark_uses_role_glyphs_and_honest_names() {
+        let chat = |v: serde_json::Value| crate::local_model::chat(&v).unwrap();
+        let named = |_: &str| Some(("Launch 日本語 👩‍💻".to_owned(), true));
+        let unread = |_: &str| -> Option<(String, bool)> { panic!("no lookup") };
+        let mark = |icon, text: &str, label: &str| {
+            Some(MissionMark {
+                icon,
+                text: text.into(),
+                label: label.into(),
+            })
+        };
+        // Titles and projects never imply a mission or a role.
+        assert_eq!(
+            mission_mark(
+                &chat(json!({"id":"c","title":"Mission coordinator","projectId":"mission-A"})),
+                unread
+            ),
+            None
+        );
+        assert_eq!(
+            mission_mark(&chat(json!({"id":"m","missionId":"mission-A"})), named),
+            mark(
+                AppIcon::Mission,
+                "Launch 日本語 👩‍💻",
+                "Mission: Launch 日本語 👩‍💻"
+            )
+        );
+        assert_eq!(
+            mission_mark(
+                &chat(json!({"id":"c","missionId":"mission-A","missionCoordinator":true})),
+                |_| Some(("Launch".to_owned(), false))
+            ),
+            mark(
+                AppIcon::Coordinator,
+                "Launch",
+                "Coordinator · Mission (last known): Launch"
+            )
+        );
+        assert_eq!(
+            mission_mark(
+                &chat(json!({"id":"c","activeMissionCoordinator":true})),
+                unread
+            ),
+            mark(AppIcon::Coordinator, "Coordinator", "Mission coordinator")
+        );
+        assert_eq!(
+            mission_mark(
+                &chat(json!({"id":"c","missionId":true,"missionCoordinator":true})),
+                unread
+            ),
+            mark(
+                AppIcon::Info,
+                "Mission unavailable",
+                "Coordinator · Mission association unavailable"
+            )
+        );
+        // A linked mission without a cached name never shows its ID.
+        for name in [None, Some(("  ".to_owned(), true))] {
+            assert_eq!(
+                mission_mark(&chat(json!({"id":"m","missionId":"mission-A"})), |_| name),
+                mark(
+                    AppIcon::Mission,
+                    "Name unavailable",
+                    "Mission linked · name unavailable"
+                )
+            );
+        }
+    }
+}
 #[cfg(test)]
 mod refresh_tests {
     use super::*;
@@ -2651,6 +2880,8 @@ mod refresh_tests {
             view.update(cx, |v, cx| {
                 v.open(
                     Chat {
+                        mission: Default::default(),
+                        mission_coordinator: false,
                         failure: None,
                         pull_requests: Vec::new(),
                         context_usage: Default::default(),

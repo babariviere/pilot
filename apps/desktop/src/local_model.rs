@@ -95,8 +95,88 @@ mod project_tests {
     }
 }
 
+/// Association comes only from the session summary, never titles or projects.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum MissionAssociation {
+    #[default]
+    Unlinked,
+    Linked(String),
+    Unknown,
+}
+impl MissionAssociation {
+    fn read(value: &Value) -> Self {
+        match &value["missionId"] {
+            Value::Null => Self::Unlinked,
+            Value::String(id) if valid_id(id) => Self::Linked(id.clone()),
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[cfg(test)]
+mod mission_association_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_explicit_valid_summary_membership_links_a_chat() {
+        for raw in [
+            json!({}),
+            json!({"missionId":null}),
+            json!({"title":"Mission coordinator", "projectId":"mission-A", "missionCoordinator":true}),
+        ] {
+            assert_eq!(chat(&json!({"id":"chat", "title":raw["title"], "projectId":raw["projectId"], "missionCoordinator":raw["missionCoordinator"], "missionId":raw["missionId"]})).unwrap().mission, MissionAssociation::Unlinked);
+        }
+        for value in [json!(""), json!("bad/id"), json!(true), json!({})] {
+            assert_eq!(
+                chat(&json!({"id":"chat", "missionId":value}))
+                    .unwrap()
+                    .mission,
+                MissionAssociation::Unknown
+            );
+        }
+        assert_eq!(
+            chat(&json!({"id":"chat", "missionId":"orphan-A"}))
+                .unwrap()
+                .mission,
+            MissionAssociation::Linked("orphan-A".into())
+        );
+    }
+
+    #[test]
+    fn mission_association_coordinator_role_is_explicit_and_separate() {
+        let role = |v: serde_json::Value| {
+            let c = chat(&v).unwrap();
+            (c.mission_coordinator, c.mission)
+        };
+        assert_eq!(
+            role(json!({"id":"c","title":"Mission coordinator chat"})),
+            (false, MissionAssociation::Unlinked)
+        );
+        assert_eq!(
+            role(json!({"id":"c","missionCoordinator":true})),
+            (true, MissionAssociation::Unlinked)
+        );
+        assert_eq!(
+            role(json!({"id":"c","activeMissionCoordinator":true,"missionId":"m"})),
+            (true, MissionAssociation::Linked("m".into()))
+        );
+        // The current role wins over the active flag, as Swift's does.
+        assert!(
+            !role(json!({"id":"c","missionCoordinator":false,"activeMissionCoordinator":true})).0
+        );
+        assert_eq!(
+            role(json!({"id":"c","missionCoordinator":true,"missionId":true})),
+            (true, MissionAssociation::Unknown)
+        );
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) mission: MissionAssociation,
+    /// Swift `isMissionCoordinator`: a passive role, never proof of membership.
+    pub(crate) mission_coordinator: bool,
     pub(crate) pull_requests: Vec<crate::jump::PullRequest>,
     pub(crate) failure: Option<crate::session_failure::Failure>,
     pub(crate) context_usage: crate::context_usage::Usage,
@@ -158,6 +238,10 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
     }
     let (signal, background_work) = decoration(value);
     Some(Chat {
+        mission: MissionAssociation::read(value),
+        mission_coordinator: value["missionCoordinator"]
+            .as_bool()
+            .unwrap_or(value["activeMissionCoordinator"] == true),
         pull_requests: crate::jump::pull_requests(value),
         failure: crate::session_failure::read(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),

@@ -246,6 +246,16 @@ Dither corners paint their cells inside one `paint_layer`, one draw order
 instead of a bounds-tree insert per cell. The open
 row keeps its faint neutral fill. Missions is the sidebar's only mission entry
 (Command-3 opens the same browser); mission and member chats stay ordinary rows.
+A linked chat's metadata line ends with its mission: Map (`AppIcon::Mission`)
+for a member, Compass (`AppIcon::Coordinator`) for the summary's coordinator
+role, as in Swift, then the cached Local mission name. Beside it the project
+keeps a `Space::SECTION` start and its own separator, the name segment keeps
+two of them, and the state shares the rest; the title, menu slot and corner
+lane are unchanged. The tooltip and row accessible name give the
+full wording. Without a cached name it says "Name unavailable"; malformed
+association metadata gets Info and "Mission unavailable", never a guessed link,
+UUID or row fetch. Offline names are labelled last known. Summary and
+mission-cache updates refresh the segment without changing row identity.
 `examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden
 native window with production dispatchers, cold (first traversal) against warm.
 `examples/sidebar_scroll_visible.rs` (release build; from an agent, launch it

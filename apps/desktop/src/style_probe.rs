@@ -66,6 +66,8 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                 ]
                                 .into_iter()
                                 .map(|(id, title, signal, background_work)| Chat {
+                                    mission: Default::default(),
+                                    mission_coordinator: false,
                                     failure: None,
                                     pull_requests: Vec::new(),
                                     context_usage: Default::default(),

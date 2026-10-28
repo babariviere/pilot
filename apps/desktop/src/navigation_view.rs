@@ -244,6 +244,8 @@ impl LocalViewer {
             }
             Target::Draft(key) => self.open(
                 Chat {
+                    mission: Default::default(),
+                    mission_coordinator: false,
                     failure: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),

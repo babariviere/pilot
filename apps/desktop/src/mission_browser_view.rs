@@ -75,6 +75,8 @@ pub(crate) struct Browser {
     pub(crate) error: Option<&'static str>,
     pub(crate) busy: bool,
     catalog_current: bool,
+    /// Sidebar names only: the retained Detail was accepted after the Catalog.
+    detail_newer: bool,
     projects: Arc<Vec<Project>>,
     chats: Arc<Vec<Chat>>,
     online: bool,
@@ -96,6 +98,30 @@ pub(crate) struct Browser {
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
+    /// The Local mission's cached name and whether it is current (online),
+    /// without reads. The later accepted snapshot wins; a newer complete
+    /// catalog without the mission does not fall back to a retained detail's
+    /// older name.
+    pub(crate) fn sidebar_mission_name(&self, id: &str) -> Option<(&str, bool)> {
+        let home = self.local_home();
+        let local = |key: &Key| key.id == id && Some(&key.home) == home.as_ref();
+        let detail = self
+            .detail
+            .as_ref()
+            .filter(|d| local(&d.key))
+            .map(|d| d.title.as_str());
+        let row = self
+            .catalog
+            .as_ref()
+            .and_then(|c| c.rows.iter().find(|r| local(&r.key)))
+            .map(|r| r.title.as_str());
+        let title = if self.detail_newer {
+            detail.or(row)
+        } else {
+            row.or_else(|| detail.filter(|_| self.catalog.as_ref().is_none_or(|c| c.truncated)))
+        };
+        title.map(|title| (title, self.online))
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_safe(&self, cx: &App) -> bool {
         self.creation.is_none()
@@ -136,6 +162,7 @@ impl Browser {
             error: None,
             busy: false,
             catalog_current: false,
+            detail_newer: false,
             projects: Arc::new(Vec::new()),
             chats: Arc::new(Vec::new()),
             online: false,
@@ -452,12 +479,14 @@ impl Browser {
             Ok(Data::Catalog(c)) if response.route == Route::Catalog => {
                 self.catalog = Some(c);
                 self.catalog_current = true;
+                self.detail_newer = false;
                 self.error = None;
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
                 self.decisions.reconcile(&d);
                 self.comments.reconcile(&d);
                 self.detail = Some(d);
+                self.detail_newer = true;
                 self.members = m;
                 self.error = None;
             }
@@ -988,7 +1017,7 @@ impl Render for Browser {
                         .child(
                             ResourceLabel::new(SharedString::from(r.title.clone()))
                                 .detail(SharedString::from(detail))
-                                .icon(crate::app_icon::AppIcon::Overview),
+                                .icon(crate::app_icon::AppIcon::Mission),
                         )
                         .on_click(cx.listener(move |v, _, _, cx| {
                             if v.can_open(&key, generation) {

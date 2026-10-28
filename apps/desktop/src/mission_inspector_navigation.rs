@@ -140,7 +140,7 @@ impl LocalViewer {
                     crate::ui::icon_action(
                         "mission-context-toggle",
                         "Mission context (⌘⌥M)",
-                        AppIcon::Overview,
+                        AppIcon::Mission,
                         crate::ui::Action::Quiet,
                     )
                     .selected(p.visible)

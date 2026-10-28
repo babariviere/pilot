@@ -99,3 +99,94 @@ fn failed_refresh_keeps_snapshot_but_never_claims_empty_current_or_linkable(
         }
     });
 }
+fn accept_latest(v: &mut Browser, route: Route, data: Data, cx: &mut Context<Browser>) {
+    v.generation += 1;
+    v.route = Some(route.clone());
+    v.accept(
+        Response {
+            generation: v.generation,
+            route,
+            result: Ok(data),
+        },
+        cx,
+    );
+}
+fn mission_association_catalog(title: Option<&str>, truncated: bool) -> Data {
+    let mut c = model::catalog(&f::catalog()).unwrap();
+    c.truncated = truncated;
+    match title {
+        Some(title) => c
+            .rows
+            .iter_mut()
+            .filter(|r| r.key == f::key("mission-A"))
+            .for_each(|r| r.title = title.into()),
+        // The foreign replica with the same mission ID stays in the catalog.
+        None => c.rows.retain(|r| r.key != f::key("mission-A")),
+    }
+    Data::Catalog(Arc::new(c))
+}
+#[gpui_kit::test]
+fn mission_association_name_follows_the_latest_accepted_exact_key_snapshot(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let pane = cx.new(Browser::new);
+    pane.update(cx, |v, cx| {
+        v.options(LocalOptions::synthetic(1));
+        v.online = true;
+        fn label(v: &Browser) -> Option<(&str, bool)> {
+            v.sidebar_mission_name("mission-A")
+        }
+        assert_eq!(label(v), None);
+        accept_latest(
+            v,
+            Route::Catalog,
+            mission_association_catalog(Some("Catalog first"), false),
+            cx,
+        );
+        assert_eq!(label(v), Some(("Catalog first", true)));
+        // A newer exact-key detail wins over the older catalog.
+        let mut d = model::detail(&f::key("mission-A"), &f::detail("mission-A")).unwrap();
+        d.title = "Detail rename".into();
+        let d = Arc::new(d);
+        let m = model::members(&d, &f::members("mission-A")).map(Arc::new);
+        accept_latest(
+            v,
+            Route::Detail(f::key("mission-A")),
+            Data::Detail(d, m),
+            cx,
+        );
+        assert_eq!(label(v), Some(("Detail rename", true)));
+        // A newer catalog wins over the retained detail.
+        accept_latest(
+            v,
+            Route::Catalog,
+            mission_association_catalog(Some("Catalog rename"), false),
+            cx,
+        );
+        assert!(v.detail.is_some());
+        assert_eq!(label(v), Some(("Catalog rename", true)));
+        // A newer complete catalog without the Local mission never revives the
+        // retained name, nor borrows the foreign replica's.
+        accept_latest(
+            v,
+            Route::Catalog,
+            mission_association_catalog(None, false),
+            cx,
+        );
+        assert_eq!(label(v), None);
+        // A truncated catalog may omit it, so the retained exact-key name remains.
+        accept_latest(
+            v,
+            Route::Catalog,
+            mission_association_catalog(None, true),
+            cx,
+        );
+        assert_eq!(label(v), Some(("Detail rename", true)));
+        // Offline keeps the last known name; reconnect restores the current label.
+        v.online = false;
+        assert_eq!(label(v), Some(("Detail rename", false)));
+        v.online = true;
+        assert_eq!(label(v), Some(("Detail rename", true)));
+    });
+}

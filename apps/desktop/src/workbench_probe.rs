@@ -787,12 +787,12 @@ fn sidebar_rows(
         json!({"id":"synthetic","title":"Current conversation","projectId":"a","state":"working"}),
         json!({"id":"working2","title":format!("Refactor {}","長いタイトル 👩‍💻 ".repeat(4)),"projectId":"b","state":"working"}),
         json!({"id":"jobs","title":"Background build","projectId":"a","state":"idle","runningJobs":[{"id":"j"}]}),
-        json!({"id":"stall","title":"Stalled tool","projectId":"b","state":"working","attentionReason":{"kind":"tool_stall"}}),
-        json!({"id":"failed","title":"Check failed build","projectId":"a","state":"failed"}),
-        json!({"id":"coord","title":"Mission coordinator chat","projectId":"a","state":"idle","missionCoordinator":true}),
-        json!({"id":"member","title":"Mission member chat","projectId":"a","state":"idle","missionId":"m1"}),
+        json!({"id":"stall","title":"Stalled tool","projectId":"b","state":"working","attentionReason":{"kind":"tool_stall"},"missionId":"mission-B"}),
+        json!({"id":"failed","title":"Check failed build","projectId":"a","state":"failed","missionId":"missing"}),
+        json!({"id":"coord","title":"Mission coordinator chat","projectId":"a","state":"idle","missionId":"mission-A","missionCoordinator":true}),
+        json!({"id":"member","title":"Mission member chat","projectId":"a","state":"idle","missionId":"mission-A"}),
         json!({"id":"idle1","title":"Review package","projectId":"b","state":"idle"}),
-        json!({"id":"idle2","title":format!("Résumé {}","naïve café ".repeat(5)),"projectId":"a","state":"idle"}),
+        json!({"id":"idle2","title":format!("Résumé {}","naïve café ".repeat(5)),"projectId":"a","state":"idle","missionId":{}}),
     ]
     .iter()
     .map(|x| crate::local_model::chat(x).unwrap())
@@ -875,12 +875,311 @@ fn sidebar_rows(
                     .map(|id| format!("{id:?}"))
                     .collect::<Vec<_>>()
             })
-            .filter(|id| id.to_lowercase().contains("mission") && !id.contains("nav-missions"))
+            .filter(|id| {
+                id.to_lowercase().contains("mission")
+                    && !id.contains("nav-missions")
+                    && !id.contains("chat-mission-")
+            })
             .collect();
         assert!(stray.is_empty(), "no per-mission sidebar rows: {stray:?}");
         assert!(w.try_find("nav-missions").is_some());
     })
     .unwrap();
+    // Association is summary-owned. Cache updates only enrich the name, never
+    // create membership, and preserve the selected row and existing geometry.
+    let association = |cx: &mut HeadlessAppContext, id: &str| {
+        cx.update_window(h, |_, w, _| {
+            w.within(SharedString::from(format!("chat-row-{id}")))
+                .try_find("chat-mission-mark")
+                .map(|m| (m.label().unwrap().to_owned(), m.bounds()))
+        })
+        .unwrap()
+    };
+    // Member Map, coordinator Compass, malformed metadata Info.
+    let glyph = |cx: &mut HeadlessAppContext, id: &str, icon: crate::app_icon::AppIcon| {
+        cx.update_window(h, |_, w, _| {
+            w.within(SharedString::from(format!("chat-row-{id}")))
+                .try_find(format!("chat-mission-glyph-{icon:?}"))
+                .is_some()
+        })
+        .unwrap()
+    };
+    use crate::app_icon::AppIcon::{Coordinator, Info, Mission};
+    assert!(association(cx, "idle1").is_none());
+    assert_eq!(
+        association(cx, "idle2").unwrap().0,
+        "Mission association unavailable"
+    );
+    assert!(glyph(cx, "idle2", Info) && !glyph(cx, "idle2", Mission));
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission linked · name unavailable"
+    );
+    assert!(glyph(cx, "coord", Coordinator) && !glyph(cx, "coord", Mission));
+    assert_eq!(
+        association(cx, "failed").unwrap().0,
+        "Mission linked · name unavailable"
+    );
+    assert!(glyph(cx, "failed", Mission) && glyph(cx, "member", Mission));
+    // The name sits on the metadata line, after project and state and inside
+    // the corner's text lane; the title and menu slot keep their places.
+    let mission_line = |cx: &mut HeadlessAppContext| {
+        for id in ["member", "coord", "failed", "stall", "idle2"] {
+            // The narrow window lists fewer rows than this: bring each target
+            // into the sidebar viewport before reading its bounds and pixels.
+            cx.update_window(h, |_, w, cx| {
+                let ix = v.read(cx).chats.read(cx).delegate().index(id).unwrap();
+                v.update(cx, |v, cx| {
+                    v.chats.update(cx, |l, cx| {
+                        l.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center, w, cx)
+                    })
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            let (name, project) = cx
+                .update_window(h, |_, w, _| {
+                    let list = w.find("chat-list-pane").bounds();
+                    let scope = w.within(SharedString::from(format!("chat-row-{id}")));
+                    let title = scope.find("sidebar-chat-title").bounds();
+                    let detail = scope.find("sidebar-chat-detail").bounds();
+                    let mark = scope.find("chat-mission-mark").bounds();
+                    let name = scope.find("chat-mission-name").bounds();
+                    let menu = scope.find(format!("chat-menu-slot-{id}")).bounds();
+                    assert!(title.right() <= menu.left(), "{id}: title before menu");
+                    assert!(
+                        mark.top() >= title.bottom()
+                            && mark.left() >= detail.left()
+                            && mark.right() <= detail.right() + px(0.5),
+                        "{id}: mission on the metadata line"
+                    );
+                    if ["failed", "stall"].contains(&id) {
+                        assert!(
+                            mark.right() <= detail.right() - px(28.) + px(0.5),
+                            "{id}: clear of the state corner"
+                        );
+                    }
+                    // Linked rows keep their project and state beside the name.
+                    let project = ["failed", "stall"].contains(&id).then(|| {
+                        let project = scope.find("sidebar-chat-project").bounds();
+                        let state = scope.find("sidebar-chat-state").bounds();
+                        assert!(
+                            project.size.width >= px(28.) - px(0.5),
+                            "{id}: project start stays readable"
+                        );
+                        assert!(
+                            state.size.width > px(0.)
+                                && project.right() <= state.left()
+                                && state.right() <= mark.left() + px(0.5),
+                            "{id}: project, state, then mission"
+                        );
+                        project
+                    });
+                    assert!(name.size.width >= w.rem_size(), "{id}: name stays visible");
+                    assert!(
+                        name.top() >= list.top() && name.bottom() <= list.bottom(),
+                        "{id}: sampled inside the sidebar viewport"
+                    );
+                    (name, project)
+                })
+                .unwrap();
+            let image = cx.capture_screenshot(h).unwrap();
+            assert!(
+                painted(&image, name, image.width() as f32 / width) > 0,
+                "{id}: mission name painted"
+            );
+            if let Some(project) = project {
+                assert!(
+                    painted(&image, project, image.width() as f32 / width) > 0,
+                    "{id}: project painted"
+                );
+            }
+        }
+        // Back to the top, where the following checks and captures start.
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                v.chats.update(cx, |l, cx| {
+                    l.scroll_to_item(
+                        gpui_kit::component::IndexPath::new(0),
+                        gpui_kit::ScrollStrategy::Top,
+                        w,
+                        cx,
+                    )
+                })
+            });
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    mission_line(cx);
+    // Existing cached catalog, not a new per-row request. Same ID at another
+    // home is not allowed to name a Local association.
+    let long = format!("Release {}", "長いミッション名 👩‍💻 ".repeat(4));
+    cx.update_window(h, |_, _, cx| {
+        v.update(cx, |v, cx| {
+            v.missions.update(cx, |b, cx| {
+                b.options(crate::LocalOptions::synthetic(1));
+                let mut catalog =
+                    crate::mission_browser::catalog(&crate::mission_browser_fixture::catalog())
+                        .unwrap();
+                catalog
+                    .rows
+                    .iter_mut()
+                    .filter(|r| r.key == crate::mission_browser_fixture::key("mission-B"))
+                    .for_each(|r| r.title = long.clone());
+                b.catalog = Some(Arc::new(catalog));
+                cx.notify();
+            });
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(
+        association(cx, "member").unwrap().0,
+        "Mission: Same mission 日本語"
+    );
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission: Same mission 日本語"
+    );
+    // A long name beside a long project and state still shows its start.
+    assert_eq!(
+        association(cx, "stall").unwrap().0,
+        format!("Mission: {long}")
+    );
+    mission_line(cx);
+    capture(cx, h, captures, name("-mission-names"));
+    cx.update_window(h, |_, _, cx| {
+        v.update(cx, |v, cx| {
+            v.missions.update(cx, |b, cx| {
+                let mut catalog = b.catalog.as_ref().unwrap().as_ref().clone();
+                catalog
+                    .rows
+                    .iter_mut()
+                    .filter(|r| r.key == crate::mission_browser_fixture::key("mission-A"))
+                    .for_each(|r| r.title = "Renamed mission".into());
+                b.catalog = Some(Arc::new(catalog));
+                cx.notify();
+            });
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(
+        association(cx, "member").unwrap().0,
+        "Mission: Renamed mission"
+    );
+    // Pointer tooltip uses the same full name as the keyboard row label.
+    cx.update_window(h, |_, w, cx| {
+        w.within("chat-row-member").hover("chat-mission-mark", cx);
+    })
+    .unwrap();
+    cx.advance_clock(Duration::from_secs(1));
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert_eq!(
+            w.find("chat-mission-tooltip").label(),
+            Some("Mission: Renamed mission")
+        );
+    })
+    .unwrap();
+    capture(cx, h, captures, name("-mission-tooltip"));
+    let member = cx.update(|cx| {
+        v.read(cx)
+            .chats
+            .read(cx)
+            .delegate()
+            .index("member")
+            .unwrap()
+    });
+    cx.update_window(h, |_, w, cx| {
+        w.hover("nav-home", cx);
+        v.update(cx, |v, cx| v.chats.update(cx, |l, cx| l.focus(w, cx)));
+        for _ in 0..12 {
+            if v.read(cx).chats.read(cx).delegate().selected == Some(member) {
+                break;
+            }
+            w.press("down", cx);
+        }
+        assert_eq!(v.read(cx).chats.read(cx).delegate().selected, Some(member));
+        assert!(
+            w.find("member")
+                .label()
+                .unwrap()
+                .contains("Mission: Renamed mission")
+        );
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(
+        cx.update_window(h, |_, w, _| w.find("chat-menu-member").visible())
+            .unwrap()
+    );
+    // A summary role change swaps Map and Compass on the same row.
+    let set_role = |cx: &mut HeadlessAppContext, coordinator: bool| {
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                let mut chats = v.state.chats.as_ref().clone();
+                chats
+                    .iter_mut()
+                    .find(|c| c.id == "member")
+                    .unwrap()
+                    .mission_coordinator = coordinator;
+                v.state.chats = Arc::new(chats);
+                v.rebuild_nav(w, cx);
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    set_role(cx, true);
+    assert_eq!(
+        association(cx, "member").unwrap().0,
+        "Coordinator · Mission: Renamed mission"
+    );
+    assert!(glyph(cx, "member", Coordinator) && !glyph(cx, "member", Mission));
+    set_role(cx, false);
+    assert_eq!(
+        association(cx, "member").unwrap().0,
+        "Mission: Renamed mission"
+    );
+    assert!(glyph(cx, "member", Mission) && !glyph(cx, "member", Coordinator));
+    // Disconnect retains the last known name; reconnect uses the new summary.
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.state.status = "Disconnected".into();
+            v.rebuild_nav(w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(
+        association(cx, "member").unwrap().0,
+        "Mission (last known): Renamed mission"
+    );
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission (last known): Renamed mission"
+    );
+    // Reconnected summary replaces the old membership. Preserve row identity.
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.state.status = "Synthetic reconnected".into();
+            let mut chats = v.state.chats.as_ref().clone();
+            chats.iter_mut().find(|c| c.id == "member").unwrap().mission =
+                crate::local_model::MissionAssociation::Unlinked;
+            v.state.chats = Arc::new(chats);
+            v.rebuild_nav(w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(association(cx, "member").is_none());
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission: Renamed mission"
+    );
+    assert!(glyph(cx, "coord", Coordinator));
     // Row actions: not built at rest, built and shown on hover, gone again after.
     let built = |cx: &mut HeadlessAppContext| {
         cx.update_window(h, |_, w, _| w.try_find("chat-menu-idle1").is_some())
@@ -994,7 +1293,7 @@ fn sidebar_rows(
     }
     println!(
         "{}",
-        json!({"width":width,"mode":mode.name(),"sidebar_rows":true,"uniform_rows":true,"no_mission_enumeration":true,"hover_and_keyboard_reveal":true,"missions_keyboard_and_pointer_keep_scope_and_draft":true})
+        json!({"width":width,"mode":mode.name(),"sidebar_rows":true,"uniform_rows":true,"no_mission_enumeration":true,"mission_association":true,"hover_and_keyboard_reveal":true,"missions_keyboard_and_pointer_keep_scope_and_draft":true})
     );
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
