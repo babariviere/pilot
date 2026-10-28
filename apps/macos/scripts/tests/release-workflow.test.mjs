@@ -154,9 +154,8 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 	}
 });
 
-test("Swift test and release build jobs cache only pinned dependencies with toolchain-specific keys", () => {
+test("Swift production release builds cache only pinned dependencies with toolchain-specific keys", () => {
 	for (const [job, script] of [
-		[jobOf(read("tests.yaml"))("macos"), "test"],
 		[jobOf(read("release.yaml"))("macos-app"), "bundle"],
 	]) {
 		assert.match(job, /id: swift-toolchain/);
@@ -180,44 +179,20 @@ test("Swift test and release build jobs cache only pinned dependencies with tool
 	}
 });
 
-test("PRs skip Swift only when the app is untouched, and smoke-test the test build", () => {
-	const macos = jobOf(read("tests.yaml"))("macos");
-	// Independent Rust native/opt-in artifact lanes also need Mac runners.
-	// Preserve one Swift gate, not an obsolete one-Mac-job total.
-	assert.match(macos, /runs-on: macos-15/);
-	assert.equal(read("tests.yaml").match(/run: apps\/macos\/scripts\/test\.sh/g).length, 1);
-	assert.match(macos, /fetch-depth: 2/);
-	const block = runBlock(macos, "          swift=true");
-	const prefix = 'git() { test "$*" = "diff --name-only HEAD^1 HEAD" && test "$GIT_OK" = 1 && printf "%s" "$FILES"; }';
-	for (const [event, files, ok, expected] of [
-		["push", "packages/daemon/src/a.ts", "1", "true"],
-		["pull_request", "packages/daemon/src/a.ts\ndocs/testing.md", "1", "false"],
-		["pull_request", "packages/protocol/src/a.ts\napps/macos/Sources/PilotCore/A.swift", "1", "true"],
-		// The visual service runs the shared runtime against the kernel's conformance fixtures.
-		["pull_request", "packages/artifacts/src/visual/runtime.js", "1", "true"],
-		["pull_request", "packages/protocol/fixtures/visual/conformance.json", "1", "true"],
-		["pull_request", "packages/artifacts/src/visual/check.ts", "1", "false"],
-		["pull_request", ".github/workflows/tests.yaml", "1", "true"],
-		["pull_request", ".github/workflows/pr.yaml", "1", "true"],
-		["pull_request", ".github/workflows/release.yaml", "1", "false"],
-		["pull_request", "package.json", "1", "true"],
-		["pull_request", "packages/foo/package.json\nmyapps/macos/x", "1", "false"],
-		["pull_request", "", "0", "true"],
-	]) {
-		const result = run(block, { EVENT_NAME: event, FILES: files, GIT_OK: ok }, prefix);
-		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.output, `swift=${expected}\n`, `${event} ${JSON.stringify(files)}`);
+test("shared CI never builds or tests the legacy Swift app", () => {
+	const workflow = read("tests.yaml");
+	for (const name of ["pr.yaml", "main.yaml", "tests.yaml", "gui-package.yml", "linux-package.yml"]) {
+		const source = read(name);
+		assert.doesNotMatch(source, /apps\/macos\/scripts\/(?:build|test|bundle)\.sh|swift (?:build|test)\b/, name);
+		assert.doesNotMatch(source, /steps\.(?:swift[\w-]*|pr-fixtures)\.|outputs\.swift/, name);
+		assert.doesNotMatch(source, /swift-(?:build|deps|test-stalls)|apps\/macos\/\.build|org\.swift\.swiftpm|apps\/macos\/Vendor/, name);
+		assert.doesNotMatch(source, /vendor-(?:ghostty|mermaidkit|quickjs)\.sh|stable-mtimes\.py|delegated-screenshots/, name);
 	}
-	const swift = macos.indexOf("run: apps/macos/scripts/test.sh");
-	const bundle = macos.indexOf("run: apps/macos/scripts/bundle.sh");
-	assert.ok(macos.indexOf("pnpm test -- --lane=macos") < swift && swift < bundle);
-	assert.match(macos, /Verify Swift toolchain\n        id: swift-toolchain\n        if: \$\{\{ !cancelled\(\) && steps\.changes\.outputs\.swift == 'true' \}\}/);
-	const packaging = macos.slice(macos.lastIndexOf("- name:", bundle), bundle);
-	assert.match(packaging, /github\.event_name == 'pull_request' && steps\.swift-test\.outcome == 'success'/);
-	assert.match(packaging, /CONFIGURATION: debug/);
-	assert.match(packaging, /BUNDLE_PREBUILT: '1'/);
-	assert.doesNotMatch(packaging, /BUNDLE_RUNTIME|secrets\./);
-	assert.match(macos, /--snapshot "\$RUNNER_TEMP\/delegated-screenshots" --delegated-tasks-only/);
+	assert.doesNotMatch(jobOf(workflow)("macos"), /id: changes|fetch-depth:|upload-artifact|actions\/cache|PILOT_SWIFT_JOBS/);
+	assert.doesNotMatch(workflow, /^    needs:/m, "remaining test lanes are independent");
+	// The Swift app and its production release path are deliberately retained.
+	assert.match(jobOf(read("release.yaml"))("macos-app"), /run: apps\/macos\/scripts\/bundle\.sh/);
+	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
 	const script = readFileSync(new URL("../bundle.sh", import.meta.url), "utf8");
 	assert.match(script, /Release bundles always compile from source/);
 	const guard = script.indexOf('if [ "$prebuilt" = 1 ] && [ "$runtime" = 1 ]');
@@ -251,40 +226,12 @@ test("Rust test, native and opt-in artifact jobs preserve platform and release b
 	}
 });
 
-test("SwiftLint is a strict standalone macOS check even when Swift compilation is skipped", () => {
+test("SwiftLint remains a strict static check without compiling the legacy app", () => {
 	const macos = jobOf(read("tests.yaml"))("macos");
 	assert.match(macos, /- name: SwiftLint\n        if: \$\{\{ !cancelled\(\) \}\}\n        run: apps\/macos\/scripts\/lint\.sh/);
-	assert.ok(macos.indexOf("run: apps/macos/scripts/lint.sh") < macos.indexOf("run: apps/macos/scripts/test.sh"));
 	const script = readFileSync(new URL("../lint.sh", import.meta.url), "utf8");
 	assert.match(script, /--strict --force-exclude --no-cache/);
 	assert.doesNotMatch(script, /swift (build|test)|--fix|--baseline|--lenient/);
-});
-
-test("only main saves and only PRs reuse a cached Swift test build, with content-derived timestamps", () => {
-	const macos = jobOf(read("tests.yaml"))("macos");
-	const step = (name) => macos.slice(macos.indexOf(`- name: ${name}`), macos.indexOf("\n      - ", macos.indexOf(`- name: ${name}`)));
-	const restore = step("Restore the Swift test build");
-	const save = step("Save the Swift test build");
-	assert.match(restore, /github\.event_name == 'pull_request' \}\}/);
-	assert.match(restore, /uses: actions\/cache\/restore@v4/);
-	assert.match(save, /uses: actions\/cache\/save@v4/);
-	assert.match(save, /if: \$\{\{ !cancelled\(\) && steps\.swift-test\.outcome != 'skipped' && github\.ref == 'refs\/heads\/main' \}\}/);
-	const settings = (text) => text.split("\n").filter((line) => /^\s+(path|key):/.test(line));
-	assert.deepEqual(settings(restore), settings(save));
-	assert.deepEqual(settings(save), [
-		"          path: apps/macos/.build",
-		"          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}",
-	]);
-	assert.match(restore, /restore-keys: \|\n +\$\{\{ steps\.swift-toolchain\.outputs\.build \}\}-\n +\$\{\{ steps\.swift-toolchain\.outputs\.compatible \}\}/);
-	assert.match(macos, /BUILD_INPUTS: \$\{\{ hashFiles\('apps\/macos\/Package\.resolved', 'apps\/macos\/Package\.swift', 'apps\/macos\/scripts\/swift-env\.sh', 'apps\/macos\/scripts\/stable-mtimes\.py'\) \}\}/);
-	assert.match(macos, /compatible=swift-build-v1-\$RUNNER_OS-\$RUNNER_ARCH-\$identity-/);
-	assert.doesNotMatch(macos.match(/BUILD_INPUTS: .*/)[0], /test\.sh|run-swift-tests/);
-	const stamped = macos.indexOf("python3 apps/macos/scripts/stable-mtimes.py apps/macos");
-	assert.ok(macos.indexOf("Restore the Swift test build") < stamped);
-	assert.ok(macos.indexOf("apps/macos/scripts/vendor-ghostty.sh", macos.indexOf("Give Swift inputs")) < stamped);
-	assert.ok(stamped < macos.indexOf("run: apps/macos/scripts/test.sh"));
-	assert.ok(macos.indexOf("run: apps/macos/scripts/test.sh") < macos.indexOf("Save the Swift test build"));
-	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
 });
 
 test("release builds run only for newly created stable drafts or explicit retries on trusted main", () => {

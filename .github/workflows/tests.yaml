@@ -14,8 +14,7 @@ permissions:
   contents: read
 
 env:
-  # macos-15 is the standard arm64 runner, not macos-15-intel / macos-15-large.
-  # Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
+  # Pin the native helper/SDK toolchain on standard arm64 macos-15 runners.
   DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
   NODE_VERSION: 24.21.0
   # Shared workspace integration tests require jj 0.46+.
@@ -64,34 +63,15 @@ jobs:
       # --timings lists the slowest test files, which decide how long this job takes.
       - run: pnpm test -- --lane=portable --timings
 
-  # Existing native Node/packaging + Swift lane. Rust runs independently below.
-  # PRs smoke-test the Swift test build; only release.yaml builds the optimized Swift app.
+  # Native Node/runtime and packaging contracts, without building the legacy Swift app.
+  # Rust and required native helper/security checks run independently below.
   macos:
     runs-on: macos-15
     timeout-minutes: 30
-    env:
-      # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
-      PILOT_SWIFT_JOBS: 3
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          # A PR checks out its merge commit. Its first parent is the base, so that diff is the PR's change.
-          fetch-depth: 2
-      - name: Check whether the Mac app changed
-        id: changes
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          # Main pushes always verify the app. PRs skip Swift when nothing it reads changed.
-          swift=true
-          if [ "$EVENT_NAME" = pull_request ] && files="$(git diff --name-only HEAD^1 HEAD)"; then
-            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|packages/artifacts/src/visual/runtime\.js$|packages/protocol/fixtures/visual/|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
-              swift=false
-            fi
-          fi
-          echo "Swift checks: $swift"
-          echo "swift=$swift" >> "$GITHUB_OUTPUT"
       # Installs the pnpm version pinned by package.json's packageManager field.
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
@@ -134,136 +114,6 @@ jobs:
           mkdir "$stage/relocated"
           ditto -x -k "$stage/runtime.zip" "$stage/relocated"
           apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
-      # Swift steps still run after a Node failure, so one run reports both.
-      - name: Verify Swift toolchain
-        id: swift-toolchain
-        if: ${{ !cancelled() && steps.changes.outputs.swift == 'true' }}
-        env:
-          # Test selection/watchdog edits are not compiler inputs. SwiftPM still tracks source/flag changes.
-          BUILD_INPUTS: ${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/swift-env.sh', 'apps/macos/scripts/stable-mtimes.py') }}
-        run: |
-          swift --version
-          identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
-          echo "key=$identity" >> "$GITHUB_OUTPUT"
-          echo "build=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-$BUILD_INPUTS" >> "$GITHUB_OUTPUT"
-          echo "compatible=swift-build-v1-$RUNNER_OS-$RUNNER_ARCH-$identity-" >> "$GITHUB_OUTPUT"
-      - name: Cache pinned Swift dependencies
-        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
-        uses: actions/cache@v4
-        with:
-          # Only dependency downloads and patched vendor sources, never build products or signing data.
-          path: |
-            ~/Library/Caches/org.swift.swiftpm/repositories
-            ~/Library/Caches/org.swift.swiftpm/artifacts
-            apps/macos/Vendor/libghostty-spm
-            apps/macos/Vendor/MermaidKit
-            apps/macos/Vendor/QuickJSNG
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/vendor-quickjs.sh', 'apps/macos/scripts/patches/**') }}
-      # PRs start from main's newest debug build and recompile only inputs whose contents changed. Main always
-      # builds from scratch, and releases never use cached build products.
-      - name: Restore the Swift test build
-        id: swift-build-cache
-        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' && github.event_name == 'pull_request' }}
-        uses: actions/cache/restore@v4
-        with:
-          path: apps/macos/.build
-          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
-          # A changed manifest/cache key may still reuse compatible objects. SwiftPM replans and
-          # rebuilds changed inputs; main's uncached build remains the independent correctness check.
-          restore-keys: |
-            ${{ steps.swift-toolchain.outputs.build }}-
-            ${{ steps.swift-toolchain.outputs.compatible }}
-      - name: Give Swift inputs content-derived timestamps
-        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
-        run: |
-          apps/macos/scripts/vendor-ghostty.sh
-          apps/macos/scripts/vendor-mermaidkit.sh
-          apps/macos/scripts/vendor-quickjs.sh
-          python3 apps/macos/scripts/stable-mtimes.py apps/macos
-      - name: Swift tests
-        id: swift-test
-        if: ${{ !cancelled() && steps.swift-toolchain.outcome == 'success' }}
-        # Each invocation separately bounds compilation (10 min) and each test runner (3 min),
-        # sampling hung native runners before cleanup. Keep an outer bound for the whole chain.
-        timeout-minutes: 20
-        run: apps/macos/scripts/test.sh
-      - name: Upload stalled Swift runner samples
-        if: ${{ always() && steps.swift-test.outcome != 'skipped' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: swift-test-stalls
-          path: ${{ runner.temp }}/swift-test-stalls/*.sample.txt
-          if-no-files-found: ignore
-          retention-days: 3
-      # A crashed test runner prints only its signal. Show the crashed thread from the system crash report.
-      - name: Show Swift test crash reports
-        if: ${{ failure() && steps.swift-test.outcome == 'failure' }}
-        timeout-minutes: 2
-        run: |
-          python3 - <<'PY'
-          import glob, json, os, time
-          dirs = [os.path.expanduser("~/Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"]
-          since = time.time() - 45 * 60
-          def recent():
-              found = [p for d in dirs for p in glob.glob(d + "/*.ips") if os.path.getmtime(p) > since]
-              return sorted(found, key=os.path.getmtime)
-          for _ in range(20):  # ReportCrash writes shortly after the process dies.
-              if recent():
-                  break
-              time.sleep(1)
-          reports = recent()
-          if not reports:
-              print("No crash reports from this job.")
-          for path in reports[-3:]:
-              print("==", os.path.basename(path))
-              try:
-                  with open(path) as f:
-                      f.readline()
-                      body = json.loads(f.read())
-              except (OSError, ValueError) as error:
-                  print("  unreadable:", error)
-                  continue
-              print("  exception:", json.dumps(body.get("exception")), json.dumps(body.get("asi", {}))[:2000])
-              images = body.get("usedImages", [])
-              for thread in body.get("threads", []):
-                  if not thread.get("triggered"):
-                      continue
-                  print("  crashed thread:", thread.get("queue") or thread.get("name") or "")
-                  for frame in thread.get("frames", [])[:80]:
-                      index = frame.get("imageIndex", -1)
-                      image = images[index].get("name", "?") if 0 <= index < len(images) else "?"
-                      symbol = frame.get("symbol") or hex(frame.get("imageOffset", 0))
-                      print(f"    {image} {symbol}+{frame.get('symbolLocation', 0)}")
-          PY
-      # Only main saves (each build is ~430 MB against the repo's 10 GB cache limit), also after failing
-      # tests: the build itself stays valid for the next incremental build.
-      - name: Save the Swift test build
-        if: ${{ !cancelled() && steps.swift-test.outcome != 'skipped' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: apps/macos/.build
-          key: ${{ steps.swift-toolchain.outputs.build }}-${{ github.sha }}
-      # PRs package the debug binaries the tests just built and smoke-test the relocated app.
-      - name: Bundle the app from the Swift test build
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
-        env:
-          CONFIGURATION: debug
-          BUNDLE_PREBUILT: '1'
-        run: apps/macos/scripts/bundle.sh
-      - name: Render delegated task fixtures
-        id: pr-fixtures
-        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.swift-test.outcome == 'success' }}
-        run: |
-          fixture_home="$(mktemp -d "$RUNNER_TEMP/delegated-home.XXXXXX")"
-          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --delegated-tasks-only
-          HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/build/Pilot.app/Contents/MacOS/Pilot --snapshot "$RUNNER_TEMP/delegated-screenshots" --control-sidebar-only
-      - name: Upload delegated task screenshots
-        if: ${{ !cancelled() && steps.pr-fixtures.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: delegated-task-screenshots
-          path: ${{ runner.temp }}/delegated-screenshots/*.png
-          if-no-files-found: error
 
   # Independent Linux Rust test/build sibling: no Node/Swift dependencies.
   rust:
