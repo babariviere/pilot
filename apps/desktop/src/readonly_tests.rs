@@ -303,3 +303,64 @@ fn message_footer_sits_below_body_with_sent_time_and_exact_copy(cx: &mut TestApp
     })
     .unwrap();
 }
+
+#[gpui_kit::test]
+fn keyboard_focus_on_copy_reveals_its_sent_time(cx: &mut TestAppContext) {
+    let sent = 1_793_178_307_250;
+    let reply = "Reply e\u{301} 日本 👩‍💻";
+    let (handle, _view) = setup(
+        cx,
+        vec![
+            Message::live(1, "You · entry 1".into(), "Question 👋".into()).with_sent(Some(sent)),
+            Message::live(2, "assistant · entry 2".into(), reply.into())
+                .with_sent(Some(sent + 1_000)),
+        ],
+    );
+    cx.update_window(handle, |_, w, cx| {
+        w.activate_window();
+        w.render_frame(cx);
+        for id in [1u64, 2] {
+            assert!(
+                !w.find(("sent-time", id)).visible(),
+                "time {id} quiet at rest"
+            );
+            assert!(
+                !w.find(("copy-source", id)).visible(),
+                "copy {id} quiet at rest"
+            );
+        }
+        w.focus_next(cx);
+    })
+    .unwrap();
+    let mut reached = false;
+    for _ in 0..20 {
+        reached = cx
+            .update_window(handle, |_, w, cx| {
+                if w.find(("copy-source", 2u64)).focused() != Some(true) {
+                    w.press("tab", cx);
+                }
+                w.render_frame(cx);
+                w.find(("copy-source", 2u64)).focused() == Some(true)
+            })
+            .unwrap();
+        if reached {
+            break;
+        }
+    }
+    assert!(reached, "Tab reaches the reply's copy action");
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.find(("copy-source", 2u64)).visible());
+        assert!(
+            w.find(("sent-time", 2u64)).visible(),
+            "keyboard focus shows the sent time beside copy"
+        );
+        assert!(
+            !w.find(("sent-time", 1u64)).visible(),
+            "other footers stay quiet"
+        );
+        w.press("enter", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), reply);
+    })
+    .unwrap();
+}

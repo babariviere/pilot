@@ -236,6 +236,15 @@ pub fn run_message_footer_probe(cx: &mut HeadlessAppContext) {
                 !uniform(&region(&focused, copy, width)),
                 "focus paints copy"
             );
+            assert!(
+                !uniform(&region(&focused, time, width)),
+                "focus paints time beside copy"
+            );
+            assert_eq!(
+                region(&focused, quiet, width),
+                region(&hidden, quiet, width),
+                "other messages stay quiet"
+            );
             if let Some(p) = &captures {
                 focused
                     .save(p.join(format!("focus-{width}-{dark}.png")))

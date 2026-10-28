@@ -13,16 +13,25 @@ pub(crate) fn read(message: &Value) -> Option<u64> {
         .map(|ms| ms as u64)
 }
 
-/// "Today at 14:05", "Yesterday at 09:30" or "27 Oct 2026 at 14:05", in local time.
+/// Date and time in local time, with Today/Yesterday: the system's localized
+/// formatter on macOS, else "Today at 14:05" or "27 Oct 2026 at 14:05".
 pub(crate) fn label(ms: u64) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(text) = native::current(ms, false) {
+        return text;
+    }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
     label_with(ms, now, crate::subscription_pause::local_offset)
 }
 
-/// Full date, seconds and UTC offset, for the tooltip.
+/// Full date, seconds and time zone, for the tooltip.
 pub(crate) fn detail(ms: u64) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(text) = native::current(ms, true) {
+        return text;
+    }
     detail_with(ms, crate::subscription_pause::local_offset)
 }
 
@@ -93,6 +102,136 @@ fn civil(day: i64) -> (i64, usize, i64) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (yoe + era * 400 + i64::from(m <= 2), m as usize, d)
+}
+
+/// The system date formatter (CoreFoundation's CFDateFormatter, which backs the
+/// Swift app's DateFormatter), so labels follow the user's locale settings.
+#[cfg(target_os = "macos")]
+mod native {
+    use std::ffi::c_void;
+    use std::ptr::null;
+
+    type Ref = *const c_void;
+    type Index = isize;
+    const UTF8: u32 = 0x0800_0100;
+    const SHORT: Index = 1;
+    const MEDIUM: Index = 2;
+    const LONG: Index = 3;
+    /// CFAbsoluteTime counts seconds from 2001-01-01 UTC.
+    const EPOCH_2001: f64 = 978_307_200.;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFBooleanTrue: Ref;
+        static kCFDateFormatterDoesRelativeDateFormattingKey: Ref;
+        static kCFDateFormatterTimeZone: Ref;
+        fn CFLocaleCopyCurrent() -> Ref;
+        fn CFLocaleCreate(alloc: Ref, identifier: Ref) -> Ref;
+        fn CFTimeZoneCreateWithTimeIntervalFromGMT(alloc: Ref, seconds: f64) -> Ref;
+        fn CFDateFormatterCreate(alloc: Ref, locale: Ref, date: Index, time: Index) -> Ref;
+        fn CFDateFormatterSetProperty(formatter: Ref, key: Ref, value: Ref);
+        fn CFDateFormatterCreateStringWithAbsoluteTime(alloc: Ref, formatter: Ref, at: f64) -> Ref;
+        fn CFStringCreateWithBytes(
+            alloc: Ref,
+            bytes: *const u8,
+            len: Index,
+            encoding: u32,
+            external: u8,
+        ) -> Ref;
+        fn CFStringGetLength(string: Ref) -> Index;
+        fn CFStringGetMaximumSizeForEncoding(len: Index, encoding: u32) -> Index;
+        fn CFStringGetCString(string: Ref, buffer: *mut u8, size: Index, encoding: u32) -> u8;
+        fn CFRelease(object: Ref);
+    }
+
+    /// An owned (+1) CoreFoundation object.
+    struct Owned(Ref);
+    impl Owned {
+        fn new(object: Ref) -> Option<Self> {
+            (!object.is_null()).then_some(Self(object))
+        }
+    }
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            // SAFETY: created by a CF Create/Copy call and released once.
+            unsafe { CFRelease(self.0) }
+        }
+    }
+
+    pub(super) struct Formatter(Owned);
+    impl Formatter {
+        /// The Swift app's label (medium date, short time, Today/Yesterday) or
+        /// detail (long date and time). None uses the user's current locale and
+        /// the system time zone.
+        pub(super) fn new(
+            exact: bool,
+            locale: Option<&str>,
+            gmt_offset: Option<f64>,
+        ) -> Option<Self> {
+            // SAFETY: plain CoreFoundation calls on owned, non-null objects.
+            unsafe {
+                let locale = match locale {
+                    Some(id) => {
+                        let id = Owned::new(CFStringCreateWithBytes(
+                            null(),
+                            id.as_ptr(),
+                            id.len() as Index,
+                            UTF8,
+                            0,
+                        ))?;
+                        Owned::new(CFLocaleCreate(null(), id.0))?
+                    }
+                    None => Owned::new(CFLocaleCopyCurrent())?,
+                };
+                let (date, time) = if exact { (LONG, LONG) } else { (MEDIUM, SHORT) };
+                let formatter = Owned::new(CFDateFormatterCreate(null(), locale.0, date, time))?;
+                if !exact {
+                    CFDateFormatterSetProperty(
+                        formatter.0,
+                        kCFDateFormatterDoesRelativeDateFormattingKey,
+                        kCFBooleanTrue,
+                    );
+                }
+                if let Some(seconds) = gmt_offset {
+                    let zone =
+                        Owned::new(CFTimeZoneCreateWithTimeIntervalFromGMT(null(), seconds))?;
+                    CFDateFormatterSetProperty(formatter.0, kCFDateFormatterTimeZone, zone.0);
+                }
+                Some(Self(formatter))
+            }
+        }
+
+        pub(super) fn format(&self, ms: u64) -> Option<String> {
+            let at = ms as f64 / 1000. - EPOCH_2001;
+            // SAFETY: the formatter is live; the returned string is owned and
+            // copied out with a buffer sized for its UTF-8 encoding.
+            unsafe {
+                let text = Owned::new(CFDateFormatterCreateStringWithAbsoluteTime(
+                    null(),
+                    (self.0).0,
+                    at,
+                ))?;
+                let size = CFStringGetMaximumSizeForEncoding(CFStringGetLength(text.0), UTF8) + 1;
+                let mut buffer = vec![0u8; usize::try_from(size).ok()?];
+                if CFStringGetCString(text.0, buffer.as_mut_ptr(), size, UTF8) == 0 {
+                    return None;
+                }
+                let end = buffer.iter().position(|b| *b == 0)?;
+                buffer.truncate(end);
+                String::from_utf8(buffer).ok()
+            }
+        }
+    }
+
+    thread_local! {
+        /// Created once per (UI) thread, like the Swift app's formatters.
+        static CURRENT: [Option<Formatter>; 2] =
+            [Formatter::new(false, None, None), Formatter::new(true, None, None)];
+    }
+
+    pub(super) fn current(ms: u64, exact: bool) -> Option<String> {
+        CURRENT.with(|formatters| formatters[usize::from(exact)].as_ref()?.format(ms))
+    }
 }
 
 #[cfg(test)]
@@ -167,5 +306,40 @@ mod tests {
             detail_with(AT, |_| 5 * 3600 + 1800),
             "28 October 2026 at 14:35:07 GMT+5:30"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_formatter_follows_locale_and_time_zone() {
+        use super::native::Formatter;
+        let format = |exact, locale, offset, ms| {
+            Formatter::new(exact, Some(locale), offset)
+                .unwrap()
+                .format(ms)
+                .unwrap()
+        };
+        let en = format(true, "en_US", Some(0.), AT);
+        assert!(
+            en.contains("October 28, 2026") && en.contains("9:05:07"),
+            "{en}"
+        );
+        let fr = format(true, "fr_FR", Some(3600.), AT);
+        assert!(
+            fr.contains("28 octobre 2026") && fr.contains("10:05:07"),
+            "{fr}"
+        );
+        let de = format(false, "de_DE", Some(0.), AT - 400 * DAY);
+        assert!(de.contains("2025") && de.contains("09:05"), "{de}");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let today = format(false, "en_US", None, now);
+        assert!(today.starts_with("Today"), "{today}");
+        let aujourdhui = format(false, "fr_FR", None, now).to_lowercase();
+        assert!(aujourdhui.starts_with("aujourd"), "{aujourdhui}");
+        // The production path uses the user's settings.
+        assert!(super::native::current(AT, false).is_some());
+        assert!(super::native::current(AT, true).is_some());
     }
 }

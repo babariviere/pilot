@@ -725,11 +725,28 @@ impl TranscriptView {
             self.work_ui.groups[&id].entity_id(),
         )
     }
+    /// A message footer's focus scope and whether keyboard focus is inside it,
+    /// so focusing its copy action also shows the sent time beside it.
+    fn footer_focus(
+        view: &Entity<Self>,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<(gpui_kit::FocusHandle, bool)> {
+        let id = view.read(cx).transcript.messages().get(ix)?.id();
+        let focus = window
+            .use_keyed_state(("message-actions-focus", id), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let focused = window.last_input_was_keyboard() && focus.contains_focused(window, cx);
+        Some((focus, focused))
+    }
     fn render_row(
         &self,
         ix: usize,
         cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
+        footer: Option<(gpui_kit::FocusHandle, bool)>,
     ) -> impl IntoElement + use<> {
         let row = &self.transcript.messages()[ix];
         if row.image_data().is_some() {
@@ -769,8 +786,10 @@ impl TranscriptView {
             "Copy source"
         };
         // Like the Swift app: a footer under the message with copy and its sent
-        // time, revealed on hover (copy also on keyboard focus). Its slot is
-        // always laid out, so revealing it never reflows the transcript.
+        // time, revealed together on hover or while keyboard focus is inside
+        // it. Its slot is always laid out, so revealing it never reflows.
+        let (footer_focus, focused) = footer.unzip();
+        let focused = focused.unwrap_or(false);
         let copy = Button::new(("copy-source", row.id()))
             .ghost()
             .xsmall()
@@ -781,7 +800,7 @@ impl TranscriptView {
             } else {
                 "Copy source"
             })
-            .opacity(0.)
+            .when(!focused, |b| b.opacity(0.))
             .group_hover("message", |s| s.opacity(1.))
             .focus_visible(|s| s.opacity(1.))
             .on_click(move |_, _, cx| {
@@ -798,7 +817,7 @@ impl TranscriptView {
                 .flex_none()
                 .whitespace_nowrap()
                 .text_color(cx.theme().muted_foreground)
-                .opacity(0.)
+                .when(!focused, |t| t.opacity(0.))
                 .group_hover("message", |s| s.opacity(1.))
                 .tooltip(move |w, cx| {
                     gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(w, cx)
@@ -824,17 +843,24 @@ impl TranscriptView {
             .test_support()
             .h_flex()
             .h(px(20.))
-            .items_center()
-            .gap(px(6.))
             .when(user, |f| f.justify_end())
-            .children(
-                if user {
-                    [sent, Some(copy)]
-                } else {
-                    [Some(copy), sent]
-                }
-                .into_iter()
-                .flatten(),
+            .child(
+                // Hugs its content: the focus scope that holds the copy action.
+                div()
+                    .h_flex()
+                    .h_full()
+                    .items_center()
+                    .gap(px(6.))
+                    .when_some(footer_focus, |f, focus| f.track_focus(&focus))
+                    .children(
+                        if user {
+                            [sent, Some(copy)]
+                        } else {
+                            [Some(copy), sent]
+                        }
+                        .into_iter()
+                        .flatten(),
+                    ),
             );
         let body = div()
             .v_flex()
@@ -1003,11 +1029,12 @@ impl Render for TranscriptView {
                         MessageScroller::new(
                             "transcript",
                             self.scroller.clone(),
-                            move |ix, _, cx| {
+                            move |ix, window, cx| {
                                 weak.upgrade()
                                     .map(|view| {
+                                        let footer = Self::footer_focus(&view, ix, window, cx);
                                         view.read(cx)
-                                            .render_row(ix, cx, weak.clone())
+                                            .render_row(ix, cx, weak.clone(), footer)
                                             .into_any_element()
                                     })
                                     .unwrap_or_else(|| div().into_any_element())
@@ -1078,8 +1105,8 @@ impl Render for TranscriptView {
                     .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
             .children(self.render_find(cx))
             .child(viewport.child(self.inline_survey(cx)).child(
-                MessageScroller::new("transcript", self.scroller.clone(), move |ix, _, cx| {
-                    weak.upgrade().map(|view| view.read(cx).render_row(ix, cx,weak.clone()).into_any_element())
+                MessageScroller::new("transcript", self.scroller.clone(), move |ix, window, cx| {
+                    weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_row(ix, cx, weak.clone(), footer).into_any_element() })
                         .unwrap_or_else(|| div().into_any_element())
                 }).with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
                         .with_list_style(list_style).jump_button(false)))
