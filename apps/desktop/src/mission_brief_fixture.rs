@@ -12,6 +12,7 @@ pub(crate) struct Reply {
     pub(crate) status: Option<u16>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) delay: u64,
+    pub(crate) chunked: bool,
     pub(crate) after_commit: bool,
 }
 impl Reply {
@@ -20,6 +21,7 @@ impl Reply {
             status: Some(status),
             bytes: serde_json::to_vec(&value).unwrap(),
             delay: 0,
+            chunked: false,
             after_commit: false,
         }
     }
@@ -224,6 +226,17 @@ async fn serve(mut stream: tokio::net::TcpStream, state: Arc<Mutex<State>>) -> s
     let Some(status) = reply.status else {
         return Ok(());
     };
+    if reply.chunked {
+        stream.write_all(format!("HTTP/1.1 {status} fixture\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n").as_bytes()).await?;
+        for chunk in reply.bytes.chunks(16 * 1024) {
+            stream
+                .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                .await?;
+            stream.write_all(chunk).await?;
+            stream.write_all(b"\r\n").await?;
+        }
+        return stream.write_all(b"0\r\n\r\n").await;
+    }
     let head = format!(
         "HTTP/1.1 {status} fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         reply.bytes.len()

@@ -1,4 +1,4 @@
-//! Bounded read and one explicit PATCH. No retry, redirect or GET settlement.
+//! Whole detail read and one bounded PATCH ACK. No retry, redirect or GET settlement.
 use crate::{
     LocalOptions,
     mission_brief::Source,
@@ -93,7 +93,7 @@ async fn fetch(
     if r.status().as_u16() != 200 {
         return Err("Mission metadata read unavailable. Retained text is unchanged.");
     }
-    let v = body(r).await?;
+    let v = crate::mission_tasks_reader::detail_body(r).await?;
     model::parse(s, &v["mission"])
 }
 pub(crate) async fn write(c: &reqwest::Client, o: &LocalOptions, s: &Save) -> Outcome {

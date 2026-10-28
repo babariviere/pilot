@@ -273,6 +273,7 @@ pub fn run_mission_metadata_probe(cx: &mut HeadlessAppContext) {
                     status: None,
                     bytes: Vec::new(),
                     delay: 0,
+                    chunked: false,
                 },
             );
             click(cx, h, "metadata-submit");

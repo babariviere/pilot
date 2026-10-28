@@ -109,7 +109,10 @@ async fn fetch(
     if r.status().as_u16() != 200 {
         return Err("Mission read unavailable. Nothing sent.");
     }
-    model::parse(s, &body(r).await?["mission"])
+    model::parse(
+        s,
+        &crate::mission_tasks_reader::detail_body(r).await?["mission"],
+    )
 }
 pub(crate) async fn write(c: &reqwest::Client, o: &LocalOptions, s: &Submission) -> Outcome {
     if !s.action.allowed(&s.before.status) {

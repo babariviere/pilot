@@ -120,3 +120,56 @@ async fn failures_bad_ack_and_matching_later_get_never_settle_or_retry() {
         assert!(!state.seen.iter().any(|(_, p, _)| p == "/redirect-target"));
     }
 }
+
+#[tokio::test]
+async fn whole_detail_declared() {
+    whole_detail(false).await;
+}
+#[tokio::test]
+async fn whole_detail_chunked() {
+    whole_detail(true).await;
+}
+async fn whole_detail(chunked: bool) {
+    let server = Server::start();
+    let mut reply = Reply::json(200, f::many("mission-A", 300));
+    assert!(reply.bytes.len() > CAP);
+    reply.chunked = chunked;
+    server.reply("GET", "/api/missions/mission-A", reply);
+    let s = capture();
+    assert_eq!(
+        read(server.options.clone(), source())
+            .unwrap()
+            .recv()
+            .await
+            .unwrap()
+            .unwrap(),
+        s.before
+    );
+    server.reply(
+        "POST",
+        "/api/missions/mission-A/lifecycle",
+        Reply::json(200, ack(&s)),
+    );
+    assert_eq!(
+        write(&client().unwrap(), &server.options, &s).await,
+        Outcome::Ack
+    );
+    assert_eq!(writes(&server), 1);
+}
+#[tokio::test]
+async fn oversized_declared_and_chunked_post_ack_stays_unknown() {
+    for chunked in [false, true] {
+        let server = Server::start();
+        let s = capture();
+        let mut value = ack(&s);
+        value["padding"] = json!("x".repeat(CAP));
+        let mut reply = Reply::json(200, value);
+        reply.chunked = chunked;
+        server.reply("POST", "/api/missions/mission-A/lifecycle", reply);
+        assert!(matches!(
+            write(&client().unwrap(), &server.options, &s).await,
+            Outcome::Unknown(_)
+        ));
+        assert_eq!(writes(&server), 1);
+    }
+}

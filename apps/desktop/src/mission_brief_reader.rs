@@ -250,14 +250,20 @@ async fn qualify(
             "Exact canonical mission/project evidence is absent from the received catalog. No lookup was guessed.",
         );
     }
-    let header = get(
-        client,
-        options,
-        &format!("/api/missions/{}", source.key.id),
-        model::WIRE_BYTES,
-    )
-    .await?
-    .ok_or("Canonical mission is no longer available.")?;
+    let response = client
+        .get(format!(
+            "{}/api/missions/{}",
+            options.loopback(),
+            source.key.id
+        ))
+        .send()
+        .await
+        .map_err(|_| "Couldn't load the brief. Refresh to try again.")?;
+    let header = match response.status().as_u16() {
+        200 => crate::mission_tasks_reader::detail_body(response).await?,
+        404 => return Err("Canonical mission is no longer available."),
+        _ => return Err("Local brief read was refused or unavailable."),
+    };
     model::header(source, &header)
 }
 pub(crate) async fn fetch(

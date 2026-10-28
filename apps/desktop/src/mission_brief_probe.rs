@@ -297,6 +297,7 @@ fn component(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Opt
             status: Some(200),
             bytes: serde_json::to_vec(&brief(5, "Captured before hidden save")).unwrap(),
             delay: 150,
+            chunked: false,
             after_commit: true,
         },
     );
@@ -409,6 +410,7 @@ fn component(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Opt
             status: Some(200),
             bytes: serde_json::to_vec(&brief(6, "Newer edit retained while hidden 👩‍💻")).unwrap(),
             delay: 500,
+            chunked: false,
             after_commit: true,
         },
     );

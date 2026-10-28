@@ -120,6 +120,7 @@ async fn post_commit_error_drop_malformed_ack_and_later_get_are_not_ack() {
                 status,
                 bytes,
                 delay: 0,
+                chunked: false,
                 after_commit: true,
             },
         );
@@ -169,6 +170,7 @@ async fn wire_history_caps_and_revision_zero_evidence_fail_closed() {
             status: Some(200),
             bytes: vec![b' '; model::HISTORY_BYTES + 1],
             delay: 0,
+            chunked: false,
             after_commit: false,
         },
     );
@@ -208,4 +210,53 @@ async fn worker_read_cancel_does_not_cancel_admitted_save_and_exit_closes_lanes(
     .unwrap();
     assert!(!worker.read(Some(request(Kind::Current))));
     assert!(!worker.save(save));
+}
+
+#[tokio::test]
+async fn whole_detail_declared() {
+    whole_detail(false).await;
+}
+#[tokio::test]
+async fn whole_detail_chunked() {
+    whole_detail(true).await;
+}
+async fn whole_detail(chunked: bool) {
+    let s = Server::start(Some("one"));
+    let c = client();
+    let mut detail = f::many("mission-A", 300);
+    detail["mission"]["briefRevision"] = json!(1);
+    let mut reply = Reply::json(200, detail);
+    assert!(reply.bytes.len() > model::WIRE_BYTES);
+    reply.chunked = chunked;
+    s.reply("GET", "/api/missions/mission-A", reply);
+    let Data::Current(current) = fetch(&c, &s.options, &request(Kind::Current))
+        .await
+        .unwrap()
+    else {
+        panic!("expected current brief");
+    };
+    assert_eq!(current.text(), "one");
+    let save = Save::capture(source(), 1, "one", "two").unwrap();
+    assert!(
+        matches!(write(&c, &s.options, &save).await, Outcome::Confirmed(b) if b.markdown.as_ref() == "two")
+    );
+    assert_eq!(s.puts(), 1);
+}
+#[tokio::test]
+async fn oversized_declared_and_chunked_save_ack_stays_unknown() {
+    for chunked in [false, true] {
+        let s = Server::start(Some("one"));
+        let mut value = brief(2, "two");
+        value["padding"] = json!("x".repeat(model::WIRE_BYTES));
+        let mut reply = Reply::json(200, value);
+        reply.chunked = chunked;
+        reply.after_commit = true;
+        s.reply("PUT", "/api/missions/mission-A/brief", reply);
+        let save = Save::capture(source(), 1, "one", "two").unwrap();
+        assert!(matches!(
+            write(&client(), &s.options, &save).await,
+            Outcome::Unknown(_)
+        ));
+        assert_eq!(s.puts(), 1);
+    }
 }

@@ -123,8 +123,57 @@ async fn malformed_oversized_and_wrong_content_ack_are_unknown() {
                 status: Some(200),
                 bytes,
                 delay: 0,
+                chunked: false,
             },
         );
+        assert!(matches!(
+            write(&client().unwrap(), &server.options, &capture()).await,
+            Outcome::Unknown(_)
+        ));
+        assert_eq!(writes(&server), 1);
+    }
+}
+
+#[tokio::test]
+async fn whole_detail_declared() {
+    whole_detail(false).await;
+}
+#[tokio::test]
+async fn whole_detail_chunked() {
+    whole_detail(true).await;
+}
+async fn whole_detail(chunked: bool) {
+    let server = Server::start();
+    let mut reply = Reply::json(200, f::many("mission-A", 300));
+    assert!(reply.bytes.len() > model::WIRE_BYTES);
+    reply.chunked = chunked;
+    server.reply("GET", "/api/missions/mission-A", reply);
+    let value = read(server.options.clone(), source())
+        .unwrap()
+        .recv()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        value,
+        model::parse(&source(), &f::detail("mission-A")["mission"]).unwrap()
+    );
+    server.reply("PATCH", "/api/missions/mission-A", Reply::json(200, ack()));
+    assert!(matches!(
+        write(&client().unwrap(), &server.options, &capture()).await,
+        Outcome::Saved(_)
+    ));
+    assert_eq!(writes(&server), 1);
+}
+#[tokio::test]
+async fn oversized_declared_and_chunked_patch_ack_stays_unknown() {
+    for chunked in [false, true] {
+        let server = Server::start();
+        let mut value = ack();
+        value["padding"] = json!("x".repeat(model::WIRE_BYTES));
+        let mut reply = Reply::json(200, value);
+        reply.chunked = chunked;
+        server.reply("PATCH", "/api/missions/mission-A", reply);
         assert!(matches!(
             write(&client().unwrap(), &server.options, &capture()).await,
             Outcome::Unknown(_)
