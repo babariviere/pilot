@@ -2,7 +2,7 @@
 //! Baseline mode relaxes only new-layout assertions, never route/write fences.
 use super::*;
 use gpui_kit::{
-    Bounds, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds, WindowOptions,
+    Bounds, EntityInputHandler, Focusable, HeadlessAppContext, Pixels, WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
     size,
     test::TestWindowExt,
@@ -87,6 +87,9 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 &captures,
                 format!("{}-{}-chat.png", width as u32, mode.name()),
             );
+            if !baseline {
+                header_alignment(cx, h, &v, width, &captures, mode.name());
+            }
             cx.update_window(h, |_, w, cx| {
                 for id in [
                     "new-local-chat",
@@ -641,4 +644,131 @@ fn chooser_checks(
         .unwrap();
     settle(cx, h);
     cx.update(|cx| assert!(!v.read(cx).projects_open));
+}
+
+/// Lowest device row where most of a text run's ink ends: its baseline,
+/// ignoring the few descender columns below it.
+fn ink_baseline(
+    pixel: &impl Fn(u32, u32) -> [u8; 4],
+    b: Bounds<Pixels>,
+    scale: f32,
+    bg: [u8; 4],
+) -> u32 {
+    let device = |v: Pixels| (f32::from(v) * scale).round() as u32;
+    let rows: Vec<(u32, u32)> = (device(b.top())..device(b.bottom()))
+        .map(|y| {
+            let ink = (device(b.left())..device(b.right()))
+                .filter(|&x| {
+                    let p = pixel(x, y);
+                    (0..3).any(|c| p[c].abs_diff(bg[c]) > 96)
+                })
+                .count() as u32;
+            (y, ink)
+        })
+        .collect();
+    let most = rows.iter().map(|r| r.1).max().unwrap_or(0);
+    assert!(most > 0, "text paints ink");
+    rows.iter().rev().find(|r| r.1 * 10 >= most * 3).unwrap().0
+}
+
+/// Title and project meta share one baseline and stay inside the row,
+/// including long Unicode titles and chats without a project.
+fn header_alignment(
+    cx: &mut HeadlessAppContext,
+    h: gpui_kit::AnyWindowHandle,
+    v: &gpui_kit::Entity<LocalViewer>,
+    width: f32,
+    captures: &Option<std::path::PathBuf>,
+    mode: &str,
+) {
+    let found = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| {
+            (
+                w.find("chat-header").bounds(),
+                w.find("chat-title").bounds(),
+                w.try_find("chat-header-meta").map(|m| m.bounds()),
+                w.find("conversation-links-toggle").bounds(),
+            )
+        })
+        .unwrap()
+    };
+    let (header, title, meta, action) = found(cx);
+    let meta = meta.expect("project meta is shown");
+    let image = cx.capture_screenshot(h).unwrap();
+    let scale = image.width() as f32 / width;
+    let pixel = |x, y| image.get_pixel(x, y).0;
+    let bg = pixel(
+        (f32::from(header.left()) * scale) as u32 + 2,
+        (f32::from(header.top()) * scale) as u32 + 2,
+    );
+    let (a, b) = (
+        ink_baseline(&pixel, title, scale, bg),
+        ink_baseline(&pixel, meta, scale, bg),
+    );
+    println!(
+        "{}",
+        json!({"header_baselines": [a, b], "width": width, "scale": scale})
+    );
+    assert!(
+        a.abs_diff(b) <= 1,
+        "title baseline {a} and meta baseline {b} (device rows) align at {width}"
+    );
+    for (id, bounds) in [("title", title), ("meta", meta)] {
+        assert!(
+            bounds.top() >= header.top() && bounds.bottom() <= header.bottom(),
+            "{id} stays in the header row"
+        );
+    }
+    assert!(title.right() <= meta.left() && meta.right() <= action.left());
+
+    // Long Unicode title: both truncate inside the row and the project stays readable.
+    let restore = cx.update(|cx| v.read(cx).title.clone());
+    cx.update(|cx| {
+        v.update(cx, |v, cx| {
+            v.title = "資料 👩‍💻 e\u{301} Ελληνικά ".repeat(12);
+            cx.notify();
+        })
+    });
+    settle(cx, h);
+    let (header, title, meta, action) = found(cx);
+    capture(
+        cx,
+        h,
+        captures,
+        format!("{}-{mode}-header-unicode.png", width as u32),
+    );
+    let meta = meta.expect("project meta stays beside a long title");
+    assert!(
+        title.right() <= meta.left()
+            && meta.right() <= action.left()
+            && meta.size.width >= px(48.)
+            && title.top() >= header.top()
+            && meta.bottom() <= header.bottom(),
+        "long title truncates and leaves project identity readable: {title:?} {meta:?}"
+    );
+
+    // No project: the title alone, still vertically centred in the row.
+    let project = cx.update(|cx| {
+        v.update(cx, |v, cx| {
+            v.title = restore;
+            let mut chats = v.state.chats.as_ref().clone();
+            let project = chats[0].project_id.take();
+            v.state.chats = Arc::new(chats);
+            cx.notify();
+            project
+        })
+    });
+    settle(cx, h);
+    let (header, title, meta, _) = found(cx);
+    assert!(meta.is_none(), "no empty meta without a project");
+    assert!((title.center().y - header.center().y).abs() <= px(1.));
+    cx.update(|cx| {
+        v.update(cx, |v, cx| {
+            let mut chats = v.state.chats.as_ref().clone();
+            chats[0].project_id = project;
+            v.state.chats = Arc::new(chats);
+            cx.notify();
+        })
+    });
+    settle(cx, h);
 }

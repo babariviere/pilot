@@ -2232,6 +2232,18 @@ impl Render for LocalViewer {
             )
             .collect::<Vec<_>>()
             .join(" · ");
+        // GPUI layout has no text baselines (items_baseline aligns box bottoms),
+        // so both runs share the title's line box and the meta moves down by the
+        // difference between their centred baselines. Font metrics report descent
+        // as negative; painted lines centre ascent + |descent| in the line box.
+        let header_line = px(crate::ui::TextRole::HEADLINE * 1.6);
+        let meta_shift = {
+            let text = window.text_system();
+            let font = text.resolve_font(&window.text_style().font());
+            let centre =
+                |size: f32| (text.ascent(font, px(size)) - text.descent(font, px(size)).abs()) / 2.;
+            centre(crate::ui::TextRole::HEADLINE) - centre(crate::ui::TextRole::CAPTION)
+        };
         div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             // Over glass the sidebar and page are separate tints, never stacked.
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
@@ -2326,12 +2338,12 @@ impl Render for LocalViewer {
                 let conversation = div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                     // One 48pt row: title and quiet meta, then named icon actions and the … menu.
                     .child(div().id("chat-header").test_support().h_flex().items_center().gap_2().h(px(48.)).px_3().flex_shrink_0().border_b_1().border_color(cx.theme().border)
-                        .child(div().h_flex().items_baseline().gap_2().flex_1().min_w_0()
+                        .child(div().h_flex().items_start().gap_2().flex_1().min_w_0().line_height(header_line)
                             .child(div().id("chat-title").flex_shrink_0().max_w(gpui_kit::relative(0.75)).truncate().text_size(px(crate::ui::TextRole::HEADLINE)).font_semibold()
                                 .when(!cwd.is_empty(),|d|{let cwd=SharedString::from(cwd.clone());gpui_kit::StatefulInteractiveElement::tooltip(d,move|w,cx|gpui_kit::component::tooltip::Tooltip::new(cwd.clone()).build(w,cx))})
                                 .child(SharedString::from(self.title.clone())).test_support())
                             // Meta yields space before the title does.
-                            .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().min_w_0().flex_shrink(16.).truncate().text_size(px(crate::ui::TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
+                            .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().relative().top(meta_shift).min_w_0().flex_shrink(16.).truncate().text_size(px(crate::ui::TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
                         .child(div().h_flex().items_center().gap_0p5().flex_none()
                             .children(self.queued_message_action(cx))
                             .children(self.conversation_links_action(cx))
