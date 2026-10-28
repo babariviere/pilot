@@ -330,6 +330,7 @@ impl ArtifactPane {
                 version: 1,
                 width,
                 height: 180.,
+                t: 0.,
                 pointer: None,
                 plan,
             },
@@ -803,7 +804,7 @@ impl ArtifactPane {
         height: f64,
         cx: &mut Context<Self>,
     ) {
-        self.draw_pointer(generation, version, id, width, height, None, cx);
+        self.draw_pointer(generation, version, id, width, height, 0., None, cx);
     }
     #[allow(clippy::too_many_arguments)]
     fn draw_pointer(
@@ -813,6 +814,7 @@ impl ArtifactPane {
         id: String,
         width: f64,
         height: f64,
+        t: f64,
         pointer: Option<[f64; 2]>,
         cx: &mut Context<Self>,
     ) {
@@ -833,6 +835,7 @@ impl ArtifactPane {
         if self.snapshot.drawings.get(&id).is_some_and(|f| {
             f.version == version
                 && f.pointer == pointer
+                && f.t == t
                 && (f.width - width).abs() < 0.5
                 && (f.height - height).abs() < 0.5
         }) {
@@ -844,6 +847,7 @@ impl ArtifactPane {
                 id,
                 width,
                 height,
+                t,
                 pointer,
             })
         }) {
@@ -1467,11 +1471,6 @@ impl ArtifactPane {
                 crate::native_mermaid_view::Element::new(format!("mermaid-{}-{path}", cx.entity_id()), prepared.clone()).scope(self.generation).scale(scale).into_any_element()
             }).unwrap_or_else(|| Self::note("Native diagram display limit reached (8). Exact source remains in the artifact source; no browser fallback.")),
             "canvas" => {
-                if value["animated"] == true {
-                    return Self::note(
-                        "Animated canvas rendering is not wired yet. Source remains intact.",
-                    );
-                }
                 let frame = self
                     .snapshot
                     .drawings
@@ -1490,7 +1489,8 @@ impl ArtifactPane {
                 }
                 let height = value["height"].as_f64().unwrap_or(160.);
                 let live = self.snapshot.live;
-                let canvas = self.canvas_element(id.clone(), height, scale, plan, cx);
+                let animated = value["animated"] == true;
+                let canvas = self.canvas_element(id.clone(), height, scale, animated, plan, cx);
                 div()
                     .id(SharedString::from(path.to_owned()))
                     .test_support()

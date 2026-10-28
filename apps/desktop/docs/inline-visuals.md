@@ -85,6 +85,15 @@ Controls stay enabled while a visible canvas redraws. A control used during a
 draw queues (latest wins) and dispatches when the draw's reply arrives, still
 fenced by generation, state version and control type; a slider intent waits in
 its existing pacing queue. Only an in-flight control event disables controls.
+Animated canvases have no clock of their own: each paint that shows the canvas
+advances its `t` (on the executor clock) and requests the next Draw once the
+previous reply has arrived, so frames follow the display with one Draw in flight.
+Offscreen, collapsed, source view or another presentation paint nothing, and a
+hidden window does not advance `t`, so the animation pauses; on return `t`
+advances at most 0.1 s. Under Reduce Motion it draws once at `t = 0`. Each frame
+re-renders the reader. A draw over the helper's 8 ms limit is retried
+once on a fresh helper; two in a row for the same canvas stop the reader with
+the error until Retry.
 Decoded raster artifacts instead hug their aspect-fitted natural size, constrained
 by the conversation width and Swift's 720pt image ceiling (48pt minimum target).
 Small images no longer sit inside a 440pt blank box. Raster completion remeasures

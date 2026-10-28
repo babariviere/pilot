@@ -13,12 +13,13 @@ fn ack(p: &mut ArtifactPane, command: Command, cx: &mut Context<ArtifactPane>) {
         id,
         width,
         height,
+        t,
         pointer,
     } = command
     else {
         panic!("expected Draw")
     };
-    let x = pointer.map_or(0., |p| p[0]);
+    let x = pointer.map_or(0., |p| p[0]) + t * 100.;
     let drawing = crate::visual_drawing::Drawing::checked(
         1,
         vec![10., 1., 7., 1., 0., x, 20., 30., 30., 0.],
@@ -32,6 +33,7 @@ fn ack(p: &mut ArtifactPane, command: Command, cx: &mut Context<ArtifactPane>) {
             version,
             width,
             height,
+            t,
             pointer,
             plan: crate::visual_canvas_plan::Plan::compile(&drawing, width, height).map(Arc::new),
         },
@@ -45,7 +47,230 @@ fn pointer(command: &Command) -> Option<[f64; 2]> {
     };
     *pointer
 }
+fn time(command: &Command) -> f64 {
+    let Command::Draw { t, .. } = command else {
+        panic!("expected Draw")
+    };
+    *t
+}
+fn thread_cpu() -> std::time::Duration {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    std::time::Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
+/// Animated canvas lifecycle on the real paint path: one Draw per shown frame
+/// with advancing t, latest-only flight, pause offscreen and in source view,
+/// a bounded catch-up on return, a retried slow frame and t = 0 under Reduce Motion.
+fn animated(cx: &mut HeadlessAppContext) {
+    const FRAME: std::time::Duration = std::time::Duration::from_millis(16);
+    let reduce_motion = cx.update(|cx| {
+        let previous = cx.reduce_motion();
+        cx.set_reduce_motion(false);
+        previous
+    });
+    let (worker, commands) = Worker::synthetic();
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Geometry::new(
+                    Default::default(),
+                    size(px(680.), px(760.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |window, cx| {
+                cx.new(|cx| {
+                    let view = crate::LocalViewer::visual_preview(9, window, cx);
+                    view.probe_artifact_pane().update(cx, |p, cx| {
+                        let reference = p.reference.clone().unwrap();
+                        let mut children = vec![json!({"type":"canvas","id":"0.0","height":160,"animated":true,"label":"Synthetic animation"})];
+                        children.extend((1..=40).map(|i| {
+                            json!({"type":"text","runs":[{"text":format!("Synthetic row {i}")}]})
+                        }));
+                        let scene = crate::visual_scene::Scene::parse(
+                            json!({"api":1,"root":{"type":"column","children":children}}),
+                        )
+                        .unwrap();
+                        p.preview(reference, "Synthetic animated canvas. No source evaluation.".into(), scene, cx);
+                        p.snapshot.live = true;
+                        p.worker = Some(worker);
+                    });
+                    view
+                })
+            },
+        )
+        .unwrap()
+    });
+    let pane = cx.update(|cx| view.read(cx).probe_artifact_pane());
+    let frame = |cx: &mut HeadlessAppContext| {
+        cx.advance_clock(FRAME);
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+            .unwrap();
+        cx.run_until_parked();
+    };
+    cx.run_until_parked();
+    frame(cx);
+    let first = commands.try_recv().expect("shown animated canvas draws");
+    assert_eq!(time(&first), 0., "the first frame draws at t = 0");
+    pane.update(cx, |p, cx| ack(p, first, cx));
+    // Settle any layout-driven resize before measuring the steady loop.
+    for _ in 0..4 {
+        frame(cx);
+        if let Ok(command) = commands.try_recv() {
+            pane.update(cx, |p, cx| ack(p, command, cx));
+        }
+    }
+    let before = cx.capture_screenshot(handle).unwrap();
+    let mut last = pane.read_with(cx, |p, _| p.snapshot.drawings["0.0"].t);
+    let (cpu, frames) = (thread_cpu(), 60);
+    for _ in 0..frames {
+        frame(cx);
+        let next = commands
+            .try_recv()
+            .expect("each shown frame requests one Draw");
+        assert!(commands.try_recv().is_err(), "one Draw in flight");
+        let t = time(&next);
+        assert!(
+            t > last && t - last <= 0.1 + 1e-9,
+            "t advances by frame time: {last} -> {t}"
+        );
+        last = t;
+        // Without a reply, later frames only advance time; nothing queues.
+        frame(cx);
+        assert!(
+            commands.try_recv().is_err(),
+            "a frame in flight blocks the next Draw"
+        );
+        pane.update(cx, |p, cx| ack(p, next, cx));
+    }
+    let per_frame = (thread_cpu() - cpu) / frames;
+    let after = cx.capture_screenshot(handle).unwrap();
+    assert_ne!(
+        before.as_raw(),
+        after.as_raw(),
+        "animated replies paint new frames"
+    );
+    // A tolerated slow frame keeps the last frame and redraws at once.
+    frame(cx);
+    let missed = commands.try_recv().unwrap();
+    let missed_t = time(&missed);
+    pane.update(cx, |p, cx| {
+        let (generation, reference, snapshot) = (
+            p.generation,
+            p.reference.clone().unwrap(),
+            p.snapshot.clone(),
+        );
+        p.accept(generation, &reference, snapshot, cx);
+    });
+    let retried = commands.try_recv().expect("slow frame retried");
+    assert!(time(&retried) >= missed_t);
+    pane.update(cx, |p, cx| ack(p, retried, cx));
+    // Scrolled offscreen: no draws however many frames pass.
+    pane.update(cx, |p, cx| {
+        p.zoom.scroll.set_offset(point(px(0.), px(-2000.)));
+        cx.notify();
+    });
+    // A reply to the Draw sent before the scroll may still arrive.
+    for _ in 0..2 {
+        frame(cx);
+        if let Ok(command) = commands.try_recv() {
+            pane.update(cx, |p, cx| ack(p, command, cx));
+        }
+    }
+    last = cx.update(|cx| pane.read(cx).snapshot.drawings["0.0"].t);
+    for _ in 0..10 {
+        frame(cx);
+        assert!(commands.try_recv().is_err(), "offscreen canvas stays still");
+    }
+    let offscreen = cx
+        .update_window(handle, |_, window, _| window.find("0.0").bounds())
+        .unwrap();
+    assert!(
+        offscreen.bottom() < px(0.),
+        "canvas scrolled out: {offscreen:?}"
+    );
+    pane.update(cx, |p, cx| {
+        p.zoom.scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    });
+    frame(cx);
+    let resumed = commands.try_recv().expect("returning canvas resumes");
+    assert!(
+        time(&resumed) > last && time(&resumed) - last <= 0.1 + 1e-9,
+        "time paused offscreen: {last} -> {}",
+        time(&resumed)
+    );
+    pane.update(cx, |p, cx| ack(p, resumed, cx));
+    // Source view unmounts the canvas.
+    pane.update(cx, |p, cx| {
+        p.source = true;
+        cx.notify();
+    });
+    // A Draw sent before the switch is already in flight.
+    if let Ok(command) = commands.try_recv() {
+        pane.update(cx, |p, cx| ack(p, command, cx));
+    }
+    last = cx.update(|cx| pane.read(cx).snapshot.drawings["0.0"].t);
+    for _ in 0..10 {
+        frame(cx);
+        assert!(commands.try_recv().is_err(), "hidden canvas stays still");
+    }
+    pane.update(cx, |p, cx| {
+        p.source = false;
+        cx.notify();
+    });
+    frame(cx);
+    let shown = commands.try_recv().expect("shown again resumes");
+    assert!(time(&shown) > last && time(&shown) - last <= 0.1 + 1e-9);
+    pane.update(cx, |p, cx| ack(p, shown, cx));
+    // Reduce Motion: one still frame at t = 0, then nothing.
+    cx.update(|cx| cx.set_reduce_motion(true));
+    // A Draw sent before the switch may still be in flight; then t = 0 follows.
+    let mut times = Vec::new();
+    for _ in 0..3 {
+        frame(cx);
+        while let Ok(command) = commands.try_recv() {
+            times.push(time(&command));
+            pane.update(cx, |p, cx| ack(p, command, cx));
+        }
+    }
+    assert_eq!(
+        times.last(),
+        Some(&0.),
+        "Reduce Motion draws t = 0: {times:?}"
+    );
+    assert!(times.len() <= 2, "{times:?}");
+    for _ in 0..10 {
+        frame(cx);
+        assert!(commands.try_recv().is_err(), "Reduce Motion stays still");
+    }
+    cx.update(|cx| cx.set_reduce_motion(false));
+    cx.update_window(handle, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    pane.update(cx, |p, cx| {
+        p.pump_canvas(cx);
+        assert!(
+            commands.try_recv().is_err(),
+            "removed window stops animation"
+        );
+        p.close();
+    });
+    cx.update(|cx| cx.set_reduce_motion(reduce_motion));
+    println!(
+        "Native animated canvas: per-frame Draw with advancing t, one flight, slow-frame retry, offscreen/source pause with bounded catch-up, Reduce Motion t=0, window removal. UI thread CPU per animated frame (headless render+paint, two passes, synthetic replies): {:.2} ms.",
+        per_frame.as_secs_f64() * 1000.
+    );
+}
 pub(in crate::artifact_view) fn run(cx: &mut HeadlessAppContext) {
+    animated(cx);
     let reduce_motion = cx.update(|cx| {
         let previous = cx.reduce_motion();
         cx.set_reduce_motion(true);

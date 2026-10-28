@@ -1,10 +1,13 @@
 //! Mounted canvas input. One warm Draw lane, latest pointer per mounted canvas.
+//! Animated canvases draw again after each paint that shows them, so frames
+//! follow the display and stop while offscreen, collapsed or in another pane.
 use super::*;
 use gpui_kit::{
     Bounds, DispatchPhase, HitboxBehavior, MouseExitEvent, MouseMoveEvent, Pixels, ScrollWheelEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Weak;
+use std::time::Instant;
 
 type Geometry = Bounds<Pixels>;
 pub(super) struct Mounted {
@@ -16,6 +19,27 @@ pub(super) struct Mounted {
     geometry: Geometry,
     scale: f32,
     pointer: Option<[f64; 2]>,
+    /// Seconds of animation shown so far, and the paint that last advanced it.
+    t: f64,
+    tick: Option<Instant>,
+}
+impl Mounted {
+    /// Advances animation time at a paint. Time pauses while the window is hidden
+    /// (a long gap adds at most a tenth of a second) and stays 0 for still
+    /// canvases and under Reduce Motion.
+    fn advance(&mut self, animated: bool, reduce_motion: bool, shown: bool, now: Instant) {
+        if !animated || reduce_motion {
+            self.t = 0.;
+            self.tick = None;
+        } else if !shown {
+            self.tick = None;
+        } else {
+            if let Some(last) = self.tick {
+                self.t += now.saturating_duration_since(last).as_secs_f64().min(0.1);
+            }
+            self.tick = Some(now);
+        }
+    }
 }
 impl ArtifactPane {
     pub(super) fn prepare_canvases(&mut self) {
@@ -35,6 +59,8 @@ impl ArtifactPane {
                     geometry: Geometry::default(),
                     scale: 1.,
                     pointer: None,
+                    t: 0.,
+                    tick: None,
                 });
             }
         }
@@ -44,6 +70,7 @@ impl ArtifactPane {
         id: String,
         height: f64,
         scale: f32,
+        animated: bool,
         plan: Option<Arc<crate::visual_canvas_plan::Plan>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -91,6 +118,7 @@ impl ArtifactPane {
                 let visible = bounds.intersect(&window.content_mask().bounds);
                 if visible.size.width > px(0.) && visible.size.height > px(0.) {
                     proof.set(Some(bounds));
+                    let shown = window.visibility().is_visible();
                     let id = id.clone();
                     let proof = proof.clone();
                     let weak = weak.clone();
@@ -118,6 +146,8 @@ impl ArtifactPane {
                                 mounted.inline = inline;
                                 mounted.geometry = bounds;
                                 mounted.scale = scale;
+                                let now = cx.background_executor().now();
+                                mounted.advance(animated, cx.reduce_motion(), shown, now);
                             }
                             view.pump_canvas(cx);
                         });
@@ -182,22 +212,69 @@ impl ArtifactPane {
             let matches = self.snapshot.drawings.get(id).is_some_and(|f| {
                 f.version == m.version
                     && f.pointer == m.pointer
+                    && f.t == m.t
                     && (f.width - width).abs() < 0.5
                     && (f.height - height).abs() < 0.5
             });
-            (!matches).then(|| (id.clone(), width, height, m.pointer))
+            (!matches).then(|| (id.clone(), width, height, m.t, m.pointer))
         });
-        if let Some((id, width, height, pointer)) = next {
+        if let Some((id, width, height, t, pointer)) = next {
             self.draw_pointer(
                 self.generation,
                 self.snapshot.version,
                 id,
                 width,
                 height,
+                t,
                 pointer,
                 cx,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    fn mounted() -> Mounted {
+        Mounted {
+            bounds: Rc::new(Cell::new(None)),
+            lifetime: RefCell::new(Weak::new()),
+            generation: 0,
+            version: 0,
+            inline: false,
+            geometry: Geometry::default(),
+            scale: 1.,
+            pointer: None,
+            t: 0.,
+            tick: None,
+        }
+    }
+    #[test]
+    fn animation_time_follows_paints_pauses_while_hidden_and_stays_zero_under_reduce_motion() {
+        let start = Instant::now();
+        let at = |ms| start + Duration::from_millis(ms);
+        let mut m = mounted();
+        m.advance(true, false, true, at(0));
+        assert_eq!(m.t, 0., "the first frame draws at t = 0");
+        m.advance(true, false, true, at(16));
+        m.advance(true, false, true, at(33));
+        assert!((m.t - 0.033).abs() < 1e-9);
+        // A hidden window pauses time; coming back adds no more than 0.1 s.
+        m.advance(true, false, false, at(500));
+        assert!((m.t - 0.033).abs() < 1e-9);
+        m.advance(true, false, true, at(5_000));
+        m.advance(true, false, true, at(10_000));
+        assert!((m.t - 0.133).abs() < 1e-9, "{}", m.t);
+        m.advance(true, true, true, at(10_016));
+        assert_eq!(m.t, 0., "Reduce Motion shows t = 0");
+        m.advance(true, true, true, at(10_032));
+        assert_eq!(m.t, 0.);
+        let mut still = mounted();
+        still.advance(false, false, true, at(0));
+        still.advance(false, false, true, at(16));
+        assert_eq!(still.t, 0.);
     }
 }
 

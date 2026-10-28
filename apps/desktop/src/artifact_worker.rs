@@ -8,7 +8,7 @@ use crate::{
 };
 use serde_json::Value;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -31,6 +31,8 @@ pub(crate) struct DrawingFrame {
     pub(crate) version: u64,
     pub(crate) width: f64,
     pub(crate) height: f64,
+    /// Animation time in seconds; 0 for still canvases and under Reduce Motion.
+    pub(crate) t: f64,
     pub(crate) pointer: Option<[f64; 2]>,
     pub(crate) plan: Result<Arc<crate::visual_canvas_plan::Plan>, &'static str>,
 }
@@ -46,6 +48,7 @@ pub(crate) enum Command {
         id: String,
         width: f64,
         height: f64,
+        t: f64,
         pointer: Option<[f64; 2]>,
     },
 }
@@ -151,6 +154,19 @@ fn publish(
         let _ = updates.try_send(value);
     }
 }
+/// A slow frame is retried once on a fresh helper; a second slow frame in a row
+/// for the same canvas stops it with the error. Returns the error to report.
+fn slow_frame(slow: &mut BTreeSet<String>, id: &str, mut error: Fault) -> Option<Fault> {
+    if error.kind != "timeout" {
+        return Some(error);
+    }
+    if slow.insert(id.to_owned()) {
+        return None;
+    }
+    slow.remove(id);
+    error.message = format!("{} twice in a row, which stops the canvas", error.message);
+    Some(error)
+}
 async fn run(
     options: LocalOptions,
     reference: Reference,
@@ -241,6 +257,8 @@ async fn run(
             return;
         }
     };
+    // Canvases whose last draw missed the frame limit.
+    let mut slow = BTreeSet::new();
     loop {
         snapshot.scene = session.scene.clone();
         snapshot.state = session.state.clone();
@@ -298,6 +316,7 @@ async fn run(
         }
         let next = match command {
             Command::Retry => {
+                slow.clear();
                 session.clock(now());
                 retry(&mut session, &cancelled).await
             }
@@ -310,13 +329,16 @@ async fn run(
                 id,
                 width,
                 height,
+                t,
                 pointer,
             } => {
-                let drawing = tokio::select! {biased;_=cancelled.recv()=>None,drawing=session.draw(version,&id,width,height,pointer)=>Some(drawing)};
+                let drawing = tokio::select! {biased;_=cancelled.recv()=>None,drawing=session.draw(version,&id,width,height,t,pointer)=>Some(drawing)};
                 match drawing {
                     None => None,
-                    Some(Err(error)) => Some(Err(error)),
+                    // A tolerated miss keeps the last frame; the next draw restarts the helper.
+                    Some(Err(error)) => slow_frame(&mut slow, &id, error).map(Err).or(Some(Ok(()))),
                     Some(Ok(drawing)) => {
+                        slow.remove(&id);
                         let plan =
                             crate::visual_canvas_plan::Plan::compile(&drawing, width, height)
                                 .map(Arc::new);
@@ -326,6 +348,7 @@ async fn run(
                                 version,
                                 width,
                                 height,
+                                t,
                                 pointer,
                                 plan,
                             },
@@ -365,6 +388,31 @@ mod tests {
     use serde_json::json;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[test]
+    fn one_slow_frame_redraws_and_two_in_a_row_stop_the_canvas() {
+        let fault = |kind| Fault {
+            kind,
+            message: "the drawing took longer than 8 ms".into(),
+            line: Some(3),
+            limit: None,
+        };
+        let mut slow = BTreeSet::new();
+        assert!(slow_frame(&mut slow, "0.1", fault("timeout")).is_none());
+        // Another canvas's miss does not count against the first.
+        assert!(slow_frame(&mut slow, "0.2", fault("timeout")).is_none());
+        let stopped = slow_frame(&mut slow, "0.1", fault("timeout")).unwrap();
+        assert_eq!(
+            stopped.message,
+            "the drawing took longer than 8 ms twice in a row, which stops the canvas"
+        );
+        assert_eq!(stopped.line, Some(3));
+        // A good frame in between resets the count (the caller removes the id).
+        slow.remove("0.2");
+        assert!(slow_frame(&mut slow, "0.2", fault("timeout")).is_none());
+        // Other draw errors stop at once.
+        let script = slow_frame(&mut BTreeSet::new(), "0.1", fault("script")).unwrap();
+        assert_eq!(script.message, "the drawing took longer than 8 ms");
+    }
     #[test]
     fn artifact_gallery_completion_receiver_does_not_retain_lifetime_or_queued_raster() {
         let (commands, _events) = async_channel::bounded(1);
@@ -543,6 +591,7 @@ mod tests {
             id: "0.2".into(),
             width: 320.,
             height: 120.,
+            t: 0.,
             pointer: Some([25., 30.]),
         }));
         let frame = tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())

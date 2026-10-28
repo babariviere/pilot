@@ -90,16 +90,20 @@ impl Session {
             self.program.now = now;
         }
     }
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn draw(
         &mut self,
         version: u64,
         id: &str,
         width: f64,
         height: f64,
+        t: f64,
         pointer: Option<[f64; 2]>,
     ) -> Result<crate::visual_drawing::Drawing, Fault> {
         if version != self.version
             || self.process.is_none()
+            || !t.is_finite()
+            || t < 0.
             || pointer.is_some_and(|[x, y]| {
                 !x.is_finite() || !y.is_finite() || x < 0. || y < 0. || x > width || y > height
             })
@@ -120,7 +124,7 @@ impl Session {
             .as_mut()
             .unwrap()
             .drawing(
-                json!({"kind":"draw","id":id,"width":width,"height":height,"t":0,"pointer":pointer.map(|[x,y]| json!({"x":x,"y":y}))}),
+                json!({"kind":"draw","id":id,"width":width,"height":height,"t":t,"pointer":pointer.map(|[x,y]| json!({"x":x,"y":y}))}),
             )
             .await;
         if result.is_err() {
@@ -312,7 +316,7 @@ mod tests {
             (None, "none:3"),
         ] {
             let drawing = session
-                .draw(version, "0", 320., 120., pointer)
+                .draw(version, "0", 320., 120., 0., pointer)
                 .await
                 .unwrap();
             assert_eq!(drawing.strings, vec![expected]);
@@ -322,12 +326,42 @@ mod tests {
         for pointer in [Some([f64::NAN, 1.]), Some([-1., 1.]), Some([321., 1.])] {
             assert!(
                 session
-                    .draw(version, "0", 320., 120., pointer)
+                    .draw(version, "0", 320., 120., 0., pointer)
                     .await
                     .is_err()
             );
         }
         assert!(session.process.is_some());
+        session.stop().await;
+    }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn animated_canvas_draws_receive_frame_time() {
+        let mut session = Session::new(Program {
+            source: "({ui})=>()=>ui.canvas({height:120,animated:true,draw:(g,{t})=>{g.text(4,4,String(t));}})".into(),
+            data: Value::Null, seed: "synthetic".into(), now: 0.,
+        }, None).unwrap();
+        session.retry().await.unwrap();
+        let version = session.version;
+        for (t, expected) in [(0., "0"), (1.5, "1.5"), (2.25, "2.25")] {
+            let drawing = session
+                .draw(version, "0", 320., 120., t, None)
+                .await
+                .unwrap();
+            assert_eq!(drawing.strings, vec![expected]);
+        }
+        for t in [f64::NAN, f64::INFINITY, -1.] {
+            assert!(
+                session
+                    .draw(version, "0", 320., 120., t, None)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            session.process.is_some(),
+            "rejected requests never reach the helper"
+        );
         session.stop().await;
     }
     #[cfg(target_os = "macos")]
@@ -349,7 +383,7 @@ mod tests {
             let state = session.state.clone();
             let version = session.version;
             let error = session
-                .draw(version, "0.1", 320., 120., None)
+                .draw(version, "0.1", 320., 120., 0., None)
                 .await
                 .unwrap_err();
             assert!(matches!(error.kind, "timeout" | "memory"));
@@ -363,7 +397,7 @@ mod tests {
             );
             assert!(
                 session
-                    .draw(version, "0.1", 320., 120., None)
+                    .draw(version, "0.1", 320., 120., 0., None)
                     .await
                     .is_err()
             );
