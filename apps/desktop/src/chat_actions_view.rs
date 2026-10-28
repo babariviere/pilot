@@ -200,16 +200,17 @@ impl Render for Actions {
         use crate::ui::{Notice, Tone};
         let report = self.latest.as_ref().and_then(|id| self.reports.get(id));
         div().id("chat-action-status").test_support().w_full().min_w_0()
-            .children(report.map(|r| {
+            .children(report.and_then(|r| {
                 let verb = if r.evidence.archive { "Archive" } else { "Restore" };
                 let (status, detail, tone) = match r.outcome {
                     None => ("Pending", "Waiting for Local. This request will not be retried automatically.", Tone::Quiet),
-                    Some(Outcome::Acknowledged) => ("Confirmed", "Local acknowledged this action. History and drafts are kept.", Tone::Success),
+                    // Keep the exact ACK/report for fences and inspection, not routine success chrome.
+                    Some(Outcome::Acknowledged) => return None,
                     Some(Outcome::Rejected(error)) => ("Not submitted", error, Tone::Error),
                     Some(Outcome::Unknown) => ("Unconfirmed", "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.", Tone::Warning),
                 };
-                div().p_2().child(Notice::new(SharedString::from(format!("{verb} · {status}")))
-                    .detail(SharedString::from(format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id))).tone(tone))
+                Some(div().p_2().child(Notice::new(SharedString::from(format!("{verb} · {status}")))
+                    .detail(SharedString::from(format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id))).tone(tone)))
             }))
             .children(self.latest_rename.as_ref().and_then(|id| self.renames.get(id)).and_then(|form| form.read(cx).status()).map(|(text,tone)|div().p_2().child(Notice::new(text).tone(tone))))
             .children(self.error.map(|e| div().p_2().child(Notice::new(e).tone(Tone::Error))))

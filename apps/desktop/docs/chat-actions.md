@@ -83,6 +83,10 @@ per-window status and operation ownership. `chat_actions_navigation.rs` is the
 small LocalViewer/menu/form seam. Production `ChatList::render_item` uses the
 same callbacks for right-click and the keyboard-reachable shared icon button.
 
+Acknowledged Archive/Restore reports stay in the operation owner without a
+success notice, title/ID dump or replacement toast. Pending, rejected, Unknown
+and local errors remain visible. Hiding success does not release ACK fences.
+
 One off-UI worker has one in-flight request and one bounded queued command.
 There are no retries, idle polling, environment/disk reads in render or per-row
 timers. Requests/responses use bounded channels; HTTP has 2-second connect and

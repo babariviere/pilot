@@ -377,6 +377,11 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                     == Some(&crate::chat_actions::Outcome::Acknowledged)
             });
             assert_eq!(server.posts(), 1);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-action-status").bounds().size.height, px(0.));
+            })
+            .unwrap();
+            capture(cx, h, &dir, format!("{width}-{mode:?}-archive-quiet.png"));
             // Stream observations may update archive presentation, but do not settle ACKs.
             let raw = server.seen.lock().unwrap().source.clone();
             cx.update_window(h, |_, w, cx| {
@@ -404,6 +409,10 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
             });
             let raw = server.seen.lock().unwrap().source.clone();
             assert!(raw["archivedAt"].is_null());
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-action-status").bounds().size.height, px(0.));
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| {
                 view.update(cx, |v, cx| {
                     let mut chats = (*v.state.chats).clone();

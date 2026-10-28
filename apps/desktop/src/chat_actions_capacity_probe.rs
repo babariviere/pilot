@@ -52,6 +52,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         until(cx, h, |_, cx| {
             actions.read(cx).outcome(&id) == Some(&Outcome::Acknowledged)
         });
+        cx.update_window(h, |_, w, _| {
+            assert_eq!(w.find("chat-action-status").bounds().size.height, px(0.));
+        })
+        .unwrap();
         cx.update(|cx| {
             let a = actions.read(cx);
             assert!(!a.blocked(&id));
@@ -66,6 +70,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         until(cx, h, |_, cx| {
             matches!(actions.read(cx).outcome(&id), Some(Outcome::Rejected(_)))
         });
+        cx.update_window(h, |_, w, _| {
+            assert!(w.find("chat-action-status").bounds().size.height > px(0.));
+        })
+        .unwrap();
         cx.update(|cx| {
             assert!(!actions.read(cx).read_only(&id));
             #[cfg(target_os = "macos")]
@@ -76,6 +84,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     let pending = evidence("pending", Behavior::Slow);
     submit(cx, pending.clone());
     until(cx, h, |_, _| server.posts() == 41);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("chat-action-status").bounds().size.height > px(0.));
+    })
+    .unwrap();
     cx.update(|cx| {
         let a = actions.read(cx);
         assert!(a.blocked("pending") && a.blocked("unseen"));
@@ -107,6 +119,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     until(cx, h, |_, cx| {
         actions.read(cx).outcome("unknown") == Some(&Outcome::Unknown)
     });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("chat-action-status").bounds().size.height > px(0.));
+    })
+    .unwrap();
     for n in 0..20 {
         let id = format!("after-unknown-{n}");
         submit(cx, evidence(&id, Behavior::Accept));
