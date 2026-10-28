@@ -412,7 +412,8 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
         .within("chat-row-synthetic")
         .find("sidebar-chat-detail")
         .bounds();
-    let menu = w.find("chat-menu-synthetic").bounds();
+    // Row action buttons are built on hover or selection; their slot holds the column.
+    let menu = w.find("chat-menu-slot-synthetic").bounds();
     let compose = w.find("new-local-chat").bounds();
     let filter = w.find("chat-filters").bounds();
     assert!(
@@ -429,9 +430,10 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
             && (filter.center().x - compose.center().x).abs() < px(0.5),
         "common trailing action column"
     );
-    for bounds in [compose, filter, menu] {
+    for bounds in [compose, filter] {
         assert_eq!(bounds.size, size(w.rem_size() * 2., w.rem_size() * 2.));
     }
+    assert_eq!(menu.size.width, w.rem_size() * 2.);
     // Usage and Settings are footer icon actions in Jump to…'s row.
     let footer = w.find("sidebar-footer").bounds();
     for id in ["open-usage", "open-settings"] {
@@ -879,24 +881,42 @@ fn sidebar_rows(
         assert!(w.try_find("nav-missions").is_some());
     })
     .unwrap();
-    // Row actions: hidden at rest, shown on hover, hidden again after.
+    // Row actions: not built at rest, built and shown on hover, gone again after.
+    let built = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| w.try_find("chat-menu-idle1").is_some())
+            .unwrap()
+    };
+    let slot = cx
+        .update_window(h, |_, w, _| w.find("chat-menu-slot-idle1").bounds())
+        .unwrap();
     let menu = |cx: &mut HeadlessAppContext| {
         let bounds = cx
-            .update_window(h, |_, w, _| w.find("chat-menu-idle1").bounds())
+            .update_window(h, |_, w, _| {
+                w.try_find("chat-menu-idle1").map_or(slot, |m| m.bounds())
+            })
             .unwrap();
         let image = cx.capture_screenshot(h).unwrap();
         painted(&image, bounds, image.width() as f32 / width)
     };
-    assert_eq!(menu(cx), 0, "row actions hidden at rest");
+    assert!(!built(cx) && menu(cx) == 0, "row actions absent at rest");
     cx.update_window(h, |_, w, cx| w.hover("chat-row-idle1", cx))
         .unwrap();
     settle(cx, h);
-    assert!(menu(cx) > 0, "row actions revealed on hover");
+    assert!(built(cx) && menu(cx) > 0, "row actions revealed on hover");
+    cx.update_window(h, |_, w, _| {
+        let button = w.find("chat-menu-idle1").bounds();
+        assert_eq!(button.size, size(w.rem_size() * 2., w.rem_size() * 2.));
+        assert!((button.center().x - slot.center().x).abs() < px(0.5));
+    })
+    .unwrap();
     capture(cx, h, captures, name("-hover"));
     cx.update_window(h, |_, w, cx| w.hover("nav-home", cx))
         .unwrap();
     settle(cx, h);
-    assert_eq!(menu(cx), 0, "row actions hide when the pointer leaves");
+    assert!(
+        !built(cx) && menu(cx) == 0,
+        "row actions go when the pointer leaves"
+    );
     // Keyboard: arrows through the focused list reveal the selected row's actions.
     let target = cx.update(|cx| v.read(cx).chats.read(cx).delegate().index("idle1").unwrap());
     cx.update_window(h, |_, w, cx| {

@@ -132,6 +132,13 @@ pub fn run(cx: &mut App) {
                         let pane = w.find("chat-list-pane").bounds();
                         let position = pane.center();
                         let corners_before = view.read(cx).chats.read(cx).delegate().corners.len();
+                        let renders = |cx: &App| {
+                            let v = view.read(cx);
+                            let corner_renders: u64 = v.chats.read(cx).delegate().corners.values().map(|c| c.read(cx).renders).sum();
+                            (v.render_count, v.transcript.read(cx).probe_render_count(), corner_renders)
+                        };
+                        let renders_before = renders(cx);
+                        let counters = instructions_cycles();
                         let (cpu, start) = (thread_cpu_ms(), Instant::now());
                         w.dispatch_event(
                             ScrollWheelEvent {
@@ -147,12 +154,18 @@ pub fn run(cx: &mut App) {
                         w.draw(cx).clear(cx);
                         let draw = drawing.elapsed().as_secs_f64() * 1000.;
                         let cpu = thread_cpu_ms() - cpu;
+                        let after = instructions_cycles();
+                        let renders_after = renders(cx);
                         let list = view.read(cx).chats.read(cx);
                         json!({
                             "step": step,
                             "dispatch_ms": dispatched,
                             "draw_ms": draw,
                             "thread_cpu_ms": cpu,
+                            "minstructions": (after.0 - counters.0) as f64 / 1e6,
+                            "local_renders": renders_after.0 - renders_before.0,
+                            "transcript_renders": renders_after.1 - renders_before.1,
+                            "corner_renders": renders_after.2 - renders_before.2,
                             "new_corners": list.delegate().corners.len() - corners_before,
                             "offset": f32::from(list.scroll_handle().offset().y),
                         })

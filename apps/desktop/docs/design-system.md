@@ -227,7 +227,12 @@ row's section heading (no "Working" under Working, "Archived" under Archived).
 The accessible name keeps the full state. Every row has the same height. The
 row's … menu overhangs a text-height slot, so it never pushes the caption away,
 and shows only on hover or on the keyboard-selected row while the list has
-keyboard focus; the right-click menu always reaches the same actions. The open
+keyboard focus; the right-click menu always reaches the same actions. Only the
+hovered row, the selected row and the row whose menu opened last build the
+button (Tab reaches the selected row's); the rest keep an empty slot, because
+GPUI caches by absolute bounds and every row re-renders while the list scrolls.
+Dither corners paint their cells inside one `paint_layer`, one draw order
+instead of a bounds-tree insert per cell. The open
 row keeps its faint neutral fill. Missions is the sidebar's only mission entry
 (Command-3 opens the same browser); mission and member chats stay ordinary rows.
 `examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden

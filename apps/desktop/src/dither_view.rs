@@ -240,7 +240,7 @@ pub(crate) struct CornerView {
     origin: Instant,
     lease: Rc<Lease>,
     #[cfg(any(test, feature = "native-probes"))]
-    renders: u64,
+    pub(crate) renders: u64,
 }
 impl CornerView {
     pub(crate) fn new(spec: Spec, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -356,7 +356,10 @@ impl Render for CornerView {
                         clock.update(cx, |clock, cx| clock.listen(owner, lease, window, cx))
                     });
                 }
-                paint(snapshot, image, bounds, window, cx.theme().is_dark());
+                // One draw order for the corner's few hundred non-overlapping
+                // cells instead of a bounds-tree insert per cell.
+                let dark = cx.theme().is_dark();
+                window.paint_layer(image, |window| paint(snapshot, image, bounds, window, dark));
                 if snapshot.spec.signal.is_some()
                     || (snapshot.mix < 1. && snapshot.previous.is_some())
                 {

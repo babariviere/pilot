@@ -208,6 +208,11 @@ struct ChatList {
     corners: HashMap<String, Entity<CornerView>>,
     /// The list's keyboard focus (its search field), for revealing row actions.
     focus: Option<gpui_kit::FocusHandle>,
+    /// Rows that build their action menu button: the hovered row, the selected
+    /// row and the row whose menu opened last. Other rows leave the slot empty,
+    /// so a scroll frame doesn't lay out and paint a menu button per row.
+    hovered: Option<String>,
+    menu_row: Option<String>,
 }
 impl ChatList {
     fn filter(&mut self) {
@@ -291,6 +296,7 @@ impl ListDelegate for ChatList {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
+        use gpui_kit::StatefulInteractiveElement as _;
         let chat = self.at(ix)?.clone();
         let section = SECTIONS[ix.section];
         let spec = Spec::row(chat.signal, chat.background_work);
@@ -330,6 +336,15 @@ impl ListDelegate for ChatList {
         let menu_shown = self.selected == Some(ix)
             && window.last_input_was_keyboard()
             && self.focus.as_ref().is_some_and(|f| f.is_focused(window));
+        // The selected row keeps its button for Tab; the last opened menu's row
+        // keeps it so Escape can return focus to the trigger.
+        let menu_built = self.selected == Some(ix)
+            || self.hovered.as_ref() == Some(&chat.id)
+            || self.menu_row.as_ref() == Some(&chat.id);
+        let list = cx.entity().downgrade();
+        let open_list = list.clone();
+        let hover_id = chat.id.clone();
+        let open_id = chat.id.clone();
         let owner = self.action_owner.clone();
         let menu_owner = owner.clone();
         let button_owner = owner.clone();
@@ -351,6 +366,20 @@ impl ListDelegate for ChatList {
                 .child(
                     div()
                         .id(SharedString::from(format!("chat-row-{}", chat.id)))
+                        // Keys don't end the pointer's hover: the button under it stays.
+                        .hover_listener_mode(gpui_kit::HoverListenerMode::InputModalityIndependent)
+                        .on_hover(move |hovered, _, cx| {
+                            let _ = list.update(cx, |list, cx| {
+                                let row = &mut list.delegate_mut().hovered;
+                                if *hovered && row.as_ref() != Some(&hover_id) {
+                                    *row = Some(hover_id.clone());
+                                    cx.notify();
+                                } else if !*hovered && row.as_ref() == Some(&hover_id) {
+                                    *row = None;
+                                    cx.notify();
+                                }
+                            });
+                        })
                         .test_support()
                         .group("chat-row")
                         .capture_any_mouse_down(move |_, w, cx| {
@@ -396,39 +425,56 @@ impl ListDelegate for ChatList {
                                         .child(SharedString::from(chat.title.clone())),
                                 )
                                 .child(
-                                    // Revealed on hover or keyboard selection; the
-                                    // right-click menu and Tab reach it regardless.
+                                    // Built and revealed on hover or keyboard selection;
+                                    // the right-click menu reaches the same actions.
                                     // A text-height slot: the 2rem target overhangs it rather
                                     // than pushing the metadata line away from the title.
                                     div()
+                                        .id(SharedString::from(format!(
+                                            "chat-menu-slot-{}",
+                                            chat.id
+                                        )))
                                         .flex_none()
+                                        .w_8()
                                         .h(px(appearance::TextRole::BODY))
                                         .flex()
                                         .items_center()
                                         .opacity(if menu_shown { 1. } else { 0. })
                                         .group_hover("chat-row", |s| s.opacity(1.))
-                                        .child(
-                                            crate::ui::icon_action(
-                                                SharedString::from(format!(
-                                                    "chat-menu-{}",
-                                                    chat.id
-                                                )),
-                                                "Chat actions",
-                                                AppIcon::More,
-                                                crate::ui::Action::Quiet,
-                                            )
-                                            .size_8()
-                                            .disabled(chat.local_draft)
-                                            .dropdown_menu(move |menu, w, cx| {
-                                                LocalViewer::chat_actions_menu(
-                                                    button_owner.clone(),
-                                                    button_chat.clone(),
-                                                    menu,
-                                                    w,
-                                                    cx,
+                                        .when(menu_built, |d| {
+                                            d.child(
+                                                crate::ui::icon_action(
+                                                    SharedString::from(format!(
+                                                        "chat-menu-{}",
+                                                        chat.id
+                                                    )),
+                                                    "Chat actions",
+                                                    AppIcon::More,
+                                                    crate::ui::Action::Quiet,
                                                 )
-                                            }),
-                                        ),
+                                                .size_8()
+                                                .disabled(chat.local_draft)
+                                                .dropdown_menu(move |menu, w, cx| {
+                                                    LocalViewer::chat_actions_menu(
+                                                        button_owner.clone(),
+                                                        button_chat.clone(),
+                                                        menu,
+                                                        w,
+                                                        cx,
+                                                    )
+                                                })
+                                                .on_open_change(move |open, _, cx| {
+                                                    if *open {
+                                                        let _ = open_list.update(cx, |list, cx| {
+                                                            list.delegate_mut().menu_row =
+                                                                Some(open_id.clone());
+                                                            cx.notify();
+                                                        });
+                                                    }
+                                                }),
+                                            )
+                                        })
+                                        .test_support(),
                                 ),
                         )
                         .when(!detail.is_empty(), |row| {
@@ -1188,6 +1234,8 @@ impl LocalViewer {
                     projects: Arc::new(Vec::new()),
                     corners: HashMap::new(),
                     focus: None,
+                    hovered: None,
+                    menu_row: None,
                 },
                 window,
                 cx,
