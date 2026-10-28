@@ -483,6 +483,101 @@ async fn delivery_diagnostic_followup_malformed_state_and_identity_gate_never_ex
     }
 }
 #[tokio::test]
+async fn delivery_diagnostic_hello_and_target_keep_transport_outcome_and_never_execute() {
+    for (behavior, stopped, stage, category, status) in [
+        (
+            Behavior::Accept,
+            true,
+            Stage::Identity,
+            Category::Interrupted,
+            None,
+        ),
+        (
+            Behavior::HelloRefused,
+            false,
+            Stage::Identity,
+            Category::Refused,
+            Some(503),
+        ),
+        (
+            Behavior::BadIdentity,
+            false,
+            Stage::Identity,
+            Category::Identity,
+            Some(200),
+        ),
+        (
+            Behavior::TargetMissing,
+            false,
+            Stage::Target,
+            Category::Refused,
+            Some(404),
+        ),
+        (
+            Behavior::Readonly,
+            false,
+            Stage::Target,
+            Category::Refused,
+            Some(200),
+        ),
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        if stopped {
+            // Nothing listens: the daemon is down, not a different daemon.
+            daemon.task.abort();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        let intent = store
+            .prepare("chat:a", &draft(1, "original"), false, false)
+            .unwrap();
+        let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .retry(reqwest::retry::never())
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let mut report = None;
+        // Explicit Send again, so the target check is reached after an unknown lookup.
+        let result = reconcile(
+            &client,
+            &daemon.options,
+            &mut store,
+            &intent.id,
+            true,
+            &mut report,
+        )
+        .await;
+        assert!(result.is_err(), "{behavior:?}");
+        let mut state = WriteState::default();
+        retain_report(&mut state, &mut store, report);
+        let d = state.delivery_reports[&intent.id]
+            .delivery
+            .diagnostic
+            .unwrap();
+        assert_eq!(
+            (d.stage, d.category, d.status),
+            (stage, category, status),
+            "{behavior:?}"
+        );
+        assert_eq!(d.acknowledgment, Acknowledgment::Unknown);
+        drop(store);
+        let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        let kept = &store.book.pending[&intent.id];
+        assert_eq!((kept.state.as_str(), kept.diagnostic), ("unknown", Some(d)));
+        assert_eq!(
+            serde_json::to_vec(kept.operation.as_ref().unwrap()).unwrap(),
+            original
+        );
+        assert!(
+            daemon.seen.lock().unwrap().envelopes.is_empty(),
+            "{behavior:?} executed"
+        );
+    }
+}
+#[tokio::test]
 async fn delivery_diagnostic_followup_known_rejection_survives_non_io_adoption_failure_and_restart()
 {
     let daemon = Daemon::start(Behavior::Reject).await;
@@ -865,7 +960,7 @@ impl Drop for Temp {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Behavior {
     AnswerIdle,
     AnswerLost,
@@ -889,6 +984,8 @@ enum Behavior {
     LookupMalformed,
     LookupOversize,
     LookupTruncated,
+    HelloRefused,
+    TargetMissing,
 }
 #[derive(Default)]
 struct Seen {
@@ -939,9 +1036,12 @@ impl Daemon {
                             let mut stream=reader.into_inner();
                             let reject_then_refuse=behavior==Behavior::RejectThenLookupRefused && path=="/api/operations/receipt" && !record.lock().unwrap().envelopes.is_empty();
                             let fault=if (path=="/api/operations/receipt" && matches!(behavior,Behavior::LookupRefused|Behavior::LookupMalformed|Behavior::LookupOversize|Behavior::LookupTruncated)) || reject_then_refuse
+                                || (path=="/api/hello" && behavior==Behavior::HelloRefused)
+                                || (path.starts_with("/api/sessions/") && behavior==Behavior::TargetMissing)
                                 || (path=="/api/operations" && behavior==Behavior::ExecuteRefused) {
                                 Some(match behavior {
-                                    Behavior::LookupRefused|Behavior::ExecuteRefused|Behavior::RejectThenLookupRefused=>"HTTP/1.1 503 Unavailable\r\nContent-Length: 31\r\nConnection: close\r\n\r\nprivate provider body /sensitive",
+                                    Behavior::LookupRefused|Behavior::ExecuteRefused|Behavior::RejectThenLookupRefused|Behavior::HelloRefused=>"HTTP/1.1 503 Unavailable\r\nContent-Length: 31\r\nConnection: close\r\n\r\nprivate provider body /sensitive",
+                                    Behavior::TargetMissing=>"HTTP/1.1 404 Not Found\r\nContent-Length: 31\r\nConnection: close\r\n\r\nprivate provider body /sensitive",
                                     Behavior::LookupOversize=>"HTTP/1.1 200 OK\r\nContent-Length: 4194305\r\nConnection: close\r\n\r\nx",
                                     Behavior::LookupTruncated=>"HTTP/1.1 200 OK\r\nContent-Length: 128\r\nConnection: close\r\n\r\n{}",
                                     _=>"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nbad",

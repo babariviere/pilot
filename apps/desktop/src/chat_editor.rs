@@ -881,7 +881,16 @@ impl ChatEditor {
             }
         }
     }
-    fn delivery_detail(&self, key: &str, draft: &Draft) -> Option<(String, String)> {
+    /// The retained observation of this draft's exact operation, never another tuple's.
+    fn delivery_observation(
+        &self,
+        key: &str,
+        draft: &Draft,
+    ) -> Option<(
+        String,
+        crate::delivery_store::diagnostic::Diagnostic,
+        Option<&crate::interaction::DeliveryReport>,
+    )> {
         let book = self.state.book.as_ref()?;
         let summary = if let Some(id) = &draft.pending {
             let intent = book.pending.get(id).filter(|i| i.key == key)?;
@@ -897,6 +906,10 @@ impl ChatEditor {
         let diagnostic = report
             .and_then(|r| r.delivery.diagnostic)
             .or(summary.diagnostic)?;
+        Some((summary.id, diagnostic, report))
+    }
+    fn delivery_detail(&self, key: &str, draft: &Draft) -> Option<(String, String)> {
+        let (id, diagnostic, report) = self.delivery_observation(key, draft)?;
         let mut caption = diagnostic.caption();
         if let Some(report) = report
             && !report.saved
@@ -917,7 +930,7 @@ impl ChatEditor {
                 },
             );
         }
-        Some((summary.id, caption))
+        Some((id, caption))
     }
     pub(crate) fn resource_navigation_issue(&self) -> Option<&'static str> {
         self.state
@@ -1230,12 +1243,22 @@ impl Render for ChatEditor {
             );
         }
         let delivery_status = if let Some(intent) = pending {
+            use crate::delivery_store::diagnostic::Acknowledgment;
+            // Local's answer is known; only Pilot's own receipt save failed.
+            let acknowledged = self
+                .delivery_observation(&key, draft)
+                .map(|(_, d, _)| d.acknowledgment);
             Some(if intent.operation.is_none() {
                 "Couldn't confirm that Stop reached the agent."
             } else if intent.state == "pending" {
                 "Sending…"
             } else {
-                "Couldn't confirm this message was sent."
+                match acknowledged {
+                    Some(Acknowledgment::Accepted) => "Sent. Pilot couldn't save the receipt.",
+                    Some(Acknowledgment::Pending) => "Sending. Pilot couldn't save the receipt.",
+                    Some(Acknowledgment::Rejected) => "Not sent. Pilot couldn't save the receipt.",
+                    _ => "Couldn't confirm this message was sent.",
+                }
             })
         } else if draft
             .last

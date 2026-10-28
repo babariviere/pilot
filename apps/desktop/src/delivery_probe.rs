@@ -252,6 +252,11 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
+                // Local's acceptance is not reported as an unconfirmed send.
+                assert_eq!(
+                    w.find("delivery-recovery-status").label(),
+                    Some("Sent. Pilot couldn't save the receipt.")
+                );
                 let b = w.find("delivery-diagnostic").bounds();
                 let tray = gpui_kit::Bounds::new(Default::default(), w.viewport_size());
                 assert!(

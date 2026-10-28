@@ -775,10 +775,14 @@ async fn writable(
     }
     let value =
         read_json(client.get(format!("{}/api/sessions/{target}", options.loopback()))).await?;
-    if value["id"] != target || !crate::local_model::interactive_local(&value) {
+    writable_summary(&value, target)?;
+    Ok(value)
+}
+fn writable_summary(value: &Value, target: &str) -> Result<(), Failure> {
+    if value["id"] != target || !crate::local_model::interactive_local(value) {
         return Err("This Local conversation is retained, archived, continued or not writable");
     }
-    Ok(value)
+    Ok(())
 }
 
 fn question_turn_idle(summary: &Value) -> Result<(), Failure> {
@@ -925,27 +929,37 @@ async fn operation(
     lookup: bool,
     diagnostic: &mut Diagnostic,
 ) -> Result<Value, Failure> {
-    diagnostic.stage = if lookup {
-        Stage::Lookup
-    } else {
-        Stage::Execute
-    };
-    diagnostic.category = Category::InFlight;
-    diagnostic.status = None;
     let body = serde_json::to_vec(op).map_err(|_| "Cannot encode immutable operation")?;
     let path = if lookup {
         "/api/operations/receipt"
     } else {
         "/api/operations"
     };
-    match read_delivery_json(
+    observe(
+        diagnostic,
+        if lookup {
+            Stage::Lookup
+        } else {
+            Stage::Execute
+        },
         client
             .post(format!("{}{path}", options.loopback()))
             .header("Content-Type", "application/json")
             .body(body),
     )
     .await
-    {
+}
+
+/// One request of a retained operation, keeping its stage and transport outcome.
+async fn observe(
+    diagnostic: &mut Diagnostic,
+    stage: Stage,
+    request: reqwest::RequestBuilder,
+) -> Result<Value, Failure> {
+    diagnostic.stage = stage;
+    diagnostic.category = Category::InFlight;
+    diagnostic.status = None;
+    match read_delivery_json(request).await {
         Ok((value, status)) => {
             diagnostic.status = Some(status);
             Ok(value)
@@ -956,6 +970,23 @@ async fn operation(
             Err(error.message())
         }
     }
+}
+
+/// Hello before a lookup or execute. An unreachable or refusing daemon is not an identity change.
+async fn verify_local(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    diagnostic: &mut Diagnostic,
+) -> Result<(), Failure> {
+    let hello = observe(
+        diagnostic,
+        Stage::Identity,
+        client.get(format!("{}/api/hello", options.loopback())),
+    )
+    .await?;
+    options
+        .verify(&hello)
+        .inspect_err(|_| diagnostic.category = Category::Identity)
 }
 
 async fn reconcile(
@@ -981,30 +1012,32 @@ async fn reconcile(
         .diagnostic
         .as_mut()
         .unwrap();
-    gate(client, options)
-        .await
-        .inspect_err(|_| diagnostic.category = Category::Identity)?;
+    verify_local(client, options, diagnostic).await?;
     let mut receipt = operation(client, options, op, true, diagnostic).await?;
     if receipt["state"] == "unknown" && retry {
         // Explicit Retry retains the same envelope/target. Pending is NEVER re-posted.
         if op.kind == "chat-send" {
-            diagnostic.stage = Stage::Target;
-            diagnostic.category = Category::InFlight;
-            diagnostic.status = None;
-            let summary = writable(client, options, &op.target_id)
-                .await
-                .inspect_err(|_| diagnostic.category = Category::Identity)?;
+            if !crate::delivery_store::token(&op.target_id) {
+                return Err("Invalid Local chat target");
+            }
+            let summary = observe(
+                diagnostic,
+                Stage::Target,
+                client.get(format!(
+                    "{}/api/sessions/{}",
+                    options.loopback(),
+                    op.target_id
+                )),
+            )
+            .await?;
+            writable_summary(&summary, &op.target_id)
+                .inspect_err(|_| diagnostic.category = Category::Refused)?;
             if intent.answer.is_some() {
                 question_turn_idle(&summary)
                     .inspect_err(|_| diagnostic.category = Category::Refused)?;
             }
         }
-        diagnostic.stage = Stage::Identity;
-        diagnostic.category = Category::InFlight;
-        diagnostic.status = None;
-        gate(client, options)
-            .await
-            .inspect_err(|_| diagnostic.category = Category::Identity)?;
+        verify_local(client, options, diagnostic).await?;
         receipt = operation(client, options, op, false, diagnostic).await?;
     }
     if receipt["state"] == "unknown" {

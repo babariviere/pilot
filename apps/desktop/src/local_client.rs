@@ -105,7 +105,7 @@ impl LocalOptions {
         })
     }
 
-    fn verify(&self, hello: &Value) -> Result<(), Failure> {
+    pub(crate) fn verify(&self, hello: &Value) -> Result<(), Failure> {
         if hello["daemonId"] != self.daemon_id || hello["lineageId"] != self.lineage_id {
             return Err(
                 "Local identity changed. Stop and verify the Local data home before relaunching.",

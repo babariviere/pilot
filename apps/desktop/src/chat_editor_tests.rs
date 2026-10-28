@@ -495,12 +495,59 @@ fn delivery_diagnostic_stays_with_exact_owner_after_autosave_navigation_and_lega
     cx.update_window(handle, |_, w, cx| {
         w.render_frame(cx);
         assert!(w.try_find("delivery-diagnostic").is_none());
-        assert!(w.try_find("delivery-recovery-status").is_some());
+        assert_eq!(
+            w.find("delivery-recovery-status").label(),
+            Some("Couldn't confirm this message was sent."),
+            "A refused lookup knows nothing about Local's answer"
+        );
         w.click("composer-recovery", cx);
         w.render_frame(cx);
         assert!(w.try_find("delivery-diagnostic").is_some());
     })
     .unwrap();
+    // A known Local answer with a failed private save is not an unconfirmed send.
+    for (acknowledgment, label) in [
+        (
+            Acknowledgment::Accepted,
+            "Sent. Pilot couldn't save the receipt.",
+        ),
+        (
+            Acknowledgment::Pending,
+            "Sending. Pilot couldn't save the receipt.",
+        ),
+        (
+            Acknowledgment::Rejected,
+            "Not sent. Pilot couldn't save the receipt.",
+        ),
+    ] {
+        let mut known = delivery.clone();
+        known.diagnostic = Some(Diagnostic {
+            stage: Stage::Adoption,
+            category: Category::PrivateWrite,
+            status: Some(200),
+            acknowledgment,
+        });
+        state.delivery_reports.insert(
+            intent.id.clone(),
+            crate::interaction::DeliveryReport {
+                key: "chat:a".into(),
+                delivery: known,
+                saved: false,
+                save_error: Some(Category::PrivateWrite),
+            },
+        );
+        cx.update_window(handle, |_, w, cx| {
+            w.press("escape", cx);
+            view.update(cx, |e, cx| e.accept(state.clone(), w, cx));
+            w.render_frame(cx);
+            assert_eq!(w.find("delivery-recovery-status").label(), Some(label));
+            assert_eq!(
+                view.read(cx).state.book.as_ref().unwrap().pending[&intent.id].state,
+                "unknown"
+            );
+        })
+        .unwrap();
+    }
     assert!(
         commands.try_recv().is_err(),
         "Rendering/navigation must not Check/execute/retry"
