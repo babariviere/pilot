@@ -179,12 +179,12 @@ Elsewhere, and in offscreen probes, every surface stays solid.
 
 `transition::Transition` is the one-shot entrance helper: it runs on the executor
 clock (settled by probe clock advances), requests frames only while running and is
-instant under reduced motion. It drives two paint-only moments: the page entrance
+instant under reduced motion. It drives the page entrance
 (200ms fade and 6pt rise when the destination changes, never on the first frame)
 and Send's takeoff (the arrow lifts away and lands again after an admitted send).
-Do not animate layout, streaming height or every control. The one layout exception,
-requested by the user, is the chat side panel (`side_panel.rs`, `transition::Reveal`):
-mission context, links and changes ease open and closed over 200ms. The panel keeps
+Layout may animate too. `transition::Reveal` eases an extent from what is shown when
+its key changes, so reversals continue smoothly. The chat side panel (`side_panel.rs`)
+uses it: mission context, links and changes ease open and closed over 200ms. The panel keeps
 its full extent inside a clipped slot, so its content slides with the edge rather
 than reflowing; only the conversation narrows. Closing removes the panel at once
 (focus returns, its work stops) and collapses only an empty edge. Switching panels
