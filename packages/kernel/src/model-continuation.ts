@@ -16,6 +16,7 @@ const ContinuationDoc = defineDoc<{
 	history: "latest",
 	fork: "initial",
 	initial: () => ({}),
+	checkpointWhen: () => false,
 });
 
 export async function continueModelInPlace(

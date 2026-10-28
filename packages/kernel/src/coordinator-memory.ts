@@ -51,6 +51,7 @@ export const CoordinatorMemoryDoc = defineDoc<{ states: Saved[] }>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ states: [] }),
+	checkpointWhen: () => false,
 });
 const nodeDoc = (key: string) =>
 	defineDoc<{ status: "empty" | "pending" | "ready"; text: string }>({
@@ -60,6 +61,7 @@ const nodeDoc = (key: string) =>
 		history: "latest",
 		fork: "initial",
 		initial: () => ({ status: "empty", text: "" }),
+		checkpointWhen: () => false,
 	});
 const line = (n: Node) => `${n.start}+${n.count} [#${n.first}-#${n.last}] ${n.text.replaceAll("\n", " ")}\n`;
 const render = (t: Tree) =>

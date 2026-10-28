@@ -11,6 +11,7 @@ export const GitHubActionsDoc = defineDoc<{ actions: GitHubAction[] }>({
 	version: 1,
 	scope: "session",
 	initial: () => ({ actions: [] }),
+	checkpointWhen: () => false,
 });
 export function appendGitHubAction(state: { actions: GitHubAction[] }, action: GitHubAction): boolean {
 	if (state.actions.some((item) => item.id === action.id)) return false;

@@ -11,7 +11,7 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const fields = new Set(["type", "url", "command", "args", "env", "headers", "enabled", "exposure", "timeout"]);
 const exposures = new Set(["codemode", "codemode-deferred", "deferred", "direct", "hidden"]);
 
-/** Positive, deliberately narrow subset of pinned Pi 1.3 config. Never resolve env or execute commands.
+/** Positive, deliberately narrow subset of pinned Pi 1.4 config. Never resolve env or execute commands.
  * Extra fields block the entire entry, rather than stripping authentication/permissions silently.
  * Descriptions and arbitrary URL paths/arguments can themselves contain secrets.
  */

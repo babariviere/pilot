@@ -185,6 +185,32 @@ test("cold reader rejects unsupported schemas instead of migrating or creating a
 	assert.deepEqual(await readFile(file), before);
 });
 
+test("cold reader reads a schema 1 store without migrating it", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-schema-1-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const owned = await openSessionStorage(dir);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	const root = await harness.root(context);
+	await root.commit(async (tx) => {
+		await tx.appendEntry(root.id, { kind: "before-upgrade", data: { text: "kept" } });
+	}, context);
+	await harness.close(context);
+	owned.release();
+	const file = join(dir, "harness.sqlite");
+	const db = new DatabaseSync(file);
+	db.exec("UPDATE durable_schema SET version = 1");
+	db.close();
+	const before = await readFile(file);
+	const view = await readSessionSnapshot(dir, dir);
+	const snapshot = view.events[0];
+	assert.equal(snapshot?.type, "snapshot");
+	assert.deepEqual(
+		snapshot.entries.map((entry) => entry.kind),
+		["before-upgrade"],
+	);
+	assert.deepEqual(await readFile(file), before, "the reader leaves the schema for the worker to migrate");
+});
+
 test("cold snapshot of an unopened session creates no storage and ignores legacy TODO files", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-unopened-"));
 	try {

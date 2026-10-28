@@ -9,6 +9,7 @@ export const PullRequestsDoc = defineDoc<{ urls: string[] }>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ urls: [] }),
+	checkpointWhen: () => false,
 });
 
 const SHELL_CONTROL = new Set([

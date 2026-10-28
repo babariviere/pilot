@@ -333,11 +333,19 @@ test("missing storage and future schemas remain unavailable without creating or 
 		await run(f.dir, { attemptId: f.root.id, boundary: 0 });
 		assert.deepEqual(await readFile(join(f.dir, "harness.sqlite")), before);
 		const db = new DatabaseSync(join(f.dir, "harness.sqlite"));
-		db.exec("UPDATE durable_schema SET version = 2");
+		db.exec("UPDATE durable_schema SET version = 1");
 		db.close();
-		const future = await run(f.dir, { attemptId: f.root.id, boundary: 0 });
-		assert.equal(future.status, "unavailable");
-		assert.deepEqual(future.chunks, []);
+		assert.equal(
+			(await run(f.dir, { attemptId: f.root.id, boundary: 0 })).status,
+			"captured",
+			"schema 1 still reads",
+		);
+		const future = new DatabaseSync(join(f.dir, "harness.sqlite"));
+		future.exec("UPDATE durable_schema SET version = 3");
+		future.close();
+		const unsupported = await run(f.dir, { attemptId: f.root.id, boundary: 0 });
+		assert.equal(unsupported.status, "unavailable");
+		assert.deepEqual(unsupported.chunks, []);
 		assert.throws(() => exportCommittedHistory(f.dir, { attemptId: 1, boundary: 0 }), /worker/);
 	} finally {
 		await f.close();

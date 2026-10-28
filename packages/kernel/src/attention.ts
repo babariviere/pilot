@@ -43,6 +43,7 @@ export const AttentionDoc = defineDoc<AttentionState>({
 	history: "latest",
 	fork: "initial",
 	initial: () => ({}),
+	checkpointWhen: () => false,
 });
 
 export function classifyCompletion(record: SubmissionRecord): Omit<SessionCompletion, "outcomeAt"> {

@@ -19,6 +19,7 @@ export const CompactionStatsDoc = defineDoc<{
 	version: 1,
 	scope: "session",
 	initial: () => ({ items: [] }),
+	checkpointWhen: () => false,
 });
 
 function tokens(

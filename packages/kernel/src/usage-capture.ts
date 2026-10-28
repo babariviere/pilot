@@ -385,7 +385,8 @@ export class UsageCapture {
 	}
 
 	/** Observe only Harness-initiated deferred fetch/cancel. Never add provider polling. */
-	deferredModels(models: Models): Models {
+	deferredModels(models: Models | (() => Models)): Models | (() => Models) {
+		if (typeof models === "function") return () => this.deferredModels(models()) as Models;
 		const capture = this;
 		return new Proxy(models, {
 			get(target, key) {

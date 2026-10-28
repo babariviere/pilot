@@ -168,10 +168,12 @@ export function exportCommittedHistory(
 	};
 	try {
 		db.exec("PRAGMA query_only = ON; BEGIN");
-		// Deliberately refuse a future dependency/schema until this export seam is requalified.
+		// Deliberately refuse a future dependency/schema until this export seam is requalified. Schemas 1 and 2
+		// differ only in the tasks table's status CHECK constraint, which this export never reads.
+		const version = db.prepare("SELECT version FROM durable_schema WHERE singleton = 1").get()?.version;
 		if (
-			CURRENT_SQLITE_SCHEMA_VERSION !== 1 ||
-			db.prepare("SELECT version FROM durable_schema WHERE singleton = 1").get()?.version !== 1
+			(CURRENT_SQLITE_SCHEMA_VERSION !== 1 && CURRENT_SQLITE_SCHEMA_VERSION !== 2) ||
+			(version !== 1 && version !== 2)
 		) {
 			disclose("unsupported_storage_schema");
 			return result;

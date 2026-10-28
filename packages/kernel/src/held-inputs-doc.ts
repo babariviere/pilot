@@ -25,4 +25,5 @@ export const HeldInputsDoc = defineDoc<{
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ stopped: false, items: [], serial: 0, events: [] }),
+	checkpointWhen: () => false,
 });

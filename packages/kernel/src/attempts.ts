@@ -39,6 +39,7 @@ export const AttemptsDoc = defineDoc<AttemptsState>({
 	version: 1,
 	scope: "session",
 	initial: () => ({ active: ROOT_CONVERSATION_ID, attempts: [] }),
+	checkpointWhen: () => false,
 });
 
 /** Bounded display list. The original and the active attempt are always included. */

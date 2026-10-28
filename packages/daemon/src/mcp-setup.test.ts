@@ -94,7 +94,7 @@ const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 const configEditors: SdkConfig[] = [
 	await import(new URL("./extensions/mcp/config.js", sdk).href),
 	// The published CLI has its own compiled copy. Test its actual public editing functions too.
-	await import(new URL("./bundle/chunks/chunk-GDR5JFDJ.js", sdk).href),
+	await import(new URL("./bundle/chunks/chunk-INGZIYBC.js", sdk).href),
 ];
 
 test("MCP and SDK writes preserve untouched numeric literals without rounding or null conversion", async (t) => {
@@ -112,6 +112,18 @@ test("MCP and SDK writes preserve untouched numeric literals without rounding or
 		assert.match(saved, /"large": 9007199254740993/);
 		assert.match(saved, /"exponent": 1e309/);
 		assert.match(saved, /"future": 9007199254740993/);
+	}
+});
+
+test("SDK and bundled CLI writes accept a UTF-8 BOM like Pi readers", async (t) => {
+	const { directory } = await fixture(t);
+	const path = join(directory, "mcp.json");
+	for (const [index, editor] of configEditors.entries()) {
+		await writeFile(path, `\uFEFF${JSON.stringify({ mcpServers: { original: entry().config } })}`);
+		assert.equal(editor.addMcpServerConfig(path, `added${index}`, entry().config), false);
+		const saved = await readFile(path, "utf8");
+		assert.equal(saved.startsWith("\uFEFF"), false);
+		assert.deepEqual(Object.keys(JSON.parse(saved).mcpServers), ["original", `added${index}`]);
 	}
 });
 

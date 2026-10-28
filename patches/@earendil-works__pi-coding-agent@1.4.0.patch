@@ -1,0 +1,138 @@
+diff --git a/dist/bundle/chunks/chunk-INGZIYBC.js b/dist/bundle/chunks/chunk-INGZIYBC.js
+index 7f3ba8358c12bb9eb3b1f1e52223d9d56eb5076c..a12abd756e0354de3cac2dc1792804c3749a1bb6 100644
+--- a/dist/bundle/chunks/chunk-INGZIYBC.js
++++ b/dist/bundle/chunks/chunk-INGZIYBC.js
+@@ -1,4 +1,4 @@
++import { editMcpConfigSync } from "../../extensions/mcp/config-writer.js";
+ import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);
+ import{mcpNamespace,require_proper_lockfile,validateMcpServerConfig}from"./chunk-N43LRJ4N.js";import{CONFIG_DIR_NAME,canonicalizePath,resolvePath,stripBom}from"./chunk-BSS6T6KQ.js";import{__toESM}from"./chunk-JXWJOIH4.js";var import_proper_lockfile=__toESM(require_proper_lockfile(),1);import{existsSync,mkdirSync,readFileSync,writeFileSync}from"node:fs";import{homedir}from"node:os";import{dirname,join}from"node:path";var TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES=["settings.json","mcp.json","extensions","skills","prompts","themes","SYSTEM.md","APPEND_SYSTEM.md"];function normalizeCwd(cwd){return canonicalizePath(resolvePath(cwd))}function findNearestTrustEntry(data,cwd){let currentDir=normalizeCwd(cwd);for(;;){let value=data[currentDir];if(value===!0||value===!1)return{path:currentDir,decision:value};let parentDir=dirname(currentDir);if(parentDir===currentDir)return null;currentDir=parentDir}}function getProjectTrustParentPath(cwd){let trustPath=normalizeCwd(cwd),parentDir=dirname(trustPath);return parentDir===trustPath?void 0:parentDir}function getProjectTrustOptions(cwd,options){let trustPath=normalizeCwd(cwd),trustOptions=[{label:"Trust",trusted:!0,updates:[{path:trustPath,decision:!0}],savedPath:trustPath}],parentPath=getProjectTrustParentPath(cwd);return parentPath!==void 0&&trustOptions.push({label:`Trust parent folder (${parentPath})`,trusted:!0,updates:[{path:parentPath,decision:!0},{path:trustPath,decision:null}],savedPath:parentPath}),options?.includeSessionOnly&&trustOptions.push({label:"Trust (this session only)",trusted:!0,updates:[]}),trustOptions.push({label:"Do not trust",trusted:!1,updates:[{path:trustPath,decision:!1}],savedPath:trustPath}),options?.includeSessionOnly&&trustOptions.push({label:"Do not trust (this session only)",trusted:!1,updates:[]}),trustOptions}function readTrustFile(path){if(!existsSync(path))return{};let parsed;try{parsed=JSON.parse(stripBom(readFileSync(path,"utf-8")))}catch(error){let message=error instanceof Error?error.message:String(error);throw new Error(`Failed to read trust store ${path}: ${message}`)}if(typeof parsed!="object"||parsed===null||Array.isArray(parsed))throw new Error(`Invalid trust store ${path}: expected an object`);let data={};for(let[key,value]of Object.entries(parsed)){if(value!==!0&&value!==!1&&value!==null)throw new Error(`Invalid trust store ${path}: value for ${JSON.stringify(key)} must be true, false, or null`);data[key]=value}return data}function writeTrustFile(path,data){let sorted={};for(let key of Object.keys(data).sort()){let value=data[key];(value===!0||value===!1||value===null)&&(sorted[key]=value)}mkdirSync(dirname(path),{recursive:!0}),writeFileSync(path,`${JSON.stringify(sorted,null,2)}
+-`,"utf-8")}function acquireTrustLockSync(path){let trustDir=dirname(path);mkdirSync(trustDir,{recursive:!0});let maxAttempts=10,delayMs=20,lastError;for(let attempt=1;attempt<=maxAttempts;attempt++)try{return import_proper_lockfile.default.lockSync(trustDir,{realpath:!1,lockfilePath:`${path}.lock`})}catch(error){if((typeof error=="object"&&error!==null&&"code"in error?String(error.code):void 0)!=="ELOCKED"||attempt===maxAttempts)throw error;lastError=error;let start=Date.now();for(;Date.now()-start<delayMs;);}throw lastError instanceof Error?lastError:new Error("Failed to acquire trust store lock")}function withTrustFileLock(path,fn){let release=acquireTrustLockSync(path);try{return fn()}finally{release()}}function hasTrustRequiringProjectResources(cwd){let homeDir=canonicalizePath(resolvePath(process.env.HOME||homedir())),userAgentsSkillsDir=join(homeDir,".agents","skills"),currentDir=canonicalizePath(resolvePath(cwd)),configDir=join(currentDir,CONFIG_DIR_NAME);if(TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some(entry=>existsSync(join(configDir,entry))))return!0;for(;;){let agentsSkillsDir=join(currentDir,".agents","skills");if(agentsSkillsDir!==userAgentsSkillsDir&&existsSync(agentsSkillsDir))return!0;let parentDir=dirname(currentDir);if(parentDir===currentDir)return!1;currentDir=parentDir}}var ProjectTrustStore=class{trustPath;constructor(agentDir){this.trustPath=join(resolvePath(agentDir),"trust.json")}get(cwd){return this.getEntry(cwd)?.decision??null}getEntry(cwd){return withTrustFileLock(this.trustPath,()=>{let data=readTrustFile(this.trustPath);return findNearestTrustEntry(data,cwd)})}set(cwd,decision){this.setMany([{path:cwd,decision}])}setMany(decisions){withTrustFileLock(this.trustPath,()=>{let data=readTrustFile(this.trustPath);for(let{path,decision}of decisions){let key=normalizeCwd(path);decision===null?delete data[key]:data[key]=decision}writeTrustFile(this.trustPath,data)})}};import{spawn}from"node:child_process";function openBrowser(target){let[cmd,args]=process.platform==="darwin"?["open",[target]]:process.platform==="win32"?["rundll32",["url.dll,FileProtocolHandler",target]]:["xdg-open",[target]];spawn(cmd,args,{stdio:"ignore",detached:!0}).on("error",()=>{}).unref()}import{existsSync as existsSync2,mkdirSync as mkdirSync2,readFileSync as readFileSync2,writeFileSync as writeFileSync2}from"node:fs";import{dirname as dirname2,join as join2}from"node:path";var OVERRIDE_KEYS=["enabled","exposure","toolExposure"];function isOverride(value){return value.command===void 0&&value.url===void 0&&value.type===void 0}function isRecord(value){return typeof value=="object"&&value!==null&&!Array.isArray(value)}function readConfigFile(path,scope,state){let{servers,errors}=state;if(!existsSync2(path))return;let parsed;try{parsed=JSON.parse(stripBom(readFileSync2(path,"utf8")))}catch(error){errors.push(`${path}: ${error instanceof Error?error.message:String(error)}`);return}if(!isRecord(parsed)||parsed.mcpServers!==void 0&&!isRecord(parsed.mcpServers)){errors.push(`${path}: expected an object with an "mcpServers" object`);return}typeof parsed.autoEnableCodemode=="boolean"?state.autoEnableCodemode=parsed.autoEnableCodemode:parsed.autoEnableCodemode!==void 0&&errors.push(`${path}: autoEnableCodemode must be a boolean`);for(let[name,value]of Object.entries(parsed.mcpServers??{})){if(scope==="project"&&isRecord(value)&&isOverride(value)){let base=servers.get(name),extra=Object.keys(value).filter(key=>!OVERRIDE_KEYS.includes(key));if(!base)errors.push(`${path}: server "${name}" needs "command" or "url", or a global server to override`);else if(extra.length>0)errors.push(`${path}: server "${name}": an override can only set ${OVERRIDE_KEYS.join(", ")}`);else{let config2=validateMcpServerConfig(name,{...base.config,...value});typeof config2=="string"?errors.push(`${path}: ${config2}`):servers.set(name,{...base,config:config2,override:path})}continue}let config=validateMcpServerConfig(name,value);if(typeof config=="string"){errors.push(`${path}: ${config}`);continue}let clash=[...servers.keys()].find(other=>other!==name&&mcpNamespace(other)===mcpNamespace(name));if(clash){errors.push(`${path}: server "${name}" conflicts with "${clash}"`);continue}if(scope==="project"&&"url"in config&&config.auth){errors.push(`${path}: server "${name}": auth is only allowed in the global mcp.json`);continue}servers.set(name,{name,config,source:path,scope})}}function loadMcpConfig(options){let state={servers:new Map,errors:[]};readConfigFile(join2(options.agentDir,"mcp.json"),"global",state);let projectConfig=options.projectTrusted?join2(options.cwd,CONFIG_DIR_NAME,"mcp.json"):void 0;return projectConfig&&readConfigFile(projectConfig,"project",state),{servers:[...state.servers.values()],...state.autoEnableCodemode===void 0?{}:{autoEnableCodemode:state.autoEnableCodemode},errors:state.errors,...projectConfig?{projectConfig}:{}}}function updateMcpServerConfig(path,name,patch,options={}){editMcpServers(path,(servers,parsed)=>{let server=servers?.[name];if(server===void 0&&options.override&&(server={},parsed.mcpServers={...servers,[name]:server}),!isRecord(server))throw new Error(`${path} does not define MCP server "${name}"`);let keepDefaults=isOverride(server);return patch.enabled!==void 0&&(patch.enabled&&!keepDefaults?delete server.enabled:server.enabled=patch.enabled),patch.exposure!==void 0&&(patch.exposure==="codemode"&&!keepDefaults?delete server.exposure:server.exposure=patch.exposure),!0})}function addMcpServerConfig(path,name,config){let replaced=!1;return editMcpServers(path,(servers,parsed)=>{let target=servers??{};return replaced=target[name]!==void 0,target[name]=config,parsed.mcpServers=target,!0}),replaced}function removeMcpServerConfig(path,name){if(!existsSync2(path))return!1;let removed=!1;return editMcpServers(path,servers=>!servers||servers[name]===void 0?!1:(delete servers[name],removed=!0,!0)),removed}function editMcpServers(path,edit){let text=existsSync2(path)?stripBom(readFileSync2(path,"utf8")):void 0,parsed=text===void 0?{}:JSON.parse(text);if(!isRecord(parsed)||parsed.mcpServers!==void 0&&!isRecord(parsed.mcpServers))throw new Error(`${path}: expected an object with an "mcpServers" object`);let servers=isRecord(parsed.mcpServers)?parsed.mcpServers:void 0;if(!edit(servers,parsed))return;let indent=text&&/^([ \t]+)\S/m.exec(text)?.[1]||"  ";mkdirSync2(dirname2(path),{recursive:!0}),writeFileSync2(path,`${JSON.stringify(parsed,null,indent)}
+-`)}export{getProjectTrustOptions,hasTrustRequiringProjectResources,ProjectTrustStore,openBrowser,loadMcpConfig,updateMcpServerConfig,addMcpServerConfig,removeMcpServerConfig};
++`,"utf-8")}function acquireTrustLockSync(path){let trustDir=dirname(path);mkdirSync(trustDir,{recursive:!0});let maxAttempts=10,delayMs=20,lastError;for(let attempt=1;attempt<=maxAttempts;attempt++)try{return import_proper_lockfile.default.lockSync(trustDir,{realpath:!1,lockfilePath:`${path}.lock`})}catch(error){if((typeof error=="object"&&error!==null&&"code"in error?String(error.code):void 0)!=="ELOCKED"||attempt===maxAttempts)throw error;lastError=error;let start=Date.now();for(;Date.now()-start<delayMs;);}throw lastError instanceof Error?lastError:new Error("Failed to acquire trust store lock")}function withTrustFileLock(path,fn){let release=acquireTrustLockSync(path);try{return fn()}finally{release()}}function hasTrustRequiringProjectResources(cwd){let homeDir=canonicalizePath(resolvePath(process.env.HOME||homedir())),userAgentsSkillsDir=join(homeDir,".agents","skills"),currentDir=canonicalizePath(resolvePath(cwd)),configDir=join(currentDir,CONFIG_DIR_NAME);if(TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some(entry=>existsSync(join(configDir,entry))))return!0;for(;;){let agentsSkillsDir=join(currentDir,".agents","skills");if(agentsSkillsDir!==userAgentsSkillsDir&&existsSync(agentsSkillsDir))return!0;let parentDir=dirname(currentDir);if(parentDir===currentDir)return!1;currentDir=parentDir}}var ProjectTrustStore=class{trustPath;constructor(agentDir){this.trustPath=join(resolvePath(agentDir),"trust.json")}get(cwd){return this.getEntry(cwd)?.decision??null}getEntry(cwd){return withTrustFileLock(this.trustPath,()=>{let data=readTrustFile(this.trustPath);return findNearestTrustEntry(data,cwd)})}set(cwd,decision){this.setMany([{path:cwd,decision}])}setMany(decisions){withTrustFileLock(this.trustPath,()=>{let data=readTrustFile(this.trustPath);for(let{path,decision}of decisions){let key=normalizeCwd(path);decision===null?delete data[key]:data[key]=decision}writeTrustFile(this.trustPath,data)})}};import{spawn}from"node:child_process";function openBrowser(target){let[cmd,args]=process.platform==="darwin"?["open",[target]]:process.platform==="win32"?["rundll32",["url.dll,FileProtocolHandler",target]]:["xdg-open",[target]];spawn(cmd,args,{stdio:"ignore",detached:!0}).on("error",()=>{}).unref()}import{existsSync as existsSync2,mkdirSync as mkdirSync2,readFileSync as readFileSync2,writeFileSync as writeFileSync2}from"node:fs";import{dirname as dirname2,join as join2}from"node:path";var OVERRIDE_KEYS=["enabled","exposure","toolExposure"];function isOverride(value){return value.command===void 0&&value.url===void 0&&value.type===void 0}function isRecord(value){return typeof value=="object"&&value!==null&&!Array.isArray(value)}function readConfigFile(path,scope,state){let{servers,errors}=state;if(!existsSync2(path))return;let parsed;try{parsed=JSON.parse(stripBom(readFileSync2(path,"utf8")))}catch(error){errors.push(`${path}: ${error instanceof Error?error.message:String(error)}`);return}if(!isRecord(parsed)||parsed.mcpServers!==void 0&&!isRecord(parsed.mcpServers)){errors.push(`${path}: expected an object with an "mcpServers" object`);return}typeof parsed.autoEnableCodemode=="boolean"?state.autoEnableCodemode=parsed.autoEnableCodemode:parsed.autoEnableCodemode!==void 0&&errors.push(`${path}: autoEnableCodemode must be a boolean`);for(let[name,value]of Object.entries(parsed.mcpServers??{})){if(scope==="project"&&isRecord(value)&&isOverride(value)){let base=servers.get(name),extra=Object.keys(value).filter(key=>!OVERRIDE_KEYS.includes(key));if(!base)errors.push(`${path}: server "${name}" needs "command" or "url", or a global server to override`);else if(extra.length>0)errors.push(`${path}: server "${name}": an override can only set ${OVERRIDE_KEYS.join(", ")}`);else{let config2=validateMcpServerConfig(name,{...base.config,...value});typeof config2=="string"?errors.push(`${path}: ${config2}`):servers.set(name,{...base,config:config2,override:path})}continue}let config=validateMcpServerConfig(name,value);if(typeof config=="string"){errors.push(`${path}: ${config}`);continue}let clash=[...servers.keys()].find(other=>other!==name&&mcpNamespace(other)===mcpNamespace(name));if(clash){errors.push(`${path}: server "${name}" conflicts with "${clash}"`);continue}if(scope==="project"&&"url"in config&&config.auth){errors.push(`${path}: server "${name}": auth is only allowed in the global mcp.json`);continue}servers.set(name,{name,config,source:path,scope})}}function loadMcpConfig(options){let state={servers:new Map,errors:[]};readConfigFile(join2(options.agentDir,"mcp.json"),"global",state);let projectConfig=options.projectTrusted?join2(options.cwd,CONFIG_DIR_NAME,"mcp.json"):void 0;return projectConfig&&readConfigFile(projectConfig,"project",state),{servers:[...state.servers.values()],...state.autoEnableCodemode===void 0?{}:{autoEnableCodemode:state.autoEnableCodemode},errors:state.errors,...projectConfig?{projectConfig}:{}}}function updateMcpServerConfig(path,name,patch,options={}){editMcpServers(path,(servers,parsed)=>{let server=servers?.[name];if(server===void 0&&options.override&&(server={},parsed.mcpServers={...servers,[name]:server}),!isRecord(server))throw new Error(`${path} does not define MCP server "${name}"`);let keepDefaults=isOverride(server);return patch.enabled!==void 0&&(patch.enabled&&!keepDefaults?delete server.enabled:server.enabled=patch.enabled),patch.exposure!==void 0&&(patch.exposure==="codemode"&&!keepDefaults?delete server.exposure:server.exposure=patch.exposure),!0})}function addMcpServerConfig(path,name,config){let replaced=!1;return editMcpServers(path,(servers,parsed)=>{let target=servers??{};return replaced=target[name]!==void 0,target[name]=config,parsed.mcpServers=target,!0}),replaced}function removeMcpServerConfig(path,name){if(!existsSync2(path))return!1;let removed=!1;return editMcpServers(path,servers=>!servers||servers[name]===void 0?!1:(delete servers[name],removed=!0,!0)),removed}function editMcpServers(path,edit){return editMcpConfigSync(path,edit)}export{getProjectTrustOptions,hasTrustRequiringProjectResources,ProjectTrustStore,openBrowser,loadMcpConfig,updateMcpServerConfig,addMcpServerConfig,removeMcpServerConfig};
+diff --git a/dist/extensions/mcp/config-writer.js b/dist/extensions/mcp/config-writer.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..8462e776a67f3d453365156b77d067848040a8ea
+--- /dev/null
++++ b/dist/extensions/mcp/config-writer.js
+@@ -0,0 +1,74 @@
++// Pinned downstream writer protocol. The SDK and bundled CLI must use this same module.
++// Older Pi installations and manual editors do not participate: do not edit concurrently.
++import { randomUUID } from "node:crypto";
++import { constants, closeSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
++    readSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
++import { basename, dirname, join } from "node:path";
++import lockfile from "proper-lockfile";
++
++export const mcpConfigWriteProtocol = 1;
++const MAX_BYTES = 1048576;
++const record = value => value !== null && typeof value === "object" && !Array.isArray(value) && !JSON.isRawJSON(value);
++const conflict = () => { throw new Error("MCP configuration changed; review it again"); };
++
++function read(path) {
++    let fd;
++    try {
++        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
++        const before = fstatSync(fd, { bigint: true });
++        if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(MAX_BYTES))
++            throw new Error("MCP configuration is not a bounded, unlinked regular file");
++        const buffer = Buffer.alloc(MAX_BYTES + 1);
++        const length = readSync(fd, buffer, 0, buffer.length, 0);
++        if (length > MAX_BYTES || BigInt(length) !== before.size) conflict();
++        const text = buffer.toString("utf8", 0, length);
++        const after = fstatSync(fd, { bigint: true });
++        if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs)
++            conflict();
++        return { text, ino: before.ino, dev: before.dev };
++    } catch (error) {
++        if (error.code === "ENOENT") return undefined;
++        throw error;
++    } finally { if (fd !== undefined) closeSync(fd); }
++}
++
++export function editMcpConfigSync(path, edit) {
++    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
++    path = join(realpathSync(dirname(path)), basename(path));
++    // Synchronous SDK APIs fail promptly on contention; never busy-spin a host event loop.
++    const release = lockfile.lockSync(path, { realpath: false, retries: 0 });
++    let temporary;
++    try {
++        const before = read(path);
++        // Preserve number literals in untouched fields (including integers outside IEEE-754 range).
++        // Accept a UTF-8 BOM like Pi 1.4 readers; the rewrite omits it.
++        const parsed = before === undefined ? {} : JSON.parse(before.text.replace(/^\uFEFF/, ""), (_key, value, context) =>
++            typeof value === "number" ? JSON.rawJSON(context.source) : value);
++        if (!record(parsed) || (parsed.mcpServers !== undefined && !record(parsed.mcpServers)))
++            throw new Error('Expected an object with an "mcpServers" object');
++        if (!edit(parsed.mcpServers, parsed)) return;
++        const indent = (before?.text && /^([ \t]+)\S/m.exec(before.text)?.[1]) || "  ";
++        const next = `${JSON.stringify(parsed, null, indent)}\n`;
++        if (Buffer.byteLength(next) > MAX_BYTES) throw new Error("MCP configuration is too large");
++        temporary = `${path}.${randomUUID()}.tmp`;
++        const fd = openSync(temporary, "wx", 0o600);
++        try { writeFileSync(fd, next); fsyncSync(fd); } finally { closeSync(fd); }
++        const current = read(path);
++        if (current?.text !== before?.text || current?.ino !== before?.ino || current?.dev !== before?.dev) conflict();
++        if (before === undefined) linkSync(temporary, path);
++        else {
++            const target = lstatSync(path, { bigint: true });
++            if (target.ino !== before.ino || target.dev !== before.dev) conflict();
++            renameSync(temporary, path);
++        }
++        // Remove the private name before syncing the directory (initial link publication).
++        try { unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; }
++        temporary = undefined;
++        const directory = openSync(dirname(path), constants.O_RDONLY);
++        try { fsyncSync(directory); } finally { closeSync(directory); }
++    } finally {
++        try {
++            if (temporary) { try { unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; } }
++        } finally { release(); }
++    }
++}
+diff --git a/dist/extensions/mcp/config.js b/dist/extensions/mcp/config.js
+index b2daad90dd01750326741c66a7f984eb36a38397..b294e648e7076b8abd3d64362393e4fea2ee076a 100644
+--- a/dist/extensions/mcp/config.js
++++ b/dist/extensions/mcp/config.js
+@@ -28,8 +28,9 @@
+  * The top-level `autoEnableCodemode` (default true) activates the codemode tool when a server
+  * with `codemode` exposure connects. A project value overrides the global one.
+  */
+-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+-import { dirname, join } from "node:path";
++import { existsSync, readFileSync } from "node:fs";
++import { editMcpConfigSync } from "./config-writer.js";
++import { join } from "node:path";
+ import { CONFIG_DIR_NAME } from "../../config.js";
+ import { mcpNamespace, validateMcpServerConfig, } from "../../core/mcp-servers.js";
+ import { stripBom } from "../../utils/text.js";
+@@ -180,16 +181,6 @@ export function removeMcpServerConfig(path, name) {
+  * it back with its indentation when `edit` returns true. Other content is kept.
+  */
+ function editMcpServers(path, edit) {
+-    const text = existsSync(path) ? stripBom(readFileSync(path, "utf8")) : undefined;
+-    const parsed = text === undefined ? {} : JSON.parse(text);
+-    if (!isRecord(parsed) || (parsed.mcpServers !== undefined && !isRecord(parsed.mcpServers))) {
+-        throw new Error(`${path}: expected an object with an "mcpServers" object`);
+-    }
+-    const servers = isRecord(parsed.mcpServers) ? parsed.mcpServers : undefined;
+-    if (!edit(servers, parsed))
+-        return;
+-    const indent = (text && /^([ \t]+)\S/m.exec(text)?.[1]) || "  ";
+-    mkdirSync(dirname(path), { recursive: true });
+-    writeFileSync(path, `${JSON.stringify(parsed, null, indent)}\n`);
++    return editMcpConfigSync(path, edit);
+ }
+ //# sourceMappingURL=config.js.map
+\ No newline at end of file
+diff --git a/examples/extensions/custom-provider-anthropic/package-lock.json b/examples/extensions/custom-provider-anthropic/package-lock.json
+deleted file mode 100644
+index b7d2ebab02ff59bf6a1e58768784bed006cc2805..0000000000000000000000000000000000000000
+diff --git a/examples/extensions/gondolin/package-lock.json b/examples/extensions/gondolin/package-lock.json
+deleted file mode 100644
+index cacaab7b924a92ddee9e080fb927a8d36da9be8c..0000000000000000000000000000000000000000
+diff --git a/examples/extensions/sandbox/package-lock.json b/examples/extensions/sandbox/package-lock.json
+deleted file mode 100644
+index 90ef1c2f589ca972a497dd1f021fc03cad3cd519..0000000000000000000000000000000000000000
+diff --git a/examples/extensions/with-deps/package-lock.json b/examples/extensions/with-deps/package-lock.json
+deleted file mode 100644
+index 90c4e6339e578c214af6bcaddc909570156c0fdd..0000000000000000000000000000000000000000

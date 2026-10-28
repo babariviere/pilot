@@ -21,6 +21,16 @@ function privateFile(file: string): void {
 
 export class StorageBusy extends Error {}
 
+const SCHEMA_VERSION_QUERY = "SELECT version FROM durable_schema WHERE singleton = 1";
+
+/**
+ * Schema 2 (pi-durable 1.4) only widens the task status CHECK constraint by rebuilding the table, so a
+ * schema 1 store that no worker has reopened yet reads identically.
+ */
+function readableSchema(version: unknown): boolean {
+	return version === CURRENT_SQLITE_SCHEMA_VERSION || (CURRENT_SQLITE_SCHEMA_VERSION === 2 && version === 1);
+}
+
 /**
  * A committed read transaction, not a storage owner. Never creates a database, changes permissions,
  * checkpoints WAL, migrates a schema, or acquires the worker's writer lease. SQLite may create its
@@ -51,6 +61,8 @@ export async function openSessionReader(directory: string, name = "harness.sqlit
 	};
 	const executor: SqliteExecutor = {
 		async get<T extends object>(sql: string, ...params: SqliteValue[]) {
+			// A validated older schema reports as current so SqliteStorage.open attempts no migration.
+			if (bootstrap && sql === SCHEMA_VERSION_QUERY) return { version: CURRENT_SQLITE_SCHEMA_VERSION } as T;
 			return db.prepare(sql).get(...params) as T | undefined;
 		},
 		async all<T extends object>(sql: string, ...params: SqliteValue[]) {
@@ -122,9 +134,8 @@ export async function openSessionReader(directory: string, name = "harness.sqlit
 	};
 	try {
 		db.exec("BEGIN");
-		const schema = db.prepare("SELECT version FROM durable_schema WHERE singleton = 1").get();
-		if (schema?.version !== CURRENT_SQLITE_SCHEMA_VERSION)
-			throw new Error(`Unsupported durable snapshot schema: ${schema?.version}`);
+		const schema = db.prepare(SCHEMA_VERSION_QUERY).get();
+		if (!readableSchema(schema?.version)) throw new Error(`Unsupported durable snapshot schema: ${schema?.version}`);
 		const storage = await SqliteStorage.open(facade);
 		bootstrap = false;
 		return storage;
