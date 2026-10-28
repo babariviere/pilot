@@ -1,0 +1,25 @@
+diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
+index 5ef33aa67d8435deecfb92dcbae0a987e8332976..3fa8a4a8cacdee08ada99f29a6c5f96bcd79fb5a 100644
+--- a/dist/harness/inbox.js
++++ b/dist/harness/inbox.js
+@@ -26,8 +26,8 @@ export async function prepareBoundary(tx, conversationId, modes) {
+     };
+ }
+ /**
+- * Place the queued items a boundary selects (spec §6): every write, the first or all steers, and at `final` the first
+- * or all follow-ups. A selected reset turns a `postTools` boundary into `final`. Writes are placed first and user
++ * Place the queued items a boundary selects: every write and the first or all steers, or at `final` the first or all
++ * follow-ups if no steer was selected. A selected reset turns a `postTools` boundary into `final`. Writes are placed first and user
+  * items after them, each in ID order, so user items queued before a reset run in the new context. A write whose head
+  * targets an entry before the active range, including a range started earlier in this commit, is stale. Selected and
+  * stale items are removed positionally.
+@@ -42,7 +42,8 @@ export async function applyBoundary(tx, boundary, at, now) {
+         return queueMode === "all" ? indexes : indexes.slice(0, 1);
+     };
+     const writes = items.flatMap((item, index) => (item.mode === "write" ? [index] : []));
+-    const users = [...pick("steer", boundary.steeringMode), ...(final ? pick("followUp", boundary.followUpMode) : [])];
++    const steers = pick("steer", boundary.steeringMode);
++    const users = steers.length > 0 ? steers : final ? pick("followUp", boundary.followUpMode) : [];
+     users.sort((a, b) => a - b);
+     // `appendEntry()` copies the drafts' values; the items are removed only afterwards.
+     for (const index of writes) {

@@ -175,6 +175,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-coding-agent@1.4.0': 6a3a85fbac77dd87523c149e32084311721cd3f970cccd08c852e347cff6cfe7
+  '@earendil-works/pi-durable@1.4.0': de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f
 
 importers:
 
@@ -288,7 +289,7 @@ importers:
         version: 1.4.0
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
+        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -321,7 +322,7 @@ importers:
         version: 1.4.0(patch_hash=6a3a85fbac77dd87523c149e32084311721cd3f970cccd08c852e347cff6cfe7)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
+        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@earendil-works/pi-mcp':
         specifier: 1.4.0
         version: 1.4.0
@@ -348,7 +349,7 @@ importers:
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
+        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
 
   packages/telemetry:
     dependencies:
@@ -2145,7 +2146,7 @@ snapshots:
       '@earendil-works/chord': 1.4.0
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@earendil-works/pi-coding-agent': 1.4.0(patch_hash=6a3a85fbac77dd87523c149e32084311721cd3f970cccd08c852e347cff6cfe7)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
-      '@earendil-works/pi-durable': 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
+      '@earendil-works/pi-durable': 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)
       '@earendil-works/pi-tui': 1.4.0
       defuddle: 0.19.5
       linkedom: 0.18.13
@@ -2315,7 +2316,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)':
+  '@earendil-works/pi-durable@1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)':
     dependencies:
       '@earendil-works/chord': 1.4.0
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.4)(undici@8.10.2)(ws@8.22.0)

@@ -154,6 +154,17 @@ Repository-wide lint still reports pre-existing assignment-expression errors in 
 
 ## Provider error recovery
 
+`steering.integration.test.ts` exercises the durable Harness queue policy, not the unused native
+session loop. It reproduces the SDK's one-at-a-time mode and checks Pilot's existing all-at-once
+steering policy with distinct ordered messages and per-submission placement/settlement. The offline
+matrix covers arrivals during drain, duplicate request IDs, captured-row edits/removals, separate
+follow-ups, model failure, Stop, SQLite reopen, held-input revisions and pending questions. Queue
+controls cannot answer a question; only an explicit user reply releases its deferred automatic input.
+
+The pinned `pi-durable@1.4.0` patch keeps final/reset boundaries steer-first like pi: follow-ups
+wait until no steer is selected, then retain their own one-at-a-time/all setting. It changes only
+selection, leaving atomic placement, individual submission ACKs and question holding unchanged.
+
 `shell-deadline.test.ts` uses isolated real shell process groups plus fake-clock deadline boundaries.
 It covers a nonterminating process and child, explicit cancellation, silent valid work with an extended
 deadline, quick failure, process cleanup, elapsed notices without invented progress, and timer/listener
