@@ -247,6 +247,8 @@ pub use local_view::shell_probe::run_shell_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::sidebar_scroll_native::run as run_native_sidebar_scroll_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::sidebar_scroll_native::run_visible as run_visible_sidebar_scroll_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::side_panel_probe::run_side_panel_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;

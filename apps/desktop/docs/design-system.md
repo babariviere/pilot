@@ -232,6 +232,12 @@ row keeps its faint neutral fill. Missions is the sidebar's only mission entry
 (Command-3 opens the same browser); mission and member chats stay ordinary rows.
 `examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden
 native window with production dispatchers, cold (first traversal) against warm.
+`examples/sidebar_scroll_visible.rs` (release build; from an agent, launch it
+inside a minimal .app with `open`) wheels a shown window from display frame
+callbacks and logs frame intervals, main-thread CPU and process instructions and
+cycles. The first one to three frames after any pause retire the same
+instructions as later frames at a lower CPU clock, so a heavy frame can miss
+its first deadline; less work per scroll frame is the lever, not warming caches.
 The sidebar chat and project lists hide Kit's scrollbar in every scrollbar mode
 (`List::scrollbar_visible(false)`); wheel, keyboard selection and retained offsets
 still scroll them. Other panes keep their scrollbars.
