@@ -407,7 +407,8 @@ uses a known reset time when available; otherwise it waits for a fresh lower rea
 Transient rate limits, authentication and billing errors retain their normal error/retry behavior.
 
 Beside the usage warning, **Force work** lets that chat and its subagents continue past the current
-windows. The override ends when those windows reset or clear. **Pause at limit** restores the guard early.
+limit, including windows that cross or move later. The override ends once all of the chat's windows reset or
+clear, or when the provider itself rejects a request. **Pause at limit** restores the guard early.
 
 When you message a long chat (context at 40% of the window or 100k tokens, whichever is lower) after
 the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI, longer with

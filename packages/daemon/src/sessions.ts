@@ -9491,6 +9491,9 @@ export class SessionManager {
 			if (meta.continuedTo) throw new Conflict("Continue in the replacement chat");
 			meta.subscriptionPolicy = refreshSubscriptionPolicy(meta.subscriptionPolicy, this.subscriptionUsage);
 			meta.subscriptionPolicy.forced = force ? meta.subscriptionPolicy.windows.map(subscriptionWindowKey) : [];
+			if (force && meta.subscriptionPolicy.windows.length)
+				meta.subscriptionPolicy.force = [...SUBSCRIPTION_PROVIDERS];
+			else delete meta.subscriptionPolicy.force;
 			await this.save(meta);
 			await this.syncSubscriptionPolicy(meta);
 			this.scheduleSubscriptionReset();

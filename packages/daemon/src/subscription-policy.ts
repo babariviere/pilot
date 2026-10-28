@@ -12,7 +12,10 @@ export const SUBSCRIPTION_PAUSE_PERCENT = 95;
 export interface SubscriptionPolicy {
 	version: 1;
 	windows: SubscriptionPauseWindow[];
+	/** Window keys admission may pass (the gate's contract). Derived from `force` for current windows. */
 	forced: string[];
+	/** Force work: providers whose windows are ignored until the chat has no blocked window left. */
+	force?: SubscriptionProvider[];
 	/** Prevent a stale/lower cache replay from releasing a known blocked window. */
 	observed?: Partial<Record<SubscriptionProvider, number>>;
 }
@@ -48,6 +51,9 @@ export function recordSubscriptionLimit(
 	}
 	const keys = new Set(next.windows.filter((window) => window.provider === limit.provider).map(subscriptionWindowKey));
 	next.forced = next.forced.filter((key) => !keys.has(key));
+	const force = next.force?.filter((provider) => provider !== limit.provider);
+	if (force?.length) next.force = force;
+	else delete next.force;
 	// Re-reading the snapshot that preceded the rejection cannot immediately release this hold.
 	next.observed = { ...next.observed, [limit.provider]: Math.max(now + 1, next.observed?.[limit.provider] ?? 0) };
 	return next;
@@ -91,10 +97,18 @@ export function refreshSubscriptionPolicy(
 		}
 	}
 	const keys = new Set(windows.map(subscriptionWindowKey));
+	// A reading can move a window's reset time or add a window; Force work still covers it.
+	const force = windows.length ? previous?.force?.filter((provider) => SUBSCRIPTION_PROVIDERS.includes(provider)) : [];
 	return {
 		version: 1,
 		windows,
-		forced: (previous?.forced ?? []).filter((key) => keys.has(key)),
+		forced: [
+			...new Set([
+				...(previous?.forced ?? []).filter((key) => keys.has(key)),
+				...windows.filter((window) => force?.includes(window.provider)).map(subscriptionWindowKey),
+			]),
+		],
+		...(force?.length ? { force } : {}),
 		...(Object.keys(observed).length ? { observed } : {}),
 	};
 }

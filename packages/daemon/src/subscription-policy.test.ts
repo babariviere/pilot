@@ -53,19 +53,26 @@ test("unknown, error, stale and older readings cannot release a known limit", ()
 	assert.equal(refreshSubscriptionPolicy(blocked, source(usage(5, now + 1)), now + 1).windows.length, 0);
 });
 
-test("force is scoped to window identity and expires on reset, decrease or a new window", () => {
+test("force ignores moved and new windows until every window resets or clears", () => {
 	const policy = refreshSubscriptionPolicy(undefined, source(usage(95)), now);
 	policy.forced = policy.windows.map(subscriptionWindowKey);
+	policy.force = ["anthropic", "openai"];
 	assert.deepEqual(refreshSubscriptionPolicy(policy, source(usage(99, now + 1)), now + 1).forced, policy.forced);
 	assert.deepEqual(refreshSubscriptionPolicy(policy, source(), now + 60_000).forced, []);
+	assert.equal(refreshSubscriptionPolicy(policy, source(), now + 60_000).force, undefined);
 	assert.deepEqual(refreshSubscriptionPolicy(policy, source(usage(10, now + 1)), now + 1).forced, []);
-	const next = refreshSubscriptionPolicy(
-		policy,
-		source(usage(96, now + 1, new Date(now + 120_000).toISOString())),
-		now + 1,
+	assert.equal(refreshSubscriptionPolicy(policy, source(usage(10, now + 1)), now + 1).force, undefined);
+	const moved = usage(96, now + 1, new Date(now + 60_001).toISOString());
+	moved.windows.push({ label: "Week", usedPercent: 97 });
+	const next = refreshSubscriptionPolicy(policy, source(moved), now + 1);
+	assert.equal(next.windows.length, 2);
+	assert.deepEqual(
+		next.forced,
+		next.windows.map(subscriptionWindowKey),
+		"a moved reset time or new window stays forced",
 	);
-	assert.equal(next.windows.length, 1);
-	assert.deepEqual(next.forced, []);
+	const legacy = { ...policy, force: undefined };
+	assert.deepEqual(refreshSubscriptionPolicy(legacy, source(moved), now + 1).forced, []);
 });
 
 test("the durable policy preserves missing-reset pauses and independent provider windows", () => {
@@ -95,9 +102,11 @@ test("provider exhaustion pauses despite a lower cache until newer evidence, for
 	assert.deepEqual(refreshSubscriptionPolicy(reported, source(), now + 1), reported);
 	assert.equal(refreshSubscriptionPolicy(reported, source(usage(10, now + 1)), now + 1).windows.length, 0);
 	reported.forced = reported.windows.map(subscriptionWindowKey);
+	reported.force = ["openai"];
 	assert.equal(refreshSubscriptionPolicy(reported, low, now).forced.length, 1, "explicit force remains available");
 	const rejectedAgain = recordSubscriptionLimit(reported, low, { provider: "openai" }, now);
 	assert.deepEqual(rejectedAgain.forced, [], "a real rejection supersedes a force override");
+	assert.equal(rejectedAgain.force, undefined);
 	assert.equal(rejectedAgain.windows.length, 1, "reports cannot accumulate synthetic windows");
 	const timed = recordSubscriptionLimit(reported, low, { provider: "openai", resetsAt: reset }, now);
 	assert.equal(timed.windows[0]?.resetsAt, reset);
@@ -108,8 +117,10 @@ test("provider rejection reuses known windows and leaves the other provider's fo
 	const policy = refreshSubscriptionPolicy(undefined, source(usage(96)), now);
 	policy.windows.push({ provider: "anthropic", label: "Week", usedPercent: 95 });
 	policy.forced = policy.windows.map(subscriptionWindowKey);
+	policy.force = ["anthropic", "openai"];
 	const reported = recordSubscriptionLimit(policy, source(usage(96)), { provider: "openai" }, now);
 	assert.equal(reported.windows.length, 2, "known reset windows need no indefinite synthetic hold");
 	assert.equal(reported.windows.find((window) => window.provider === "openai")?.resetsAt, reset);
 	assert.deepEqual(reported.forced, [policy.forced[1]]);
+	assert.deepEqual(reported.force, ["anthropic"]);
 });

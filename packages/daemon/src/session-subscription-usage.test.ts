@@ -217,6 +217,33 @@ test("a different-provider child cannot escape limits, and its parent exposes th
 	assert.equal(f.sessions.get(id)?.working, true);
 });
 
+test("force work stays on when a fresh reading moves the reset time or adds a window", async (t) => {
+	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
+	const id = f.ids.chat!;
+	const fetchedAt = Date.now();
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt,
+		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
+	});
+	await f.cache().refresh();
+	await f.sessions.forceSubscription(id, true);
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt: fetchedAt + 1,
+		snapshot: {
+			windows: [
+				{ label: "5h", usedPercent: 97, resetsAt: new Date(fetchedAt + 60_001).toISOString() },
+				{ label: "Week", usedPercent: 96 },
+			],
+		},
+	});
+	await f.cache().refresh();
+	await f.sessions["subscriptionPolicyWrites"];
+	assert.equal(f.sessions.get(id)?.subscriptionPause?.windows.length, 2);
+	assert.equal(f.sessions.get(id)?.subscriptionPause?.forced, true);
+	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
+	assert.equal(policy.forced.length, 2, "the admission gate passes the moved and new windows");
+});
+
 test("the reset timer releases work and expires force without a new provider reading", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
 	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
