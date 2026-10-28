@@ -37,6 +37,15 @@ impl Drop for Temp {
 fn key() -> Ed25519KeyPair {
     Ed25519KeyPair::from_seed_unchecked(&[42; 32]).unwrap()
 }
+
+#[test]
+fn arbitrary_group_writable_parent_is_still_refused() {
+    let temp = Temp::new();
+    fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o775)).unwrap();
+    assert_eq!(installer::validate_parents(&temp.0), Err(Error::Filesystem));
+    fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
+    installer::validate_parents(&temp.0).unwrap();
+}
 fn trust() -> manifest::Trust {
     manifest::Trust {
         repository: "owner/private-repo".into(),

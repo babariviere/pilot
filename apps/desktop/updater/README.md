@@ -163,7 +163,14 @@ already acknowledged/fenced install intent; safety must be established before se
 ## Recovery and explicit limits
 
 Stages are private same-volume directories, permanent target lock files are never unlinked.
-Writable installation parents/unsafe ancestors are rejected. The parent directory is
+Writable installation parents/unsafe ancestors are rejected, with one macOS exception:
+the exact `/Applications` directory may be root:admin (UID 0/GID 80), mode 0775.
+Administrators are trusted to replace apps in that system directory. This does not
+admit arbitrary group-writable paths, symlinks, write-capable ACLs, world-writable
+directories or administrator-owned app bundles. `/Applications/Pilot Next.app` must
+still be user-owned with a safe bounded tree and valid native seal/identity. There is
+no privilege escalation and no chmod of existing paths. Linux policy is unchanged.
+The parent directory is
 checked for macOS extended ACL write/delete/security grants, not just POSIX mode bits;
 the installed bundle's bounded file tree is checked too, including the helper's ancestors
 and contents, so permissive nested ACLs cannot race verified executable launch.

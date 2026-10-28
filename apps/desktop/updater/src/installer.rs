@@ -177,7 +177,12 @@ pub fn finish_stage(
     })
 }
 
-pub(crate) fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
+/// Read-only installation filesystem preflight, shared by startup and updates.
+/// Does not authenticate a release; callers must also verify its native signature.
+///
+/// # Errors
+/// Rejects unsafe paths, ownership, permissions, ACLs and bundle trees.
+pub fn validate_target(target: &Path, trust: &Trust) -> Result<(), Error> {
     if !target.is_absolute()
         || target.file_name().is_none_or(|name| {
             // Linux installs may be renamed; the signed inventory identifies them.
@@ -245,22 +250,37 @@ fn validate_bundle_tree(root: &Path) -> Result<(), Error> {
 
 pub(crate) fn validate_parents(parent: &Path) -> Result<(), Error> {
     // A root-owned sticky ancestor (e.g. /private/tmp) protects our owned entry;
-    // an immediately writable/sticky installation parent is deliberately refused.
+    // an immediately writable/sticky parent is refused except standard macOS
+    // /Applications, whose administrator write permission is intentional.
     // SAFETY: geteuid is a process identity query.
     let uid = unsafe { libc::geteuid() };
     for (index, ancestor) in parent.ancestors().enumerate() {
         acl_policy(ancestor, 0)?;
         let metadata = fs::symlink_metadata(ancestor).map_err(|_| Error::Filesystem)?;
         let safe_sticky = index > 0 && metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
+        let system_applications =
+            is_system_applications(ancestor, metadata.uid(), metadata.gid(), metadata.mode());
         if !metadata.is_dir()
             || metadata.file_type().is_symlink()
             || (metadata.uid() != uid && metadata.uid() != 0)
-            || (metadata.mode() & 0o022 != 0 && !safe_sticky)
+            || (metadata.mode() & 0o022 != 0 && !safe_sticky && !system_applications)
         {
             return Err(Error::Filesystem);
         }
     }
     Ok(())
+}
+
+fn is_system_applications(path: &Path, uid: u32, gid: u32, mode: u32) -> bool {
+    // macOS administrators can already replace applications here. Trust only the
+    // standard root:admin directory, not arbitrary group-writable ancestors.
+    // Symlinks, non-directories and write-capable ACLs are still rejected above;
+    // the app itself must remain user-owned, non-writable by others and sealed.
+    cfg!(target_os = "macos")
+        && path == Path::new("/Applications")
+        && uid == 0
+        && gid == 80 // macOS's system admin group
+        && mode & 0o7777 == 0o775
 }
 
 fn entry_identity(parent: &File, relative: &Path) -> Result<(u64, u64), Error> {
@@ -812,6 +832,31 @@ pub use crate::linux::LinuxPlatform as NativePlatform;
 #[cfg(test)]
 mod identity_tests {
     use super::*;
+
+    #[test]
+    fn system_applications_exception_is_exact() {
+        assert_eq!(
+            is_system_applications(Path::new("/Applications"), 0, 80, 0o40775),
+            cfg!(target_os = "macos")
+        );
+        for (path, uid, gid, mode) in [
+            ("/other/Applications", 0, 80, 0o40775),
+            ("/Applications/other", 0, 80, 0o40775),
+            ("/Applications", 501, 80, 0o40775),
+            ("/Applications", 0, 20, 0o40775),
+            ("/Applications", 0, 80, 0o40777),
+            ("/Applications", 0, 80, 0o41775),
+        ] {
+            assert!(!is_system_applications(Path::new(path), uid, gid, mode));
+        }
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    #[test]
+    fn native_system_applications_parent_preflight() {
+        // Read-only: no fixture app or administrator-owned path is created.
+        validate_parents(Path::new("/Applications")).unwrap();
+    }
 
     #[test]
     fn relative_directory_identity_matches_metadata() {

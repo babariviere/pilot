@@ -91,6 +91,29 @@ authentication for the ordinary loopback API.
 
 ## Recovery and evidence boundaries
 
+### macOS install preflight
+
+`/Applications/Pilot Next.app` is supported when the app is user-owned and sealed.
+The standard root:admin, 0775 `/Applications` parent is allowed specifically;
+other group-writable parents, world write, symlinks and unsafe ACLs remain refused.
+Do not chmod system directories or relocate the app to work around a startup error.
+
+Before advising an installation is usable, check both the full payload inventory
+and native installation policy. Payload/seal success alone does not check parents:
+
+```sh
+python3 apps/desktop/scripts/bundle_runtime.py verify '/Applications/Pilot Next.app'
+bash apps/desktop/scripts/cargo.sh run --locked --manifest-path updater/Cargo.toml \
+  --features native-macos --example install-preflight -- '/Applications/Pilot Next.app' \
+  '/path/to/authenticated-release/updater-inputs.json'
+```
+
+The preflight shares startup's filesystem predicate and native signature/identity
+checks, but does not authenticate its supplied release configuration, publish capsules,
+launch a window, or touch daemon/profile state. Use configuration from the separately
+verified release. A later retained-runtime compatibility refusal is a separate issue.
+Never overwrite an open app; obtain user close/approval before installing a correction.
+
 Recovery metadata is read-only, with details and copyable retained paths. Failed
 swap leaves the old app; failed relaunch/startup keeps both bundles and reports
 uncertainty. Transactions and backups are not blindly retried or deleted; the one
