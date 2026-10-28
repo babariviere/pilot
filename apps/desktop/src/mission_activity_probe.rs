@@ -152,9 +152,17 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(a.state.rows[0].id, 60);
                 assert!(w.find("mission-activity-page").bounds().size.width <= px(width));
                 assert_eq!(w.find("mission-activity-page").focused(), Some(true));
-                // Root -> Back -> Refresh -> Source -> icon Copy -> event disclosure.
-                for _ in 0..5 {
+                // Follow the mounted controls, including the user-update entry point.
+                for id in [
+                    "activity-overview",
+                    "activity-refresh",
+                    "activity-scope",
+                    "activity-post-update",
+                    "activity-copy-60",
+                    "activity-expand-60",
+                ] {
                     w.press("tab", cx);
+                    assert_eq!(w.find(id).focused(), Some(true), "Tab reaches {id}");
                 }
                 w.press("enter", cx);
             })
