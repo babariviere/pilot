@@ -78,9 +78,10 @@ and a parked watchdog, then confines before reading any source:
 - Linux draft: no-new-privs, non-dumpable, parent-death kill, close-range,
   320 MiB AS cap and architecture-checked seccomp allowlist with TSYNC to the
   watchdog. No open/socket/connect/exec/clone/ptrace/io_uring/executable mappings.
-  Draft parent checks `/proc`. Not compiled/run on native Wayland. App source
-  execution is explicitly disabled off macOS pending validation; source view
-  remains available. No unconstrained fallback.
+  Draft parent checks `/proc`. A later [Linux helper checkpoint](linux-visual-confinement.md)
+  exercises actual x86_64 kernel denials and helper limits, but does not qualify
+  the Wayland/product path. App source execution is explicitly disabled off
+  macOS pending validation; source view remains available. No unconstrained fallback.
 
 Child env cleared, cwd `/`, stderr null, private pipes only. A parent-owned
 synthetic listener ensures denial probes cannot contact the daemon/real service.
