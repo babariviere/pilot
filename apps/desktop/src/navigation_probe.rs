@@ -490,7 +490,161 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+    sidebar_scrollbar_hidden(cx, captures.as_deref());
     canonical_reader_navigation(cx);
+}
+
+/// An overflowing sidebar paints no scrollbar in any Kit mode, while wheel
+/// input scrolls it and keyboard selection keeps the selected row in view.
+fn sidebar_scrollbar_hidden(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {
+    use gpui_kit::component::{Theme, scroll::ScrollbarMode};
+    let width = 1100.;
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        cx.update(|cx| {
+            crate::appearance::commit_appearance(
+                if mode == ThemeMode::Dark {
+                    crate::settings_state::AppearancePreference::Dark
+                } else {
+                    crate::settings_state::AppearancePreference::Light
+                },
+                cx,
+            )
+        });
+        let chats = (0..80)
+            .map(|ix| {
+                crate::local_model::chat(&json!({"id":format!("chat{ix}"),"title":format!("Sidebar row {ix}"),"projectId":"a","state":"idle"})).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let (h, v) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(width), px(600.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        v.state.loaded = true;
+                        v.state.chats = Arc::new(chats);
+                        v.rebuild_nav(w, cx);
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        settle(cx, h);
+        let offset = |cx: &mut HeadlessAppContext| {
+            cx.update(|cx| f32::from(v.read(cx).chats.read(cx).scroll_handle().offset().y))
+        };
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "chat-list-pane",
+                ScrollDelta::Pixels(point(px(0.), px(-300.))),
+                cx,
+            )
+        })
+        .unwrap();
+        settle(cx, h);
+        let scrolled = offset(cx);
+        assert!(scrolled < -100., "wheel input still scrolls the sidebar");
+        let previous = cx.update(|cx| cx.theme().scrollbar_mode);
+        let mut shots = Vec::new();
+        for scrollbar in [
+            ScrollbarMode::Hover,
+            ScrollbarMode::Scrolling,
+            ScrollbarMode::Always,
+        ] {
+            cx.update(|cx| Theme::set_scrollbar_mode(scrollbar, cx));
+            if scrollbar == ScrollbarMode::Scrolling {
+                // Fresh wheel input that returns to the same offset.
+                for delta in [-40., 40.] {
+                    cx.update_window(h, |_, w, cx| {
+                        w.scroll(
+                            "chat-list-pane",
+                            ScrollDelta::Pixels(point(px(0.), px(delta))),
+                            cx,
+                        )
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                }
+                assert!((offset(cx) - scrolled).abs() <= 1.);
+            }
+            // Keep the pointer off the rows; Base fades use wall time.
+            cx.update_window(h, |_, w, cx| w.hover("conversation", cx))
+                .unwrap();
+            settle(cx, h);
+            std::thread::sleep(Duration::from_millis(
+                if scrollbar == ScrollbarMode::Hover {
+                    2400
+                } else {
+                    150
+                },
+            ));
+            settle(cx, h);
+            shots.push(cx.capture_screenshot(h).unwrap());
+        }
+        cx.update(|cx| Theme::set_scrollbar_mode(previous, cx));
+        let pane = cx
+            .update_window(h, |_, w, _| w.find("chat-list-pane").bounds())
+            .unwrap();
+        let scale = shots[0].width() as f32 / width;
+        let (x0, x1) = (
+            (f32::from(pane.left()) * scale) as u32,
+            (f32::from(pane.right()) * scale) as u32,
+        );
+        let (y0, y1) = (
+            (f32::from(pane.top()) * scale) as u32,
+            (f32::from(pane.bottom()) * scale) as u32,
+        );
+        for (shot, name) in shots[1..].iter().zip(["scrolling", "always"]) {
+            let changed = (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| shot.get_pixel(x, y) != shots[0].get_pixel(x, y))
+                .count();
+            assert_eq!(changed, 0, "{name} mode must not paint a sidebar scrollbar");
+        }
+        // Keyboard selection past the viewport scrolls the selected row into view.
+        cx.update_window(h, |_, w, cx| {
+            let list = v.read(cx).chats.clone();
+            list.update(cx, |l, cx| l.focus(w, cx));
+        })
+        .unwrap();
+        settle(cx, h);
+        for _ in 0..60 {
+            cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
+        }
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            let list = v.read(cx).chats.read(cx);
+            let ix = list.selected_index().expect("keyboard selection");
+            let id = list.delegate().at(ix).unwrap().id.clone();
+            let row = w
+                .find(SharedString::from(format!("chat-row-{id}")))
+                .bounds();
+            assert!(row.top() >= pane.top() - px(1.) && row.bottom() <= pane.bottom() + px(1.));
+        })
+        .unwrap();
+        assert!(offset(cx) < scrolled, "selection scrolled further down");
+        if let Some(d) = captures {
+            shots[2]
+                .save(d.join(format!("sidebar-scrollbar-always-{}.png", mode.name())))
+                .unwrap();
+        }
+        println!(
+            "{}",
+            json!({"mode":mode.name(),"sidebar_scrollbar_hidden":["hover","scrolling","always"],"wheel_scrolls":true,"keyboard_selection_visible":true})
+        );
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+    }
 }
 
 /// Actual reducer -> fresh Open, including allocation collision and missing key.

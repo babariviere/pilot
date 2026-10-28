@@ -220,7 +220,7 @@ impl LocalViewer {
                         .child(gpui_kit::component::Icon::new(if self.projects_open{IconName::ChevronUp}else{IconName::ChevronDown}).small().flex_shrink_0()))
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_projects(w,cx))))
                 .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0().py_1()
-                    .child(div().h(px((self.state.projects.len().min(5)as f32*28.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects)))
+                    .child(div().h(px((self.state.projects.len().min(5)as f32*28.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects).scrollbar_visible(false)))
                     .child(sidebar_row("add-project","Add project…",AppIcon::AddProject)
                         .tooltip("Add a folder as a project")
                         .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|{
@@ -245,7 +245,8 @@ impl LocalViewer {
                         .child("Chats"))
                     .child(self.chat_filter(cx)))
                 .when(archived,|this|this.child(div().id("archives-active").test_support().px_2().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
-            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…")))
+            // The sidebar scrolls without a visible scrollbar in any Kit mode.
+            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…").scrollbar_visible(false)))
             .child(self.chat_actions.clone())
             // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()

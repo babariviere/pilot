@@ -213,6 +213,9 @@ leading resource column. Compose, filters and chat menus share a trailing action
 column and 28pt targets. Long names truncate without shrinking body text; actual
 owners retain full accessible names. Search, filters, archive, navigation history,
 Usage, Settings and connection/recovery state keep their existing owners.
+The sidebar chat and project lists hide Kit's scrollbar in every scrollbar mode
+(`List::scrollbar_visible(false)`); wheel, keyboard selection and retained offsets
+still scroll them. Other panes keep their scrollbars.
 
 Chat order and groups follow Swift (`src/chat_order.rs` documents the exact
 rules). Every summary list uses Swift's `listPrecedes`: pinned, unsettled PRs,
