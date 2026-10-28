@@ -116,6 +116,10 @@ bash scripts/cargo.sh test --locked --features native-probes --test queued_messa
 bash scripts/cargo.sh clippy --locked --features native-probes --test message_fold -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test message_fold
 
+# Message copy and sent-time footer below the body, hover/keyboard reveal.
+bash scripts/cargo.sh clippy --locked --features native-probes --test message_footer -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test message_footer
+
 # Focused new-chat setup, retained native input and unchanged creation guards.
 bash scripts/cargo.sh clippy --locked --features native-probes --test new_chat_view -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test new_chat_view

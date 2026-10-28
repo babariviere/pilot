@@ -277,8 +277,10 @@ pub fn run_fonts_probe(cx: &mut HeadlessAppContext) {
                 > tool_height,
             "expanded real tool output adopts code metrics"
         );
-        cx.update_window(chat, |_, w, cx| w.click(("copy-source", 2u64), cx))
-            .unwrap();
+        cx.update_window(chat, |_, w, cx| {
+            crate::transcript_view::click_copy(w, 2, cx)
+        })
+        .unwrap();
         cx.update(|cx| {
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().unwrap(),

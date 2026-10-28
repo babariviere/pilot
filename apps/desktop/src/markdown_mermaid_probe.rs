@@ -184,7 +184,7 @@ pub fn run_markdown_mermaid_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             }
             cx.update_window(h, |_, w, cx| {
-                w.click(("copy-source", 1u64), cx);
+                crate::transcript_view::click_copy(w, 1, cx);
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), one);
             })
             .unwrap();

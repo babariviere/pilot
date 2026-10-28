@@ -499,7 +499,8 @@ impl LiveTranscript {
                 } else {
                     "Assistant · streaming"
                 },
-            );
+            )
+            .with_sent(crate::message_time::read(&value));
             if row.source() != "[No text content]" {
                 rows.push(canonical_row(row, entry, Some(block_ix)));
             }
@@ -1123,6 +1124,7 @@ fn queued_row(row: &crate::queued_message::Row) -> Message {
 
 fn message(id: u64, value: &Value, label: &str) -> Message {
     Message::live(id, label.into(), content_text(&value["content"]))
+        .with_sent(crate::message_time::read(value))
 }
 fn content_text(content: &Value) -> String {
     let mut source = String::new();
@@ -1596,6 +1598,47 @@ mod tests {
         );
         assert_eq!(model.cursor, None);
         assert_eq!(model.rows().len(), 2);
+    }
+    #[test]
+    fn sent_time_is_each_messages_own_timestamp_through_stream_and_commit() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[
+            {"id":1,"kind":"pi.user","model":[{"role":"user","timestamp":1_000,"content":"Hi 👋"}]},
+            {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","timestamp":2_000,"content":[
+                {"type":"text","text":"First"},{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Second"}]}]},
+            {"id":3,"kind":"pi.user","model":[{"role":"user","content":"No time"}]},
+            {"id":4,"kind":"pi.user","model":[{"role":"user","timestamp":"2000","content":"Text time"}]},
+        ]}));
+        let sent: Vec<_> = model
+            .rows()
+            .iter()
+            .map(|row| (row.source().to_owned(), row.sent()))
+            .collect();
+        assert_eq!(
+            sent,
+            [
+                ("Hi 👋".into(), Some(1_000)),
+                ("First".into(), Some(2_000)),
+                ("Second".into(), Some(2_000)),
+                ("No time".into(), None),
+                ("Text time".into(), None),
+            ]
+        );
+        model.apply(&json!({"type":"message_start","message":{"role":"assistant","timestamp":3_000,"content":[{"type":"text","text":"日"}]}}));
+        let live = model.rows().last().unwrap().clone();
+        assert_eq!(live.sent(), Some(3_000));
+        model.apply(&json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":"本"}]}));
+        let streamed = model.rows().last().unwrap().clone();
+        assert_eq!((streamed.id(), streamed.sent()), (live.id(), Some(3_000)));
+        model.apply(
+            &json!({"type":"message_end","entry":{"id":5,"kind":"pi.assistant","model":[
+            {"role":"assistant","timestamp":3_000,"content":[{"type":"text","text":"日本"}]}]}}),
+        );
+        let committed = model.rows().last().unwrap().clone();
+        assert_eq!(
+            (committed.id(), committed.source(), committed.sent()),
+            (live.id(), "日本", Some(3_000))
+        );
     }
     #[test]
     fn streaming_promotes_identity_and_deduplicates_commit() {

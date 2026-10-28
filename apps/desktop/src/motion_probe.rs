@@ -119,10 +119,14 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 .update_window(h, |_, w, cx| {
                     w.draw(cx).clear(cx);
                     assert!(v.read(cx).text_parsers_ready(cx));
+                    // The message's first line, where the copy action used to sit.
+                    let text = v.read(cx).transcript.read(cx).history_probe_row(ID);
+                    let top = text.read(cx).bounds();
+                    let copy = w.find(("copy-source", ID)).bounds().size.height;
                     (
-                        w.find(("copy-source", ID)).bounds(),
+                        Bounds::new(top.origin, size(top.size.width, copy)),
                         w.find("viewport").bounds(),
-                        v.read(cx).transcript.read(cx).history_probe_row(ID),
+                        text,
                     )
                 })
                 .unwrap();
@@ -148,7 +152,16 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 .update_window(h, |_, w, cx| {
                     let paint = Instant::now();
                     w.draw(cx).clear(cx);
-                    assert_eq!(w.find(("copy-source", ID)).bounds(), header);
+                    assert_eq!(
+                        v.read(cx)
+                            .transcript
+                            .read(cx)
+                            .history_probe_row(ID)
+                            .read(cx)
+                            .bounds()
+                            .origin,
+                        header.origin
+                    );
                     assert_eq!(
                         v.read(cx)
                             .transcript
@@ -218,8 +231,14 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                         let paint = Instant::now();
                         w.draw(cx).clear(cx);
                         assert_eq!(
-                            w.find(("copy-source", ID)).bounds(),
-                            header,
+                            v.read(cx)
+                                .transcript
+                                .read(cx)
+                                .history_probe_row(ID)
+                                .read(cx)
+                                .bounds()
+                                .origin,
+                            header.origin,
                             "word fade must not move its message"
                         );
                         let t = v.read(cx).transcript.read(cx);
@@ -296,7 +315,7 @@ pub fn run_motion_probe(cx: &mut HeadlessAppContext) {
                 "settled words must not keep notifying the transcript"
             );
             cx.update_window(h, |_, w, cx| {
-                w.click(("copy-source", ID), cx);
+                crate::transcript_view::click_copy(w, ID, cx);
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().as_deref(),
                     Some(FULL)

@@ -284,7 +284,7 @@ fn civil_from_days(z: i64) -> (i64, i64) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (m, d)
 }
-fn local_offset(t: i64) -> i64 {
+pub(crate) fn local_offset(t: i64) -> i64 {
     let t = t as libc::time_t;
     // SAFETY: localtime_r only writes the struct it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };

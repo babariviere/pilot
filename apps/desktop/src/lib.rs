@@ -15,6 +15,7 @@ mod path_completion;
 mod path_completion_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::path_completion_probe::run_path_completion_probe;
+mod message_time;
 mod session_todos;
 mod session_todos_view;
 mod subscription_pause;
@@ -348,6 +349,8 @@ mod message_fold;
 pub use local_view::markdown_mermaid_probe::run_markdown_mermaid_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::message_fold_probe::run_message_fold_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::message_footer_probe::run_message_footer_probe;
 
 #[cfg(feature = "native-probes")]
 pub use local_view::new_chat_view_probe::run_new_chat_view_probe;

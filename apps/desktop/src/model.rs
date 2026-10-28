@@ -46,6 +46,7 @@ pub(crate) struct Message {
     image: Option<Arc<crate::conversation_images::Source>>,
     /// Delivery caption for user input not yet in canonical history (Sending, Queued).
     pending: Option<&'static str>,
+    sent: Option<u64>,
 }
 
 impl Message {
@@ -74,6 +75,7 @@ impl Message {
             artifact_size: None,
             image: None,
             pending: None,
+            sent: None,
         }
     }
     pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
@@ -140,6 +142,14 @@ impl Message {
     }
     pub(crate) fn work_data(&self) -> Option<&Arc<crate::tool_presentation::Work>> {
         self.work.as_ref()
+    }
+    /// The message's own epoch-millisecond sent time, when it has a valid one.
+    pub(crate) fn sent(&self) -> Option<u64> {
+        self.sent
+    }
+    pub(crate) fn with_sent(mut self, sent: Option<u64>) -> Self {
+        self.sent = sent;
+        self
     }
     pub(crate) fn image_data(&self) -> Option<&Arc<crate::conversation_images::Source>> {
         self.image.as_ref()
@@ -340,6 +350,7 @@ impl Transcript {
             artifact_size: None,
             image: None,
             pending: None,
+            sent: None,
         });
     }
 
@@ -428,6 +439,7 @@ fn history_message(ix: usize) -> Message {
         artifact_size: None,
         image: None,
         pending: None,
+        sent: None,
     }
 }
 

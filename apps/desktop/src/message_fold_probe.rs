@@ -138,7 +138,7 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                     b.top() >= state.read(cx).bounds().bottom(),
                     "Show more follows the preview"
                 );
-                w.click(("copy-source", 1u64), cx);
+                crate::transcript_view::click_copy(w, 1, cx);
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source());
             })
             .unwrap();
@@ -424,7 +424,7 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
             });
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
-                w.click(("copy-source", 10u64), cx);
+                crate::transcript_view::click_copy(w, 10, cx);
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source());
                 assert!(
                     w.find_all(("message-fold", 10u64)).is_empty(),

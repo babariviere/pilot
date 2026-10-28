@@ -768,30 +768,73 @@ impl TranscriptView {
         } else {
             "Copy source"
         };
-        // Exact copy stays one click away, revealed on hover at a fixed corner
-        // so streaming text never moves it.
-        let copy = div()
-            .absolute()
-            .top_0()
-            .right_0()
-            .rounded(px(crate::appearance::Radius::CONTROL))
-            .bg(crate::appearance::card(cx))
+        // Like the Swift app: a footer under the message with copy and its sent
+        // time, revealed on hover (copy also on keyboard focus). Its slot is
+        // always laid out, so revealing it never reflows the transcript.
+        let copy = Button::new(("copy-source", row.id()))
+            .ghost()
+            .xsmall()
+            .icon(crate::app_icon::AppIcon::Copy.asset())
+            .accessibility_label(copy_label)
+            .tooltip(if self.folds.long(row) {
+                "Copy full source. Includes the exact loaded source, not content omitted by viewer limits."
+            } else {
+                "Copy source"
+            })
             .opacity(0.)
             .group_hover("message", |s| s.opacity(1.))
-            .child(
-                Button::new(("copy-source", row.id()))
-                    .ghost()
-                    .xsmall()
-                    .icon(crate::app_icon::AppIcon::Copy.asset())
-                    .accessibility_label(copy_label)
-                    .tooltip(if self.folds.long(row) {
-                        "Copy full source. Includes the exact loaded source, not content omitted by viewer limits."
-                    } else {
-                        "Copy source"
-                    })
-                    .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(source.as_ref().clone()))
-                    }),
+            .focus_visible(|s| s.opacity(1.))
+            .on_click(move |_, _, cx| {
+                cx.write_to_clipboard(ClipboardItem::new_string(source.as_ref().clone()))
+            })
+            .into_any_element();
+        let sent = row.sent().map(|ms| {
+            let label = SharedString::from(crate::message_time::label(ms));
+            let detail = SharedString::from(crate::message_time::detail(ms));
+            crate::ui::text(crate::ui::Text::Caption, label.clone())
+                .id(("sent-time", row.id()))
+                .test_support()
+                .aria_label(label)
+                .flex_none()
+                .whitespace_nowrap()
+                .text_color(cx.theme().muted_foreground)
+                .opacity(0.)
+                .group_hover("message", |s| s.opacity(1.))
+                .tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(detail.clone()).build(w, cx)
+                })
+                .into_any_element()
+        });
+        // Input not yet in history says where it is (Sending…, Queued) in
+        // place of a sent time, and stays visible.
+        let status = row.pending().map(|status| {
+            div()
+                .id(("message-pending", row.id()))
+                .test_support()
+                .flex_none()
+                .text_color(cx.theme().muted_foreground)
+                .aria_label(status)
+                .child(crate::ui::text(crate::ui::Text::Caption, status))
+                .into_any_element()
+        });
+        let sent = status.or(sent);
+        // User messages read time, copy (trailing); replies read copy, time.
+        let footer = div()
+            .id(("message-actions", row.id()))
+            .test_support()
+            .h_flex()
+            .h(px(20.))
+            .items_center()
+            .gap(px(6.))
+            .when(user, |f| f.justify_end())
+            .children(
+                if user {
+                    [sent, Some(copy)]
+                } else {
+                    [Some(copy), sent]
+                }
+                .into_iter()
+                .flatten(),
             );
         let body = div()
             .v_flex()
@@ -874,32 +917,25 @@ impl TranscriptView {
                         }),
                 )
             })
-            .child(if user {
+            .child(
                 div()
-                    .h_flex()
+                    .v_flex()
+                    .gap_1()
                     .w_full()
                     .min_w_0()
-                    .justify_end()
-                    .child(body)
-                    .into_any_element()
-            } else {
-                body.into_any_element()
-            })
-            // Input not yet in history says where it is (Sending…, Queued).
-            .children(row.pending().map(|status| {
-                div().h_flex().w_full().justify_end().child(
-                    div()
-                        .id(("message-pending", row.id()))
-                        .test_support()
-                        .flex_none()
-                        // Aligned with the bubble's text, not its rounded edge.
-                        .pr(px(14.))
-                        .text_color(cx.theme().muted_foreground)
-                        .aria_label(status)
-                        .child(crate::ui::text(crate::ui::Text::Caption, status)),
-                )
-            }))
-            .child(copy)
+                    .child(if user {
+                        div()
+                            .h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .justify_end()
+                            .child(body)
+                            .into_any_element()
+                    } else {
+                        body.into_any_element()
+                    })
+                    .child(footer),
+            )
     }
 }
 
@@ -1058,6 +1094,16 @@ impl Render for TranscriptView {
                         .disabled(busy || full || self.composer.read(cx).value().trim().is_empty())
                         .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))))).into_any_element()
     }
+}
+
+/// Clicks a message's copy action the way a pointer does: hovering the message
+/// first reveals its footer.
+#[cfg(any(test, feature = "native-probes"))]
+pub(crate) fn click_copy(w: &mut Window, id: u64, cx: &mut App) {
+    use gpui_kit::test::{TestEventExt, TestWindowExt};
+    let b = w.find(("copy-source", id)).bounds();
+    w.pointer_move(b.center(), None, cx);
+    w.click(("copy-source", id), cx);
 }
 
 #[cfg(test)]

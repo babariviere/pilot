@@ -810,7 +810,26 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
                 assert!((mark.offset - saved.offset).abs() <= 2.);
                 assert!(v.read(cx).nav_error.is_none());
                 assert!(w.try_find(("copy-source", correct)).is_some());
-                w.click(("copy-source", correct), cx);
+                // The footer sits below a tall body: scroll to it before copying.
+                let t = v.read(cx).transcript.clone();
+                let reveal = |offset: f32, w: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
+                    let mark = crate::navigation::ReadingMark {
+                        message: Some(canonical.clone()),
+                        offset,
+                        following: false,
+                    };
+                    t.update(cx, |t, cx| t.restore_reading(mark, cx));
+                    w.render_frame(cx);
+                };
+                reveal(0., w, cx);
+                let footer = w.find(("message-actions", correct)).bounds();
+                let viewport = w.find("viewport").bounds();
+                reveal(
+                    f32::from(footer.bottom() - viewport.bottom()).max(0.) + 8.,
+                    w,
+                    cx,
+                );
+                crate::transcript_view::click_copy(w, correct, cx);
                 assert!(
                     cx.read_from_clipboard()
                         .unwrap()

@@ -196,7 +196,7 @@ fn readonly_cannot_submit_and_images_never_reach_the_http_client(cx: &mut TestAp
         });
         window.press("secondary-l", cx);
         window.press("enter", cx);
-        window.click(("copy-source", 1_u64), cx);
+        crate::transcript_view::click_copy(window, 1, cx);
         assert!(
             cx.read_from_clipboard()
                 .unwrap()
@@ -210,4 +210,96 @@ fn readonly_cannot_submit_and_images_never_reach_the_http_client(cx: &mut TestAp
     cx.update_window(handle, |_, window, cx| window.render_frame(cx))
         .unwrap();
     assert_eq!(requests.load(Ordering::SeqCst), 0);
+}
+
+#[gpui_kit::test]
+fn message_footer_sits_below_body_with_sent_time_and_exact_copy(cx: &mut TestAppContext) {
+    let sent = 1_793_178_307_250;
+    let user = "Unicode e\u{301} 👩‍💻 日本 🇫🇷 exact\r\n".repeat(3);
+    let rows = vec![
+        Message::live(1, "You · entry 1".into(), user.clone()).with_sent(Some(sent)),
+        Message::live(
+            2,
+            "assistant · entry 2".into(),
+            "## Reply\n\nBody 👋".into(),
+        )
+        .with_sent(Some(sent + 1_000)),
+        Message::live(3, "assistant · entry 3".into(), "No sent time".into()),
+    ];
+    let (handle, view) = setup(cx, rows);
+    let reply = cx
+        .update_window(handle, |_, w, cx| {
+            w.render_frame(cx);
+            let v = view.read(cx);
+            let text = |ix: usize| v.text_states[ix].as_ref().unwrap().read(cx).bounds();
+            let row = |id: u64| w.find(("message-actions", id)).bounds();
+            let copy = |id: u64| w.find(("copy-source", id)).bounds();
+            let time = |id: u64| w.find(("sent-time", id));
+            assert!(row(1).bottom() <= row(2).top() && row(2).bottom() <= row(3).top());
+            // User: trailing time then copy, under the hugging bubble.
+            assert!(copy(1).top() >= text(0).bottom());
+            assert!((copy(1).right() - row(1).right()).abs() <= px(1.));
+            assert!(time(1).bounds().right() <= copy(1).left());
+            assert!(time(1).bounds().top() >= text(0).bottom());
+            assert_eq!(
+                time(1).label(),
+                Some(crate::message_time::label(sent).as_str())
+            );
+            // Reply: leading copy then time.
+            assert!(copy(2).top() >= text(1).bottom());
+            assert!((copy(2).left() - text(1).left()).abs() <= px(1.));
+            assert!(time(2).bounds().left() >= copy(2).right());
+            assert_eq!(
+                time(2).label(),
+                Some(crate::message_time::label(sent + 1_000).as_str())
+            );
+            // Missing metadata shows no invented time, only copy.
+            assert!(w.try_find(("sent-time", 3u64)).is_none());
+            assert!(copy(3).top() >= text(2).bottom());
+            assert!(copy(3).bottom() <= row(3).bottom());
+            let reply = (
+                v.text_states[1].as_ref().unwrap().entity_id(),
+                time(2).bounds().size.height,
+            );
+            crate::transcript_view::click_copy(w, 1, cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), user);
+            reply
+        })
+        .unwrap();
+    // A streamed extension keeps identity, time and a footer below the longer body.
+    let longer = format!(
+        "## Reply\n\nBody 👋\n\n{}",
+        "More streamed text. ".repeat(80)
+    );
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.replace_readonly(
+                vec![
+                    Message::live(1, "You · entry 1".into(), user.clone()).with_sent(Some(sent)),
+                    Message::live(2, "assistant · entry 2".into(), longer.clone())
+                        .with_sent(Some(sent + 1_000)),
+                    Message::live(3, "assistant · entry 3".into(), "No sent time".into()),
+                ],
+                false,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        let v = view.read(cx);
+        let text = v.text_states[1].as_ref().unwrap();
+        assert_eq!(text.entity_id(), reply.0);
+        assert!(w.find(("copy-source", 2u64)).bounds().top() >= text.read(cx).bounds().bottom());
+        let time = w.find(("sent-time", 2u64));
+        assert_eq!(time.bounds().size.height, reply.1);
+        assert_eq!(
+            time.label(),
+            Some(crate::message_time::label(sent + 1_000).as_str())
+        );
+        crate::transcript_view::click_copy(w, 2, cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), longer);
+    })
+    .unwrap();
 }
