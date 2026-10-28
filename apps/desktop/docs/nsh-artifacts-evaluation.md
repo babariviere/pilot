@@ -7,6 +7,10 @@ components, but embedding it unchanged would regress our untrusted-code boundary
 and require a different GPUI dependency. This evaluates artifact views only,
 not the app shell, mobile migration or an implementation proposal.
 
+For trusted whole-app code, see the separate
+[shared desktop/mobile foundation assessment](nsh-app-foundation-evaluation.md).
+Its capability requirements differ from untrusted generated artifacts.
+
 No installs, builds, prototypes, runtime execution or product changes were
 performed. All behavior below is source-supported unless labelled proposed or
 unmeasured. Upstream tests and vendor benchmarks were read, not run.
@@ -205,4 +209,3 @@ All paths below refer to the pinned HEAD above, not moving website claims:
 - [Access checks](https://github.com/longbridge/nsh/blob/c7b249970c2f9a15e20c5a461a7324ea9227c08f/crates/nsh-core/src/access.rs):
   Access::allows_media/allows_http; `js/limits.rs`;
   `crates/nsh-js/src/sandbox.rs`; `crates/nsh-base/src/plot/`.
-
