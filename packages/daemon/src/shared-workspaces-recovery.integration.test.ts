@@ -146,13 +146,19 @@ test("daily maintenance forgets merged bookmarks and abandons originals of commi
 		git(f.source, "checkout", "--quiet", "--detach");
 		git(repository, "push", "--quiet", f.source, `${rewrite(one)}:refs/heads/main`);
 		git(repository, "push", "--quiet", f.source, `${rewrite(two)}:refs/heads/landed-two`);
+		// Import explicitly: colocated Git ref imports can otherwise expose the landed copies sooner or later.
+		jj(w.path, "git", "fetch", "--remote", "origin");
 		// The local "two" is amended after landing, so its diff no longer matches the landed copy.
 		jj(w.path, "edit", two);
 		writeFileSync(join(w.path, "two.txt"), "two amended\n");
+		// The change ID now names both the local and landed copies. Capture this exact snapshot before leaving it.
+		const amended = jj(w.path, "log", "--no-graph", "-r", "@", "-T", "commit_id");
+		assert.match(amended, /^[0-9a-f]{40}$/);
+		assert.notEqual(amended, two);
+		assert.equal(jj(w.path, "log", "--no-graph", "-r", amended, "-T", "change_id"), twoChange);
+		assert.equal(git(repository, "show", `${amended}:two.txt`), "two amended");
 		jj(w.path, "new", w.base);
-		const amended = jj(w.path, "log", "--no-graph", "-r", `change_id(${twoChange})`, "-T", "commit_id");
 		jj(w.path, "bookmark", "create", "feat/two", "-r", amended);
-		jj(w.path, "git", "fetch", "--remote", "origin");
 		const divergent = () =>
 			jj(w.path, "log", "--no-graph", "-r", "divergent()", "-T", 'commit_id ++ "\\n"').split("\n").sort();
 		assert.equal(divergent().length, 4);
