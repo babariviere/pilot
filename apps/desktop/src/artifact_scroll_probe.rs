@@ -227,6 +227,22 @@ mod tests {
                 )
         }
     }
+
+    struct TableConversation {
+        pane: Entity<ArtifactPane>,
+    }
+    impl Render for TableConversation {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            // Inline visuals grow naturally inside the conversation's viewport.
+            div()
+                .id("table-conversation")
+                .test_support()
+                .size_full()
+                .overflow_y_scroll()
+                .child(self.pane.clone())
+        }
+    }
+
     #[gpui_kit::test]
     fn dense_table_preserves_wrapping_columns_scroll_and_copy(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
@@ -255,7 +271,7 @@ mod tests {
                     },
                     cx,
                     |_, cx| {
-                        cx.new(|cx| {
+                        let pane = cx.new(|cx| {
                             let mut pane = ArtifactPane::new();
                             pane.preview(
                                 reference("table", 1),
@@ -265,7 +281,8 @@ mod tests {
                             );
                             pane.inline_mode(true, cx);
                             pane
-                        })
+                        });
+                        cx.new(|_| TableConversation { pane })
                     },
                 )
                 .unwrap()
@@ -292,19 +309,34 @@ mod tests {
                         "equal-width columns retained"
                     );
                 }
+                let viewport = w.find("table-conversation").bounds();
+                assert!(
+                    w.find("0-39-7").bounds().top() >= viewport.bottom(),
+                    "last row starts below the conversation viewport"
+                );
+                assert!(
+                    w.find("inline-visual-content").bounds().size.height > viewport.size.height,
+                    "inline visual retains its natural height"
+                );
                 w.scroll(
-                    "inline-visual-content",
+                    "table-conversation",
                     ScrollDelta::Pixels(point(px(0.), px(-10000.))),
                     cx,
                 );
                 let last = w.find("0-39-7").bounds();
-                let viewport = w.find("inline-visual-content").bounds();
                 assert!(
-                    last.bottom() <= viewport.bottom(),
-                    "last row remains reachable"
+                    last.top() >= viewport.top() && last.bottom() <= viewport.bottom(),
+                    "last row is visible inside the conversation viewport"
                 );
                 // Numeric columns end-align, so drag across the figure itself.
                 let last = w.find("0-39-7-text").bounds();
+                assert!(
+                    last.left() >= viewport.left()
+                        && last.right() <= viewport.right()
+                        && last.top() >= viewport.top()
+                        && last.bottom() <= viewport.bottom(),
+                    "the selected figure is fully visible"
+                );
                 w.drag(
                     point(last.left() + px(1.), last.center().y),
                     point(last.right() - px(1.), last.center().y),
