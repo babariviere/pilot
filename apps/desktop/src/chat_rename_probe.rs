@@ -121,6 +121,13 @@ fn menu(cx: &mut HeadlessAppContext, h: AnyWindowHandle, label: &str) {
     until(cx, h, |w, _| menu_has(w, label));
 }
 pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
+    // Kit's entrance uses wall time, not advance_clock. Keep pointer geometry
+    // stationary so this probe tests dismissal/focus rather than animation timing.
+    let reduced_motion = cx.update(|cx| {
+        let previous = cx.reduce_motion();
+        cx.set_reduce_motion(true);
+        previous
+    });
     let case = std::env::var("PILOT_NEXT_CHAT_RENAME_CASE").ok();
     assert!(
         case.as_deref().is_none_or(|s| s == "routing"),
@@ -183,6 +190,9 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                 v.rebuild_nav(w,cx);v.listen_writes(updates,w,cx);v
             }))).unwrap();
                 until(cx, h, |_, cx| view.read(cx).editor.read(cx).ready());
+                // This activates only TestPlatform's hidden window, never an OS window.
+                cx.update_window(h, |_, w, _| w.activate_window()).unwrap();
+                settle(cx, h);
                 let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
                 cx.update_window(h, |_, w, cx| {
                     input.update(cx, |i, cx| i.focus(w, cx));
@@ -197,38 +207,49 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                         .read(cx)
                         .history_probe_row(first_id)
                 });
-                // Actual right-click on the unselected production row, then actual native menu item.
+                for escape in [false, true] {
+                    // Actual unselected production row and native menu item.
+                    menu(cx, h, "Rename…");
+                    cx.update_window(h, |_, w, cx| click_label(w, "Rename…", cx))
+                        .unwrap();
+                    settle(cx, h);
+                    cx.update_window(h, |_, w, cx| {
+                        assert!(w.is_window_active());
+                        assert_eq!(w.viewport_size(), size(px(width), px(840.)));
+                        assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+                        assert_eq!(
+                            w.find("rename-title").value(),
+                            Some(f::source()["title"].as_str().unwrap())
+                        );
+                        assert_eq!(w.find("rename-title").focused(), Some(true));
+                        assert_eq!(w.find("rename-submit").disabled(), Some(true));
+                        assert_eq!(view.read(cx).selected.as_deref(), Some("other"));
+                        if escape {
+                            w.press("escape", cx);
+                        } else {
+                            w.click("rename-cancel", cx);
+                        }
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                    assert_eq!(server.posts(), 0);
+                    cx.update_window(h, |_, w, cx| {
+                        assert!(
+                            w.try_find("rename-title").is_none(),
+                            "dismissal must close Rename"
+                        );
+                        assert!(
+                            view.read(cx).chats.read(cx).focus_handle(cx).is_focused(w),
+                            "Root must restore chat navigation focus"
+                        );
+                        assert_eq!(view.read(cx).selected.as_deref(), Some("other"));
+                        assert_eq!(input.read(cx).value(), draft);
+                    })
+                    .unwrap();
+                }
                 menu(cx, h, "Rename…");
                 cx.update_window(h, |_, w, cx| click_label(w, "Rename…", cx))
                     .unwrap();
-                // Drain the real dialog entrance before pointer admission.
-                cx.advance_clock(Duration::from_millis(300));
-                settle(cx, h);
-                cx.update_window(h, |_, w, cx| {
-                    assert_eq!(w.viewport_size(), size(px(width), px(840.)));
-                    assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
-                    assert_eq!(
-                        w.find("rename-title").value(),
-                        Some(f::source()["title"].as_str().unwrap())
-                    );
-                    assert_eq!(w.find("rename-submit").disabled(), Some(true));
-                    assert_eq!(view.read(cx).selected.as_deref(), Some("other"));
-                    w.click("rename-cancel", cx);
-                })
-                .unwrap();
-                settle(cx, h);
-                assert_eq!(server.posts(), 0);
-                cx.update_window(h, |_, w, cx| {
-                    assert!(view.read(cx).chats.read(cx).focus_handle(cx).is_focused(w));
-                    assert!(w.try_find("rename-title").is_none());
-                    assert_eq!(input.read(cx).value(), draft);
-                })
-                .unwrap();
-                menu(cx, h, "Rename…");
-                cx.update_window(h, |_, w, cx| click_label(w, "Rename…", cx))
-                    .unwrap();
-                // Drain the real dialog entrance before pointer admission.
-                cx.advance_clock(Duration::from_millis(300));
                 settle(cx, h);
                 let form =
                     cx.update(|cx| view.read(cx).chat_actions.read(cx).renames["source"].clone());
@@ -438,5 +459,6 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
         }
     }
     assert_eq!(cases, if routing { 1 } else { 6 });
+    cx.update(|cx| cx.set_reduce_motion(reduced_motion));
     println!("chat rename: {cases} mounted exact-row cases passed");
 }

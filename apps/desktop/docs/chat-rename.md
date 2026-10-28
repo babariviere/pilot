@@ -59,6 +59,14 @@ broad CI remains unchanged. Optional `PILOT_NEXT_CHAT_RENAME_DIR` saves actual
 native light/dark screenshots at680/1100pt. None of these tests rename a live
 chat, launch the visible app, or prove OS IME/motion/Wayland acceptance.
 
+The focus journey uses reduced motion and activates only its hidden TestPlatform
+window. Kit's dialog entrance uses wall-clock time, so advancing the simulated
+clock does not settle its moving pointer targets. The former Cancel failure left
+the dialog open, including with an active fixture; it was not a demonstrated Root
+focus-restoration defect. The probe checks focused title input, actual dismissal,
+then restored chat-navigation focus for both Cancel and Escape, with selection,
+draft and zero-POST assertions retained. Production focus and animation are unchanged.
+
 After additive caller/registry integration, set `PILOT_NEXT_CHAT_RENAME_CASE=routing`
 with `scripts/check-scoped.py --test chat_rename --lint` to run only the1100pt
 light successful menu-to-form journey, including retained conversation/stream,
