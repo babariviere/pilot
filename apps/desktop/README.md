@@ -109,6 +109,17 @@ mutation. Synthetic viewers do not resolve or change production preferences. See
 Other missing categories state their gaps explicitly. See `docs/settings-parity.md` and
 `evidence/settings-screen.md` for ownership, supported behavior and qualified checks.
 
+### Dogfooding diagnostics
+
+**Settings → Diagnostics** prepares an editable local JSON preview from
+privacy-filtered `tracing` events. Remove or redact records before **Export
+reviewed…**. No data is sent automatically. Capture covers app startup and Local
+delivery request timings/categories only, with app version, desktop-source hash,
+app-local correlation and explicit missing daemon coverage. Local rotating capture
+is limited to three 64 KiB slots; seven-day expiry runs on next capture, review or
+startup. See [dogfooding diagnostics](docs/dogfooding-diagnostics.md) for the exact
+privacy, retention, export and coverage contract.
+
 ### Local Scoped models
 
 In **Settings → Scoped models**, choose **All authenticated models**, or search and check

@@ -308,6 +308,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission_brief"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "catalog"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "settings"], calls)
+        self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "dogfooding_diagnostics"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "mission"], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "missions"], calls)
         self.assertIn("PASSED", (self.root / "target/ci-native-status.txt").read_text())

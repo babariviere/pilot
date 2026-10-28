@@ -959,7 +959,9 @@ async fn observe(
     diagnostic.stage = stage;
     diagnostic.category = Category::InFlight;
     diagnostic.status = None;
-    match read_delivery_json(request).await {
+    let request_id = crate::diagnostics::request_id();
+    let started = std::time::Instant::now();
+    let result = match read_delivery_json(request).await {
         Ok((value, status)) => {
             diagnostic.status = Some(status);
             Ok(value)
@@ -969,7 +971,14 @@ async fn observe(
             diagnostic.status = error.status;
             Err(error.message())
         }
-    }
+    };
+    crate::diagnostics::delivery(
+        request_id,
+        diagnostic,
+        started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        result.is_ok(),
+    );
+    result
 }
 
 /// Hello before a lookup or execute. An unreachable or refusing daemon is not an identity change.

@@ -26,6 +26,7 @@ actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
 
 /// Non-rendering state owner retained by the Local window and any open Settings window.
 pub(crate) struct SettingsPreferences {
+    pub(super) diagnostics: Option<Entity<crate::diagnostics_view::Diagnostics>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) updater: Option<Entity<crate::updates_view::Updates>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -45,6 +46,7 @@ pub(crate) struct SettingsPreferences {
 impl SettingsPreferences {
     pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
         Self {
+            diagnostics: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             updater: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -229,6 +231,7 @@ impl SettingsPreferences {
             return false;
         }
         let ready = !self.restart_locked
+            && self.diagnostics.as_ref().is_none_or(|d| !d.read(cx).busy())
             && !self.state.saving()
             && !self.state.dirty()
             && !self.state.unconfirmed()
@@ -251,14 +254,21 @@ pub(super) enum Category {
     Appearance,
     Models,
     Updates,
+    Diagnostics,
 }
 impl Category {
-    const ALL: [Self; 3] = [Self::Appearance, Self::Models, Self::Updates];
+    const ALL: [Self; 4] = [
+        Self::Appearance,
+        Self::Models,
+        Self::Updates,
+        Self::Diagnostics,
+    ];
     fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
             Self::Models => "Scoped models",
             Self::Updates => "Updates",
+            Self::Diagnostics => "Diagnostics",
         }
     }
     fn id(self) -> &'static str {
@@ -266,6 +276,7 @@ impl Category {
             Self::Appearance => "settings-appearance",
             Self::Models => "settings-models",
             Self::Updates => "settings-updates",
+            Self::Diagnostics => "settings-diagnostics",
         }
     }
 }
@@ -346,6 +357,13 @@ impl SettingsView {
     ) -> Self {
         crate::typography::prepare(cx);
         let category = preferences.read(cx).category;
+        if preferences.read(cx).diagnostics.is_none() {
+            let diagnostics = cx.new(|cx| crate::diagnostics_view::Diagnostics::new(window, cx));
+            preferences.update(cx, |owner, cx| {
+                owner.diagnostics = Some(diagnostics);
+                cx.notify();
+            });
+        }
         let categories = cx.new(|cx| {
             ListState::new(
                 Categories {
@@ -415,6 +433,15 @@ impl SettingsView {
             .update(cx, |owner, cx| owner.request_close(cx))
     }
     fn models_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self
+            .preferences
+            .read(cx)
+            .diagnostics
+            .clone()
+            .is_some_and(|d| d.update(cx, |d, cx| d.marked(w, cx)))
+        {
+            return true;
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self
             .preferences
@@ -546,6 +573,16 @@ impl SettingsView {
     }
     /// None when there is nothing to say or do: the footer then disappears.
     fn status(&mut self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
+        if self.preferences.read(cx).close_notice
+            && self
+                .preferences
+                .read(cx)
+                .diagnostics
+                .as_ref()
+                .is_some_and(|d| d.read(cx).busy())
+        {
+            return Some(div().child(Notice::new("Finish diagnostic preview or export before closing. Nothing is sent automatically.").tone(Tone::Warning)));
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.preferences.read(cx).close_notice
             && self
@@ -737,6 +774,7 @@ impl Render for SettingsView {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
             Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
             Category::Updates => self.updates(cx).into_any_element(),
+            Category::Diagnostics => div().children(self.preferences.read(cx).diagnostics.clone()).into_any_element(),
         };
         let status = self.status(cx);
         div()

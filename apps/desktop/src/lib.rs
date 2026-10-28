@@ -1,5 +1,9 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
 pub mod bundled_runtime;
+pub mod diagnostics;
+mod diagnostics_view;
+#[cfg(feature = "native-probes")]
+pub use diagnostics_view::probe::run_diagnostics_probe;
 mod bundled_runtime_view;
 pub mod desktop_entry;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

@@ -91,6 +91,9 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // One tracing subscriber, no fmt layer or arbitrary log/message persistence.
+    // Help and read-only command-line checks never create diagnostic storage.
+    pilot_desktop::diagnostics::start();
     #[cfg(target_os = "linux")]
     if let Err(error) = wayland_preflight() {
         eprintln!("Native Wayland required: {error}. No X11/headless fallback.");

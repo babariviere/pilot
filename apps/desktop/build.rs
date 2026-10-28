@@ -39,6 +39,7 @@ const PACKAGE_HINTS: &[(&str, &[&str])] = &[
 ];
 
 fn main() {
+    diagnostic_source();
     println!("cargo:rerun-if-changed=build.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
         return;
@@ -103,6 +104,43 @@ fn main() {
             names.into_iter().collect::<Vec<_>>().join(", ")
         );
     }
+}
+
+// A reproducible desktop-source fingerprint, not a claim about the signed payload
+// or a jj/Git commit (shared working copies need not have a matching Git HEAD).
+fn diagnostic_source() {
+    use sha2::{Digest, Sha256};
+    fn collect(dir: &std::path::Path, files: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("desktop sources") {
+            let path = entry.expect("source entry").path();
+            if path.is_dir() {
+                collect(&path, files);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let mut files = vec![
+        "Cargo.toml".into(),
+        "Cargo.lock".into(),
+        "build.rs".into(),
+        "../../package.json".into(),
+    ];
+    collect(std::path::Path::new("src"), &mut files);
+    files.sort();
+    println!("cargo:rerun-if-changed=src");
+    let mut digest = Sha256::new();
+    for path in files {
+        println!("cargo:rerun-if-changed={}", path.display());
+        digest.update(path.to_string_lossy().as_bytes());
+        digest.update([0]);
+        digest.update(std::fs::read(path).expect("fingerprinted source"));
+        digest.update([0]);
+    }
+    println!(
+        "cargo:rustc-env=PILOT_DESKTOP_SOURCE_SHA256={:x}",
+        digest.finalize()
+    );
 }
 
 enum Library {

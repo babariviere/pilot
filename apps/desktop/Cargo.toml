@@ -12,6 +12,11 @@ required-features = ["native-probes"]
 [features]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
+[[test]]
+name = "dogfooding_diagnostics"
+harness = false
+required-features = ["native-probes"]
+
 [[example]]
 name = "artifact_scroll_native"
 required-features = ["native-probes"]
@@ -78,6 +83,8 @@ gpui-base = { path = ".patched/gpui-base-0.8.0" }
 gpui-component = { path = ".patched/gpui-component-0.8.0" }
 
 [dependencies]
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std"] }
 gpui-kit = "=0.8.0"
 async-channel = "=2.5.0"
 futures-util = "=0.3.34"
@@ -93,6 +100,9 @@ image = { version = "=0.25.10", default-features = false, features = ["png", "jp
 reqwest = { version = "=0.12.28", default-features = false }
 tokio = { version = "=1.54.1", features = ["rt", "net", "sync", "time", "macros", "io-util", "process"] }
 tokio-tungstenite = { version = "=0.28.0", default-features = false, features = ["handshake"] }
+
+[build-dependencies]
+sha2 = "=0.10.9"
 
 [dev-dependencies]
 gpui-kit = { version = "=0.8.0", features = ["test-support"] }
