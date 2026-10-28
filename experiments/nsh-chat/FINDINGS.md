@@ -35,6 +35,25 @@ comparison or speed ranking was attempted.** The measurements below are historic
   now dispatch there, use the actual coordinate orientation, and distinguish
   parked recycling cells from the mounted row when choosing geometry. Those are
   harness fixes, not proof that recycling selection works.
+- The remaining Escape discrepancy had two causes. A direct `setMarkedText`
+  call did not complete an editing notification: Rust was already stale before
+  Escape. `--marked-raw-only` preserves that failing control. Explicit
+  `didChangeText` first establishes exact native/Rust `中文`, composing=true.
+  Then the upstream Escape callback blurred the editor and reported false
+  while native marked text remained. The pinned patch declines the app's
+  leave-field shortcut while marked, leaving cancellation to AppKit/input
+  context. `--marked-only` now includes the explicit edit notification and
+  passes with the native marked state preserved. This is callback consistency,
+  not Japanese/Chinese OS IME qualification.
+- Latest was not an incorrect end offset. A selection-free held replay reached
+  the tail; adding native selection left the resolved ScrollTo waiting in the
+  platform queue. Temporary tracing showed 49 queued batches. The hidden-window
+  frame watchdog updated its own last-display-tick timestamp on each fallback
+  frame, repeatedly imposing another 100ms stall wait instead of its intended
+  16ms cadence. The pinned patch lets only real display-link ticks reset that
+  timestamp. The same strict `--latest-selection-only` replay now reaches zero
+  gap within the original 1.8s settling budget, without resize. No larger
+  settling allowance, custom scroller or visible-window result is substituted.
 
 `patches/{nsh-core,nsh-platform-macos}.patch` are applied only to generated local
 copies of revision `c7b249970c2f9a15e20c5a461a7324ea9227c08f`. There is no vendored
@@ -57,18 +76,21 @@ records failures instead of treating diagnostic completion as acceptance.
 | Navigation, native Undo/Redo, Unicode paste, authoritative restore, Send/Undo | Pass | Actual hidden NSTextView and native manager; not active-app menu routing |
 | Held prepend and tail/image growth | Pass | Same message at the same viewport y before/after both operations in the isolated native repro, zero drift against the 1pt limit |
 | Simulated marked Return | Pass | Native marked-text API commits without Send, exact Rust/native text agreement |
-| Simulated marked Escape | Fail | Native marked text remains while Rust reports no composition and an older draft; no Send alone is not acceptance |
+| Simulated marked Escape, completed edit notification | Pass | Exact native/Rust text and marked state; app does not blur a marked editor; not OS IME |
+| Raw marked-text setter without edit notification | Fail (harness control) | Rust is stale before Escape; retained as `--marked-raw-only`, not an OS input-context simulation |
 | Cross-message drag/Copy | Unmeasured | Synthetic drag still produced an empty selection, not an established OS pointer interaction |
 | Native Select All and Copy | Fail | Selection is established, but Copy repeats beta before alpha rather than copying each message once in order |
 | Retained selection across recycling/prepend | Fail | Copy changes from duplicated beta to an unrelated older message after holding/prepending, without a new selection |
-| Latest after selection/held growth | Fail | Tail gap remained 291pt after bounded 1.8s settling; resizing reached the tail. Attribution remains open |
+| Static two-TextView Select All/Copy control | Pass | Exact alpha then beta, once each; no list recycling |
+| Minimal virtual-list Select All/Copy | Fail | 200 single-line rows, no replay/images; mount order, omitted backing rows and recycled identities |
+| Latest after selection/held growth | Pass (hidden) | Fixed fallback watchdog, zero gap within unchanged 1.8s budget; no visible presentation claim |
 | Genuine Japanese/Chinese OS IME, active-app keyboard/menu Undo/Copy | Unmeasured | Hidden API calls do not establish OS input-source or focused responder behavior |
 | Fair matched performance comparison | Unmeasured | Withheld until functional gates pass; historical offscreen counters remain incomparable |
 
-The marked-text mismatch is a direct `setMarkedText`/`cancelOperation:` simulation,
-not an exercised OS input-context session. Its upstream-versus-harness attribution
-remains unresolved; it is not evidence of a genuine OS IME failure. Reproduce it
-alone with `--checks --marked-only`, which exits nonzero and writes `marked-only.json`.
+Both marked probes are direct `NSTextInputClient` simulations, not exercised OS
+input-context sessions. The raw control exits nonzero; the completed-edit probe
+passes. The report records native/Rust state before notification, before Escape
+and after Escape so a missing notification cannot masquerade as an IME bug.
 
 The native Copy reproduction uses the two final rows, `Selection alpha…` followed
 by `Selection beta…`, then root Select All/Copy, Hold/Earlier and Copy again, all
@@ -76,12 +98,33 @@ within `--checks`. Beta appeared twice before alpha; after recycling the first
 copied text became an unrelated older message. This is real native selection/
 clipboard output, not a retained sentinel. Upstream `selectable_view::walk` collects
 mounted/recycling nodes in mount order, and `SelectionTexts::key` uses native node
-IDs, not message identity. Fixing that list/selection contract is not a justified
-one-line prototype workaround. No selection framework or broad fork was added.
+IDs, not message identity. The follow-up's `--selection-static-only` control uses
+the same native TextView renderer and passes exact alpha/beta copy. Its
+`--selection-only` list contains 200 single-line Unicode rows, stable `.keys`,
+no images and no replay. It still copies out of order. After a jump to the start
+and a prepend, the same native row addresses name different logical messages,
+and Copy changes without reselection. `selection-only.json` records full copy
+strings and native addresses/labels/geometry/hidden state before and after.
+Copy clears the pasteboard first, so a lost selection cannot pass by leaving
+the previous clipboard value untouched.
 
-The remaining marked-text mismatch, selection failures and Latest gap are concrete
-qualification blockers. Do not replace selection/scrolling with a broad custom
-framework, weaken the assertions or claim a stack-adoption/performance result.
+Three focused `selection_contract` tests pin the platform-independent contract:
+the model copies the supplied order and duplicates; recycled keys retarget a
+selection; logical item keys follow prepend but clear selection when those texts
+are unmounted. The Rust list's `.keys` preserve list data identity, not native
+text-node identity. The backend sees generic scroll/cell views, not backing
+message IDs or offscreen text. Therefore geometry sorting or skipping hidden
+spares alone cannot satisfy retained selection or whole-document Select All.
+It would need a logical text-order/identity contract through list binding and
+selection retention independent of mounted cells. **That exceeds a small,
+maintainable patch. Stop here rather than introduce a selection framework,
+snapshot clipboard workaround, message-label identity hack or broad fork.**
+
+Selection remains a concrete qualification blocker. Genuine OS IME, active-app
+menu routing and visible presentation remain unmeasured. Do not replace
+selection with a broad custom framework, weaken assertions or claim a
+stack-adoption/performance result. The undo patch and one-point anchor gates
+remain in place.
 
 ## Original prototype evidence (before follow-up fixes)
 

@@ -176,6 +176,7 @@ fn surface_root(w: &NSWindow) -> Retained<NSView> {
 
 fn copy_transcript(w: &NSWindow) -> String {
     let document = surface_root(w);
+    NSPasteboard::generalPasteboard().clearContents();
     // Exercise the NSH native document's copy implementation directly. A hidden
     // app cannot qualify the active application's menu/key-equivalent routing.
     unsafe {
@@ -186,6 +187,31 @@ fn copy_transcript(w: &NSWindow) -> String {
             .stringForType(NSPasteboardTypeString)
             .map(|s| s.to_string())
             .unwrap_or_default()
+    }
+}
+
+/// Native addresses deliberately expose cell reuse, not message identity.
+fn row_snapshot(w: &NSWindow) -> Value {
+    let root = w.contentView().unwrap();
+    json!(descendants(&root).into_iter().filter_map(|view| {
+        let label = NSAccessibility::accessibilityLabel(&*view)?.to_string();
+        if !label.starts_with("message-") { return None; }
+        let layer = view.layer()?;
+        let rect = layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref());
+        let mut hidden = false;
+        let mut current = Some(layer);
+        while let Some(layer) = current {
+            hidden |= layer.isHidden();
+            current = layer.superlayer();
+        }
+        Some(json!({"label":label,"address":format!("{:p}",&*view),"y":rect.origin.y,"hidden":hidden}))
+    }).collect::<Vec<_>>())
+}
+
+fn select_all(w: &NSWindow) {
+    // SAFETY: the surface root implements NSResponder's Select All action.
+    unsafe {
+        let _: () = msg_send![&*surface_root(w), selectAll: None::<&objc2::runtime::AnyObject>];
     }
 }
 
@@ -279,7 +305,135 @@ fn exercise(
     };
     std::thread::sleep(Duration::from_secs(2));
     let mut checks = vec![];
-    if std::env::args().any(|a| a == "--marked-only") {
+    if std::env::args().any(|a| a == "--selection-only" || a == "--selection-static-only") {
+        let control = std::env::args().any(|a| a == "--selection-static-only");
+        if !control {
+            action("latest");
+            pause();
+        }
+        let y = if control {
+            90.
+        } else {
+            main_thread(|w| row_frame(w, Some("message-minimal:199")))
+                .expect("last minimal row")
+                .1
+                + 12.
+        };
+        let x = if control { 90. } else { 245. };
+        main_thread(move |w| {
+            mouse(w, NSEventType::LeftMouseDown, x, y);
+            mouse(w, NSEventType::LeftMouseUp, x, y);
+            select_all(w);
+        });
+        pause();
+        let before = main_thread(copy_transcript);
+        let cells_before = main_thread(row_snapshot);
+        if !control {
+            action("selection-top");
+            pause();
+            action("selection-prepend");
+            pause();
+        }
+        let after = main_thread(copy_transcript);
+        let cells_after = main_thread(row_snapshot);
+        let ordered_once = if control {
+            before == "Selection alpha 日本語 👩🏽‍💻 e\u{301}\nSelection beta العربية 한국어"
+        } else {
+            let indices = before
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("Selection row ")?
+                        .split_whitespace()
+                        .next()?
+                        .parse::<u32>()
+                        .ok()
+                })
+                .collect::<Vec<_>>();
+            !indices.is_empty() && indices.windows(2).all(|w| w[0] < w[1])
+        };
+        let complete_document = control
+            || before
+                == (0..200)
+                    .map(|i| format!("Selection row {i:03} 日本語 👩🏽‍💻"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+        let result = json!({"control":control,"ordered_once":ordered_once,"complete_document":complete_document,"retained":!before.is_empty() && before == after,"before":before,"after":after,"cells_before":cells_before,"cells_after":cells_after});
+        std::fs::write(
+            output.join(if control {
+                "selection-static-only.json"
+            } else {
+                "selection-only.json"
+            }),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            ordered_once && complete_document && !before.is_empty() && before == after,
+            "native selection contract: {result}"
+        );
+        return;
+    }
+    if std::env::args().any(|a| {
+        a == "--latest-only" || a == "--latest-fixture-only" || a == "--latest-selection-only"
+    }) {
+        let fixture = std::env::args()
+            .any(|a| a == "--latest-fixture-only" || a == "--latest-selection-only");
+        let selection = std::env::args().any(|a| a == "--latest-selection-only");
+        if fixture {
+            action("selection-fixture");
+            pause();
+            action("latest");
+            pause();
+        }
+        if selection {
+            let y = main_thread(|w| row_frame(w, Some("message-0:9998")))
+                .unwrap()
+                .1
+                + 12.;
+            main_thread(move |w| {
+                mouse(w, NSEventType::LeftMouseDown, 245., y);
+                mouse(w, NSEventType::LeftMouseUp, 245., y);
+                select_all(w);
+            });
+            pause();
+        }
+        action("hold");
+        pause();
+        action("older");
+        pause();
+        action("replay");
+        std::thread::sleep(Duration::from_secs(4));
+        let held = state();
+        action("latest");
+        let mut samples = Vec::new();
+        for _ in 0..10 {
+            pause();
+            samples.push(json!({"state":state(),"last_frame":main_thread(|w| row_frame(w,Some("message-0:10000")))}));
+        }
+        let pass = samples
+            .last()
+            .is_some_and(|s| s["state"]["endGap"].as_f64().is_some_and(|g| g.abs() <= 1.));
+        main_thread(|w| w.setContentSize(NSSize::new(860., 720.)));
+        pause();
+        main_thread(|w| w.setContentSize(NSSize::new(1180., 820.)));
+        pause();
+        let result = json!({"pass":pass,"fixture":fixture,"selection":selection,"held":held,"samples":samples,"after_resize":state()});
+        std::fs::write(
+            output.join(if selection {
+                "latest-selection-only.json"
+            } else if fixture {
+                "latest-fixture-only.json"
+            } else {
+                "latest-only.json"
+            }),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(pass, "Latest reaches the tail before resize: {result}");
+        return;
+    }
+    if std::env::args().any(|a| a == "--marked-only" || a == "--marked-raw-only") {
+        let notified = !std::env::args().any(|a| a == "--marked-raw-only");
         main_thread(|w| {
             let e = composer(w);
             w.makeFirstResponder(Some(&e));
@@ -289,8 +443,19 @@ fn exercise(
                     NSRange::new(2, 0),
                     NSRange::new(usize::MAX, 0),
                 );
-                NSTextInputClient::doCommandBySelector(&*e, objc2::sel!(cancelOperation:));
             }
+        });
+        pause();
+        let before_notification = json!({"state":state(),"native":main_thread(|w| (composer(w).string().to_string(),composer(w).hasMarkedText()))});
+        if notified {
+            // Direct setMarkedText does not simulate the complete editing cycle.
+            // Explicitly finish that edit before testing the command callback.
+            main_thread(|w| composer(w).didChangeText());
+            pause();
+        }
+        let before_escape = json!({"state":state(),"native":main_thread(|w| (composer(w).string().to_string(),composer(w).hasMarkedText()))});
+        main_thread(|w| unsafe {
+            NSTextInputClient::doCommandBySelector(&*composer(w), objc2::sel!(cancelOperation:));
         });
         pause();
         let model = state();
@@ -300,11 +465,19 @@ fn exercise(
                 composer(w).hasMarkedText(),
             )
         });
-        let pass =
-            model["draft"] == native.0 && model["composing"] == native.1 && model["rows"] == 1000;
-        let result = json!({"pass":pass,"input":"simulated NSTextInputClient, not OS IME","native":native,"state":model});
+        let established = before_escape["state"]["draft"] == "中文"
+            && before_escape["state"]["composing"] == true;
+        let pass = established
+            && model["draft"] == native.0
+            && model["composing"] == native.1
+            && model["rows"] == 1000;
+        let result = json!({"pass":pass,"input":"simulated NSTextInputClient, not OS IME","explicit_did_change_text":notified,"before_notification":before_notification,"before_escape":before_escape,"native":native,"state":model});
         std::fs::write(
-            output.join("marked-only.json"),
+            output.join(if notified {
+                "marked-only.json"
+            } else {
+                "marked-raw-only.json"
+            }),
             serde_json::to_vec_pretty(&result).unwrap(),
         )
         .unwrap();
@@ -439,7 +612,8 @@ fn exercise(
         action("chat0");
         pause();
         checks.push(json!({"check":"native draft survives navigation", "pass":state()["draft"]==draft, "value":draft}));
-        // Actual NSTextInputClient marked-text path. No claim of OS input-source testing.
+        // Simulate both NSTextInputClient and the completed edit notification.
+        // This does not exercise an OS input-context session.
         main_thread(|w| {
             let e = composer(w);
             w.makeFirstResponder(Some(&e));
@@ -450,6 +624,7 @@ fn exercise(
                     NSRange::new(usize::MAX, 0),
                 );
             }
+            e.didChangeText();
             unsafe {
                 NSTextInputClient::doCommandBySelector(&*e, objc2::sel!(insertNewline:));
             }
@@ -472,6 +647,7 @@ fn exercise(
                     NSRange::new(usize::MAX, 0),
                 );
             }
+            e.didChangeText();
             unsafe {
                 NSTextInputClient::doCommandBySelector(&*e, objc2::sel!(cancelOperation:));
             }

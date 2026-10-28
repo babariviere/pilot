@@ -37,8 +37,12 @@ pub fn probe() -> Probe {
 }
 
 pub fn root() -> Root {
-    Root::of::<ConversationStudy>()
-        .app_id("dev.pilot.synthetic.nsh-chat")
+    let root = if std::env::args().any(|a| a == "--selection-static-only") {
+        Root::of::<SelectionControl>()
+    } else {
+        Root::of::<ConversationStudy>()
+    };
+    root.app_id("dev.pilot.synthetic.nsh-chat")
         .font(Arc::<[u8]>::from(
             include_bytes!("../../../apps/desktop/assets/fonts/Inter-Regular.ttf").as_slice(),
         ))
@@ -140,10 +144,25 @@ impl Ui {
             "focus" | "close" => p.input.focus(),
             "state" => {
                 if let Some(tx) = self.report.get_untracked() {
-                    let _=tx.send(json!({"chat":p.id,"draft":p.draft.get_untracked(),"composing":self.composing.get_untracked(),"rows":p.rows.with_untracked(Vec::len),"last":p.rows.with_untracked(|r|r.last().cloned()),"offset":p.offset.get_untracked(),"endGap":p.gap.get_untracked(),"streaming":self.fixture.with_untracked(|f|f.chats[p.id].streaming)}));
+                    let _=tx.send(json!({"chat":p.id,"draft":p.draft.get_untracked(),"composing":self.composing.get_untracked(),"rows":p.rows.with_untracked(Vec::len),"last":p.rows.with_untracked(|r|r.last().cloned()),"listNode":p.list.node(),"offset":p.offset.get_untracked(),"endGap":p.gap.get_untracked(),"streaming":self.fixture.with_untracked(|f|f.chats[p.id].streaming)}));
                 }
             }
             "latest" => p.list.scroll_to_end(false),
+            "selection-top" => p.list.scroll_to_index(0, Percentage(0.), px(0.), false),
+            "selection-prepend" => {
+                p.rows.update(|rows| {
+                    rows.insert(
+                        0,
+                        Message {
+                            id: "minimal:older".into(),
+                            text: "Earlier row".into(),
+                            mine: false,
+                            image: false,
+                            visual: false,
+                        },
+                    )
+                });
+            }
             "restore" => {
                 let value = "Restored 日本語 👩🏽‍💻".to_owned();
                 p.draft.set(value.clone());
@@ -258,6 +277,27 @@ impl Ui {
 }
 
 #[component]
+fn SelectionControl() -> impl IntoElement {
+    view()
+        .flex_1()
+        .p(px(80.))
+        .selectable(true)
+        .test_id("transcript-selection")
+        .child(
+            text_view()
+                .markdown("Selection alpha 日本語 👩🏽‍💻 e\u{301}")
+                .selectable(true)
+                .text_size(px(15.)),
+        )
+        .child(
+            text_view()
+                .markdown("Selection beta العربية 한국어")
+                .selectable(true)
+                .text_size(px(15.)),
+        )
+}
+
+#[component]
 pub fn ConversationStudy() -> impl IntoElement {
     let ui = Ui {
         owner: Owner::current(),
@@ -344,10 +384,21 @@ fn visual() -> impl IntoElement {
 }
 
 fn conversation(ui: Ui, id: usize) -> impl IntoElement {
-    let rows = signal(
+    let initial_rows = if std::env::args().any(|a| a == "--selection-only") {
+        (0..200)
+            .map(|i| Message {
+                id: format!("minimal:{i}"),
+                text: format!("Selection row {i:03} 日本語 👩🏽‍💻"),
+                mine: false,
+                image: false,
+                visual: false,
+            })
+            .collect()
+    } else {
         ui.fixture
-            .with_untracked(|f| f.chats[id].visible().to_vec()),
-    );
+            .with_untracked(|f| f.chats[id].visible().to_vec())
+    };
+    let rows = signal(initial_rows);
     let draft = signal(ui.fixture.with_untracked(|f| f.chats[id].draft.clone()));
     let p = Pane {
         id,

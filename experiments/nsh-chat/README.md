@@ -24,8 +24,21 @@ bash experiments/nsh-chat/run.sh nsh --checks
 bash experiments/nsh-chat/run.sh nsh --checks --undo-only
 bash experiments/nsh-chat/run.sh nsh --checks --anchors-only
 
-# Strict simulated marked-text blocker repro, expected nonzero currently.
+# Completed edit notification + simulated marked Escape, not OS IME.
 bash experiments/nsh-chat/run.sh nsh --checks --marked-only
+
+# Raw setter control (missing editing notification), expected nonzero.
+bash experiments/nsh-chat/run.sh nsh --checks --marked-raw-only
+
+# Exact static copy control (pass) versus list identity repro (nonzero).
+bash experiments/nsh-chat/run.sh nsh --checks --selection-static-only
+bash experiments/nsh-chat/run.sh nsh --checks --selection-only
+
+# Isolate selection from fixture changes and ordinary held growth.
+# All three must reach the tail within 1.8s, before the resize control.
+bash experiments/nsh-chat/run.sh nsh --checks --latest-only
+bash experiments/nsh-chat/run.sh nsh --checks --latest-fixture-only
+bash experiments/nsh-chat/run.sh nsh --checks --latest-selection-only
 
 # Historical replay commands, not a fair comparison. Functional gates must pass first.
 bash experiments/nsh-chat/run.sh nsh --bench
@@ -98,6 +111,22 @@ flag remains accepted with `--checks`; undo now runs in ordinary diagnostics.
 Hidden undo probes drive the real native manager directly. They do not qualify
 the active application's Edit menu. `--responder-undo` separately attempts
 native responder routing, which a hidden window may not deliver to this editor.
+
+The additional `*-only` modes are strict and write their named JSON report.
+`--selection-static-only` uses two static native TextViews; `--selection-only`
+uses 200 single-line rows with the same renderer and stable list keys, then
+recycles cells and prepends. It asserts whole-document ordered Copy and retained
+selection, not just successful native selection dispatch. Its current failure
+is intentional evidence, not an accepted behavior. Copy clears the pasteboard
+before every readback.
+
+`--marked-only` explicitly calls `didChangeText` after the synthetic marked
+setter, then checks exact text/marked-state agreement and no Send after Escape.
+`--marked-raw-only` omits that notification and preserves the old failing
+simulation as a control. Neither is a genuine OS input-context interaction.
+The three `--latest-*-only` variants separate ordinary replay, simplified tail
+content and native selection. They assert the unchanged one-point tail limit
+after 1.8s, then record a resize control without using it to satisfy the gate.
 
 `NSH_CHAT_BASELINE=1` stages unpatched pinned sources for attribution only.
 It can terminate this synthetic process on a native exception. Run separately

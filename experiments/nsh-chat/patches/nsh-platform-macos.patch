@@ -28,6 +28,18 @@
      surface: Weak<Surface>,
      view: objc2::rc::Weak<NSView>,
      input: Weak<InputState>,
+@@ -706,5 +707,11 @@
+         }
+         if command == sel!(cancelOperation:) {
++            // Marked Escape belongs to AppKit/the input context, not the
++            // application's leave-field shortcut. Blurring here reports
++            // composition=false while NSTextView still has marked text.
++            if text_view.hasMarkedText() {
++                return false;
++            }
+             // Escape leaves the field (navigation leaves Escape alone while
+             // a field has the focus).
+             self.key_press("Escape");
 @@ -1331,6 +1332,17 @@
      unsafe impl NSObjectProtocol for InputDelegate {}
  
@@ -102,3 +114,15 @@
          let placeholder = NSTextField::labelWithString(&NSString::new(), mtm);
          placeholder.setHidden(true);
          placeholder.setSelectable(false);
+--- a/src/surface.rs
++++ b/src/surface.rs
+@@ -812,7 +812,8 @@
+             let now = objc2_quartz_core::CACurrentMediaTime();
+             let stalled = now - surface.last_tick.get() > 0.1;
+             if stalled {
+-                surface.last_tick.set(now);
++                // Only a display-link tick resets the watchdog. Otherwise
++                // each fallback frame waits another 100 ms, not 16 ms.
+                 surface.frame(now, 1.0 / 60.0);
+             }
+             let delay = if stalled { 16 } else { 100 };
