@@ -1466,6 +1466,10 @@ impl Render for ArtifactPane {
         let revision = self.snapshot.revision.clone();
         let scene = self.snapshot.scene.clone();
         let generation = self.generation;
+        // Only images and native visuals preview; other stored kinds stay inert source.
+        let unsupported = revision
+            .as_ref()
+            .is_some_and(|r| !r.visual_supported && r.reference.kind != "image");
         // One toolbar: back · title · revision, then source, copy and zoom actions.
         let provenance: SharedString = if revision
             .as_ref()
@@ -1473,6 +1477,8 @@ impl Render for ArtifactPane {
             || reference.kind == "image"
         {
             "Local · stored raster · static preview only".into()
+        } else if unsupported {
+            "Local · current chat · stored source only".into()
         } else {
             "Local · current chat · visual controls have no file/network/tool bridge".into()
         };
@@ -1657,9 +1663,6 @@ impl Render for ArtifactPane {
             }
         }
         if let Some(revision) = revision {
-            if !revision.visual_supported && revision.reference.kind != "image" {
-                view=view.child(Self::note("Preview family/runtime is unsupported here. Source/provenance is retained; no HTML, React, shader or external execution."));
-            }
             if let Some(raster) = &self.snapshot.raster {
                 view = view.child(
                     div().h_flex().flex_wrap().gap_2().child(
@@ -1737,6 +1740,38 @@ impl Render for ArtifactPane {
                     .child(self.node(&scene.root, "0", &mut 4096, cx))
                     .into_any_element();
                 content = content.child(self.zoom.surface(native, cx));
+            } else if unsupported {
+                content = content.items_center().justify_center().child(
+                    div()
+                        .id("artifact-unsupported")
+                        .test_support()
+                        .v_flex()
+                        .items_start()
+                        .gap(px(crate::ui::Space::SIDEBAR))
+                        .max_w(gpui_kit::rems(28.))
+                        .child(
+                            crate::ui::Notice::new(crate::artifact_model::unsupported_title(
+                                &revision.reference.kind,
+                            ))
+                            .detail(crate::artifact_model::UNSUPPORTED_DETAIL),
+                        )
+                        .child(
+                            crate::ui::action(
+                                "artifact-view-source",
+                                "View source",
+                                crate::ui::Action::Secondary,
+                            )
+                            .icon(AppIcon::Source.asset())
+                            .on_click(cx.listener(
+                                move |v, _, _, cx| {
+                                    if v.generation == generation {
+                                        v.source = true;
+                                        cx.notify();
+                                    }
+                                },
+                            )),
+                        ),
+                );
             }
             view = view.child(content);
         }

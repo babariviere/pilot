@@ -4,7 +4,9 @@ The conversation's job is to make an exact published result usable without a
 navigation detour. Native content sits on the conversation surface, with its
 title/revision and quiet Expand action. Source/copy remain in the expanded pane;
 errors reveal Reload. There is no diagnostic toolbar or outer card.
-Legacy HTML/React remain inert stored source, not future rendering fallbacks.
+Legacy HTML, React, SwiftUI and shader revisions show a quiet "No preview" note;
+Expand opens View source, history and exact copy. They remain inert stored
+source, not future rendering fallbacks.
 
 ## Reference audit, retain / adapt / avoid
 

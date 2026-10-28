@@ -389,7 +389,8 @@ close, and artifact expansion transfers the same reader to the pane.
 Expanded readers offer Fit, 100%, bounded zoom and Reset with two-axis pan.
 Native charts/canvas/Mermaid repaint native geometry, not rasterized previews;
 text, tables and controls retain native legibility and interaction.
-Other kinds retain explicit Open cards; body links/JSON and legacy tool-only
+Legacy HTML, React, SwiftUI and shader revisions show a quiet "No preview" note;
+the expanded reader adds View source. Body links/JSON and legacy tool-only
 output are not parsed into reads. Neither surface can switch owners or silently
 open the latest revision. See [inline ownership and bounds](docs/inline-visuals.md).
 Previous revisions, source/provenance and Copy source remain
@@ -403,8 +404,8 @@ Category labels show all through12, sparse endpoints above; labels/legends/units
 are visibly elided after80 Unicode scalars; stored source/data remain intact.
 Static canvas supports trusted native path/text painting, limited transforms,
 viewport margins and approximated curves; animation/pointer scheduling and
-non-uniform strokes/transformed text remain unsupported. SwiftUI
-previews, image nodes inside visuals and stacked/out-of-domain charts show honest placeholders.
+non-uniform strokes/transformed text remain unsupported. Image nodes inside
+visuals and stacked/out-of-domain charts show honest placeholders.
 Stored raster image artifacts separately support native PNG/JPEG and labelled
 first-frame GIF previews, fit/100%/zoom/pan viewing and explicit source copy.
 Already-loaded stored conversation images use the same bounded decoder and
@@ -414,9 +415,10 @@ WebP previews remain unsupported with their stored source/provenance retained.
 See [stored image boundaries and checks](docs/stored-images.md) and the
 [pinned allocation audit](docs/image-allocation-audit.md); pixel/buffer limits
 are separate from encoded bytes, and no total-memory ceiling is claimed.
-HTML/React/browser rendering is not part of Next's product path. Legacy sources
-remain inert data; nothing is deleted. Shaders remain unsupported. Links are
-inert. No prepared HTML, browser fallback or external assets are consumed.
+Pilot Next previews only images and native visuals. HTML, React, SwiftUI and
+shader artifacts are legacy stored data: never executed or deleted, shown with a
+"No preview" placeholder, View source, previous revisions and exact Copy source.
+Links are inert. No prepared HTML, browser fallback or external assets are consumed.
 
 Only validated macOS confinement enables source/handlers, in a separate helper,
 never the desktop process/thread. Linux source execution is explicitly disabled

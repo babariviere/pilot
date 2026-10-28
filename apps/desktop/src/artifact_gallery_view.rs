@@ -753,15 +753,7 @@ impl ArtifactPane {
             let reference = reference.clone();
             let key = Key::new(&reference);
             let thumbnail = self.gallery.cache.get(&key);
-            let kind = match reference.kind.as_str() {
-                "image" => "Image",
-                "visual" => "Native visual",
-                "swiftui" => "SwiftUI",
-                "html" => "HTML",
-                "react" => "React",
-                "shader" => "Shader",
-                _ => "Artifact",
-            };
+            let kind = crate::artifact_model::kind_label(&reference.kind);
             let status = if self.gallery.errors.contains_key(&key) {
                 "Preview unavailable"
             } else if self
@@ -775,7 +767,7 @@ impl ArtifactPane {
                 if reference.kind == "visual" {
                     "Open to view"
                 } else {
-                    "Source only"
+                    "Not previewed"
                 }
             } else if self.gallery.desired.iter().any(|r| Key::new(r) == key) {
                 "Queued preview"

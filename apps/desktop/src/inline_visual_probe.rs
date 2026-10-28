@@ -1085,6 +1085,51 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                 let snapshot = pane(&t, cx).unwrap().read(cx).inline_probe_snapshot();
                 snapshot.scene.is_none() && snapshot.error.is_none()
             }));
+            // Legacy kinds show an explicit placeholder, then exact source in the reader.
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("inline-unsupported").bounds().size.width > px(0.));
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-legacy-inline.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.click("inline-expand", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, _| {
+                let placeholder = w.find("artifact-unsupported").bounds();
+                assert!(placeholder.size.width > px(200.));
+                assert!(w.find("artifact-view-source").bounds().size.width > px(0.));
+            })
+            .unwrap();
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{dark}-legacy-expanded.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.click("artifact-view-source", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.find("artifact-source-text").bounds().size.width > px(0.));
+                w.click("artifact-copy-source", cx);
+            })
+            .unwrap();
+            assert_eq!(
+                cx.update(|cx| cx.read_from_clipboard().unwrap().text().unwrap()),
+                "<script>inert stored source</script>",
+                "legacy source copies exactly"
+            );
+            cx.update_window(h, |_, w, cx| w.click("artifact-source", cx))
+                .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("artifact-gallery", cx))
+                .unwrap();
+            frame(cx, h);
 
             cx.update(|cx| {
                 t.update(cx, |t, cx| {

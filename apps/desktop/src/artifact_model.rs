@@ -45,6 +45,31 @@ impl Reference {
         Self::parse_kind(value, value["sessionId"].as_str()?, "unknown")
     }
 }
+/// Display name for a stored artifact kind. Pilot Next previews only images and
+/// native visuals; other kinds are legacy data shown as source.
+pub(crate) fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "image" => "Image",
+        "visual" => "Native visual",
+        "html" => "HTML",
+        "react" => "React",
+        "swiftui" => "SwiftUI",
+        "shader" => "Shader",
+        _ => "Artifact",
+    }
+}
+/// Placeholder title for a revision that has no native preview.
+pub(crate) fn unsupported_title(kind: &str) -> String {
+    match kind {
+        "visual" => "This native visual version isn't supported".into(),
+        "html" | "react" | "swiftui" | "shader" => {
+            format!("No preview for {} artifacts", kind_label(kind))
+        }
+        _ => "No preview for this artifact".into(),
+    }
+}
+pub(crate) const UNSUPPORTED_DETAIL: &str =
+    "Pilot Next shows images and native visuals. The stored source is unchanged.";
 /// Upright raster size an inline pin reserves before its revision is read: the
 /// publication's header hint, or the exact revision's decoded size. Only layout
 /// uses it; the read keeps its identity, kind and codec checks, and decoding wins.
@@ -238,6 +263,35 @@ mod tests {
         let mut future = v;
         future["visual"]["api"] = json!(2);
         assert!(!Revision::parse(future, &expected).unwrap().visual_supported);
+    }
+    #[test]
+    fn legacy_kinds_keep_exact_source_without_a_preview() {
+        for kind in ["html", "react", "swiftui", "shader", "future"] {
+            let v = json!({"id":"synthetic","sessionId":"owner","revision":1,"title":"Synthetic","kind":kind,"source":"<p>exact 🌍</p>","html":"<script>never consumed</script>","createdAt":1,"updatedAt":2});
+            let r = Revision::parse(
+                v,
+                &Reference::pinned(
+                    &json!({"id":"synthetic","sessionId":"owner","revision":1,"title":"Synthetic"}),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(!r.visual_supported, "{kind}");
+            assert_eq!(r.reference.kind, kind);
+            assert_eq!(r.source.as_str(), "<p>exact 🌍</p>");
+        }
+        assert_eq!(unsupported_title("html"), "No preview for HTML artifacts");
+        assert_eq!(
+            unsupported_title("swiftui"),
+            "No preview for SwiftUI artifacts"
+        );
+        assert_eq!(unsupported_title("future"), "No preview for this artifact");
+        assert_eq!(
+            unsupported_title("visual"),
+            "This native visual version isn't supported"
+        );
+        assert_eq!(kind_label("react"), "React");
+        assert_eq!(kind_label("future"), "Artifact");
     }
     #[test]
     fn raster_size_hints_cover_only_decodable_formats_and_sizes() {

@@ -289,7 +289,15 @@ impl ArtifactPane {
                 .min_w_0()
                 .gap_3();
             if !revision.visual_supported {
-                content = content.child(crate::ui::text(crate::ui::Text::Caption, "No native inline preview for this artifact. Source is retained; Expand opens its detail."));
+                // Expand opens the reader, which keeps the source, history and copy.
+                content = content.child(
+                    div().id("inline-unsupported").test_support().child(
+                        crate::ui::Notice::new(crate::artifact_model::unsupported_title(
+                            &revision.reference.kind,
+                        ))
+                        .tone(crate::ui::Tone::Quiet),
+                    ),
+                );
             } else if let Some(scene) = self.snapshot.scene.clone() {
                 content = content.child(self.node(&scene.root, "0", &mut 4096, cx));
             }

@@ -7,8 +7,9 @@ placeholders. Selecting a tile opens its captured revision, not whatever became
 latest while the click or reader was waiting.
 
 This is a scoped gallery, not global/project browsing or full artifact parity.
-Swift remains available. HTML/React/browser execution, shaders and native SwiftUI
-preview generation remain deferred.
+Swift remains available. Pilot Next previews only images and native visuals;
+HTML, React, SwiftUI and shader tiles say "Not previewed" and open to their
+stored source.
 
 ## Interaction and state
 
@@ -121,4 +122,3 @@ For a view/probe-only correction, use --test artifact_gallery --lint and explici
 map unchanged unit evidence. No real Local profile, content, sends or mutations
 are used. Captures are actual offscreen GPUI, not SwiftUI mocks, visible motion,
 OS IME/AX, Linux/Wayland, RSS/performance or full-parity acceptance.
-
