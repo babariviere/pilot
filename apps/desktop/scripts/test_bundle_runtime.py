@@ -15,6 +15,104 @@ import bundle_runtime as bundle
 import make_dev_icon
 
 
+class NativeSnapshotTests(unittest.TestCase):
+    def snapshot(self, root, layout, fault=None):
+        staged = root / "staged"
+        source = "a" * 40
+        builds = []
+
+        def command(args, **kwargs):
+            if args[:2] == ["git", "archive"]:
+                self.assertEqual(args[-1], source)
+                with tarfile.open(fileobj=kwargs["stdout"], mode="w"):
+                    pass
+            else:
+                package = Path(args[1]).parents[1]
+                self.assertEqual(args, ["/bin/bash", str(package / "scripts/build.sh"),
+                                        "-c", "release", "--product", args[-1]])
+                builds.append(args[-1])
+                bin_path = package / layout
+                bin_path.mkdir(parents=True, exist_ok=True)
+                helper = bin_path / args[-1]
+                helper.write_text("snapshot " + args[-1])
+                helper.chmod(0o755)
+
+        def query(*args, **kwargs):
+            if args[:2] == ("/usr/bin/uname", "-m"):
+                return "arm64"
+            if args[:2] == ("git", "cat-file"):
+                return "commit"
+            self.assertEqual(builds, ["PilotPower", "PilotSystemEvents"])
+            self.assertEqual(args[:2], ("/bin/bash", "-c"))
+            self.assertIn('source "$1/scripts/swift-env.sh"', args[2])
+            self.assertIn('swift build --package-path "$1" -c release --show-bin-path', args[2])
+            self.assertEqual(kwargs["timeout"], 60)
+            package = Path(args[-1])
+            self.assertEqual(package, (kwargs["cwd"] / "apps/macos").resolve())
+            bin_path = package / layout
+            if fault == "alias":
+                alias = package / ".build/release"
+                alias.symlink_to(bin_path.relative_to(alias.parent), target_is_directory=True)
+                return str(alias)
+            if fault in ("empty", "relative", "multiline"):
+                return {"empty": "", "relative": layout, "multiline": str(bin_path) + "\nextra"}[fault]
+            if fault == "outside-directory":
+                return str(root)
+            if fault == "escaped-directory-link":
+                alias = package / ".build/release"
+                alias.symlink_to(root, target_is_directory=True)
+                return str(alias)
+            if fault == "missing-directory":
+                return str(package / "missing")
+            helper = bin_path / "PilotSystemEvents"
+            if fault == "file-directory":
+                return str(helper)
+            if fault in ("missing-helper", "escaped-helper", "directory-helper"):
+                helper.unlink()
+                if fault == "escaped-helper":
+                    external = root / "external"
+                    external.write_text("not from the immutable source")
+                    external.chmod(0o755)
+                    helper.symlink_to(external)
+                elif fault == "directory-helper":
+                    helper.mkdir()
+            if fault == "nonexecutable-helper":
+                helper.chmod(0o644)
+            return str(bin_path)
+
+        with patch.object(bundle.sys, "platform", "darwin"), \
+             patch.object(bundle, "run", side_effect=query), \
+             patch.object(bundle.subprocess, "run", side_effect=command):
+            bundle.snapshot_build(source, staged, native=True)
+        return staged
+
+    def test_swiftpm_reported_legacy_new_and_release_alias_layouts(self):
+        for layout, fault in ((".build/arm64-apple-macosx/release", None),
+                              (".build/out/Products/Release", None),
+                              (".build/out/Products/Release", "alias")):
+            with self.subTest(layout=layout, fault=fault), tempfile.TemporaryDirectory() as temporary:
+                staged = self.snapshot(Path(temporary), layout, fault)
+                receipt = bundle.read_json(staged / "manifest.json")
+                self.assertEqual(receipt["source"], "a" * 40)
+                self.assertEqual(receipt["target"], "aarch64-apple-darwin")
+                for entry in receipt["binaries"]:
+                    helper = staged / entry["name"]
+                    self.assertEqual(helper.read_text(), "snapshot " + entry["name"])
+                    self.assertEqual(entry["sha256"], bundle.digest(helper))
+                    self.assertEqual(entry["bytes"], helper.stat().st_size)
+                    self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
+
+    def test_invalid_paths_and_helpers_fail_before_staging(self):
+        for fault in ("empty", "relative", "multiline", "outside-directory", "escaped-directory-link",
+                      "missing-directory", "file-directory", "missing-helper", "escaped-helper",
+                      "directory-helper", "nonexecutable-helper"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    self.snapshot(root, ".build/out/Products/Release", fault)
+                self.assertFalse((root / "staged").exists())
+
+
 class BundleRuntimeTests(unittest.TestCase):
     def test_native_deployment_metadata_requires_macos_15_or_older(self):
         current="Load command 1\n cmd LC_BUILD_VERSION\n platform 1\n minos 15.0\n sdk 26.2\n"
