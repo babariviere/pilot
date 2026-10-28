@@ -129,6 +129,8 @@ pub fn run_daemon_upgrade_probe(cx: &mut HeadlessAppContext) {
         (1100., true, Err(Failure::Unknown)),
         (680., true, Err(Failure::Busy)),
         (1100., false, Err(Failure::Unverified)),
+        (680., false, Err(Failure::StagingCapacity)),
+        (1100., true, Err(Failure::StagingArchiveFailed)),
     ] {
         cases += 1;
         cx.update(|cx| {
@@ -230,6 +232,11 @@ pub fn run_daemon_upgrade_probe(cx: &mut HeadlessAppContext) {
         until(cx, h, |cx| !v.read(cx).active());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert!(present(cx, h, "daemon-upgrade-status"));
+        cx.update_window(h, |_, w, _| {
+            let status = w.find("daemon-upgrade-status").bounds();
+            assert!(status.left() >= px(0.) && status.right() <= px(width));
+        })
+        .unwrap();
         cx.update(|cx| match result {
             Ok(()) => assert_eq!(v.read(cx).status(), Status::Succeeded),
             Err(failure) => {

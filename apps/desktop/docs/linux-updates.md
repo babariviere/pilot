@@ -97,9 +97,16 @@ Relaunch uses the new native executable directly, preserving the desktop-session
 environment and the receipt-bound profile/policy. Spawn success is not startup
 success. Only the GUI's actual durable startup checkpoint acknowledges the
 transaction. Interrupted/uncertain installs preserve journals and both payloads
-for contextual recovery inspection. There is no automatic rollback or cleanup,
-except that startup removes downloads never committed (journal phase `Ready`)
-once no session or helper holds the target lock; nothing was installed from them.
+for contextual recovery inspection. There is no automatic rollback. When staging
+needs room, older acknowledged transactions move intact under the existing
+target/journal locks into private `.pilot-next-updater-history/`, outside the
+immediate active scan. The current build receipt, uncertain phases, pending
+writes and mismatched rollback inodes stay put. Original receipt paths still
+resolve to retained history. Archival preserves all journals, archives and old
+payloads and syncs both rename parents; a failure refuses staging rather than
+claiming the installed app is unconfirmed. History is not purged. Startup still
+removes downloads never committed (journal phase `Ready`) once no session or
+helper holds the target lock; nothing was installed from them.
 
 ## Native fixtures
 

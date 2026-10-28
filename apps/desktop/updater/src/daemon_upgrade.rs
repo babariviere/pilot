@@ -8,6 +8,12 @@ pub enum Failure {
     Unverified,
     Busy,
     Cancelled,
+    /// Refused before staging: retained runtimes and staging evidence fill the bounded
+    /// runtime store. Nothing was staged or stopped, and no evidence was removed.
+    StagingCapacity,
+    /// Refused before staging: archiving earlier staging evidence to make room failed.
+    /// Nothing was installed or stopped; the evidence stays in place or in the archive.
+    StagingArchiveFailed,
     /// A lifecycle write may have happened. Inspect before any further action.
     Unknown,
 }
@@ -20,6 +26,12 @@ impl std::fmt::Display for Failure {
             }
             Self::Busy => "tools are still running; no daemon was stopped",
             Self::Cancelled => "upgrade cancelled before shutdown; agents resume within 30 seconds",
+            Self::StagingCapacity => {
+                "retained runtimes or staging evidence fill ~/Library/Application Support/Pilot Next Runtimes; nothing was staged or stopped. Inspect them before retrying"
+            }
+            Self::StagingArchiveFailed => {
+                "earlier runtime staging evidence could not be archived to make room; nothing was installed or stopped and the evidence was kept. Retry later"
+            }
             Self::Unknown => {
                 "upgrade outcome is unknown; inspect the retained handoff before retrying"
             }

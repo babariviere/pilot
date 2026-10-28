@@ -58,6 +58,8 @@ pub enum Error {
     RuntimeUnverified,
     AdmissionsNotFenced,
     InstallFailed,
+    StagingCapacity,
+    StagingArchiveFailed,
     RecoveryRequired,
     CommitUncertain,
     ParentStillRunning,

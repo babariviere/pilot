@@ -1,5 +1,5 @@
 //! Whole sealed runtime capsules. Publication never renames or deletes a published
-//! root. No GC: exhaustion refuses publication, including orphan/unknown roots.
+//! root. Only lease-qualified unpublished stages can move to evidence history.
 use crate::{
     Error,
     helper::run_command_checked,
@@ -11,7 +11,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Read,
     os::{
-        fd::AsRawFd,
+        fd::{AsRawFd, FromRawFd, OwnedFd},
         unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
@@ -20,12 +20,24 @@ use std::{
 };
 
 pub const STORE_NAME: &str = "Pilot Next Runtimes";
+const STAGE_PREFIX: &str = ".stage-v1-";
+const HISTORY: &str = ".abandoned-stages";
 const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 unsafe extern "C" {
     fn pnu_publish_capsule(
         stage: *const libc::c_char,
         destination: *const libc::c_char,
     ) -> libc::c_int;
+    fn pnu_stage_unused(
+        stage: *const libc::c_char,
+        ignored_fd: libc::c_int,
+        timeout_ms: u32,
+    ) -> bool;
+    fn pnu_bundle_build(
+        path: *const libc::c_char,
+        output: *mut libc::c_char,
+        capacity: usize,
+    ) -> bool;
 }
 
 fn check(deadline: Instant) -> Result<(), Error> {
@@ -254,55 +266,107 @@ fn publish_checked(
         }
         return Ok(destination);
     }
-    // At most four full 2GiB closures, including failed publication evidence.
-    // Never delete/reuse an unknown root or orphan as a shortcut to admission.
+    // Published and legacy/unknown roots retain their original count/byte bounds.
+    // Versioned stages were never execution roots: validate_capsule requires a
+    // 64-hex parent. Their inherited lease also excludes surviving copy children.
     let mut count = 0;
     let mut retained = 0_u64;
+    // Snapshot names before moving any entry. Mutating a directory during
+    // readdir may skip retained roots and incorrectly admit beyond the cap.
+    let mut entries = Vec::new();
     for entry in fs::read_dir(store).map_err(|_| Error::Filesystem)? {
         check(deadline)?;
         cancel()?;
-        let entry = entry.map_err(|_| Error::Filesystem)?;
+        if entries.len() >= 4096 {
+            return Err(Error::StagingCapacity);
+        }
+        entries.push(entry.map_err(|_| Error::Filesystem)?);
+    }
+    for entry in entries {
+        check(deadline)?;
+        cancel()?;
+        if entry.file_name() == HISTORY {
+            validate_history(&entry.path())?;
+            continue;
+        }
         if entry.file_name() != ".store.lock" {
             let name = entry.file_name();
             let name = name.to_str().ok_or(Error::RecoveryRequired)?;
+            if let Some(id) = name.strip_prefix(STAGE_PREFIX) {
+                if !hex_id(id, 32) {
+                    return Err(Error::RecoveryRequired);
+                }
+                archive_stage(&entry.path(), deadline, cancel)?;
+                continue;
+            }
             let valid = if let Some(id) = name.strip_prefix(".stage-") {
-                id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
+                // Legacy publishers did not lease their copy children. Never
+                // infer absence of live users from names, age or the store lock.
+                if hex_id(id, 32)
+                    && archive_legacy_duplicate(
+                        &entry.path(),
+                        store,
+                        trust,
+                        platform,
+                        deadline,
+                        cancel,
+                        &|stage, lease| native_stage_unused(stage, lease, deadline),
+                    )?
+                {
+                    continue;
+                }
+                hex_id(id, 32)
             } else {
-                name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+                hex_id(name, 64)
             };
             if !valid {
                 return Err(Error::RecoveryRequired);
             }
             retained = retained
-                .checked_add(retained_size(&entry.path(), deadline, cancel)?)
-                .ok_or(Error::Exhausted)?;
+                .checked_add(
+                    retained_size(&entry.path(), deadline, cancel).map_err(|error| {
+                        if error == Error::Exhausted {
+                            Error::StagingCapacity
+                        } else {
+                            error
+                        }
+                    })?,
+                )
+                .ok_or(Error::StagingCapacity)?;
             if retained > MAX_BYTES * 3 {
-                return Err(Error::Exhausted);
+                return Err(Error::StagingCapacity);
             }
             count += 1;
         }
         if count >= 4 {
-            return Err(Error::Exhausted);
+            return Err(Error::StagingCapacity);
         }
     }
-    let stage = store.join(format!(".stage-{}", crate::transport::hex(&ring_random()?)));
+    let stage = store.join(format!(
+        "{STAGE_PREFIX}{}",
+        crate::transport::hex(&ring_random()?)
+    ));
     fs::DirBuilder::new()
         .mode(0o700)
         .create(&stage)
         .map_err(|_| Error::Filesystem)?;
     installer::acl_policy(&stage, 1)?;
+    // Admission already succeeded. Failure to lease our new private directory
+    // is a filesystem failure, not a claim that retained capacity is exhausted.
+    let stage_lease = stage_lease(&stage).map_err(|_| Error::Filesystem)?;
     let app = stage.join(&trust.bundle_name);
+    let mut copy = Command::new("/usr/bin/ditto");
+    copy.args(["--noqtn", "--noacl"]).arg(source).arg(&app);
+    inherit_stage_lease(&mut copy, &stage_lease)?;
     run_command_checked(
-        Command::new("/usr/bin/ditto")
-            .args(["--noqtn", "--noacl"])
-            .arg(source)
-            .arg(&app),
+        &mut copy,
         deadline.saturating_duration_since(Instant::now()),
         || {
             check(deadline)?;
             cancel()
         },
     )?;
+    drop(copy);
     installer::validate_target(&app, trust)?;
     platform.verify(&app, trust, &trust.current_build, None)?;
     if identity_checked(&app, deadline, cancel)? != id
@@ -326,6 +390,208 @@ fn publish_checked(
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::RecoveryRequired)?;
     Ok(destination)
+}
+
+fn hex_id(value: &str, length: usize) -> bool {
+    value.len() == length && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn stage_lease(stage: &Path) -> Result<File, Error> {
+    let lease = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(stage)
+        .map_err(|_| Error::StagingCapacity)?;
+    let meta = lease.metadata().map_err(|_| Error::StagingCapacity)?;
+    let named = fs::symlink_metadata(stage).map_err(|_| Error::StagingCapacity)?;
+    // SAFETY: identity query and nonblocking lock on an owned directory fd.
+    if !meta.is_dir()
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.mode() & 0o077 != 0
+        || (meta.dev(), meta.ino()) != (named.dev(), named.ino())
+        || unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0
+    {
+        return Err(Error::StagingCapacity);
+    }
+    installer::acl_policy(stage, 2).map_err(|_| Error::StagingCapacity)?;
+    Ok(lease)
+}
+
+fn inherit_stage_lease(command: &mut Command, lease: &File) -> Result<(), Error> {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: duplicate our owned fd above stdio, preserving its shared flock.
+    let fd = unsafe { libc::fcntl(lease.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 10) };
+    if fd < 0 {
+        return Err(Error::Native);
+    }
+    // SAFETY: fcntl returned a new owned descriptor.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: only async-signal-safe fcntl after fork. No dup2/stdio collisions.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
+}
+
+fn validate_history(history: &Path) -> Result<(), Error> {
+    let meta = fs::symlink_metadata(history).map_err(|_| Error::StagingArchiveFailed)?;
+    // SAFETY: pure current-user identity query.
+    if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+        return Err(Error::StagingArchiveFailed);
+    }
+    installer::acl_policy(history, 2).map_err(|_| Error::StagingArchiveFailed)
+}
+
+// Caller holds the permanent store lock. Never called for published roots.
+fn archive_stage(
+    stage: &Path,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
+    check(deadline)?;
+    cancel()?;
+    let lease = stage_lease(stage)?;
+    archive_stage_leased(stage, &lease, deadline, cancel, &|| Ok(()))
+}
+
+fn archive_stage_leased(
+    stage: &Path,
+    lease: &File,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+    before_move: &impl Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let original = lease.metadata().map_err(|_| Error::StagingArchiveFailed)?;
+    let store = stage.parent().ok_or(Error::StagingArchiveFailed)?;
+    let history = store.join(HISTORY);
+    match fs::DirBuilder::new().mode(0o700).create(&history) {
+        Ok(()) => installer::acl_policy(&history, 1).map_err(|_| Error::StagingArchiveFailed)?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(_) => return Err(Error::StagingArchiveFailed),
+    }
+    validate_history(&history)?;
+    let destination = history.join(stage.file_name().ok_or(Error::StagingArchiveFailed)?);
+    let named = fs::symlink_metadata(stage).map_err(|_| Error::StagingArchiveFailed)?;
+    if (original.dev(), original.ino()) != (named.dev(), named.ino()) {
+        return Err(Error::StagingArchiveFailed);
+    }
+    let from =
+        CString::new(stage.as_os_str().as_bytes()).map_err(|_| Error::StagingArchiveFailed)?;
+    let to = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| Error::StagingArchiveFailed)?;
+    check(deadline)?;
+    cancel()?;
+    before_move()?;
+    let named = fs::symlink_metadata(stage).map_err(|_| Error::StagingArchiveFailed)?;
+    if (original.dev(), original.ino()) != (named.dev(), named.ino()) {
+        return Err(Error::StagingArchiveFailed);
+    }
+    // SAFETY: validated private stage under its exclusive lease and store lock;
+    // exclusive rename preserves both roots on collision, never replaces evidence.
+    if unsafe { pnu_publish_capsule(from.as_ptr(), to.as_ptr()) } != 0 {
+        return Err(Error::StagingArchiveFailed);
+    }
+    for directory in [&history, store] {
+        File::open(directory)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| Error::StagingArchiveFailed)?;
+    }
+    Ok(())
+}
+
+fn native_stage_unused(stage: &Path, lease: &File, deadline: Instant) -> bool {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let Ok(path) = CString::new(stage.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let milliseconds = deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis()
+        .min(2000) as u32;
+    // SAFETY: owned NUL-terminated path, controlled directory fd, bounded read-only census.
+    unsafe { pnu_stage_unused(path.as_ptr(), lease.as_raw_fd(), milliseconds) }
+}
+
+fn sealed_build(app: &Path) -> Result<String, Error> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let plist =
+        fs::symlink_metadata(app.join("Contents/Info.plist")).map_err(|_| Error::Identity)?;
+    if !plist.is_file() || plist.len() > 65_536 {
+        return Err(Error::Identity);
+    }
+    let path = CString::new(app.as_os_str().as_bytes()).map_err(|_| Error::Identity)?;
+    let mut buffer = [0_u8; 64];
+    // SAFETY: valid owned path and bounded output, always on the updater worker.
+    if !unsafe { pnu_bundle_build(path.as_ptr(), buffer.as_mut_ptr().cast(), buffer.len()) } {
+        return Err(Error::Identity);
+    }
+    let end = buffer.iter().position(|b| *b == 0).ok_or(Error::Identity)?;
+    let build = std::str::from_utf8(&buffer[..end])
+        .map_err(|_| Error::Identity)?
+        .to_owned();
+    crate::manifest::Build::parse(&build)?;
+    Ok(build)
+}
+
+// Legacy recovery is deliberately narrower than ordinary staged evidence:
+// one exact sealed duplicate, already published, plus positive native no-use
+// proof. Missing/inaccessible/changing evidence stays in place and counts.
+fn archive_legacy_duplicate(
+    stage: &Path,
+    store: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+    unused: &impl Fn(&Path, &File) -> bool,
+) -> Result<bool, Error> {
+    let verify = || -> Result<(File, PathBuf, String), Error> {
+        let lease = stage_lease(stage)?;
+        let entries = fs::read_dir(stage)
+            .map_err(|_| Error::Filesystem)?
+            .take(2)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| Error::Filesystem)?;
+        if entries.len() != 1 || entries[0].file_name() != trust.bundle_name.as_str() {
+            return Err(Error::Identity);
+        }
+        let app = stage.join(&trust.bundle_name);
+        installer::validate_target(&app, trust)?;
+        let build = sealed_build(&app)?;
+        platform.verify(&app, trust, &build, None)?;
+        let id = identity_checked(&app, deadline, cancel)?;
+        let published = store.join(&id).join(&trust.bundle_name);
+        installer::validate_target(&published, trust)?;
+        platform.verify(&published, trust, &build, None)?;
+        if identity_checked(&published, deadline, cancel)? != id {
+            return Err(Error::Identity);
+        }
+        Ok((lease, published, id))
+    };
+    let (lease, published, id) = match verify() {
+        Ok(value) => value,
+        Err(Error::Cancelled) => return Err(Error::Cancelled),
+        Err(_) => return Ok(false),
+    };
+    if !unused(stage, &lease) {
+        return Ok(false);
+    }
+    archive_stage_leased(stage, &lease, deadline, cancel, &|| {
+        if identity_checked(&stage.join(&trust.bundle_name), deadline, cancel)? != id
+            || identity_checked(&published, deadline, cancel)? != id
+            || !unused(stage, &lease)
+        {
+            return Err(Error::StagingCapacity);
+        }
+        Ok(())
+    })?;
+    Ok(true)
 }
 fn retained_size(
     root: &Path,
@@ -417,6 +683,10 @@ fn sync_tree(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "runtime_staging_tests.rs"]
+mod staging_tests;
 
 #[cfg(test)]
 mod tests {

@@ -260,14 +260,17 @@ impl Updates {
                 .unwrap();
                 settle(cx, h);
                 assert_eq!(restarts.get(), 2, "one key activation, one restart intent");
-                // Fenced preparation, an open folder chooser and a failed local build
-                // hide the action; a deferral can be retried.
+                // Fenced preparation, an open folder chooser, a failed local build and a
+                // staging refusal hide the action; a deferral can be retried.
                 type Case = (&'static str, fn(&mut Updates));
-                let cases: [Case; 4] = [
+                let cases: [Case; 5] = [
                     ("fenced", |u| u.fenced = true),
                     ("choosing", |u| u.choosing = true),
                     ("failed", |u| {
                         u.probe_state = Some(State::Failed(Error::Version))
+                    }),
+                    ("capacity", |u| {
+                        u.probe_state = Some(State::Failed(Error::StagingCapacity))
                     }),
                     ("deferred", |u| {
                         u.probe_state = Some(State::Deferred {
@@ -299,6 +302,13 @@ impl Updates {
                                     .status()
                                     .starts_with("This local build is not newer")
                             );
+                        }
+                        if name == "capacity" {
+                            let status = updates.read(cx).status();
+                            assert!(status.starts_with("The update was not staged."));
+                            assert!(!status.contains("unconfirmed"), "not an uncertain install");
+                            let line = w.find("updates-status").bounds();
+                            assert!(line.left() >= px(0.) && line.right() <= px(width));
                         }
                         if name == "fenced" {
                             assert!(w.find("updates-cancel").visible());
@@ -953,6 +963,13 @@ fn error_text(error: Error) -> &'static str {
         Error::CommitUncertain | Error::RecoveryRequired => {
             "Update recovery is required. The install result is unconfirmed; retained bundles and transaction evidence were preserved."
         }
+        // Refused before staging. Nothing was installed, so this is not recovery-uncertain.
+        Error::StagingCapacity => {
+            "The update was not staged. Retained update records fill the staging limit; nothing was installed. Inspect them before retrying."
+        }
+        Error::StagingArchiveFailed => {
+            "The update was not staged. Completed update records could not be archived to make room; nothing was installed and they were kept. Retry later."
+        }
         Error::Signature | Error::Identity | Error::Archive | Error::RedirectDenied => {
             "The update failed authenticity, identity or archive policy. It was not accepted for installation."
         }
@@ -1217,5 +1234,24 @@ mod tests {
             assert!(!can_stage(Some(&state)), "{state:?}");
         }
         assert!(!can_stage(None));
+    }
+    #[test]
+    fn staging_refusals_are_not_reported_as_uncertain_installs() {
+        let uncertain = error_text(Error::RecoveryRequired);
+        let generic = error_text(Error::InstallFailed);
+        for error in [Error::StagingCapacity, Error::StagingArchiveFailed] {
+            let text = error_text(error);
+            assert_ne!(text, uncertain, "{error:?}");
+            assert_ne!(text, generic, "{error:?}");
+            assert!(text.starts_with("The update was not staged."), "{text}");
+            assert!(text.contains("nothing was installed"), "{text}");
+            assert!(!text.contains("unconfirmed"), "{text}");
+        }
+        // A refused stage leaves ordinary retry and local staging available.
+        assert!(can_stage(Some(&State::Failed(Error::StagingCapacity))));
+        assert_eq!(
+            local_text(Some(&State::Failed(Error::StagingCapacity))),
+            None
+        );
     }
 }

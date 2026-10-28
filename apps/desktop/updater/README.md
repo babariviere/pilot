@@ -186,9 +186,24 @@ held open through extraction and the target inode rechecked immediately before t
 swap; the retained/installed inode identities are checked afterwards too. Journal
 transitions use a separate private nonblocking lock. Relaunch intent is durable before
 launch, so fast startup acknowledgement cannot be overwritten by a later helper write.
-The old app is retained after swap. Journals/archives/backups are not automatically cleaned
-after publication. At most two retained transactions per install parent are admitted;
-further preparation requires explicit recovery/cleanup. Fresh failed preparations with
+The old app is retained after swap. At most two transactions remain in the active
+install-parent scan. When staging needs room, the updater holds the permanent
+target lock and a transaction journal lock and moves an older acknowledged
+transaction intact into the private sibling `.pilot-next-updater-history/`.
+It verifies the signed manifest/archive and exact retained rollback inode first.
+The current build receipt stays at its original path. Pending writes, uncertain
+phases, unreadable evidence and rollback mismatches are never archived. Both
+rename parents are synced before another stage is admitted. Archive collisions
+and failures preserve evidence and refuse staging, never overwrite history.
+
+Journals, authenticated archives, rollback bundles and UI/runtime receipts remain
+byte-for-byte retained. `installer::transaction_path` resolves an original receipt
+into acknowledged history for read-only phase, navigation and guard lookup;
+archived transactions cannot be reopened for installation. History is not part
+of automatic recovery scanning, since only acknowledged transactions enter it.
+No history purge or automatic rollback is implemented, so retained disk usage can
+grow. Capacity/archive refusals are definite pre-staging failures, distinct from
+an uncertain COMMIT, swap or startup outcome. Fresh failed preparations with
 no ready/pending journal are discarded by their owning worker, never committed evidence.
 Directories are scanned with a4096-entry cap. Retained transactions are never blindly
 retried; `recovery_phase` is read-only. A failed swap leaves the original in place.

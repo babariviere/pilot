@@ -448,7 +448,8 @@ fn start_runtime(
     let runtime_root = if let Some((root, _, _)) = &pinned {
         root.clone()
     } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
-        let capsule = own_capsule(root, &trust, &cancel, deadline)?;
+        let capsule =
+            own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
         let location = runtime_location()?;
         pilot_desktop_updater::coordination::selected(&location, &capsule, &trust)
             .map_err(|_| RETAINED_OWNER_REFUSED)?
@@ -592,14 +593,49 @@ fn package_root(executable: &Path) -> Result<&Path, Failure> {
         .ok_or("Cannot locate Linux package.")
 }
 
-/// This app's runtime in the retained store, published on first use.
+/// Startup text for a failed runtime publication. Staging refusals happen before any
+/// stage, start or stop, so they say what to do instead of the generic failure.
+#[cfg(any(target_os = "macos", test))]
+fn startup_publish_failure(error: pilot_desktop_updater::Error) -> Failure {
+    use pilot_desktop_updater::Error;
+    match error {
+        Error::StagingCapacity => {
+            "This app's runtime was not staged: retained runtimes or staging evidence fill ~/Library/Application Support/Pilot Next Runtimes. No daemon was started or stopped. Inspect them before relaunching."
+        }
+        Error::StagingArchiveFailed => {
+            "This app's runtime was not staged: earlier runtime staging evidence could not be archived to make room. It was kept, and no daemon was started or stopped. Relaunch to retry."
+        }
+        _ => {
+            "The immutable runtime capsule could not be verified/published. Existing runtimes were preserved."
+        }
+    }
+}
+
+/// A daemon upgrade's runtime publication failure. It precedes any shutdown, so it
+/// is never Unknown; staging refusals keep their own actionable status.
+#[cfg(any(target_os = "macos", test))]
+fn upgrade_publish_failure(
+    error: pilot_desktop_updater::Error,
+    cancelled: bool,
+) -> pilot_desktop_updater::daemon_upgrade::Failure {
+    use pilot_desktop_updater::{Error, daemon_upgrade::Failure};
+    match error {
+        Error::StagingCapacity => Failure::StagingCapacity,
+        Error::StagingArchiveFailed => Failure::StagingArchiveFailed,
+        _ if cancelled => Failure::Cancelled,
+        _ => Failure::Unverified,
+    }
+}
+
+/// This app's runtime in the retained store, published on first use. The outer error
+/// is a local precondition; the inner one is the publication result.
 #[cfg(target_os = "macos")]
 fn own_capsule(
     root: &Path,
     trust: &pilot_desktop_updater::manifest::Trust,
     cancel: &AtomicBool,
     deadline: Instant,
-) -> Result<PathBuf, Failure> {
+) -> Result<Result<PathBuf, pilot_desktop_updater::Error>, Failure> {
     let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?);
     let store = home
         .join("Library/Application Support")
@@ -607,15 +643,14 @@ fn own_capsule(
     let canonical = root
         .canonicalize()
         .map_err(|_| "Cannot resolve app bundle.")?;
-    pilot_desktop_updater::runtime::publish_cancellable(
+    Ok(pilot_desktop_updater::runtime::publish_cancellable(
         &canonical,
         &store,
         trust,
         &pilot_desktop_updater::installer::MacPlatform,
         deadline,
         cancel,
-    )
-    .map_err(|_| "The immutable runtime capsule could not be verified/published. Existing runtimes were preserved.")
+    ))
 }
 
 /// This app's runtime in the retained store, published on first use.
@@ -647,13 +682,15 @@ pub(crate) fn upgrade_daemon_explicit(
         validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
         let trust =
             pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
-        let capsule = own_capsule(root, &trust, &cancel, deadline).map_err(|_| {
-            if cancel.load(Ordering::Acquire) {
-                Failure::Cancelled
-            } else {
-                Failure::Unverified
-            }
-        })?;
+        let capsule = own_capsule(root, &trust, &cancel, deadline)
+            .map_err(|_| {
+                if cancel.load(Ordering::Acquire) {
+                    Failure::Cancelled
+                } else {
+                    Failure::Unverified
+                }
+            })?
+            .map_err(|error| upgrade_publish_failure(error, cancel.load(Ordering::Acquire)))?;
         pilot_desktop_updater::daemon_upgrade::upgrade(
             location,
             &capsule,
@@ -1030,6 +1067,50 @@ mod tests {
             .is_err()
         );
         assert!(validate(&fixture.root, &AtomicBool::new(false), Instant::now()).is_err());
+    }
+    #[test]
+    fn runtime_staging_refusals_stay_distinct_from_unverified_or_unknown() {
+        use pilot_desktop_updater::{Error, daemon_upgrade::Failure as Upgrade};
+        for cancelled in [false, true] {
+            assert_eq!(
+                upgrade_publish_failure(Error::StagingCapacity, cancelled),
+                Upgrade::StagingCapacity
+            );
+            assert_eq!(
+                upgrade_publish_failure(Error::StagingArchiveFailed, cancelled),
+                Upgrade::StagingArchiveFailed
+            );
+        }
+        for error in [Error::RecoveryRequired, Error::Filesystem, Error::Exhausted] {
+            assert_eq!(upgrade_publish_failure(error, false), Upgrade::Unverified);
+            assert_eq!(upgrade_publish_failure(error, true), Upgrade::Cancelled);
+        }
+        let generic = startup_publish_failure(Error::RecoveryRequired);
+        for (error, said) in [
+            (Error::StagingCapacity, "Inspect them before relaunching."),
+            (Error::StagingArchiveFailed, "Relaunch to retry."),
+        ] {
+            let text = startup_publish_failure(error);
+            assert_ne!(text, generic);
+            assert!(
+                text.contains("was not staged") && text.contains(said),
+                "{text}"
+            );
+            assert!(
+                text.to_lowercase()
+                    .contains("no daemon was started or stopped"),
+                "{text}"
+            );
+            assert!(
+                !text.contains("unconfirmed") && !text.contains("unknown"),
+                "{text}"
+            );
+        }
+        #[cfg(target_os = "macos")]
+        assert!(
+            startup_publish_failure(Error::StagingCapacity)
+                .contains(pilot_desktop_updater::runtime::STORE_NAME)
+        );
     }
     #[test]
     fn runtime_bundle_shape_never_silently_falls_back_to_fixture() {

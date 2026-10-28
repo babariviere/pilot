@@ -1,4 +1,7 @@
 //! Durable, same-volume staging. Ordinary quit never arms installation.
+#[cfg(test)]
+#[path = "installer_retention_tests.rs"]
+mod retention_tests;
 use crate::{
     Error, archive,
     manifest::{Trust, VerifiedManifest},
@@ -11,7 +14,7 @@ use std::{
     io::{Read, Write},
     os::{
         fd::AsRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     },
     path::{Path, PathBuf},
 };
@@ -143,15 +146,15 @@ pub fn new_stage(
     validate_target(target, trust)?;
     platform.verify(target, trust, &trust.current_build, None)?;
     let lock = lock_target(target)?;
-    // Retain at most two transactions (including backups/crash evidence). Do not
-    // silently garbage-collect an ambiguous or committed installation to make room.
-    let mut retained = 0;
+    // Keep the two-transaction active bound. Completed history is moved intact,
+    // never deleted; uncertain transactions and the current receipt stay put.
+    let mut retained = Vec::new();
     for (scanned, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
         .map_err(|_| Error::Filesystem)?
         .enumerate()
     {
         if scanned >= 4096 {
-            return Err(Error::RecoveryRequired);
+            return Err(Error::StagingCapacity);
         }
         let entry = entry.map_err(|_| Error::Filesystem)?;
         if entry
@@ -159,12 +162,25 @@ pub fn new_stage(
             .to_str()
             .is_some_and(|name| name.starts_with(".pilot-next-update-"))
         {
-            retained += 1;
-            if retained >= 2 {
-                return Err(Error::RecoveryRequired);
-            }
+            retained.push(entry.path());
         }
     }
+    let mut remaining = retained.len();
+    for root in &retained {
+        if remaining < 2 {
+            break;
+        }
+        if archive_acknowledged(root, target, trust)? {
+            remaining -= 1;
+        }
+    }
+    if remaining >= 2 {
+        return Err(Error::StagingCapacity);
+    }
+    new_stage_locked(target, lock)
+}
+
+fn new_stage_locked(target: &Path, lock: File) -> Result<(PathBuf, File), Error> {
     let mut random = [0; 16];
     SystemRandom::new()
         .fill(&mut random)
@@ -177,6 +193,163 @@ pub fn new_stage(
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).map_err(|_| Error::Filesystem)?;
     acl_policy(&root, 1)?; // owned newly-created stage only; never repair existing ACLs
     Ok((root, lock))
+}
+
+const HISTORY: &str = ".pilot-next-updater-history";
+
+fn transaction_name(root: &Path) -> bool {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.strip_prefix(".pilot-next-update-")
+                .is_some_and(|suffix| {
+                    suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+                })
+        })
+}
+
+fn private_directory(path: &Path) -> Result<(), Error> {
+    let meta = fs::symlink_metadata(path).map_err(|_| Error::Filesystem)?;
+    // SAFETY: current identity query only.
+    if !meta.is_dir()
+        || meta.file_type().is_symlink()
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.mode() & 0o077 != 0
+    {
+        return Err(Error::Filesystem);
+    }
+    acl_policy(path, 2)
+}
+
+fn signed_manifest(root: &Path, trust: &Trust) -> Result<VerifiedManifest, Error> {
+    use base64::Engine as _;
+    let bytes = read_small(&root.join("manifest.json"), crate::manifest::MAX_MANIFEST)?;
+    let envelope: crate::manifest::Envelope =
+        serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?;
+    let signed = base64::engine::general_purpose::STANDARD
+        .decode(envelope.signed)
+        .map_err(|_| Error::Signature)?;
+    let untrusted: crate::manifest::Manifest =
+        serde_json::from_slice(&signed).map_err(|_| Error::InvalidResponse)?;
+    VerifiedManifest::parse(&bytes, trust, untrusted.archive_asset_id)
+}
+
+// Caller holds the permanent target lock. Journal locking also excludes a late
+// startup ACK/helper writer. A pending write or incomplete rollback stays active.
+fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<bool, Error> {
+    if validate_root(root, target).is_err() {
+        return Ok(false);
+    }
+    let Ok(_guard) = journal_guard(root) else {
+        return Ok(false);
+    };
+    let Ok(journal) = read_journal(root) else {
+        return Ok(false);
+    };
+    if journal.phase != Phase::StartupAcknowledged {
+        return Ok(false);
+    }
+    let Ok(manifest) = signed_manifest(root, trust) else {
+        return Ok(false);
+    };
+    // The running app's receipt stays at its original path, including reconnect
+    // and UI checkpoint data. Only older completed history leaves active scans.
+    if crate::manifest::Build::parse(&manifest.manifest().build)?
+        >= crate::manifest::Build::parse(&trust.current_build)?
+    {
+        return Ok(false);
+    }
+    let rollback = root.join("install-payload").join(&trust.bundle_name);
+    let Ok(old) = fs::symlink_metadata(&rollback) else {
+        return Ok(false);
+    };
+    if !old.is_dir()
+        || old.file_type().is_symlink()
+        || rollback.canonicalize().ok().as_deref() != Some(rollback.as_path())
+        || (old.dev(), old.ino()) != (journal.original_device, journal.original_inode)
+        || verify_archive(
+            &root.join("archive.zip"),
+            &manifest,
+            &Cancellation::default(),
+        )
+        .is_err()
+    {
+        return Ok(false);
+    }
+    let parent = target.parent().ok_or(Error::Filesystem)?;
+    let history = parent.join(HISTORY);
+    (|| {
+        match fs::DirBuilder::new().mode(0o700).create(&history) {
+            Ok(()) => acl_policy(&history, 1)?,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(Error::Filesystem),
+        }
+        private_directory(&history)?;
+        sync_directory(parent)?;
+        archive_move(
+            root,
+            &history.join(root.file_name().ok_or(Error::Identity)?),
+            sync_directory,
+        )
+    })()
+    .map_err(|_| Error::StagingArchiveFailed)?;
+    Ok(true)
+}
+
+fn archive_move(
+    root: &Path,
+    destination: &Path,
+    sync: impl Fn(&Path) -> Result<(), Error>,
+) -> Result<(), Error> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let original = fs::symlink_metadata(root).map_err(|_| Error::Filesystem)?;
+    let from = CString::new(root.as_os_str().as_bytes()).map_err(|_| Error::Filesystem)?;
+    let to = CString::new(destination.as_os_str().as_bytes()).map_err(|_| Error::Filesystem)?;
+    // SAFETY: live NUL-terminated names. Exclusive rename never overwrites history.
+    #[cfg(target_os = "macos")]
+    let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(Error::Filesystem);
+    }
+    let moved = fs::symlink_metadata(destination).map_err(|_| Error::Filesystem)?;
+    if (moved.dev(), moved.ino()) != (original.dev(), original.ino()) {
+        return Err(Error::Identity);
+    }
+    sync(destination.parent().ok_or(Error::Filesystem)?)?;
+    sync(root.parent().ok_or(Error::Filesystem)?)
+}
+
+/// Locate retained evidence by its original receipt path, without replaying it.
+/// Archived entries must be acknowledged and have no pending journal write.
+pub fn transaction_path(root: &Path) -> Result<PathBuf, Error> {
+    match fs::symlink_metadata(root) {
+        Ok(_) => return Ok(root.to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(Error::Filesystem),
+    }
+    if !root.is_absolute() || !transaction_name(root) {
+        return Err(Error::Identity);
+    }
+    let parent = root.parent().ok_or(Error::Identity)?;
+    validate_parents(parent)?;
+    let history = parent.join(HISTORY);
+    private_directory(&history)?;
+    let archived = history.join(root.file_name().ok_or(Error::Identity)?);
+    private_directory(&archived)?;
+    if read_journal(&archived)?.phase != Phase::StartupAcknowledged {
+        return Err(Error::RecoveryRequired);
+    }
+    Ok(archived)
 }
 
 pub fn finish_stage(
@@ -518,7 +691,7 @@ impl Staged {
 
 /// Read-only recovery inspection. No automatic retry, deletion or rollback.
 pub fn recovery_phase(root: &Path) -> Result<Phase, Error> {
-    Ok(read_journal(root)?.phase)
+    Ok(read_journal(&transaction_path(root)?)?.phase)
 }
 /// Startup cleanup of downloads that were verified but never committed (phase Ready),
 /// so a previous session's staged update does not block the next check as "recovery".
@@ -606,6 +779,8 @@ pub fn acknowledge_startup(
     target: &Path,
 ) -> Result<(), Error> {
     validate_target(target, trust)?;
+    let located = transaction_path(root)?;
+    let root = located.as_path();
     validate_root(root, target)?;
     let _guard = journal_guard(root)?;
     let bytes = read_small(&root.join("manifest.json"), crate::manifest::MAX_MANIFEST)?;
@@ -635,6 +810,11 @@ pub fn acknowledge_startup(
 }
 
 fn read_journal(root: &Path) -> Result<Journal, Error> {
+    // A durable old phase does not settle an interrupted newer write.
+    match fs::symlink_metadata(root.join("journal.pending")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err(Error::RecoveryRequired),
+    }
     let journal: Journal = serde_json::from_slice(&read_small(&root.join("journal.json"), 1024)?)
         .map_err(|_| Error::RecoveryRequired)?;
     if journal.schema != 1 {
@@ -713,17 +893,16 @@ fn journal_guard(root: &Path) -> Result<File, Error> {
 
 fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
     acl_policy(root, 2)?;
-    if root.parent() != target.parent()
-        || !root.file_name().is_some_and(|name| {
-            name.to_str().is_some_and(|name| {
-                name.strip_prefix(".pilot-next-update-")
-                    .is_some_and(|suffix| {
-                        suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
-                    })
-            })
-        })
-    {
+    let history = target.parent().ok_or(Error::Identity)?.join(HISTORY);
+    let archived = root.parent() == Some(history.as_path());
+    if (root.parent() != target.parent() && !archived) || !transaction_name(root) {
         return Err(Error::Identity);
+    }
+    if archived {
+        private_directory(&history)?;
+        if read_journal(root)?.phase != Phase::StartupAcknowledged {
+            return Err(Error::RecoveryRequired);
+        }
     }
     let metadata = fs::symlink_metadata(root).map_err(|_| Error::Filesystem)?;
     // SAFETY: identity query, no pointer arguments.

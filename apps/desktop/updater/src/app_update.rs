@@ -173,13 +173,14 @@ impl ExitGuard {
         build: &str,
         trust: &Trust,
     ) -> Result<Self, Error> {
-        if transaction
+        let located = installer::transaction_path(transaction)?;
+        if located
             .join("app-guard.json")
             .try_exists()
             .map_err(|_| Error::Filesystem)?
         {
             let guard: ExternalGuard = serde_json::from_value(coordination::private_json(
-                &transaction.join("app-guard.json"),
+                &located.join("app-guard.json"),
                 16_384,
             )?)
             .map_err(|_| Error::Identity)?;
@@ -218,7 +219,7 @@ impl ExitGuard {
         target: &Path,
         trust: &Trust,
     ) -> Result<Option<Connection>, Error> {
-        if !transaction
+        if !installer::transaction_path(transaction)?
             .join("app-guard.json")
             .try_exists()
             .map_err(|_| Error::Filesystem)?
@@ -274,6 +275,8 @@ pub fn save_navigation(transaction: &Path, navigation: &Value) -> Result<(), Err
         .map_err(|_| Error::Filesystem)
 }
 pub fn navigation(transaction: &Path) -> Result<Value, Error> {
+    let located = installer::transaction_path(transaction)?;
+    let transaction = located.as_path();
     if !transaction
         .join("ui-state.json")
         .try_exists()

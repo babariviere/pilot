@@ -49,8 +49,14 @@ resources and production dependencies under their original relative paths.
 Capsule identity hashes the bounded path/mode/content/link closure. Publication
 is exclusive, checks signatures and closure before activation, and runs off-UI
 with cooperative cancellation and a deadline. No existing root is overwritten
-or garbage-collected. At most four retained roots are admitted; eligible closures are bounded to 2 GiB.
-Unknown or oversized evidence refuses further publication.
+or garbage-collected. At most four retained roots are admitted; eligible closures
+are bounded to 2 GiB. New staging directories hold a lease inherited by the copier;
+only proven inactive staging evidence may move intact into the private runtime
+history. Published runtimes are never moved. Legacy unleased stages require an
+exact verified published duplicate and native proof that no copier or runtime
+user still refers to the staging path; uncertainty retains them and refuses.
+History is never purged and retained disk usage may grow. Capacity and archival
+refusals are distinguished from identity failures and uncertain installation.
 
 An update's signed full bundle must explicitly list the exact retained capsule
 digest in `Contents/Resources/update-runtime-policy.json`. The default empty
@@ -131,9 +137,15 @@ Recovery metadata is read-only, with details and copyable retained paths. Failed
 swap leaves the old app; failed relaunch/startup keeps both bundles and reports
 uncertainty. Transactions and backups are not blindly retried or deleted; the one
 exception is a download never committed (phase `Ready`), which startup removes once
-no session or helper holds the target lock. Two
-retained transactions per install parent are the admission limit. Automatic
-rollback, cleanup and privilege elevation are not implemented.
+no session or helper holds the target lock. Two active transactions per install
+parent remain the admission limit. When staging needs room, older acknowledged
+transactions are moved intact into private `.pilot-next-updater-history/` under
+the permanent target and journal locks. The signed archive and exact rollback
+inode must still match; current receipts, pending writes and uncertain installs
+stay in place. Original receipt paths resolve into acknowledged history for
+inspection. History is never purged. Capacity and archive refusals report that
+nothing was installed, rather than claiming an uncertain install result.
+Automatic rollback and privilege elevation are not implemented.
 
 `scripts/verify_update_lifecycle.py` runs only native arm64 macOS synthetic
 fixtures: signed temporary minimal test apps, the actual helper, owned Node

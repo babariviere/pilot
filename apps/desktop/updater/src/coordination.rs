@@ -388,6 +388,13 @@ pub(crate) fn validate_capsule(
     Ok((id.to_owned(), build))
 }
 impl Guard {
+    fn read_record(transaction: &Path) -> Result<Self, Error> {
+        serde_json::from_value(private_json(
+            &installer::transaction_path(transaction)?.join("runtime-guard.json"),
+            16_384,
+        )?)
+        .map_err(|_| Error::Identity)
+    }
     pub fn prepare(
         location: Location,
         candidate: &Path,
@@ -609,11 +616,7 @@ impl Guard {
         trust: &Trust,
         reserved: bool,
     ) -> Result<Self, Error> {
-        let guard: Self = serde_json::from_value(private_json(
-            &transaction.join("runtime-guard.json"),
-            16_384,
-        )?)
-        .map_err(|_| Error::Identity)?;
+        let guard = Self::read_record(transaction)?;
         let (accepted, hash) = policy(candidate)?;
         #[cfg(feature = "fixture")]
         if crate::fixture::enabled() {
@@ -724,6 +727,45 @@ fn random_operation() -> Result<String, Error> {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
+
+    #[test]
+    fn archived_runtime_guard_keeps_original_receipt_and_capsule_paths() {
+        let temp = crate::owned_tests::Temp::new();
+        let transaction = temp
+            .path()
+            .join(format!(".pilot-next-update-{}", "a".repeat(32)));
+        fs::create_dir(&transaction).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&transaction, fs::Permissions::from_mode(0o700)).unwrap();
+        let capsule = temp.path().join("fixed-runtime-root");
+        let guard = json!({"ui_only":true,"location":{"home":temp.path(),"port":1,"policy":{}},"boot":"same-boot","capsule":capsule,"capsule_id":"same-capsule","bundle_build":"1.1","build":{},"receipt":{"operationId":"exact-operation"},"transaction":transaction,"target_build":"101.1","policy_hash":"same-policy","configuration":"same-configuration"});
+        installer::write_new(
+            &transaction.join("runtime-guard.json"),
+            &serde_json::to_vec(&guard).unwrap(),
+        )
+        .unwrap();
+        installer::write_new(
+            &transaction.join("journal.json"),
+            br#"{"schema":1,"phase":"StartupAcknowledged","original_device":0,"original_inode":0}"#,
+        )
+        .unwrap();
+        let before = Guard::read_record(&transaction).unwrap();
+        let history = temp.path().join(".pilot-next-updater-history");
+        fs::create_dir(&history).unwrap();
+        fs::set_permissions(&history, fs::Permissions::from_mode(0o700)).unwrap();
+        let archived = history.join(transaction.file_name().unwrap());
+        fs::rename(&transaction, &archived).unwrap();
+        let after = Guard::read_record(&transaction).unwrap();
+        assert_eq!(after.transaction, transaction);
+        assert_eq!(after.capsule, capsule);
+        assert_eq!(after.receipt, before.receipt);
+        assert_eq!(serde_json::to_value(after).unwrap(), guard);
+        // Historical evidence never grants permission to replay an installation.
+        assert_eq!(
+            installer::recovery_phase(&transaction).unwrap(),
+            installer::Phase::StartupAcknowledged
+        );
+    }
 
     #[test]
     fn public_configuration_fingerprint_is_independent_of_json_map_features() {

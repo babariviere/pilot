@@ -310,9 +310,12 @@ impl Drop for DaemonUpgrade {
 fn outcome(failure: Failure) -> (&'static str, Tone) {
     match failure {
         Failure::Cancelled => ("Upgrade cancelled", Tone::Quiet),
-        Failure::Busy => ("Daemon not upgraded", Tone::Warning),
+        // Definite refusals before shutdown. Capacity is the user's to act on.
+        Failure::Busy | Failure::StagingCapacity => ("Daemon not upgraded", Tone::Warning),
         Failure::Unknown => ("Upgrade outcome unknown", Tone::Error),
-        Failure::Unsupported | Failure::Unverified => ("Daemon not upgraded", Tone::Error),
+        Failure::Unsupported | Failure::Unverified | Failure::StagingArchiveFailed => {
+            ("Daemon not upgraded", Tone::Error)
+        }
     }
 }
 

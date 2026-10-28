@@ -189,6 +189,8 @@ fn failures_are_preserved_and_unknown_blocks_retry(cx: &mut TestAppContext) {
         Failure::Unverified,
         Failure::Busy,
         Failure::Cancelled,
+        Failure::StagingCapacity,
+        Failure::StagingArchiveFailed,
         Failure::Unknown,
     ] {
         let (worker, calls) = counting(Err(failure));
@@ -282,4 +284,38 @@ fn opening_never_takes_focus_from_another_owner(cx: &mut TestAppContext) {
         assert_eq!(v.read(cx).status(), Status::Confirming);
     })
     .unwrap();
+}
+
+#[test]
+fn staging_refusals_are_definite_not_unknown() {
+    for (failure, tone, said) in [
+        (
+            Failure::StagingCapacity,
+            Tone::Warning,
+            "nothing was staged or stopped",
+        ),
+        (
+            Failure::StagingArchiveFailed,
+            Tone::Error,
+            "nothing was installed or stopped",
+        ),
+    ] {
+        assert_eq!(
+            outcome(failure),
+            ("Daemon not upgraded", tone),
+            "{failure:?}"
+        );
+        let detail = failure.to_string();
+        assert!(detail.contains(said), "{detail}");
+        assert!(
+            !detail.contains("unknown") && !detail.contains("handoff"),
+            "{detail}"
+        );
+        assert_ne!(detail, Failure::Unverified.to_string());
+    }
+    assert!(
+        Failure::StagingCapacity
+            .to_string()
+            .contains("Application Support/Pilot Next Runtimes")
+    );
 }

@@ -21,10 +21,6 @@ impl Temp {
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }
-    #[cfg(any(
-        all(target_os = "macos", feature = "native-macos"),
-        all(target_os = "linux", feature = "native-linux")
-    ))]
     pub(crate) fn path(&self) -> &Path {
         &self.0
     }
@@ -57,7 +53,7 @@ pub(crate) fn trust() -> manifest::Trust {
         code_requirement: "identifier \"com.example.synthetic.next\"".into(),
     }
 }
-fn metadata(bytes: &[u8]) -> manifest::Manifest {
+pub(crate) fn metadata(bytes: &[u8]) -> manifest::Manifest {
     let trust = trust();
     manifest::Manifest {
         schema: 1,
@@ -79,7 +75,7 @@ fn metadata(bytes: &[u8]) -> manifest::Manifest {
         archive_sha256: transport::hex(&Sha256::digest(bytes)),
     }
 }
-fn envelope(manifest: &manifest::Manifest) -> Vec<u8> {
+pub(crate) fn envelope(manifest: &manifest::Manifest) -> Vec<u8> {
     let bytes = serde_json::to_vec(manifest).unwrap();
     serde_json::to_vec(&manifest::Envelope {
         signed: STANDARD.encode(&bytes),
@@ -106,7 +102,7 @@ fn zip_files(files: &[(&str, &[u8])]) -> Vec<u8> {
     }
     writer.finish().unwrap().into_inner()
 }
-fn archive() -> Vec<u8> {
+pub(crate) fn archive() -> Vec<u8> {
     zip_files(&[
         ("Pilot Next.app/Contents/build", b"101.1"),
         ("Pilot Next.app/Contents/id", b"com.example.synthetic.next"),
@@ -1147,6 +1143,20 @@ fn uncertain_commit_requires_recovery_not_new_checks_or_false_success() {
     );
     assert_eq!(updater.next_deadline(), None);
 }
+
+#[test]
+fn staging_capacity_or_archive_failure_does_not_claim_an_uncertain_install() {
+    for error in [Error::StagingCapacity, Error::StagingArchiveFailed] {
+        let mut updater = Updater::new(FauxBackend::default(), false, Duration::ZERO);
+        updater.check(Trigger::Manual, Duration::ZERO).unwrap();
+        updater.complete(done(1, Outcome::Available(candidate())), Duration::ZERO);
+        updater.download(Duration::ZERO).unwrap();
+        updater.complete(done(2, Outcome::Failed(error)), Duration::ZERO);
+        assert_eq!(updater.state(), &State::Failed(error));
+        assert_eq!(updater.backend_mut().commits, 0);
+        assert!(updater.check(Trigger::Manual, Duration::ZERO).is_ok());
+    }
+}
 #[test]
 fn teardown_never_arms_installation_or_accepts_late_results() {
     let mut updater = ready();
@@ -1488,8 +1498,109 @@ fn retained_transaction_bound_and_unpublished_cleanup_never_erase_ready_state() 
     drop(stage);
     assert!(matches!(
         installer::new_stage(&target, &trust(), &FakePlatform::default()),
-        Err(Error::RecoveryRequired)
+        Err(Error::StagingCapacity)
     ));
+}
+
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
+#[test]
+fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receipt() {
+    use std::os::unix::fs::MetadataExt;
+    struct ExchangePlatform;
+    impl installer::Platform for ExchangePlatform {
+        fn verify(
+            &self,
+            bundle: &Path,
+            trust: &manifest::Trust,
+            build: &str,
+            short: Option<&str>,
+        ) -> Result<(), Error> {
+            installer::Platform::verify(&FakePlatform::default(), bundle, trust, build, short)
+        }
+        fn swap(&self, parent: &File, staged: &Path, target: &Path) -> Result<(), Error> {
+            #[cfg(target_os = "macos")]
+            let native = installer::MacPlatform;
+            #[cfg(target_os = "linux")]
+            let native = crate::linux::LinuxPlatform;
+            installer::Platform::swap(&native, parent, staged, target)
+        }
+        fn relaunch(&self, _: &Path, _: &Path) -> Result<(), Error> {
+            Ok(())
+        }
+    }
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    let platform = ExchangePlatform;
+    let mut current = trust();
+    let mut receipts = Vec::new();
+    for build in 101..=106 {
+        let next = format!("{build}.1");
+        let previous = fs::metadata(&target).unwrap();
+        let bytes = zip_files(&[
+            ("Pilot Next.app/Contents/build", next.as_bytes()),
+            (
+                "Pilot Next.app/Contents/id",
+                current.application_id.as_bytes(),
+            ),
+        ]);
+        let mut manifest = metadata(&bytes);
+        manifest.build = next.clone();
+        let verified =
+            manifest::VerifiedManifest::parse(&envelope(&manifest), &current, 12).unwrap();
+        let (root, lock) = installer::new_stage(&target, &current, &platform).unwrap();
+        fs::write(root.join("archive.zip"), &bytes).unwrap();
+        let stage = installer::finish_stage(
+            root.clone(),
+            target.clone(),
+            lock,
+            verified,
+            &current,
+            &platform,
+            &Default::default(),
+        )
+        .unwrap();
+        stage.mark_committed().unwrap();
+        stage
+            .apply_after_exit(&current, &platform, helper::ExitedParent::synthetic())
+            .unwrap();
+        installer::acknowledge_startup(&root, &next, &current, &platform, &target).unwrap();
+        assert_eq!(
+            fs::read_to_string(target.join("Contents/build")).unwrap(),
+            next
+        );
+        receipts.push((
+            root.clone(),
+            current.current_build.clone(),
+            previous.dev(),
+            previous.ino(),
+            bytes,
+        ));
+        current.current_build = next;
+        assert!(
+            root.exists(),
+            "current startup receipt must remain at original path"
+        );
+        drop(stage);
+    }
+    for (root, old_build, dev, ino, bytes) in receipts {
+        let located = installer::transaction_path(&root).unwrap();
+        let old = located.join("install-payload/Pilot Next.app");
+        let meta = fs::metadata(&old).unwrap();
+        assert_eq!((meta.dev(), meta.ino()), (dev, ino));
+        assert_eq!(
+            fs::read_to_string(old.join("Contents/build")).unwrap(),
+            old_build
+        );
+        assert_eq!(fs::read(located.join("archive.zip")).unwrap(), bytes);
+        assert_eq!(
+            installer::recovery_phase(&root).unwrap(),
+            installer::Phase::StartupAcknowledged
+        );
+    }
+    assert!(installer::recoveries(&target, &current).unwrap().is_empty());
 }
 
 fn fixture_stage_in_existing_target(target: &Path) -> installer::Staged {
