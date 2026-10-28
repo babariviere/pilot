@@ -196,6 +196,8 @@ actions menu. Nonempty drafts require confirmation; Cancel or Escape keeps the d
 The row is removed only after private storage confirms deletion, including pending
 autosaves, so refresh/relaunch does not restore it. Other drafts and server chats are
 unchanged. The native new-chat draft contract currently has no attachments.
+Leaving a new chat that is still empty (no text or recovered text) removes it the same
+way, without asking. The slot on screen is never removed; a failed removal keeps the row.
 Unresolved delivery recovery retains its separate **Discard draft** behavior: text is
 copied to the clipboard and the pending intent is abandoned, never retried.
 See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifecycle.

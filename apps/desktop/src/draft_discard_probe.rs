@@ -343,13 +343,93 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             until(cx, h, |_, cx| {
                 !editor.read(cx).has_navigation_draft("new:recovered")
             });
-            cx.update_window(h, |_, w, cx| {
+            cx.update_window(h, |_, _, cx| {
                 assert_eq!(editor.read(cx).navigation_key(), Some("new:other"));
                 assert_eq!(
                     editor.read(cx).shell_probe().0.read(cx).value().as_ref(),
                     "Keep other draft"
                 );
                 assert!(view.read(cx).page == Page::Chat);
+            })
+            .unwrap();
+            // Leaving an untouched new chat removes it; New chat on it reuses, not prunes.
+            let shown = |cx: &mut HeadlessAppContext| {
+                cx.update(|cx| editor.read(cx).navigation_key().unwrap().to_owned())
+            };
+            let gone = |key: String| {
+                let editor = editor.clone();
+                move |_: &mut Window, cx: &mut App| {
+                    let e = editor.read(cx);
+                    !e.has_navigation_draft(&key)
+                        && e.draft_discard_blocked(&key) != Some("Discarding…")
+                }
+            };
+            let new_chat = |cx: &mut HeadlessAppContext| {
+                cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.new_chat(w, cx)))
+                    .unwrap();
+                settle(cx, h);
+            };
+            new_chat(cx);
+            let untouched = shown(cx);
+            new_chat(cx);
+            assert_eq!(
+                shown(cx),
+                untouched,
+                "the slot in use is reused, never pruned"
+            );
+            cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.show_home(w, cx)))
+                .unwrap();
+            until(cx, h, gone(untouched.clone()));
+            cx.update(|cx| {
+                assert!(view.read(cx).page == Page::Home);
+                assert!(view.read(cx).nav_error.is_none());
+                assert!(editor.read(cx).has_navigation_draft("new:other"));
+            });
+            // Typing then clearing, then switching to another draft, still removes it.
+            new_chat(cx);
+            let cleared = shown(cx);
+            assert_ne!(cleared, untouched);
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| e.focus(w, cx));
+                w.input("Typed then cleared", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let text = editor.read(cx).shell_probe().0;
+                text.update(cx, |t, cx| t.set_value("", w, cx));
+                view.update(cx, |v, cx| {
+                    let row = v
+                        .chats
+                        .read(cx)
+                        .delegate()
+                        .all
+                        .iter()
+                        .find(|c| c.id == "new:other")
+                        .unwrap()
+                        .clone();
+                    assert!(v.open(row, w, cx));
+                });
+            })
+            .unwrap();
+            until(cx, h, gone(cleared.clone()));
+            assert_eq!(shown(cx), "new:other");
+            // Text typed into a new chat survives leaving it.
+            new_chat(cx);
+            let kept = shown(cx);
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| e.focus(w, cx));
+                w.input("Keep me 日本語", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.show_home(w, cx)))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(view.read(cx).page == Page::Home);
+                assert!(editor.read(cx).has_navigation_draft(&kept));
+                assert!(view.read(cx).nav_error.is_none());
                 w.remove_window();
             })
             .unwrap();
@@ -377,6 +457,9 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             assert!(!store.book.drafts.contains_key("new:populated"));
             assert!(!store.book.drafts.contains_key("new:recovered"));
             assert_eq!(store.book.drafts["new:other"].text, "Keep other draft");
+            assert!(!store.book.drafts.contains_key(&untouched));
+            assert!(!store.book.drafts.contains_key(&cleared));
+            assert_eq!(store.book.drafts[&kept].text, "Keep me 日本語");
             assert_eq!(
                 store.book.drafts["chat:synthetic"].text,
                 "Keep chat composer"
@@ -392,7 +475,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             drop(writer);
             std::fs::remove_dir_all(root).unwrap();
             println!(
-                "draft_discard {width} dark={dark}: empty, Cancel/Escape, keyboard confirm, focus, durable removal/relaunch, other drafts retained; zero HTTP writes"
+                "draft_discard {width} dark={dark}: empty, Cancel/Escape, keyboard confirm, focus, durable removal/relaunch, other drafts retained, empty slots removed on leave (Home/draft switch, cleared text), typed kept; zero HTTP writes"
             );
         }
     }

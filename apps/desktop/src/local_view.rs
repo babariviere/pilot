@@ -2153,6 +2153,7 @@ impl LocalViewer {
         self.title = "New Local chat".into();
         self.editor
             .update(cx, |editor, cx| editor.new_draft(cwd, window, cx));
+        self.sync_visible_draft(window, cx);
         self.did_navigate(cx);
     }
     fn resume_transcript(&mut self, cx: &mut Context<Self>) {
@@ -2230,6 +2231,7 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
         self.sync_mission_context(cx);
         self.editor.update(cx, |editor, cx| {

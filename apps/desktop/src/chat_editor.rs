@@ -101,6 +101,9 @@ pub(crate) struct ChatEditor {
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
     discarding: Option<(String, u64, u64)>,
+    /// The new-chat slot navigation shows, and slots left behind that may still be empty.
+    visible_draft: Option<String>,
+    leaving: BTreeSet<String>,
     next_request: u64,
     /// Send's arrow lifts away and lands again once a submit is admitted.
     takeoff: crate::transition::Transition,
@@ -187,6 +190,8 @@ impl ChatEditor {
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
             discarding: None,
+            visible_draft: None,
+            leaving: BTreeSet::new(),
             next_request: 0,
             takeoff: Default::default(),
             state: WriteState::default(),
@@ -275,12 +280,12 @@ impl ChatEditor {
         cx.notify();
     }
     pub(crate) fn has_navigation_draft(&self, key: &str) -> bool {
-        key.starts_with("new:") && self.cache.contains_key(key)
+        key.starts_with("new:") && self.cache.contains_key(key) && !self.removing_left(key)
     }
     pub(crate) fn new_drafts(&self) -> Vec<(String, String)> {
         self.cache
             .iter()
-            .filter(|(key, _)| key.starts_with("new:"))
+            .filter(|(key, _)| key.starts_with("new:") && !self.removing_left(key))
             .map(|(key, draft)| {
                 let preview = draft
                     .text
@@ -680,6 +685,7 @@ impl ChatEditor {
         if self.state.flushed {
             cx.emit(EditorEvent::Flushed);
         }
+        self.discard_left(window, cx);
         cx.emit(EditorEvent::DraftsChanged);
         cx.notify();
     }

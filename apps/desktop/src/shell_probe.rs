@@ -423,6 +423,22 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 view.update(cx, |v, cx| v.show_home(window, cx));
                 assert_eq!(view.read(cx).page, Page::Chat);
                 query.update(cx, |q, cx| q.unmark_text(window, cx));
+                // Submitted and awaiting its creation receipt, so leaving keeps the slot.
+                let key = editor.read(cx).navigation_key().unwrap().to_owned();
+                let mut sent = editor.read(cx).shell_probe().2.unwrap();
+                sent.pending = Some("synthetic-operation".into());
+                let mut book = crate::delivery_store::Book::shell_probe();
+                book.drafts.insert(key, sent);
+                editor.update(cx, |e, cx| {
+                    e.accept(
+                        crate::interaction::WriteState {
+                            book: Some(Arc::new(book)),
+                            ..Default::default()
+                        },
+                        window,
+                        cx,
+                    )
+                });
                 view.update(cx, |v, cx| v.show_home(window, cx));
                 let draft = editor.read(cx).shell_probe().2.unwrap();
                 assert!(
@@ -446,6 +462,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     .clone();
                 let mut book = crate::delivery_store::Book::shell_probe();
                 let mut done = draft;
+                done.pending = None;
                 done.created = Some("synthetic-created".into());
                 book.drafts.insert(key, done);
                 editor.update(cx, |e, cx| {

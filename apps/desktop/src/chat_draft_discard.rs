@@ -181,6 +181,14 @@ impl ChatEditor {
             self.report_draft_discard_error(key, "Draft changed. Review it before discarding.", cx);
             return false;
         }
+        if !self.send_draft_discard(key, revision, cx) {
+            self.report_draft_discard_error(key, "Draft could not be discarded. Try again.", cx);
+            return false;
+        }
+        true
+    }
+
+    fn send_draft_discard(&mut self, key: &str, revision: u64, cx: &mut Context<Self>) -> bool {
         self.next_request += 1;
         let request = self.next_request;
         if !self.client.as_ref().is_some_and(|c| {
@@ -190,7 +198,6 @@ impl ChatEditor {
                 request,
             })
         }) {
-            self.report_draft_discard_error(key, "Draft could not be discarded. Try again.", cx);
             return false;
         }
         if self.selected.as_deref() == Some(key) {
@@ -201,6 +208,66 @@ impl ChatEditor {
         self.discarding = Some((key.into(), revision, request));
         cx.notify();
         true
+    }
+
+    /// Navigation reports the new-chat slot it shows. A slot left while still empty is
+    /// deleted through the same durable transaction; typed or recovered text stays.
+    pub(crate) fn show_draft(
+        &mut self,
+        key: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.visible_draft == key {
+            return;
+        }
+        if let Some(left) = std::mem::replace(&mut self.visible_draft, key) {
+            self.leaving.insert(left);
+        }
+        if let Some(shown) = &self.visible_draft {
+            self.leaving.remove(shown);
+        }
+        self.discard_left(window, cx);
+    }
+
+    /// An automatic deletion in flight. Its row is hidden so it cannot be reopened meanwhile.
+    pub(super) fn removing_left(&self, key: &str) -> bool {
+        self.leaving.contains(key) && self.discarding.as_ref().is_some_and(|(k, ..)| k == key)
+    }
+
+    fn left_empty(&self, key: &str) -> bool {
+        self.visible_draft.as_deref() != Some(key)
+            && self.unsent_draft(key)
+            && !self.pending.contains_key(key)
+            && !self.unsaved_local.contains(key)
+            && self
+                .cache
+                .get(key)
+                .is_some_and(|d| d.text.is_empty() && d.recovered.is_empty())
+    }
+
+    /// One deletion at a time; the rest wait for its exact reply. A slot that gained
+    /// content is no longer a candidate, even if it is emptied again without being shown.
+    pub(super) fn discard_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.leaving.is_empty() || self.discarding.is_some() || !self.ready() {
+            return;
+        }
+        if !self.marked(window, cx) {
+            self.changed(cx);
+        }
+        let candidates = std::mem::take(&mut self.leaving);
+        self.leaving = candidates
+            .into_iter()
+            .filter(|key| self.left_empty(key))
+            .collect();
+        let Some(key) = self.leaving.first().cloned() else {
+            return;
+        };
+        let revision = self.cache[&key].revision;
+        if !self.send_draft_discard(&key, revision, cx) {
+            // Not queued: the slot stays listed and stored. Leaving it again retries.
+            self.leaving.remove(&key);
+        }
     }
 
     pub(super) fn accept_draft_discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -217,8 +284,17 @@ impl ChatEditor {
         let result = *result;
         let key = key.clone();
         self.discarding = None;
+        let automatic = self.leaving.remove(&key);
         if let Err(error) = result {
-            self.report_draft_discard_error(&key, error, cx);
+            if !automatic {
+                self.report_draft_discard_error(&key, error, cx);
+            } else if self.left_empty(&key) {
+                // The slot is listed again. A newer revision kept on purpose needs no notice.
+                cx.emit(EditorEvent::DraftDiscardFailed {
+                    key,
+                    error: "An empty draft couldn't be removed, so it was kept.",
+                });
+            }
             return;
         }
         self.cache.remove(&key);
@@ -237,6 +313,279 @@ mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
     use gpui_kit::test::TestWindowExt;
+
+    fn seed(
+        e: &mut ChatEditor,
+        drafts: &[(&str, Draft)],
+        w: &mut Window,
+        cx: &mut Context<ChatEditor>,
+    ) {
+        let mut state = e.state.clone();
+        let book = std::sync::Arc::make_mut(state.book.as_mut().unwrap());
+        for (key, draft) in drafts {
+            book.drafts.insert((*key).into(), draft.clone());
+        }
+        e.accept(state, w, cx);
+    }
+
+    /// The worker's exact reply for the attempt in flight, removing the row on success.
+    fn reply(
+        e: &mut ChatEditor,
+        result: Result<(), &'static str>,
+        w: &mut Window,
+        cx: &mut Context<ChatEditor>,
+    ) {
+        let (key, revision, request) = e.discarding.clone().unwrap();
+        let mut state = e.state.clone();
+        if result.is_ok() {
+            std::sync::Arc::make_mut(state.book.as_mut().unwrap())
+                .drafts
+                .remove(&key);
+        }
+        state.discard = Some((key, revision, request, result));
+        e.accept(state, w, cx);
+    }
+
+    fn discarded(commands: &async_channel::Receiver<WriteCommand>) -> Vec<(String, u64)> {
+        std::iter::from_fn(|| commands.try_recv().ok())
+            .filter_map(|c| match c {
+                WriteCommand::DiscardNew { key, revision, .. } => Some((key, revision)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[gpui_kit::test]
+    fn draft_discard_on_leave_removes_only_empty_slots_after_exact_reply(cx: &mut TestAppContext) {
+        let (h, editor, commands) = crate::chat_editor::tests::setup(cx);
+        cx.update_window(h, |_, w, cx| {
+            editor.update(cx, |e, cx| {
+                let text = |t: &str| Draft {
+                    revision: 3,
+                    text: t.into(),
+                    ..Default::default()
+                };
+                seed(
+                    e,
+                    &[
+                        (
+                            "new:empty",
+                            Draft {
+                                revision: 2,
+                                ..Default::default()
+                            },
+                        ),
+                        ("new:text", text("Keep typed text")),
+                        (
+                            "new:recovered",
+                            Draft {
+                                revision: 1,
+                                recovered: std::sync::Arc::new(vec!["Recovered".into()]),
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            "new:other",
+                            Draft {
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        ),
+                    ],
+                    w,
+                    cx,
+                );
+                for key in ["new:text", "new:recovered"] {
+                    e.select(key.into(), true, false, w, cx);
+                    e.show_draft(Some(key.into()), w, cx);
+                }
+                e.show_draft(None, w, cx);
+                assert!(
+                    discarded(&commands).is_empty(),
+                    "text or recovered text is kept"
+                );
+                e.select("new:empty".into(), true, false, w, cx);
+                e.show_draft(Some("new:empty".into()), w, cx);
+                e.accept(e.state.clone(), w, cx);
+                assert!(
+                    discarded(&commands).is_empty(),
+                    "the slot in use is never pruned"
+                );
+                // Home: the composer keeps the slot selected but no longer shows it.
+                e.show_draft(None, w, cx);
+                assert_eq!(discarded(&commands), [("new:empty".to_owned(), 2)]);
+                assert!(e.cache.contains_key("new:empty"), "queued is not durable");
+                assert!(
+                    !e.has_navigation_draft("new:empty"),
+                    "cannot be reopened meanwhile"
+                );
+                assert!(e.new_drafts().iter().all(|(k, _)| k != "new:empty"));
+                e.new_draft(String::new(), w, cx);
+                assert_eq!(
+                    e.selected.as_deref(),
+                    Some("new:other"),
+                    "New chat skips it"
+                );
+                e.show_draft(Some("new:other".into()), w, cx);
+                reply(e, Ok(()), w, cx);
+                assert!(!e.cache.contains_key("new:empty"));
+                assert_eq!(e.selected.as_deref(), Some("new:other"));
+                for key in ["new:text", "new:recovered", "new:other"] {
+                    assert!(e.has_navigation_draft(key), "{key} retained");
+                }
+                assert!(discarded(&commands).is_empty());
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn draft_discard_on_leave_captures_cleared_text_and_fences_late_typing(
+        cx: &mut TestAppContext,
+    ) {
+        let (h, editor, commands) = crate::chat_editor::tests::setup(cx);
+        let failures = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = failures.clone();
+        let _subscription = cx.update(|cx| {
+            cx.subscribe(&editor, move |_, event, _| {
+                if let EditorEvent::DraftDiscardFailed { key, .. } = event {
+                    seen.borrow_mut().push(key.clone());
+                }
+            })
+        });
+        cx.update_window(h, |_, w, cx| {
+            editor.update(cx, |e, cx| {
+                seed(
+                    e,
+                    &[(
+                        "new:slot",
+                        Draft {
+                            revision: 5,
+                            text: "Draft".into(),
+                            ..Default::default()
+                        },
+                    )],
+                    w,
+                    cx,
+                );
+                e.select("new:slot".into(), true, false, w, cx);
+                e.show_draft(Some("new:slot".into()), w, cx);
+                e.text.update(cx, |t, cx| t.set_value("", w, cx));
+                // Leaving captures the cleared text before deciding.
+                e.show_draft(None, w, cx);
+                assert_eq!(discarded(&commands), [("new:slot".to_owned(), 6)]);
+                e.text.update(cx, |t, cx| t.set_value("late typing", w, cx));
+                e.changed(cx);
+                assert_eq!(
+                    e.cache["new:slot"].revision, 6,
+                    "no edit enters the mailbox"
+                );
+                // A refused attempt lists the slot again and says so honestly.
+                reply(e, Err("Synthetic durable write failure"), w, cx);
+                assert!(e.discarding.is_none());
+                assert!(e.has_navigation_draft("new:slot"));
+                assert!(
+                    discarded(&commands).is_empty(),
+                    "a refusal is not retried by itself"
+                );
+            });
+        })
+        .unwrap();
+        assert_eq!(*failures.borrow(), ["new:slot".to_owned()]);
+        cx.update_window(h, |_, w, cx| {
+            editor.update(cx, |e, cx| {
+                // Typing after capture: the store refuses the older revision and the newer
+                // content is kept without a failure notice.
+                e.show_draft(Some("new:slot".into()), w, cx);
+                e.show_draft(None, w, cx);
+                assert_eq!(discarded(&commands), [("new:slot".to_owned(), 6)]);
+                let mut state = e.state.clone();
+                std::sync::Arc::make_mut(state.book.as_mut().unwrap())
+                    .drafts
+                    .insert(
+                        "new:slot".into(),
+                        Draft {
+                            revision: 7,
+                            text: "Typed after capture".into(),
+                            ..Default::default()
+                        },
+                    );
+                e.accept(state, w, cx);
+                reply(e, Err("Draft changed. Review it before discarding."), w, cx);
+                assert_eq!(e.cache["new:slot"].text, "Typed after capture");
+                assert!(e.has_navigation_draft("new:slot"));
+            });
+        })
+        .unwrap();
+        assert_eq!(failures.borrow().len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn draft_discard_on_leave_runs_one_at_a_time_and_spares_revisited_slots(
+        cx: &mut TestAppContext,
+    ) {
+        let (h, editor, commands) = crate::chat_editor::tests::setup(cx);
+        cx.update_window(h, |_, w, cx| {
+            editor.update(cx, |e, cx| {
+                seed(
+                    e,
+                    &[
+                        (
+                            "new:a",
+                            Draft {
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            "new:b",
+                            Draft {
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        ),
+                        (
+                            "new:c",
+                            Draft {
+                                revision: 1,
+                                ..Default::default()
+                            },
+                        ),
+                    ],
+                    w,
+                    cx,
+                );
+                // a → b → c: a goes first, b waits for a's exact reply.
+                for key in ["new:a", "new:b", "new:c"] {
+                    e.select(key.into(), true, false, w, cx);
+                    e.show_draft(Some(key.into()), w, cx);
+                }
+                assert_eq!(discarded(&commands), [("new:a".to_owned(), 1)]);
+                assert!(
+                    e.has_navigation_draft("new:b"),
+                    "b is listed until its turn"
+                );
+                // Reopening b before its turn keeps it.
+                e.select("new:b".into(), true, false, w, cx);
+                e.show_draft(Some("new:b".into()), w, cx);
+                // A retained earlier reply for another attempt releases nothing.
+                let mut stale = e.state.clone();
+                stale.discard = Some(("new:a".into(), 1, 0, Ok(())));
+                e.accept(stale, w, cx);
+                assert!(e.discarding.is_some());
+                reply(e, Ok(()), w, cx);
+                assert!(!e.cache.contains_key("new:a"));
+                // c was left when b was opened; it follows now. b stays in use.
+                assert_eq!(discarded(&commands), [("new:c".to_owned(), 1)]);
+                reply(e, Ok(()), w, cx);
+                assert!(discarded(&commands).is_empty());
+                assert_eq!(e.selected.as_deref(), Some("new:b"));
+                assert!(e.has_navigation_draft("new:b"));
+                assert!(!e.cache.contains_key("new:c"));
+            });
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn draft_discard_recovery_cannot_bypass_pending_or_failed_private_save(

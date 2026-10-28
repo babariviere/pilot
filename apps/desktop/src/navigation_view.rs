@@ -32,6 +32,15 @@ impl LocalViewer {
             target,
         }
     }
+    /// Tells the composer which new-chat slot is on screen, so a slot left empty is removed.
+    pub(super) fn sync_visible_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = match self.location(cx).target {
+            Target::Draft(key) => Some(key),
+            _ => None,
+        };
+        self.editor
+            .update(cx, |e, cx| e.show_draft(shown, window, cx));
+    }
     pub(super) fn navigation_state() -> (
         History,
         Cache<Option<String>, ScopeState>,
