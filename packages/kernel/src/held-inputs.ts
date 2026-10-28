@@ -1,21 +1,133 @@
 /** Stop parks automatic input outside pi.inbox, where neither abort nor a run boundary can consume it. */
-import type { Context } from "@earendil-works/chord";
+import { type Context, copyJson } from "@earendil-works/chord";
 import {
 	ConversationBusy,
 	type ConversationId,
+	type Cursor,
+	type EntryDraft,
 	GenerationTask,
 	InboxDoc,
+	type JsonObject,
 	LiveDoc,
 	type Session,
 	type SubmissionId,
+	type Tx,
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode } from "@pilot/protocol";
 import { HeldInputsDoc, type HeldInput as Input, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
+import { QUESTION_ENTRY } from "./question-entry.ts";
 import { previewText, type WithdrawnMessage } from "./queue.ts";
 
 export { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
+
+/** Publish and fence the next boundary together, before ask_user's tool result can terminate its run. */
+export async function publishQuestionWithHeld(
+	session: Pick<Session, "commit">,
+	conversationId: ConversationId,
+	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+	requestId: string,
+	data: EntryDraft["data"],
+	context: Context,
+): Promise<void> {
+	await session.commit(async (tx) => {
+		if (await tx.submissionByRequest(conversationId, requestId)) return;
+		await holdQuestionInbox(tx, conversationId, readSubmission);
+		const entry = await tx.appendEntry(conversationId, { kind: QUESTION_ENTRY, data, model: [] });
+		await tx.createSubmission({ conversationId, requestId, type: "write", status: "done", entry: entry.id });
+	}, context);
+}
+
+/** Recover legacy pending questions before the Harness or native notifications can resume. */
+export async function initializeQuestionHold(
+	session: Pick<Session, "commit">,
+	conversationId: ConversationId,
+	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+	context: Context,
+): Promise<void> {
+	await session.commit(async (tx) => {
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		if (held.questionPending !== undefined) return;
+		let cursor: Cursor | undefined;
+		do {
+			const page = await tx.scanEntries({ conversationId }, 100, cursor);
+			for (const entry of page.items) {
+				if (entry.kind === QUESTION_ENTRY) {
+					await holdQuestionInbox(tx, conversationId, readSubmission);
+					return;
+				}
+				if (
+					entry.kind !== "pi.compaction" &&
+					entry.kind !== "pilot.activity" &&
+					entry.model?.some((m) => m.role === "user")
+				) {
+					held.questionPending = false;
+					return;
+				}
+			}
+			cursor = page.next;
+		} while (cursor !== undefined);
+		held.questionPending = false;
+	}, context);
+}
+
+async function holdQuestionInbox(
+	tx: Tx,
+	conversationId: ConversationId,
+	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+) {
+	const held = await tx.doc(HeldInputsDoc, conversationId);
+	const inbox = await tx.doc(InboxDoc, conversationId);
+	const records = await Promise.all(inbox.items.map((item) => readSubmission(item.id)));
+	// An already queued explicit user instruction is a response, not an automatic wake-up.
+	held.questionPending =
+		!held.stopped &&
+		!inbox.items.some((item, index) => item.mode !== "write" && !inputOrigin(records[index]?.requestId));
+	if (held.questionPending) {
+		inbox.items = inbox.items.filter((item, index) => {
+			if (item.mode === "write") {
+				if (
+					item.entry.kind !== "pilot.activity" ||
+					!Array.isArray(item.entry.model) ||
+					!item.entry.model.some(
+						(m) => typeof m === "object" && m !== null && !Array.isArray(m) && m.role === "user",
+					)
+				)
+					return true;
+				held.questionWrites ??= [];
+				held.questionWrites.push(item);
+			} else {
+				held.items.push(item);
+				notify(held, conversationId, records[index]?.requestId, "held", item.content);
+			}
+			return false;
+		});
+	}
+}
+
+/** Decision updates change model context but must not close the question or wake the model. */
+export async function deferQuestionWrite(
+	session: Pick<Session, "commit">,
+	conversationId: ConversationId,
+	requestId: string,
+	entry: EntryDraft,
+	context: Context,
+): Promise<boolean> {
+	return session.commit(async (tx) => {
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		if (!held.questionPending) return false;
+		if (await tx.submissionByRequest(conversationId, requestId)) return true;
+		const submission = await tx.createSubmission({ conversationId, requestId, type: "write", status: "queued" });
+		held.questionWrites ??= [];
+		held.questionWrites.push({
+			id: submission.id,
+			mode: "write",
+			entry: copyJson(entry, { omitUndefinedProperties: true }) as JsonObject,
+		});
+		return true;
+	}, context);
+}
 
 function notify(
 	state: { serial: number; events: SystemMessageStateEvent[] },
@@ -51,6 +163,7 @@ export async function holdOnStop(
 		held.paused = false;
 		const records = await Promise.all(inputs.map((item) => readSubmission(item.id)));
 		held.stopped = true;
+		held.questionPending = false;
 		const withdrawn: { mode: DeliveryMode; content: string; requestId?: string }[] = [];
 		inputs.forEach((item, index) => {
 			const requestId = records[index]?.requestId;
@@ -100,7 +213,7 @@ export async function pauseInputs(
 export async function admitWithHeld(
 	session: Pick<Session, "commit">,
 	conversationId: ConversationId,
-	input: { requestId: string; content: Input["content"]; mode: DeliveryMode } | undefined,
+	input: { requestId: string; content: Input["content"]; mode: DeliveryMode; entry?: Input["entry"] } | undefined,
 	context: Context,
 	onlyIfIdle = false,
 	release = false,
@@ -109,23 +222,76 @@ export async function admitWithHeld(
 	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
 		if (revision !== undefined && revision <= (held.controlRevision ?? 0)) return { started: false };
-		if (!held.stopped && !held.paused && !held.items.length && !release) return undefined;
+		if (
+			!held.stopped &&
+			!held.paused &&
+			!held.questionPending &&
+			!held.items.length &&
+			!held.questionWrites?.length &&
+			!release
+		)
+			return undefined;
 		const existing = input ? await tx.submissionByRequest(conversationId, input.requestId) : undefined;
 		if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };
 		const live = await tx.doc(LiveDoc, conversationId);
 		const inbox = await tx.doc(InboxDoc, conversationId);
-		if (!release && (held.paused || (input && inputOrigin(input.requestId)))) {
+		if (held.questionPending && !input) return { held: true };
+		if (
+			(held.questionPending && input && inputOrigin(input.requestId)) ||
+			(!release && !held.questionPending && (held.paused || (input && inputOrigin(input.requestId))))
+		) {
 			if (!input) return { held: true };
-			if (onlyIfIdle) throw new ConversationBusy(conversationId);
+			if (onlyIfIdle && !held.questionPending) throw new ConversationBusy(conversationId);
 			const submission = await tx.createSubmission({
 				conversationId,
 				requestId: input.requestId,
 				type: "input",
 				status: "queued",
 			});
-			held.items.push({ id: submission.id, mode: input.mode, content: input.content });
+			held.items.push({
+				id: submission.id,
+				mode: input.mode,
+				content: input.content,
+				...(input.entry ? { entry: input.entry } : {}),
+			});
 			notify(held, conversationId, input.requestId, "held", input.content);
 			return { id: submission.id, held: true };
+		}
+		if (held.questionPending && input) {
+			if (onlyIfIdle && (live.run || live.compactions?.length)) throw new ConversationBusy(conversationId);
+			const submission = await tx.createSubmission({
+				conversationId,
+				requestId: input.requestId,
+				type: "input",
+				status: "queued",
+			});
+			const answer: Input = { id: submission.id, mode: "followUp", content: input.content };
+			if (held.paused && !release) {
+				held.items = [answer, ...held.items.map((item) => ({ ...item, mode: "followUp" as const }))];
+				held.questionPending = false;
+				return { id: submission.id, held: true };
+			}
+			// The user's answer starts alone. Deferred automatic input follows FIFO, never steering over it.
+			if (live.run || live.compactions?.length) inbox.items.push(...(held.questionWrites ?? []), answer);
+			else {
+				for (const item of held.questionWrites ?? []) {
+					const entry = await tx.appendEntry(conversationId, item.entry as unknown as EntryDraft);
+					tx.placeSubmission(item.id, entry.id);
+				}
+				const entry = await tx.appendEntry(UserEntry, conversationId, {
+					model: [{ role: "user", content: input.content, timestamp: Date.now() }],
+				});
+				tx.placeSubmission(submission.id, entry.id);
+				live.run = {
+					taskId: await tx.createTask(GenerationTask, {}, { ownership: { kind: "conversation" }, conversationId }),
+					inputs: [submission.id],
+				};
+			}
+			held.questionWrites = [];
+			inbox.items.push(...held.items.map((item) => ({ ...item, mode: "followUp" as const })));
+			held.items = [];
+			held.questionPending = false;
+			return { id: submission.id, started: !live.compactions?.length };
 		}
 		if (release) {
 			if (revision !== undefined) held.controlRevision = revision;
@@ -133,6 +299,8 @@ export async function admitWithHeld(
 			held.stopped = false;
 			// Restore original queue modes for the next boundary, never create a second live run.
 			if (!input && (live.run || live.compactions?.length)) {
+				inbox.items.push(...(held.questionWrites ?? []));
+				held.questionWrites = [];
 				inbox.items.push(...held.items);
 				held.items = [];
 				return { started: false };
@@ -141,13 +309,20 @@ export async function admitWithHeld(
 		// Stop waits for the old run to finish. Never splice held input into that run.
 		if (live.run || live.compactions?.length || inbox.items.some((item) => item.mode !== "write"))
 			throw new ConversationBusy(conversationId);
+		for (const item of held.questionWrites ?? []) {
+			const entry = await tx.appendEntry(conversationId, item.entry as unknown as EntryDraft);
+			tx.placeSubmission(item.id, entry.id);
+		}
+		held.questionWrites = [];
 		const items = [
 			...held.items.filter((item) => item.mode === "steer"),
 			...held.items.filter((item) => item.mode === "followUp"),
 		];
 		const ids: SubmissionId[] = [];
 		for (const item of items) {
-			const entry = await tx.appendEntry(UserEntry, conversationId, {
+			const entry = await tx.appendEntry(conversationId, {
+				kind: item.entry?.kind ?? UserEntry.kind,
+				...(item.entry?.data !== undefined ? { data: item.entry.data } : {}),
 				model: [{ role: "user", content: item.content, timestamp: Date.now() }],
 			});
 			tx.placeSubmission(item.id, entry.id);

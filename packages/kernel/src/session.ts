@@ -68,10 +68,13 @@ import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
 	admitWithHeld,
+	deferQuestionWrite,
 	discardHeld,
 	HeldInputsDoc,
 	holdOnStop,
+	initializeQuestionHold,
 	pauseInputs,
+	publishQuestionWithHeld,
 	type SystemMessageStateEvent,
 } from "./held-inputs.ts";
 import { createHistoryRecallTool } from "./history-recall.ts";
@@ -91,7 +94,7 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import { createQuestionTool, type PublishQuestion, QUESTION_ENTRY } from "./question-tool.ts";
+import { createQuestionTool, type PublishQuestion } from "./question-tool.ts";
 import {
 	editQueuedMessage,
 	queueUpdateForDisplay,
@@ -334,15 +337,18 @@ export class KernelSession {
 			: undefined;
 		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
+		let serializeQuestion = (work: () => Promise<void>) => work();
 		const publishQuestion: PublishQuestion = async (callId, question) => {
 			if (!artifactConversation) throw new Error("Questions require a bound conversation");
-			await artifactConversation.submit(
-				{
-					type: "write",
-					requestId: `question:${callId}`,
-					entry: { kind: QUESTION_ENTRY, data: { ...question }, model: [] },
-				},
-				context,
+			await serializeQuestion(() =>
+				publishQuestionWithHeld(
+					harness!,
+					artifactConversation!.id,
+					(id) => owned.storage.submission(id, context),
+					`question:${callId}`,
+					{ ...question },
+					context,
+				),
 			);
 		};
 		const questionTool = createQuestionTool(publishQuestion);
@@ -751,6 +757,7 @@ export class KernelSession {
 			session.#openTodoCount = openTodoCount;
 			session.#compactSession = compaction.compactSession;
 			serializeCompaction = (work) => session.serializeInput(work);
+			serializeQuestion = (work) => session.serializeInput(work);
 			session.jobsMonitor = jobs;
 			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
@@ -828,9 +835,7 @@ export class KernelSession {
 			await adapter.refreshUsage(context);
 			if (spec.pauseInputsOnOpen !== undefined)
 				await pauseInputs(harness, conversation.id, context, spec.pauseInputsOnOpen);
-			await harness.commit(async (tx) => {
-				await tx.doc(HeldInputsDoc, conversation.id);
-			}, context);
+			await initializeQuestionHold(harness, conversation.id, (id) => owned.storage.submission(id, context), context);
 			// Extension messages that start a turn (subagent answers) become durable follow-ups.
 			session.onSystemMessageState = hooks.onSystemMessageState;
 			await session.publishSystemMessageStates();
@@ -838,8 +843,10 @@ export class KernelSession {
 				void session
 					.serializeInput(async () => {
 						const admission = await admitWithHeld(session.harness, conversation.id, input, context);
-						if (admission) await session.publishSystemMessageStates();
-						else if (
+						if (admission) {
+							await session.publishSystemMessageStates();
+							if (admission.started) session.harness.resume();
+						} else if (
 							!(await queueDuringCompaction(
 								session.harness,
 								conversation,
@@ -1117,7 +1124,7 @@ export class KernelSession {
 	}
 
 	/** Joining, leaving or a mission change. Applies from the next model request. */
-	setMission(context: MissionContext | undefined): void {
+	setMission(context: MissionContext | undefined): Promise<void> | undefined {
 		if (this.#closing) return;
 		void this.publishSystemMessageStates().catch((error) =>
 			console.warn("pilot: could not replay message states", error),
@@ -1125,6 +1132,7 @@ export class KernelSession {
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
 		const previous = this.#mission.current;
 		const latest = this.#latestMission ?? previous;
+		let noticeWrite: Promise<void> | undefined;
 		this.#latestMission = context;
 		if (previous && context && previous.id === context.id && !coordinatorChanged) {
 			const notice =
@@ -1133,20 +1141,17 @@ export class KernelSession {
 					: undefined;
 			if (notice) {
 				const text = notice.detail;
-				void this.conversation
-					.submit(
-						{
-							type: "write",
-							requestId: `mission-decisions:${randomUUID()}`,
-							entry: {
-								kind: "pilot.activity",
-								data: { text, event: { kind: "mission_decisions_changed", text: notice.summary } },
-								model: [{ role: "user", content: text, timestamp: Date.now() }],
-							},
-						},
-						BACKGROUND_CONTEXT,
-					)
-					.catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
+				const requestId = `mission-decisions:${randomUUID()}`;
+				const entry = {
+					kind: "pilot.activity",
+					data: { text, event: { kind: "mission_decisions_changed", text: notice.summary } },
+					model: [{ role: "user" as const, content: text, timestamp: Date.now() }],
+				};
+				noticeWrite = this.serializeInput(async () => {
+					if (await deferQuestionWrite(this.harness, this.conversation.id, requestId, entry, BACKGROUND_CONTEXT))
+						return;
+					await this.conversation.submit({ type: "write", requestId, entry }, BACKGROUND_CONTEXT);
+				}).catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
 			}
 			this.#mission.current = {
 				...context,
@@ -1163,6 +1168,7 @@ export class KernelSession {
 			// Without a registered tool (no host bridge) the prompt still reflects membership.
 			console.warn("pilot: could not update the mission tool", error);
 		}
+		return noticeWrite;
 	}
 
 	get subagentList(): KernelSubagent[] {
@@ -1213,7 +1219,12 @@ export class KernelSession {
 			const heldAdmission = await admitWithHeld(
 				this.harness,
 				this.conversation.id,
-				{ requestId, content: prepared, mode },
+				{
+					requestId,
+					content: prepared,
+					mode,
+					...(event ? { entry: { kind: "pi.user", data: { event: { ...event } } } } : {}),
+				},
 				context,
 				onlyIfIdle,
 				resumeHeld,

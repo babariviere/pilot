@@ -57,17 +57,33 @@ fn control_key(w: &mut Window, key: &str, cx: &mut gpui_kit::App) {
     );
     w.dispatch_event(gpui_kit::KeyUpEvent { keystroke }.to_platform_input(), cx);
 }
-fn question(multi: bool) -> Arc<Question> {
+fn question_data(multi: bool) -> serde_json::Value {
     let options=(0..if multi {9}else{3}).map(|ix|serde_json::json!({
   "label":format!("{}: {}",ix+1,if ix==0 {"Typecheck shared types 日本語 👩‍💻"} else {"Run the focused checks for this change"}),
   "detail":"Keep existing behavior, privacy and immutable delivery identity. This is an explicitly selected synthetic answer, not a live operation.",
   "suggested":ix==0,
  })).collect::<Vec<_>>();
-    Arc::new(Question::parse(4,&serde_json::json!({
-  "question":"Which checks should run before continuing?",
-  "context":"Choose one answer or several, then confirm explicitly. You can add your own words. Your existing message draft remains separate; choosing alone never sends.",
-  "options":options,"multiSelect":multi,
- })).unwrap())
+    serde_json::json!({
+     "question":"Which checks should run before continuing?",
+     "context":"Choose one answer or several, then confirm explicitly. You can add your own words. Your existing message draft remains separate; choosing alone never sends.",
+     "options":options,"multiSelect":multi,
+    })
+}
+fn question(multi: bool) -> Arc<Question> {
+    Arc::new(Question::parse(4, &question_data(multi)).unwrap())
+}
+/// The production reducer's projection after held automatic input arrives
+/// while the question waits (synthetic snapshot, no worker).
+fn held_arrival(model: &mut crate::local_model::LiveTranscript, multi: bool) -> Projection {
+    model.apply(&serde_json::json!({"type":"snapshot","entries":[
+        {"id":4,"head":1,"kind":"pilot.question","data":question_data(multi),"model":[]}
+    ]}));
+    model.apply(
+        &serde_json::json!({"type":"queue_update","items":[],"automatic":[
+            {"id":1,"origin":"mission","mode":"followUp","preview":"Mission update","held":true}
+        ]}),
+    );
+    model.question()
 }
 pub fn run_question_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_QUESTIONS_DIR").map(std::path::PathBuf::from);
@@ -145,6 +161,35 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 (h, editor.unwrap())
             });
             frame(cx, h);
+            let mut model = crate::local_model::LiveTranscript::default();
+            let held = held_arrival(&mut model, multi);
+            assert!(
+                matches!(&held, Projection::Pending(p) if p.identity == q.identity),
+                "Held automatic input keeps the same question pending"
+            );
+            // Mirror LocalView: held input still counts as queued, so the composer is busy.
+            assert_eq!(model.queued, 1);
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.permission(true, model.queued > 0, cx);
+                    e.question_context(Some("a"), held, true, w, cx)
+                })
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("question-composer").is_some(),
+                    "Held queue arrival keeps the mounted question"
+                );
+                assert!(
+                    w.try_find("question-stop").is_some(),
+                    "Busy from held input is applied"
+                );
+                assert_eq!(editor.read(cx).cache["chat:a"].text, initial.text);
+            })
+            .unwrap();
+            assert!(commands.try_recv().is_err(), "Held arrival sends nothing");
             if multi {
                 cx.update_window(h, |_, w, cx| {
                     w.scroll(
@@ -317,6 +362,13 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 .prepare_answer("chat:a", &captured, &q, captured.answer.as_ref().unwrap())
                 .unwrap();
             let original = serde_json::to_vec(intent.operation.as_ref().unwrap()).unwrap();
+            let operation = intent.operation.as_ref().unwrap();
+            assert_eq!(operation.kind, "chat-send");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&operation.payload).unwrap()["mode"],
+                "steer",
+                "A busy held queue never changes the answer's delivery mode"
+            );
             cx.update_window(h, |_, w, cx| {
                 editor.update(cx, |e, cx| {
                     e.accept(
@@ -378,6 +430,29 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap())
                     .unwrap(),
                 original
+            );
+            // Holds clear after the answer: the Unknown reply still cannot repeat.
+            model.apply(&serde_json::json!({"type":"queue_update","items":[],"automatic":[]}));
+            assert_eq!(model.queued, 0);
+            let cleared = model.question();
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.permission(true, model.queued > 0, cx);
+                    e.question_context(Some("a"), cleared, true, w, cx)
+                })
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("question-stop").is_none());
+                assert_eq!(w.find("answer-question").disabled(), Some(true));
+                w.click("answer-question", cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            assert!(
+                commands.try_recv().is_err(),
+                "Cleared holds never repeat an Unknown reply"
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

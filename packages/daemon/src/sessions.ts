@@ -5642,6 +5642,7 @@ export class SessionManager {
 			!meta.kernelRestartPending &&
 			!meta.sleepPaused &&
 			!meta.inputsPaused &&
+			meta.outcome !== "question" &&
 			!meta.working
 		)
 			return this.stoppedWithoutWorker(meta);

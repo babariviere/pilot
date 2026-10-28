@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, GenerationTask, InboxDoc, LiveDoc, MemoryStorage } from "@earendil-works/pi-durable";
-import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, pauseInputs } from "./held-inputs.ts";
+import {
+	admitWithHeld,
+	discardHeld,
+	HeldInputsDoc,
+	holdOnStop,
+	initializeQuestionHold,
+	pauseInputs,
+	publishQuestionWithHeld,
+} from "./held-inputs.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage } from "./queue.ts";
 
 async function fixture() {
@@ -32,6 +40,81 @@ async function fixture() {
 	const read = (id: Parameters<typeof storage.submission>[0]) => storage.submission(id, context);
 	return { storage, session, id: conversation.id, read };
 }
+
+test("question publication and legacy recovery fence automatic inbox entries atomically", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			const inbox = await tx.doc(InboxDoc, f.id);
+			inbox.items = inbox.items.filter(
+				(item) => !["User follow", "User steer"].includes(String("content" in item ? item.content : "")),
+			);
+		}, context);
+		await publishQuestionWithHeld(f.session, f.id, f.read, "question:one", { question: "Which?" }, context);
+		await publishQuestionWithHeld(f.session, f.id, f.read, "question:one", { question: "Which?" }, context);
+		let held = (await f.session.snapshot(HeldInputsDoc, f.id, context))!;
+		assert.equal(held.questionPending, true);
+		assert.equal(held.items.length, 4);
+		assert.equal((await f.storage.scanEntries({ conversationId: f.id }, 100, undefined, context)).items.length, 1);
+		// Simulate a pre-upgrade store, with a committed question and automatic inbox still waiting.
+		await f.session.commit(async (tx) => {
+			const held = await tx.doc(HeldInputsDoc, f.id);
+			const inbox = await tx.doc(InboxDoc, f.id);
+			delete held.questionPending;
+			inbox.items.push(...held.items);
+			held.items = [];
+		}, context);
+		await initializeQuestionHold(f.session, f.id, f.read, context);
+		held = (await f.session.snapshot(HeldInputsDoc, f.id, context))!;
+		assert.equal(held.questionPending, true);
+		assert.equal(held.items.length, 4);
+		assert.equal((await f.session.snapshot(InboxDoc, f.id, context))?.items.length, 0);
+		await holdOnStop(f.session, f.id, f.read, context);
+		await initializeQuestionHold(f.session, f.id, f.read, context);
+		assert.equal(
+			(await f.session.snapshot(HeldInputsDoc, f.id, context))?.questionPending,
+			false,
+			"recovery cannot undo explicit Stop",
+		);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
+test("an answer accepted during queue pause resolves the question without bypassing pause", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			(await tx.doc(InboxDoc, f.id)).items = [];
+		}, context);
+		await publishQuestionWithHeld(f.session, f.id, f.read, "question:one", { question: "Which?" }, context);
+		await pauseInputs(f.session, f.id, context);
+		await admitWithHeld(
+			f.session,
+			f.id,
+			{ requestId: "mission:send:one", content: "Automatic", mode: "steer" },
+			context,
+		);
+		const answer = await admitWithHeld(
+			f.session,
+			f.id,
+			{ requestId: "user:answer", content: "Answer", mode: "followUp" },
+			context,
+		);
+		assert.equal(answer?.held, true);
+		assert.equal((await f.session.snapshot(LiveDoc, f.id, context))?.run, undefined);
+		const held = (await f.session.snapshot(HeldInputsDoc, f.id, context))!;
+		assert.equal(held.questionPending, false);
+		assert.equal(held.paused, true);
+		assert.deepEqual(
+			held.items.map((item) => item.content),
+			["Answer", "Automatic"],
+		);
+		assert.equal((await admitWithHeld(f.session, f.id, undefined, context, false, true))?.started, true);
+	} finally {
+		await f.session.close(context);
+	}
+});
 
 for (const user of [false, true]) {
 	test(

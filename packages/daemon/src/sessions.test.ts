@@ -1327,6 +1327,18 @@ test("Stop reopens a parked input-paused chat instead of incorrectly reporting a
 	assert.equal(sessions["metas"].get(created.id)!.inputsPaused, undefined);
 });
 
+test("Stop reaches a parked pending question instead of reporting an idle no-op", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	f.workers[0]!.finish({ outcome: "question", outcomeAt: 42, outcomeReason: "Which?" });
+	sessions["workers"].delete(created.id);
+	await sessions.stop(created.id);
+	await sessions["starting"].get(created.id);
+	assert.equal(f.workers.at(-1)!.requests[0]?.type, "abort");
+});
+
 test("diagnostics reads a parked session without opening its worker or transcript", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager(

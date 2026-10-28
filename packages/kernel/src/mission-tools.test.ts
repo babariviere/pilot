@@ -143,13 +143,6 @@ for (const busy of [false, true]) {
 			},
 		);
 		f.cleanup.push(() => session.close());
-		const writes: Promise<unknown>[] = [];
-		const submit = session.conversation.submit.bind(session.conversation);
-		t.mock.method(session.conversation, "submit", (...args: Parameters<typeof submit>) => {
-			const promise = submit(...args);
-			if (args[0].type === "write") writes.push(promise);
-			return promise;
-		});
 		const prompts: string[] = [];
 		let reached!: () => void;
 		let release!: () => void;
@@ -186,9 +179,8 @@ for (const busy of [false, true]) {
 				{ id: "rule", number: 7, text: "Revised binding rule", audience: "all" as const, selected: true },
 			],
 		};
-		session.setMission(changed);
-		session.setMission(changed);
-		await Promise.all(writes);
+		await session.setMission(changed);
+		await session.setMission(changed);
 		release();
 		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 		assert.equal(prompts.length, 1, "a passive notice never starts generation");
@@ -204,12 +196,11 @@ for (const busy of [false, true]) {
 		assert.match(JSON.stringify(notice.data), /D7 updated: Revised binding rule/);
 		assert.match(JSON.stringify(notice.data), /Before:.*Original binding rule.*After:.*Revised binding rule/);
 		// Later changes compare against the latest live snapshot, not the original cached prompt.
-		session.setMission({
+		await session.setMission({
 			...changed,
 			decisionVersion: "third",
 			decisionState: [{ ...changed.decisionState[0]!, text: "Final binding rule" }],
 		});
-		await Promise.all(writes);
 		const updated = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
 		const notices = updated.filter((entry) => entry.kind === "pilot.activity");
 		assert.equal(notices.length, 2);

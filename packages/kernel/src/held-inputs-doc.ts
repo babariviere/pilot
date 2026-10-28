@@ -13,6 +13,10 @@ export const HeldInputsDoc = defineDoc<{
 	stopped: boolean;
 	/** Optional for v1 stores. Only explicit resume/redirect releases a pause. */
 	paused?: boolean;
+	/** Automatic input cannot act as the reply to an interactive question. */
+	questionPending?: boolean;
+	/** Passive model-visible notices also wait, without starting a turn themselves. */
+	questionWrites?: Extract<InboxItem, { mode: "write" }>[];
 	/** Daemon-owned monotonic queue-control revision. Lost acknowledgements cannot undo newer controls. */
 	controlRevision?: number;
 	items: HeldInput[];

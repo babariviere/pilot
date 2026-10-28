@@ -13,8 +13,11 @@ import {
 	Type,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { HeldInputsDoc } from "./held-inputs.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import type { MissionContext } from "./policy.ts";
+import { QUESTION_ENTRY } from "./question-entry.ts";
 import { KernelSession } from "./session.ts";
 
 function gate() {
@@ -39,46 +42,50 @@ async function fixture(t: TestContext) {
 	const faux = fauxProvider({ provider: "input-controls-test", models: [{ id: "offline" }] });
 	runtime.registerNativeProvider(faux.provider);
 	const openAdapter = NativeAdapter.open;
-	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
-		openAdapter.call(NativeAdapter, {
-			...options,
-			bundledExtensions: false,
-			projectTrusted: false,
-			settingsManager: SettingsManager.inMemory({ defaultTools: ["control_gate"] }),
-			sessionOptions: {
-				...options.sessionOptions,
-				modelRuntime: runtime,
-				model: faux.getModel(),
-				customTools: [
-					{
-						name: "control_gate",
-						label: "Gate",
-						description: "Offline gate",
-						parameters: Type.Object({}),
-						execute: async (_id, _args, signal) => {
-							started.resolve();
-							if (!signal?.aborted)
-								await Promise.race([
-									finish.promise,
-									new Promise<void>((resolve) =>
-										signal?.addEventListener("abort", () => resolve(), { once: true }),
-									),
-								]);
-							return { content: [{ type: "text", text: "finished tool" }], details: {} };
+	let adapter!: NativeAdapter;
+	t.mock.method(
+		NativeAdapter,
+		"open",
+		async (options: NativeAdapterOptions) =>
+			(adapter = await openAdapter.call(NativeAdapter, {
+				...options,
+				bundledExtensions: false,
+				projectTrusted: false,
+				settingsManager: SettingsManager.inMemory({ defaultTools: ["control_gate"] }),
+				sessionOptions: {
+					...options.sessionOptions,
+					modelRuntime: runtime,
+					model: faux.getModel(),
+					customTools: [
+						{
+							name: "control_gate",
+							label: "Gate",
+							description: "Offline gate",
+							parameters: Type.Object({}),
+							execute: async (_id, _args, signal) => {
+								started.resolve();
+								if (!signal?.aborted)
+									await Promise.race([
+										finish.promise,
+										new Promise<void>((resolve) =>
+											signal?.addEventListener("abort", () => resolve(), { once: true }),
+										),
+									]);
+								return { content: [{ type: "text", text: "finished tool" }], details: {} };
+							},
 						},
-					},
-				],
-			},
-			loaderOptions: {
-				cwd: root,
-				agentDir: join(root, "agent"),
-				noExtensions: true,
-				noSkills: true,
-				noPromptTemplates: true,
-				noThemes: true,
-				noContextFiles: true,
-			},
-		}),
+					],
+				},
+				loaderOptions: {
+					cwd: root,
+					agentDir: join(root, "agent"),
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			})),
 	);
 	const open = () =>
 		KernelSession.open(
@@ -97,6 +104,9 @@ async function fixture(t: TestContext) {
 		finish,
 		get session() {
 			return session;
+		},
+		get native() {
+			return adapter.session;
 		},
 		async reopen() {
 			await session.close();
@@ -185,4 +195,198 @@ test("Stop aborts before redirect's new instruction starts and keeps its automat
 		true,
 	);
 	assert.equal(f.faux.state.callCount, 2, "accepted redirect input is deduplicated");
+});
+
+test("automatic input preserves a pending question across reconnect and runs FIFO only after its answer", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const requests: string[] = [];
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which checks?" }), { stopReason: "toolUse" }),
+		...Array.from({ length: 3 }, () => (view: { messages: unknown[] }) => {
+			requests.push(JSON.stringify(view.messages));
+			return fauxAssistantMessage("Finished.");
+		}),
+	]);
+	await f.session.submit("user:ask", "Ask me", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	const before = (await f.session.conversation.context(context)).entries;
+	assert.ok(before.some((entry) => entry.kind === QUESTION_ENTRY));
+	for (const [requestId, content, mode] of [
+		["mission:send:first", "first automatic", "followUp"],
+		["native:jobs.result:second", "second automatic", "steer"],
+	] as const) {
+		assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
+		assert.deepEqual(await f.session.submit(requestId, content, mode, false, true), { delivery: "queued" });
+	}
+	assert.equal(f.faux.state.callCount, 1, "no automatic answer or model request");
+	assert.deepEqual((await f.session.conversation.context(context)).entries, before);
+	await f.reopen();
+	assert.equal(f.faux.state.callCount, 1);
+	await f.session.sendHeldMessages();
+	await f.session.resumeInputs();
+	assert.equal(f.faux.state.callCount, 1, "queue controls cannot answer a question");
+	assert.equal((await f.session.harness.snapshot(InboxDoc, f.session.conversation.id, context))?.items.length, 0);
+	assert.equal((await f.session.harness.snapshot(LiveDoc, f.session.conversation.id, context))?.run, undefined);
+	await f.session.submit("user:answer", "Tests please", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 4);
+	assert.doesNotMatch(requests[0]!, /first automatic|second automatic/);
+	assert.match(requests[0]!, /Tests please/);
+	assert.match(requests[1]!, /first automatic/);
+	assert.doesNotMatch(requests[1]!, /second automatic/);
+	assert.match(requests[2]!, /second automatic/);
+	await f.reopen();
+	await f.session.submit("user:answer", "Tests please", "followUp");
+	await f.session.submit("mission:send:first", "first automatic", "followUp");
+	assert.equal(f.faux.state.callCount, 4, "lost ACK retries never repeat accepted work");
+});
+
+test("question publication fences already queued automatic input, including native notifications", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("control_gate", {}), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Where?" }), { stopReason: "toolUse" }),
+	]);
+	await f.session.submit("user:ask", "Ask me after the tool", "followUp");
+	await f.started.promise;
+	await f.session.submit("mission:send:before", "Before publication", "followUp");
+	f.finish.resolve();
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 2, "final boundary cannot consume automatic input as an answer");
+	await f.native.sendCustomMessage(
+		{ customType: "jobs.result", content: "Native result", display: true },
+		{ triggerTurn: true },
+	);
+	// Idempotent admission is a barrier for the native callback on the same input line.
+	await f.session.submit("user:ask", "Ask me after the tool", "followUp");
+	const held = await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context);
+	assert.deepEqual(
+		held?.items.map((item) => item.content),
+		["Before publication", "Native result"],
+	);
+	assert.equal(f.faux.state.callCount, 2);
+	assert.equal(held?.questionPending, true);
+});
+
+test("Stop cancels the question gate without losing deferred work or starting it on reconnect", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Proceed?" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Explicitly resumed."),
+	]);
+	await f.session.submit("user:ask", "Ask", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	await f.session.submit("watch-notice:first", "Retain this", "followUp");
+	assert.deepEqual(await f.session.abort(), []);
+	await f.session.submit("control:send:late", "Retain late input", "steer");
+	await f.reopen();
+	const held = await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context);
+	assert.equal(held?.questionPending, false);
+	assert.equal(held?.stopped, true);
+	assert.equal(held?.items.length, 2);
+	assert.equal(f.faux.state.callCount, 1);
+	await f.session.resumeInputs();
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 2);
+	assert.match(JSON.stringify((await f.session.conversation.context(context)).messages), /Retain this/);
+});
+
+test("passive mission decisions do not dismiss a question and survive recovery without waking it", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const mission: MissionContext = {
+		id: "fixture",
+		title: "Fixture",
+		goal: "Test",
+		status: "active",
+		coordinator: "other",
+		tasks: [],
+		decisions: [],
+		decisionVersion: "1",
+	};
+	f.session.setMission(mission);
+	let answerContext = "";
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which?" }), { stopReason: "toolUse" }),
+		(view) => {
+			answerContext = JSON.stringify(view.messages);
+			return fauxAssistantMessage("Answered.");
+		},
+	]);
+	await f.session.submit("user:ask", "Ask", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	const before = (await f.session.conversation.context(context)).entries;
+	f.session.setMission({ ...mission, decisionVersion: "2", decisions: ["New binding rule"] });
+	await f.session.submit("user:ask", "Ask", "followUp");
+	assert.deepEqual((await f.session.conversation.context(context)).entries, before);
+	await f.reopen();
+	assert.equal(f.faux.state.callCount, 1);
+	await f.session.submit("user:answer", "My answer", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	assert.match(answerContext, /Mission decisions changed/);
+	assert.match(answerContext, /My answer/);
+	assert.equal(f.faux.state.callCount, 2);
+});
+
+test("idle-only automatic origins wait while an explicit user steer can answer", { timeout: 20_000 }, async (t) => {
+	const f = await fixture(t);
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose?" }), { stopReason: "toolUse" }),
+		...Array.from({ length: 8 }, () => fauxAssistantMessage("Done.")),
+	]);
+	await f.session.submit("user:ask", "Ask", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	for (const prefix of [
+		"mission-notice:",
+		"watch-notice:",
+		"control:",
+		"mission:send:",
+		"pr-follow-up:",
+		"slack-reply:",
+		"native:subagent:",
+	]) {
+		assert.deepEqual(await f.session.submit(`${prefix}fixture`, prefix, "followUp", true, true), {
+			delivery: "queued",
+		});
+	}
+	assert.equal(f.faux.state.callCount, 1);
+	await f.session.submit("native:user:answer", "User steer", "steer");
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 9);
+});
+
+test("a second question keeps deferred automatic input waiting instead of treating it as a reply", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	f.faux.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "First choice?" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Second choice?" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Answered both."),
+		fauxAssistantMessage("Processed notice."),
+	]);
+	await f.session.submit("user:ask", "Ask", "followUp");
+	await f.session.conversation.waitForIdle(context);
+	const event = { kind: "mission_updated" as const, text: "Fixture task changed" };
+	await f.session.submit("mission-notice:fixture", "Deferred notice", "followUp", true, true, event);
+	await f.session.submit("user:first-answer", "First answer", "steer");
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 2);
+	assert.equal((await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.items.length, 1);
+	assert.doesNotMatch(JSON.stringify((await f.session.conversation.context(context)).messages), /Deferred notice/);
+	await f.session.submit("user:second-answer", "Second answer", "steer");
+	await f.session.conversation.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 4);
+	const entries = (await f.session.conversation.context(context)).entries;
+	assert.deepEqual(
+		entries.find((entry) => entry.model?.some((m) => m.role === "user" && m.content === "Deferred notice"))?.data,
+		{ event },
+	);
 });

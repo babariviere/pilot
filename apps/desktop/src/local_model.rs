@@ -379,6 +379,9 @@ pub(crate) struct LiveTranscript {
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
     pub(crate) queued: usize,
+    /// Queued input that can still start a run: user items plus automatic
+    /// input not held while a question waits. Held input never hides it.
+    runnable_queued: usize,
     pub(crate) user_queue: std::sync::Arc<crate::queued_message::Snapshot>,
     /// Rows that just left the queue. The queue and history arrive on separate
     /// streams, so a consumed row is kept until its history entry (or a run
@@ -411,7 +414,11 @@ struct SavedHistory {
 impl LiveTranscript {
     pub(crate) fn question(&self) -> crate::question::Projection {
         use crate::question::Projection;
-        if !self.loaded || self.prefix_pending || self.question_run_active || self.queued != 0 {
+        if !self.loaded
+            || self.prefix_pending
+            || self.question_run_active
+            || self.runnable_queued != 0
+        {
             return Projection::Unavailable;
         }
         match self.question_pending.current() {
@@ -928,8 +935,12 @@ impl LiveTranscript {
                 }
                 self.arrived.clear();
                 self.user_queue = std::sync::Arc::new(next);
-                self.queued = event["items"].as_array().map_or(0, Vec::len)
-                    + event["automatic"].as_array().map_or(0, Vec::len);
+                let items = event["items"].as_array().map_or(0, Vec::len);
+                let automatic = event["automatic"].as_array().map_or(&[][..], Vec::as_slice);
+                self.queued = items + automatic.len();
+                // Only an explicit held:true is exempt; anything else fails closed.
+                self.runnable_queued =
+                    items + automatic.iter().filter(|a| a["held"] != true).count();
             }
             "message_start" => {
                 self.set_live(event["message"].clone());
@@ -1434,6 +1445,60 @@ mod tests {
             model.question(),
             crate::question::Projection::Invalid(_)
         ));
+    }
+    #[test]
+    fn question_projection_held_automatic_input_keeps_question_runnable_queue_hides() {
+        let automatic = |id: u64, held: Value| {
+            let mut row =
+                json!({"id":id,"origin":"job","mode":"followUp","preview":"Job finished"});
+            if !held.is_null() {
+                row["held"] = held;
+            }
+            row
+        };
+        let queue = |items: Value, automatic: Vec<Value>| json!({"type":"queue_update","items":items,"automatic":automatic});
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        model.apply(&queue(json!([]), vec![automatic(1, json!(true))]));
+        assert_eq!(
+            pending_question_id(&model),
+            Some(4),
+            "Held automatic input waits for the answer"
+        );
+        assert_eq!(model.queued, 1, "Held input still counts as queued work");
+        for runnable in [json!(null), json!(false), json!("true")] {
+            model.apply(&queue(
+                json!([]),
+                vec![automatic(1, json!(true)), automatic(2, runnable)],
+            ));
+            assert_eq!(
+                pending_question_id(&model),
+                None,
+                "Runnable or malformed automatic input hides"
+            );
+        }
+        model.apply(&queue(
+            json!([{"id":3,"mode":"steer","content":"Typed"}]),
+            vec![automatic(1, json!(true))],
+        ));
+        assert_eq!(pending_question_id(&model), None, "User queue hides");
+        model.apply(&queue(json!([]), vec![automatic(1, json!(true))]));
+        assert_eq!(pending_question_id(&model), Some(4));
+        // Same-model reconnect: the held queue remains until the next update.
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&queue(json!([]), vec![automatic(1, json!(true))]));
+        assert_eq!(pending_question_id(&model), Some(4));
+        // Fresh reconnect: snapshot, then the held queue arrives.
+        let mut model = LiveTranscript::default();
+        model.apply(&queue(json!([]), vec![automatic(1, json!(true))]));
+        assert_eq!(pending_question_id(&model), None, "Not loaded yet");
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)]}));
+        model.apply(&queue(json!([]), vec![automatic(1, json!(true))]));
+        assert_eq!(pending_question_id(&model), Some(4));
+        // A model-visible decision notice still answers the question.
+        model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pilot.activity","model":[{"role":"user","content":"Decision recorded"}]}}));
+        assert_eq!(pending_question_id(&model), None);
     }
     use serde_json::json;
     #[test]

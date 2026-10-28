@@ -113,7 +113,8 @@ unchanged; outstanding accounting memory and release verification is documented 
   authorization and interruption limits.
 - **Answer questions quickly.** When an agent needs a decision, its question replaces the message box with
   suggested answers. Pick one with the number keys and Return, or reply in your own words. The chat shows as
-  needing you until you answer.
+  needing you until you answer. Automatic job, mission and agent inputs wait durably while the question is open,
+  then run in arrival order after your reply. Stop keeps them held until you explicitly resume or send another message.
 - **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
   access. Move the discussion into a separate Build chat when you're ready to make changes.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)
