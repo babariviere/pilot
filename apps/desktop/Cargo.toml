@@ -201,6 +201,11 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "side_panel"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "catalog"
 harness = false
 test = false

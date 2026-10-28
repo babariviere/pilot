@@ -182,7 +182,14 @@ clock (settled by probe clock advances), requests frames only while running and 
 instant under reduced motion. It drives two paint-only moments: the page entrance
 (200ms fade and 6pt rise when the destination changes, never on the first frame)
 and Send's takeoff (the arrow lifts away and lands again after an admitted send).
-Do not animate layout, streaming height or every control.
+Do not animate layout, streaming height or every control. The one layout exception,
+requested by the user, is the chat side panel (`side_panel.rs`, `transition::Reveal`):
+mission context, links and changes ease open and closed over 200ms. The panel keeps
+its full extent inside a clipped slot, so its content slides with the edge rather
+than reflowing; only the conversation narrows. Closing removes the panel at once
+(focus returns, its work stops) and collapses only an empty edge. Switching panels
+eases between extents, a reversal continues from the extent shown, and resize or
+reduced motion apply immediately. The `side_panel` native target checks these phases.
 
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.

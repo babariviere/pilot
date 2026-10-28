@@ -4,7 +4,6 @@ use crate::{
     mission_inspector::{Link, Source},
     mission_inspector_view::{self as pane, Pane},
 };
-use gpui_kit::AnyElement;
 
 impl LocalViewer {
     pub(super) fn mission_context_parts(
@@ -149,12 +148,11 @@ impl LocalViewer {
                 )
         })
     }
-    pub(super) fn mission_companion(
+    pub(super) fn mission_panel(
         &self,
-        conversation: AnyElement,
         w: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<super::side_panel::SidePanel> {
         // Reserve the existing workbench's maximum physical sidebar extent
         // (workbench_view::sidebar). At the side-pane threshold its actual width
         // is232pt; below it this conservative budget always chooses the dock.
@@ -162,54 +160,36 @@ impl LocalViewer {
             f32::from(w.viewport_size().width) - 232.,
             f32::from(w.viewport_size().height),
         );
-        let open = self.mission_context.read(cx).visible;
-        div()
-            .id("chat-mission-companion")
-            .test_support()
-            .flex()
-            .items_stretch()
-            .size_full()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .when(side, |d| d.flex_row())
-            .when(!side, |d| d.flex_col())
-            .child(
-                div()
-                    .id("mission-context-conversation")
+        self.mission_context
+            .read(cx)
+            .visible
+            .then(|| super::side_panel::SidePanel {
+                key: "mission-context",
+                side,
+                extent,
+                region: div()
+                    .id("mission-context-region")
                     .test_support()
-                    .flex_1()
+                    .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                        // Refuse before a sibling button can blur/commit the
+                        // composer's preedit, not merely in its later click.
+                        if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .flex_none()
                     .min_h_0()
                     .min_w_0()
                     .overflow_hidden()
-                    .child(conversation),
-            )
-            .when(open, |d| {
-                d.child(
-                    div()
-                        .id("mission-context-region")
-                        .test_support()
-                        .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                            // Refuse before a sibling button can blur/commit the
-                            // composer's preedit, not merely in its later click.
-                            if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
-                                cx.stop_propagation();
-                            }
-                        }))
-                        .flex_none()
-                        .min_h_0()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .when(side, |d| {
-                            d.w(px(extent)).h_full().border_l(appearance::hairline(w))
-                        })
-                        .when(!side, |d| {
-                            d.h(px(extent)).w_full().border_t(appearance::hairline(w))
-                        })
-                        .border_color(cx.theme().border)
-                        .child(self.mission_context.clone()),
-                )
+                    .when(side, |d| {
+                        d.w(px(extent)).h_full().border_l(appearance::hairline(w))
+                    })
+                    .when(!side, |d| {
+                        d.h(px(extent)).w_full().border_t(appearance::hairline(w))
+                    })
+                    .border_color(cx.theme().border)
+                    .child(self.mission_context.clone())
+                    .into_any_element(),
             })
-            .into_any_element()
     }
 }

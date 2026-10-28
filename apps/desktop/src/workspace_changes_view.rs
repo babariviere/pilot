@@ -10,7 +10,7 @@ use crate::{
     workspace_changes::{self as model, State},
     workspace_changes_reader::{Reader, Request},
 };
-use gpui_kit::{AnyElement, FocusHandle, StatefulInteractiveElement};
+use gpui_kit::{FocusHandle, StatefulInteractiveElement};
 gpui_kit::actions!(workspace_changes, [Close, Toggle]);
 pub(super) struct Pane {
     file: Option<Entity<session_file_view_native::FilePane>>,
@@ -443,49 +443,34 @@ impl LocalViewer {
                 )
         })
     }
-    pub(super) fn workspace_changes_companion(
+    pub(super) fn workspace_changes_panel(
         &self,
-        conversation: AnyElement,
         w: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<super::side_panel::SidePanel> {
+        let p = self.workspace_changes.as_ref()?;
         let side = f32::from(w.viewport_size().width) >= 1100.;
-        div()
-            .flex()
-            .items_stretch()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .when(side, |d| d.flex_row())
-            .when(!side, |d| d.flex_col())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(conversation),
-            )
-            .when_some(self.workspace_changes.as_ref(), |d, p| {
-                d.child(
-                    div()
-                        .id("workspace-changes-region")
-                        .test_support()
-                        .flex_none()
-                        .min_w_0()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                            if !v.project_choices_ready(w, cx) {
-                                cx.stop_propagation();
-                            }
-                        }))
-                        .when(side, |d| d.w(px(360.)).h_full().border_l_1())
-                        .when(!side, |d| d.w_full().h(px(300.)).border_t_1())
-                        .border_color(cx.theme().border)
-                        .child(p.clone()),
-                )
-            })
-            .into_any_element()
+        Some(super::side_panel::SidePanel {
+            key: "workspace-changes",
+            side,
+            extent: if side { 360. } else { 300. },
+            region: div()
+                .id("workspace-changes-region")
+                .test_support()
+                .flex_none()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .when(side, |d| d.w(px(360.)).h_full().border_l_1())
+                .when(!side, |d| d.w_full().h(px(300.)).border_t_1())
+                .border_color(cx.theme().border)
+                .child(p.clone())
+                .into_any_element(),
+        })
     }
 }

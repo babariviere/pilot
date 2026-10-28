@@ -100,6 +100,11 @@ pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
 #[path = "shell_probe.rs"]
 pub(crate) mod shell_probe;
+#[path = "side_panel.rs"]
+mod side_panel;
+#[cfg(feature = "native-probes")]
+#[path = "side_panel_probe.rs"]
+pub(crate) mod side_panel_probe;
 #[cfg(feature = "native-probes")]
 #[path = "sidebar_scroll_native.rs"]
 pub(crate) mod sidebar_scroll_native;
@@ -574,6 +579,9 @@ pub struct LocalViewer {
     /// Calm entrance when the destination changes; never on the first frame.
     page_transition: crate::transition::Transition,
     page_key: String,
+    /// Open/close easing of the chat side-panel slot, and its last axis.
+    side_panel: crate::transition::Reveal<&'static str>,
+    side_panel_beside: bool,
     title: String,
     generation: u64,
     state: Presentation,
@@ -1568,6 +1576,8 @@ impl LocalViewer {
             selected: None,
             page_transition: Default::default(),
             page_key: String::new(),
+            side_panel: Default::default(),
+            side_panel_beside: true,
             title: "Choose a Local chat".into(),
             generation: 0,
             state: Presentation {
@@ -2397,9 +2407,7 @@ impl Render for LocalViewer {
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
                     .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.editor.clone()))
                         .into_any_element();
-                let conversation = self.mission_companion(conversation, window, cx);
-                let conversation = self.conversation_links_companion(conversation, window, cx);
-                self.workspace_changes_companion(conversation, window, cx)
+                self.side_panel_shell(conversation, window, cx)
                 }
                 }
             )))

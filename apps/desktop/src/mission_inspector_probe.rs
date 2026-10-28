@@ -58,6 +58,8 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
         "unknown mission context fixture case"
     );
     let mut ran = 0;
+    // Final layout checks; the side_panel target covers open/close motion.
+    cx.update(|cx| cx.set_reduce_motion(true));
     for (width, height, pending) in [
         (680., 840., false),
         (680., 520., false),

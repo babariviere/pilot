@@ -4,7 +4,7 @@ use crate::{
     conversation_links::{self, Snapshot, Source},
     ui::{self, Action, Text},
 };
-use gpui_kit::{AnyElement, ClipboardItem, FocusHandle, StatefulInteractiveElement};
+use gpui_kit::{ClipboardItem, FocusHandle, StatefulInteractiveElement};
 
 gpui_kit::actions!(conversation_links, [Close, Toggle]);
 
@@ -377,50 +377,34 @@ impl LocalViewer {
                 )
         })
     }
-    pub(super) fn conversation_links_companion(
+    pub(super) fn conversation_links_panel(
         &self,
-        conversation: AnyElement,
         w: &mut Window,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let pane = self.conversation_links.as_ref();
+    ) -> Option<super::side_panel::SidePanel> {
+        let pane = self.conversation_links.as_ref()?;
         let side = f32::from(w.viewport_size().width) >= 1100.;
-        div()
-            .flex()
-            .items_stretch()
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .when(side, |d| d.flex_row())
-            .when(!side, |d| d.flex_col())
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(conversation),
-            )
-            .when_some(pane, |d, pane| {
-                d.child(
-                    div()
-                        .id("conversation-links-region")
-                        .test_support()
-                        .flex_none()
-                        .min_w_0()
-                        .min_h_0()
-                        .overflow_hidden()
-                        .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                            if !v.project_choices_ready(w, cx) {
-                                cx.stop_propagation();
-                            }
-                        }))
-                        .when(side, |d| d.w(px(320.)).h_full().border_l_1())
-                        .when(!side, |d| d.w_full().h(px(280.)).border_t_1())
-                        .border_color(cx.theme().border)
-                        .child(pane.clone()),
-                )
-            })
-            .into_any_element()
+        Some(super::side_panel::SidePanel {
+            key: "conversation-links",
+            side,
+            extent: if side { 320. } else { 280. },
+            region: div()
+                .id("conversation-links-region")
+                .test_support()
+                .flex_none()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .when(side, |d| d.w(px(320.)).h_full().border_l_1())
+                .when(!side, |d| d.w_full().h(px(280.)).border_t_1())
+                .border_color(cx.theme().border)
+                .child(pane.clone())
+                .into_any_element(),
+        })
     }
 }
