@@ -648,6 +648,8 @@ fn socket_task(
     })
 }
 
+const DEPARTED_SETTLE: Duration = Duration::from_millis(250);
+
 fn publish(
     updates: &async_channel::Sender<Presentation>,
     replace: &async_channel::Receiver<Presentation>,
@@ -686,8 +688,14 @@ async fn run(
         ..Default::default()
     };
     publish(&updates, &replace, view.clone());
+    // A consumed queue row waits this long for its history entry from the other stream.
+    let mut settle: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
+            _ = async { tokio::time::sleep_until(settle.unwrap_or_else(tokio::time::Instant::now)).await }, if settle.is_some() => {
+                settle = None;
+                model.settle_departed();
+            }
             command = commands.recv() => match command {
                 Err(_) => break,
                 Ok(Command::Clear {generation})=>{
@@ -792,6 +800,11 @@ async fn run(
                 }
             }
         }
+        settle = if model.departed.is_empty() {
+            None
+        } else {
+            settle.or_else(|| Some(tokio::time::Instant::now() + DEPARTED_SETTLE))
+        };
         if !model.prefix_pending && model.presentation_dirty {
             view.rows = model.rows();
         }

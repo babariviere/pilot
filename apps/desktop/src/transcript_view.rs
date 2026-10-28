@@ -265,6 +265,9 @@ impl TranscriptView {
         Some(text)
     }
 
+    pub(crate) fn rows(&self) -> &[Message] {
+        self.transcript.messages()
+    }
     pub(crate) fn replace_readonly(
         &mut self,
         rows: Vec<Message>,
@@ -882,6 +885,20 @@ impl TranscriptView {
             } else {
                 body.into_any_element()
             })
+            // Input not yet in history says where it is (Sending…, Queued).
+            .children(row.pending().map(|status| {
+                div().h_flex().w_full().justify_end().child(
+                    div()
+                        .id(("message-pending", row.id()))
+                        .test_support()
+                        .flex_none()
+                        // Aligned with the bubble's text, not its rounded edge.
+                        .pr(px(14.))
+                        .text_color(cx.theme().muted_foreground)
+                        .aria_label(status)
+                        .child(crate::ui::text(crate::ui::Text::Caption, status)),
+                )
+            }))
             .child(copy)
     }
 }

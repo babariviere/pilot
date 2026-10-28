@@ -33,6 +33,7 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     settle(cx, h);
 }
 pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
+    crate::local_view::submit_visibility_probe::run(cx);
     capacity(cx);
     let captures = std::env::var_os("PILOT_NEXT_QUEUED_MESSAGE_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {

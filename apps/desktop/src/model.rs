@@ -44,6 +44,8 @@ pub(crate) struct Message {
     artifact: Option<Arc<crate::artifact_model::Reference>>,
     artifact_size: Option<crate::artifact_model::RasterSize>,
     image: Option<Arc<crate::conversation_images::Source>>,
+    /// Delivery caption for user input not yet in canonical history (Sending, Queued).
+    pending: Option<&'static str>,
 }
 
 impl Message {
@@ -71,7 +73,15 @@ impl Message {
             artifact: None,
             artifact_size: None,
             image: None,
+            pending: None,
         }
+    }
+    pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
+        self.pending = Some(status);
+        self
+    }
+    pub(crate) fn pending(&self) -> Option<&'static str> {
+        self.pending
     }
     pub(crate) fn id(&self) -> u64 {
         self.id
@@ -329,6 +339,7 @@ impl Transcript {
             artifact: None,
             artifact_size: None,
             image: None,
+            pending: None,
         });
     }
 
@@ -416,6 +427,7 @@ fn history_message(ix: usize) -> Message {
         artifact: None,
         artifact_size: None,
         image: None,
+        pending: None,
     }
 }
 

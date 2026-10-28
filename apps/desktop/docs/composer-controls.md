@@ -21,8 +21,11 @@ on send is added.
 delivery mode directly into the existing worker command, which prepares the same
 immutable operation ID, target, payload and hash before transport. Retry never
 reads the new keyboard choice. Pending/readonly/error and marked-text guards
-are retained. Pending actions show “Waiting for Local action…” in the same
-metadata row. Unknown retains its original diagnostics and recovery actions.
+are retained. A sent chat message moves to the conversation with its delivery
+state while the draft keeps it until accepted (see
+[queued messages](queued-messages.md#in-the-conversation)); other pending actions
+show “Sending…” in the metadata row. Unknown retains its original diagnostics and
+recovery actions.
 Question replies remain separate, explicitly confirmed steering messages; the
 ordinary Option-Return handler is scoped only to the ordinary textarea.
 

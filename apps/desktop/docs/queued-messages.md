@@ -37,6 +37,41 @@ focus. Preedit is guarded before blur and across internal pointer actions;
 plain Return remains text, Command-Return explicitly saves, Escape closes only
 outside composition. No global delivery or keyboard defaults change.
 
+## In the conversation
+
+A sent message appears at the end of the conversation at once, never only after
+the agent consumes it. Each stage uses the owner that already holds it:
+
+- **Sending…**: Return/Send hands an ordinary chat message to the conversation
+  ([chat_sending.rs](../src/chat_sending.rs)). The composer shows an empty editor
+  while that exact draft revision is in flight or reserved; the durable draft keeps
+  the text until Local accepts it. Refusal before reservation or a rejected receipt
+  returns the exact text to the composer. An unknown outcome stays in the
+  conversation as **Not confirmed**, with the composer's existing Resolve actions;
+  a known acknowledgment whose receipt was not saved reads Sent/Sending/Not sent.
+  Typing during delivery edits only the composer. Stop, new-chat creation and
+  question replies keep their existing composer behavior.
+- **Queued / Queued to steer**: every `queue_update.items` row is shown after
+  history ([local_model.rs](../src/local_model.rs)), keyed by its submission ID, so
+  edits keep the row. Automatic input is not shown here.
+- **History**: the committed user entry replaces the queued row.
+
+The Local wire has no operation or submission ID on queue rows or history entries,
+so reconciliation is presentation only and never settles a delivery. The sending
+row hides once a queue row or user entry newer than when it first showed has the
+same exact text ([submit_visibility.rs](../src/submit_visibility.rs)). The queue and
+history arrive on separate streams: a history entry that arrives first hides its
+queued row (exact content, oldest first) until the queue update; a row that leaves
+the queue first stays until its history entry, a run end, or 250 ms. A removed or
+withdrawn row can therefore linger that long. Appending these rows follows the
+existing tail behavior and never moves a reader who scrolled into older history.
+
+Checks: `local_model::queued_rows_tests`, `chat_editor::sending`,
+`submit_visibility` and the `queued_message` native target, which drives real
+Return in the production root through Sending, reservation, queue echo before and
+after the ACK, both stream orders, lost ACK, refusal, older-history reading and
+navigation at 680/1100 light/dark.
+
 ## Audit and verification
 
 Swift `QueuedMessageEditor`, `QueuedMessageEditing` and `ComposerState` separate

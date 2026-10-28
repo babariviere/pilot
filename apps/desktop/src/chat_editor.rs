@@ -45,6 +45,8 @@ pub(crate) mod question_probe;
 mod questions;
 #[path = "chat_recovery.rs"]
 mod recovery;
+#[path = "chat_sending.rs"]
+pub(crate) mod sending;
 
 pub(crate) enum EditorEvent {
     UpdateCheckpoint,
@@ -82,6 +84,8 @@ pub(crate) struct ChatEditor {
     thinking_held: bool,
     background_work: bool,
     pending: BTreeMap<String, u64>,
+    /// Ordinary chat sends in flight, by captured draft revision.
+    sending: BTreeMap<String, u64>,
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
     next_request: u64,
@@ -164,6 +168,7 @@ impl ChatEditor {
             thinking_held: false,
             background_work: false,
             pending: BTreeMap::new(),
+            sending: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
             next_request: 0,
@@ -435,10 +440,14 @@ impl ChatEditor {
         }
     }
     fn load_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(draft) = self.selected.as_ref().and_then(|key| self.cache.get(key)) else {
+        let Some((key, draft)) = self
+            .selected
+            .as_ref()
+            .and_then(|key| self.cache.get(key).map(|draft| (key, draft)))
+        else {
             return;
         };
-        let (text, cwd) = (draft.text.clone(), draft.cwd.clone());
+        let (text, cwd) = (self.shown_text(key, draft).to_owned(), draft.cwd.clone());
         if self.text.read(cx).value().as_ref() != text {
             self.text
                 .update(cx, |state, cx| state.set_value(text, window, cx));
@@ -463,15 +472,18 @@ impl ChatEditor {
         let Some(key) = self.selected.clone() else {
             return;
         };
-        let Some(draft) = self.cache.get_mut(&key) else {
+        let Some(draft) = self.cache.get(&key) else {
             return;
         };
         if !force
-            && draft.text == self.text.read(cx).value().as_ref()
+            && self.shown_text(&key, draft) == self.text.read(cx).value().as_ref()
             && draft.cwd == self.cwd.read(cx).value().as_ref()
         {
             return;
         }
+        let Some(draft) = self.cache.get_mut(&key) else {
+            return;
+        };
         draft.revision += 1;
         draft.text = self.text.read(cx).value().to_string();
         draft.cwd = self.cwd.read(cx).value().to_string();
@@ -578,6 +590,7 @@ impl ChatEditor {
                 .get(key)
                 .is_none_or(|handled| handled < request)
         });
+        self.sending.retain(|key, _| self.pending.contains_key(key));
         self.state = state;
         if self.update_checkpoint.is_some() {
             cx.emit(EditorEvent::UpdateCheckpoint);
@@ -735,6 +748,7 @@ impl ChatEditor {
         }
         self.next_request += 1;
         let request = self.next_request;
+        let draft_revision = draft.revision;
         if self.client.as_ref().is_some_and(|client| {
             client.command(WriteCommand::Submit {
                 key: key.clone(),
@@ -746,6 +760,12 @@ impl ChatEditor {
         }) {
             self.pending.insert(key.clone(), request);
             self.error = None;
+            if !stop && key.starts_with("chat:") {
+                // The message moves to the conversation; the draft keeps it until accepted.
+                self.sending.insert(key.clone(), draft_revision);
+                self.load_input(window, cx);
+                cx.emit(EditorEvent::DraftsChanged);
+            }
             if stop {
                 self.thinking = false;
                 self.thinking_held = true;
@@ -1170,7 +1190,8 @@ impl Render for ChatEditor {
                     .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
                     // Routine autosave is silent; only states that block sending speak.
                     // Read-only is said by the placeholder, not repeated here.
-                    .children((submitting || (self.models.is_none() && self.closing)).then_some(if submitting {
+                    // A chat message being sent says so in the conversation instead.
+                    .children(((submitting && !self.sending.contains_key(&key)) || (self.models.is_none() && self.closing)).then_some(if submitting {
                         "Sending…"
                     } else {
                         "Saving before closing…"
@@ -1242,7 +1263,10 @@ impl Render for ChatEditor {
                     .into_any_element(),
             );
         }
-        let delivery_status = if let Some(intent) = pending {
+        // While the request runs, Sending… in the controls row is the whole story.
+        let delivery_status = if submitting {
+            None
+        } else if let Some(intent) = pending {
             use crate::delivery_store::diagnostic::Acknowledgment;
             // Local's answer is known; only Pilot's own receipt save failed.
             let acknowledged = self
@@ -1305,7 +1329,7 @@ impl Render for ChatEditor {
                     .into_any_element(),
             );
         }
-        let show_menu = draft.pending.is_some()
+        let show_menu = (draft.pending.is_some() && !submitting)
             || draft.created.is_some()
             || !draft.recovered.is_empty()
             || draft

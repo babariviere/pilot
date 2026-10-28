@@ -106,6 +106,11 @@ pub(crate) mod sidebar_scroll_native;
 #[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
+#[path = "submit_visibility.rs"]
+mod submit_visibility;
+#[cfg(feature = "native-probes")]
+#[path = "submit_visibility_probe.rs"]
+pub(crate) mod submit_visibility_probe;
 #[cfg(feature = "native-probes")]
 #[path = "subscription_limit_probe.rs"]
 pub(crate) mod subscription_limit_probe;
@@ -560,6 +565,7 @@ pub struct LocalViewer {
     mission_context: Entity<crate::mission_inspector_view::Pane>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
     pending_transcript: Option<(Vec<Message>, bool)>,
+    sending_view: submit_visibility::SendingView,
     nav_error: Option<&'static str>,
     client: Option<LocalClient>,
     chats: Entity<ListState<ChatList>>,
@@ -1347,7 +1353,10 @@ impl LocalViewer {
         let editor_events =
             cx.subscribe_in(&editor, window, |view, _, event, window, cx| match event {
                 EditorEvent::AddProject => view.open_add_project(window, cx),
-                EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
+                EditorEvent::DraftsChanged => {
+                    view.sync_sending(cx);
+                    view.rebuild_nav(window, cx)
+                }
                 EditorEvent::Flushed => cx.quit(),
                 EditorEvent::OpenContinued(chat) => {
                     if view.jump.is_none() && view.page == Page::Chat {
@@ -1551,6 +1560,7 @@ impl LocalViewer {
             project_catalog_reply: None,
             nav_projects: Arc::new(Vec::new()),
             pending_transcript: None,
+            sending_view: Default::default(),
             nav_error: None,
             client,
             chats,
@@ -1766,6 +1776,7 @@ impl LocalViewer {
             // A coalesced publication from before the request is not completion.
             state.page_busy |= self.earlier_request.is_some();
             let rows = std::mem::take(&mut state.rows);
+            let rows = self.with_sending(rows, cx);
             let reset = self.refreshing;
             self.refreshing = false;
             if self.page == Page::Chat {

@@ -295,6 +295,15 @@ pub(crate) struct LiveTranscript {
     pub(crate) loaded: bool,
     pub(crate) queued: usize,
     pub(crate) user_queue: std::sync::Arc<crate::queued_message::Snapshot>,
+    /// Rows that just left the queue. The queue and history arrive on separate
+    /// streams, so a consumed row is kept until its history entry (or a run
+    /// boundary or the client's settle deadline) arrives.
+    pub(crate) departed: Vec<crate::queued_message::Row>,
+    /// Contents of user entries that arrived while their queue row is still
+    /// listed. Cleared by the next queue update.
+    arrived: Vec<Value>,
+    /// After a snapshot, the next queue update is a new baseline, not a departure.
+    queue_baseline: bool,
     active_head: Option<u64>,
     saved_history: Option<SavedHistory>,
     pub(crate) limited: bool,
@@ -340,7 +349,62 @@ impl LiveTranscript {
             row.tool_ids()
                 .is_some_and(|ids| ids.iter().all(|id| !referenced.contains(id)))
         }));
-        self.tools.project(rows)
+        let mut rows = self.tools.project(rows);
+        rows.extend(self.queued_rows());
+        rows
+    }
+
+    /// The user's admitted input that has not joined a run yet, after history.
+    fn queued_rows(&self) -> Vec<Message> {
+        let mut arrived: Vec<&Value> = self.arrived.iter().collect();
+        self.departed
+            .iter()
+            .chain(self.user_queue.rows.iter().filter(|row| {
+                // Its history entry already arrived; the queue update follows.
+                match arrived.iter().position(|c| **c == row.content) {
+                    Some(ix) => {
+                        arrived.swap_remove(ix);
+                        false
+                    }
+                    None => true,
+                }
+            }))
+            .map(queued_row)
+            .collect()
+    }
+
+    /// Drops rows that left the queue without a matching history entry in time.
+    pub(crate) fn settle_departed(&mut self) {
+        if !self.departed.is_empty() {
+            self.departed.clear();
+            self.presentation_dirty = true;
+        }
+    }
+
+    /// Pairs a newly committed user entry with the queue row it came from, by
+    /// exact content. Presentation only: a match never settles a delivery.
+    fn user_arrived(&mut self, entry: &Value) {
+        let Some(id) = entry["id"].as_u64() else {
+            return;
+        };
+        if entry["kind"] != "pi.user"
+            || entry["origin"].is_string()
+            || self.entries.contains_key(&id)
+        {
+            return;
+        }
+        let Some(content) = entry["model"]
+            .as_array()
+            .and_then(|models| models.iter().find(|m| m["role"] == "user"))
+            .map(|m| &m["content"])
+        else {
+            return;
+        };
+        if let Some(ix) = self.departed.iter().position(|r| r.content == *content) {
+            self.departed.remove(ix);
+        } else if self.user_queue.rows.iter().any(|r| r.content == *content) {
+            self.arrived.push(content.clone());
+        }
     }
 
     pub(crate) fn has_capacity(&self) -> bool {
@@ -648,6 +712,14 @@ impl LiveTranscript {
             return;
         }
         self.presentation_dirty = true;
+        if matches!(
+            event["type"].as_str(),
+            Some("snapshot" | "run_error" | "error")
+        ) {
+            self.departed.clear();
+            self.arrived.clear();
+            self.queue_baseline |= event["type"] == "snapshot";
+        }
         match event["type"].as_str().unwrap_or("") {
             "run_error" | "error" => self.stop_thinking(),
             "snapshot"
@@ -722,10 +794,27 @@ impl LiveTranscript {
                 }
                 self.finish_snapshot();
             }
-            "entry_appended" => self.entry(&event["entry"], None),
+            "entry_appended" => {
+                self.user_arrived(&event["entry"]);
+                self.entry(&event["entry"], None)
+            }
             "queue_update" => {
-                self.user_queue =
-                    std::sync::Arc::new(crate::queued_message::Snapshot::read(&event["items"]));
+                let next = crate::queued_message::Snapshot::read(&event["items"]);
+                if !next.unavailable && !std::mem::take(&mut self.queue_baseline) {
+                    let mut arrived = std::mem::take(&mut self.arrived);
+                    for row in self.user_queue.rows.iter() {
+                        if next.rows.iter().any(|r| r.id == row.id) {
+                            continue;
+                        }
+                        if let Some(ix) = arrived.iter().position(|c| *c == row.content) {
+                            arrived.swap_remove(ix);
+                        } else {
+                            self.departed.push(row.clone());
+                        }
+                    }
+                }
+                self.arrived.clear();
+                self.user_queue = std::sync::Arc::new(next);
                 self.queued = event["items"].as_array().map_or(0, Vec::len)
                     + event["automatic"].as_array().map_or(0, Vec::len);
             }
@@ -750,6 +839,7 @@ impl LiveTranscript {
                         self.block_aliases.insert((id, 0, *block), *key);
                     }
                 }
+                self.user_arrived(&event["entry"]);
                 self.entry(&event["entry"], key);
                 self.live = None;
                 self.live_block_keys.clear();
@@ -786,6 +876,7 @@ impl LiveTranscript {
             "run_end" => {
                 self.live = None;
                 self.tools.interrupt();
+                self.departed.clear();
             }
             // These are explicitly not actions. No permissions, queues or read tracking are changed.
             _ => {}
@@ -999,11 +1090,45 @@ fn slim_message(value: &Value) -> Value {
     serde_json::json!({"role":"assistant","timestamp":value["timestamp"].as_u64(),"content":content})
 }
 
+/// Presentation keys for queued input, one per durable submission ID. Disjoint
+/// from entry keys (below 2^59), sending keys (2^61) and live keys (2^63 and up).
+const QUEUED_KEY: u64 = 1 << 62;
+pub(crate) fn queued_submission(row: &Message) -> Option<u64> {
+    (row.id() & !(QUEUED_KEY - 1) == QUEUED_KEY && row.reader_key().is_none())
+        .then(|| row.id() - QUEUED_KEY)
+}
+fn queued_row(row: &crate::queued_message::Row) -> Message {
+    let images = row.content.as_array().map_or(0, |blocks| {
+        blocks.iter().filter(|b| b["type"] == "image").count()
+    });
+    let mut text = content_text(&row.content);
+    if images > 0 {
+        let note = if images == 1 {
+            "[1 image attached]".to_owned()
+        } else {
+            format!("[{images} images attached]")
+        };
+        text = if text == "[No text content]" {
+            note
+        } else {
+            format!("{text}\n\n{note}")
+        };
+    }
+    Message::live(QUEUED_KEY | row.id, "You".into(), text).with_pending(if row.mode == "steer" {
+        "Queued to steer"
+    } else {
+        "Queued"
+    })
+}
+
 fn message(id: u64, value: &Value, label: &str) -> Message {
+    Message::live(id, label.into(), content_text(&value["content"]))
+}
+fn content_text(content: &Value) -> String {
     let mut source = String::new();
-    if let Some(text) = value["content"].as_str() {
+    if let Some(text) = content.as_str() {
         source.push_str(text);
-    } else if let Some(blocks) = value["content"].as_array() {
+    } else if let Some(blocks) = content.as_array() {
         for block in blocks {
             match block["type"].as_str().unwrap_or("") {
                 "text" => source.push_str(block["text"].as_str().unwrap_or("")),
@@ -1019,7 +1144,7 @@ fn message(id: u64, value: &Value, label: &str) -> Message {
     if source.is_empty() {
         source = "[No text content]".into();
     }
-    Message::live(id, label.into(), source)
+    source
 }
 
 fn change_message(message: &mut Value, change: &Value) {
@@ -1091,6 +1216,10 @@ fn change_message(message: &mut Value, change: &Value) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+#[path = "queued_rows_tests.rs"]
+mod queued_rows_tests;
 
 #[cfg(test)]
 mod tests {
