@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.84.0](https://github.com/babariviere/pilot/compare/v1.83.0...v1.84.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** place queued messages above composer ([b934ae5](https://github.com/babariviere/pilot/commit/b934ae5d1d8c8bdfe4900a9fcfa6aefb63d8ddc6))
+
 ## [1.83.0](https://github.com/babariviere/pilot/compare/v1.82.0...v1.83.0) (2026-10-28)
 
 
