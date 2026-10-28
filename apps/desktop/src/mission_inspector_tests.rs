@@ -4,7 +4,7 @@ fn full(rows: Value) -> Value {
     json!({"type":"sessions", "sessions":rows})
 }
 #[test]
-fn metadata_is_bounded_atomic_and_not_guessed_from_titles() {
+fn metadata_is_atomic_and_not_guessed_from_titles() {
     let mut m = Arc::new(Metadata::default());
     assert_eq!(m.link("A"), &Link::Unknown);
     Metadata::accept(
@@ -46,19 +46,19 @@ fn metadata_is_bounded_atomic_and_not_guessed_from_titles() {
         json!(null),
         json!([{"id":"A"},{"id":"A"}]),
         json!([{"id":"bad/id"}]),
-        json!(vec![json!({"id":"A"}); crate::local_model::SESSION_CAP + 1]),
+        json!(vec![json!({"id":"A"}); 1005]),
     ] {
         Metadata::accept(&mut m, &full(invalid));
         assert_eq!(m.link("A"), &Link::Malformed);
     }
 }
 #[test]
-fn metadata_cap_and_structural_sharing_preserve_unrelated_partial_rows() {
+fn metadata_admits_all_summaries_and_shares_unchanged_partial_rows() {
     let mut m = Arc::new(Metadata::default());
     Metadata::accept(
         &mut m,
         &full(json!(
-            (0..crate::local_model::SESSION_CAP)
+            (0..1005)
                 .map(|n| json!({"id":format!("c{n}")}))
                 .collect::<Vec<_>>()
         )),
@@ -68,12 +68,20 @@ fn metadata_cap_and_structural_sharing_preserve_unrelated_partial_rows() {
         &mut m,
         &json!({"type":"session","session":{"id":"overflow","missionId":"M","projectId":"P"}}),
     );
-    assert!(Arc::ptr_eq(&m, &before));
+    assert!(!Arc::ptr_eq(&m, &before));
+    assert_eq!(
+        m.link("overflow"),
+        &Link::Mission {
+            project: "P".into(),
+            mission: "M".into()
+        }
+    );
+    assert_eq!(before.link("overflow"), &Link::Unknown);
     Metadata::accept(
         &mut m,
         &json!({"type":"session","session":{"id":"c1","missionId":"M","projectId":"P"}}),
     );
-    assert_eq!(m.rows.len(), crate::local_model::SESSION_CAP);
+    assert_eq!(m.rows.len(), 1006);
     assert_eq!(m.link("c0"), &Link::Unlinked);
     let before = m.clone();
     Metadata::accept(

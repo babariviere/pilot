@@ -26,6 +26,8 @@ enum Scenario {
     Thinking,
     ContextUsage,
     Todos,
+    ListAdmission,
+    ListSnapshot,
     LargeFrame,
     LargeFragmentedMessage,
 }
@@ -194,7 +196,28 @@ impl Mock {
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
+                                if matches!(scenario, Scenario::ListAdmission | Scenario::ListSnapshot) {
+                                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                                    let count = if matches!(scenario, Scenario::ListSnapshot) { 10005 } else { 1000 };
+                                    let mut summaries: Vec<_> = (0..count).map(|i| json!({"id":format!("old-{i}"),"title":"Existing chat","state":"idle","projectId":"p-a","updatedAt":i})).collect();
+                                    if attempt > 0 {
+                                        summaries.push(json!({"id":"New-Canonical","title":"Reconnect snapshot","state":"idle","projectId":"p-b","missionId":"Mission-New","createdAt":20000}));
+                                    }
+                                    socket.send(Frame::Text(json!({"type":"sessions","sessions":summaries}).to_string().into())).await.unwrap();
+                                    if steps.recv().await.is_err() { return; }
+                                    for title in ["Created elsewhere", "Updated once"] {
+                                        socket.send(Frame::Text(json!({"type":"session","session":{"id":"New-Canonical","title":title,"state":"idle","projectId":"p-b","missionId":"Mission-New","createdAt":20000}}).to_string().into())).await.unwrap();
+                                    }
+                                    if matches!(scenario, Scenario::ListSnapshot) {
+                                        for i in 0..64 {
+                                            socket.send(Frame::Text(json!({"type":"session","session":{"id":format!("burst-{i}"),"title":"Synthetic burst","state":"working","projectId":"p-a","updatedAt":30000+i}}).to_string().into())).await.unwrap();
+                                        }
+                                    }
+                                    // Ordered marker proves the preceding new-session frames were consumed.
+                                    socket.send(Frame::Text(json!({"type":"session","session":{"id":"old-0","title":"After new events","state":"idle","projectId":"p-a"}}).to_string().into())).await.unwrap();
+                                } else {
                                 socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working","projectId":"p-a"},{"id":"b","title":"Synthetic B","state":"idle","projectId":"p-b"}]}).to_string().into())).await.unwrap();
+                                }
                                 if matches!(scenario, Scenario::ContextUsage) {
                                     for usage in [json!({"context":{"tokens":42,"contextWindow":100}}), json!({"context":{"tokens":80,"contextWindow":100}}), json!({})] {
                                         if steps.recv().await.is_err() { return; }
@@ -569,4 +592,93 @@ async fn websocket_single_frame_above_eight_mib_preserves_source_and_continues()
 #[tokio::test]
 async fn websocket_fragmented_message_above_eight_mib_preserves_source_and_continues() {
     large_stream_is_intact(Scenario::LargeFragmentedMessage).await;
+}
+
+#[tokio::test]
+async fn list_admission_keeps_new_events_at_capacity_and_reconciles_reconnect() {
+    let mock = Mock::start(Scenario::ListAdmission).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let initial = until(&rx, |v| v.list_loaded).await;
+    assert_eq!(initial.chats.len(), 1000);
+    mock.step.send(()).await.unwrap();
+    let live = until(&rx, |v| {
+        v.chats.iter().any(|c| c.title == "After new events")
+    })
+    .await;
+    assert_eq!(
+        live.chats.len(),
+        1001,
+        "new identities must not be refused at 1000"
+    );
+    assert_eq!(live.chats[0].id, "New-Canonical");
+    assert_eq!(live.chats[0].title, "Updated once");
+    assert_eq!(live.chats[0].project_id.as_deref(), Some("p-b"));
+    assert_eq!(
+        live.mission_metadata.link("New-Canonical"),
+        &crate::mission_inspector::Link::Mission {
+            project: "p-b".into(),
+            mission: "Mission-New".into()
+        }
+    );
+    assert_eq!(
+        live.chats
+            .iter()
+            .filter(|c| c.id == "New-Canonical")
+            .count(),
+        1
+    );
+    assert!(client.command(Command::Reconnect));
+    let recovered = until(&rx, |v| {
+        v.chats.iter().any(|c| c.title == "Reconnect snapshot")
+    })
+    .await;
+    assert_eq!(recovered.chats.len(), 1001);
+    assert_eq!(recovered.chats[0].id, "New-Canonical");
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.starts_with("GET "))
+    );
+}
+
+#[tokio::test]
+async fn list_admission_initial_snapshot_keeps_every_project_summary() {
+    let mock = Mock::start(Scenario::ListSnapshot).await;
+    let started = std::time::Instant::now();
+    let (_client, rx) = LocalClient::start(mock.options.clone());
+    let initial = until(&rx, |v| v.list_loaded).await;
+    let snapshot_time = started.elapsed();
+    assert_eq!(
+        initial.chats.len(),
+        10005,
+        "snapshot admission must not truncate before sorting/filtering"
+    );
+    assert_eq!(initial.chats[0].id, "old-10004");
+    assert!(initial.chats.iter().any(|c| c.id == "old-0"));
+    assert_eq!(
+        initial.mission_metadata.link("old-10004"),
+        &crate::mission_inspector::Link::Unlinked
+    );
+    let started = std::time::Instant::now();
+    mock.step.send(()).await.unwrap();
+    let streamed = until(&rx, |v| {
+        v.chats.iter().any(|c| c.title == "After new events")
+    })
+    .await;
+    println!(
+        "synthetic summary workload: 10005-row initial snapshot {:?}, 67 ordered live frames {:?} (debug, loopback, worker projection only)",
+        snapshot_time,
+        started.elapsed()
+    );
+    assert_eq!(streamed.chats.len(), 10070);
+    assert_eq!(streamed.chats[0].id, "burst-63");
+    assert_eq!(
+        streamed.mission_metadata.link("New-Canonical"),
+        &crate::mission_inspector::Link::Mission {
+            project: "p-b".into(),
+            mission: "Mission-New".into()
+        }
+    );
 }

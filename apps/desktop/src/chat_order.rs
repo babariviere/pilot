@@ -135,13 +135,11 @@ pub(crate) fn sort(chats: &mut [Chat]) {
 }
 
 /// Replace or add one live summary and restore list order.
-pub(crate) fn upsert(chats: &mut Vec<Chat>, chat: Chat, cap: usize) {
+pub(crate) fn upsert(chats: &mut Vec<Chat>, chat: Chat) {
     if let Some(old) = chats.iter_mut().find(|c| c.id == chat.id) {
         *old = chat;
-    } else if chats.len() < cap {
-        chats.push(chat);
     } else {
-        return;
+        chats.push(chat);
     }
     sort(chats);
 }

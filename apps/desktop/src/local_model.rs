@@ -7,7 +7,6 @@ use std::collections::{BTreeMap, HashMap};
 
 pub(crate) const ENTRY_CAP: usize = 256;
 pub(crate) const ROW_CAP: usize = 512;
-pub(crate) const SESSION_CAP: usize = 1000;
 pub(crate) const PROJECT_CAP: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

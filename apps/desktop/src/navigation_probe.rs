@@ -52,6 +52,10 @@ fn publish(
     settle(cx, h);
 }
 pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_SIDEBAR_ADMISSION_ONLY").is_some() {
+        sidebar_new_chat_admission(cx);
+        return;
+    }
     if std::env::var_os("PILOT_NEXT_CANONICAL_READER_ONLY").is_some() {
         canonical_reader_navigation(cx);
         return;
@@ -490,6 +494,7 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+    sidebar_new_chat_admission(cx);
     sidebar_scrollbar_hidden(cx, captures.as_deref());
     canonical_reader_navigation(cx);
 }
@@ -994,4 +999,341 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+}
+
+/// Marked IME text in a production input, read back by its UTF-16 range.
+fn marked_text<T: EntityInputHandler + 'static>(
+    input: &Entity<T>,
+    w: &mut Window,
+    cx: &mut App,
+) -> Option<String> {
+    input.update(cx, |input, cx| {
+        let range = input.marked_text_range(w, cx)?;
+        input.text_for_range(range, &mut None, w, cx)
+    })
+}
+
+/// All supplied summaries survive admission. A live list publication never
+/// navigates, moves the opened chat or list selection, resets sidebar scroll,
+/// or takes the composer's focus or IME composition. Uses the production
+/// draft owner, projection accept, project scope and archive filter paths.
+fn sidebar_new_chat_admission(cx: &mut HeadlessAppContext) {
+    use gpui_kit::Focusable as _;
+    let summary = |value: serde_json::Value| crate::local_model::chat(&value).unwrap();
+    for (width, mode) in [(680., ThemeMode::Light), (1100., ThemeMode::Dark)] {
+        let dark = mode == ThemeMode::Dark;
+        cx.update(|cx| {
+            crate::appearance::commit_appearance(
+                if dark {
+                    crate::settings_state::AppearancePreference::Dark
+                } else {
+                    crate::settings_state::AppearancePreference::Light
+                },
+                cx,
+            )
+        });
+        let (client, reads) = LocalClient::synthetic_commands();
+        let (writer, _writes) = Interaction::recording();
+        let catalog = crate::local_model::projects(&json!([{"id":"a","name":"Synthetic Atlas","path":"/synthetic/a"},{"id":"b","name":"Synthetic Boreal","path":"/synthetic/b"}])).unwrap();
+        let mut chats: Vec<_> = (0..1000)
+            .map(|i| summary(json!({"id":format!("old-{i}"),"title":format!("Existing {i}"),"projectId":"a","state":"idle","updatedAt":i})))
+            .collect();
+        // The opened chat is an ordinary Recent row near the top, so newer
+        // chats are inserted above it in the same section.
+        chats.push(summary(json!({"id":"synthetic","title":"Existing selected chat","projectId":"a","cwd":"/synthetic/a","state":"idle","updatedAt":998.5})));
+        crate::chat_order::sort(&mut chats);
+        let (h, v) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(width), px(600.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        v.client = Some(client);
+                        v.writer = Some(writer.clone());
+                        // Production draft owner (select) for the opened chat.
+                        v.editor
+                            .update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                        v.generation = 10;
+                        v.state.generation = 10;
+                        v.state.loaded = true;
+                        v.state.list_loaded = true;
+                        v.state.projects = Arc::new(catalog);
+                        v.state.projects_loaded = true;
+                        v.state.chats = Arc::new(chats);
+                        v.rebuild_nav(w, cx);
+                        let index = v.chats.read(cx).delegate().index("synthetic");
+                        v.chats
+                            .update(cx, |list, cx| list.set_selected_index(index, w, cx));
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        settle(cx, h);
+        let publish = |cx: &mut HeadlessAppContext, chat: Option<Chat>| {
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    if let Some(chat) = chat {
+                        crate::chat_order::upsert(Arc::make_mut(&mut state.chats), chat);
+                    }
+                    v.accept(state, w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+        };
+        let offset = |cx: &mut HeadlessAppContext| {
+            cx.update(|cx| f32::from(v.read(cx).chats.read(cx).scroll_handle().offset().y))
+        };
+        // Hydrate editor and list context through the normal accept path
+        // before composing, so later publications are ordinary list updates.
+        publish(cx, None);
+        while reads.try_recv().is_ok() {}
+        let composer = cx.update(|cx| v.read(cx).editor.read(cx).shell_probe().0);
+        let start = cx.update(|cx| {
+            let view = v.read(cx);
+            assert_eq!(view.page, Page::Chat);
+            assert_eq!(view.selected.as_deref(), Some("synthetic"));
+            let d = view.chats.read(cx).delegate();
+            assert_eq!(d.all.len(), 1001);
+            let start = d.index("synthetic").unwrap();
+            assert_eq!(d.selected, Some(start));
+            start
+        });
+        assert!(cx.update(|cx| v.read(cx).editor.read(cx).ready()));
+        // This activates only TestPlatform's hidden window, never an OS window.
+        cx.update_window(h, |_, w, _| w.activate_window()).unwrap();
+        settle(cx, h);
+        // Focus the actual composer textarea (as chat_rename_probe does), then compose.
+        cx.update_window(h, |_, w, cx| {
+            composer.update(cx, |input, cx| input.focus(w, cx));
+            composer.update(cx, |input, cx| {
+                input.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+            });
+        })
+        .unwrap();
+        settle(cx, h);
+        let composing = |w: &mut Window, cx: &mut App| {
+            assert!(
+                composer.read(cx).focus_handle(cx).is_focused(w),
+                "composer keeps keyboard focus"
+            );
+            assert_eq!(marked_text(&composer, w, cx).as_deref(), Some("にほん"));
+            assert_eq!(composer.read(cx).value().as_ref(), "にほん");
+        };
+        let focused = cx
+            .update_window(h, |_, w, cx| {
+                composing(w, cx);
+                w.focused(cx)
+            })
+            .unwrap();
+        assert!(focused.is_some());
+        publish(
+            cx,
+            Some(summary(
+                json!({"id":"New-Canonical","title":"New chat 👩‍💻","projectId":"a","state":"idle","createdAt":2000}),
+            )),
+        );
+        cx.update_window(h, |_, w, cx| {
+            let row = w.within("chat-list-pane").find("New-Canonical");
+            assert!(
+                row.visible(),
+                "new row appears without navigation or restart"
+            );
+            assert_eq!(row.label(), Some("New chat 👩‍💻 · Synthetic Atlas"));
+            assert_eq!(w.focused(cx), focused);
+            composing(w, cx);
+            let view = v.read(cx);
+            assert_eq!(view.page, Page::Chat);
+            assert_eq!(view.selected.as_deref(), Some("synthetic"));
+            let d = view.chats.read(cx).delegate();
+            assert_eq!(d.all.len(), 1002);
+            assert_eq!(d.opened.as_deref(), Some("synthetic"));
+            let moved = d.index("synthetic").unwrap();
+            assert_eq!(
+                (moved.section, moved.row),
+                (start.section, start.row + 1),
+                "an insert above displaces the selected row"
+            );
+            assert_eq!(d.selected, Some(moved), "selection follows its chat id");
+        })
+        .unwrap();
+        if let Some(dir) = std::env::var_os("PILOT_NEXT_SIDEBAR_ADMISSION_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            cx.capture_screenshot(h)
+                .unwrap()
+                .save(dir.join(format!(
+                    "{width}-{}.png",
+                    if dark { "dark" } else { "light" }
+                )))
+                .unwrap();
+        }
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "chat-list-pane",
+                ScrollDelta::Pixels(point(px(0.), px(-300.))),
+                cx,
+            )
+        })
+        .unwrap();
+        settle(cx, h);
+        let scrolled = offset(cx);
+        assert!(
+            scrolled < -50.,
+            "sidebar scrolled before live inserts: {scrolled}"
+        );
+        // New identities sort above the viewport; an existing one updates in place.
+        for chat in [
+            json!({"id":"New-Second","title":"Second new chat","projectId":"a","state":"idle","createdAt":3000}),
+            json!({"id":"New-B","title":"Boreal new chat","projectId":"b","state":"idle","createdAt":2500}),
+            json!({"id":"New-Canonical","title":"New chat renamed","projectId":"a","state":"idle","createdAt":2000}),
+        ] {
+            publish(cx, Some(summary(chat)));
+            let y = offset(cx);
+            assert!(
+                (y - scrolled).abs() <= 1.,
+                "live publication keeps sidebar scroll: {scrolled} -> {y}"
+            );
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.focused(cx), focused);
+                composing(w, cx);
+                let view = v.read(cx);
+                assert_eq!(view.page, Page::Chat);
+                assert_eq!(view.selected.as_deref(), Some("synthetic"));
+                let d = view.chats.read(cx).delegate();
+                assert_eq!(d.opened.as_deref(), Some("synthetic"));
+                assert_eq!(
+                    d.selected.and_then(|ix| d.at(ix)).map(|c| c.id.as_str()),
+                    Some("synthetic")
+                );
+                assert_eq!(d.all.iter().filter(|c| c.id == "New-Canonical").count(), 1);
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            cx.update(|cx| v.read(cx).chats.read(cx).delegate().all.len()),
+            1004
+        );
+        assert!(
+            reads.try_recv().is_err(),
+            "list publications never open, reconnect or fetch"
+        );
+        // The existing composition guard still refuses navigation.
+        cx.update_window(h, |_, w, cx| {
+            let before = v.read(cx).location(cx);
+            w.click("nav-home", cx);
+            assert_eq!(v.read(cx).location(cx), before);
+            assert_eq!(v.read(cx).page, Page::Chat);
+            assert_eq!(marked_text(&composer, w, cx).as_deref(), Some("にほん"));
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "chat-list-pane",
+                ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                cx,
+            )
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, _| {
+            let list = w.within("chat-list-pane");
+            for (id, label) in [
+                ("New-Second", "Second new chat · Synthetic Atlas"),
+                ("New-B", "Boreal new chat · Synthetic Boreal"),
+                ("New-Canonical", "New chat renamed · Synthetic Atlas"),
+            ] {
+                let row = list.find(id);
+                assert!(row.visible(), "{id} is reachable at the top");
+                assert_eq!(row.label(), Some(label));
+            }
+        })
+        .unwrap();
+        cx.update_window(h, |_, w, cx| {
+            composer.update(cx, |input, cx| input.unmark_text(w, cx))
+        })
+        .unwrap();
+        settle(cx, h);
+        // Project scope through the real selector; the same canonical rows
+        // belong only to their own project.
+        for (project, shown, hidden, label) in [
+            ("b", "New-B", "New-Canonical", "Boreal new chat"),
+            ("a", "New-Canonical", "New-B", "New chat renamed"),
+        ] {
+            cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.click(SharedString::from(format!("project-{project}")), cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let row = w.within("chat-list-pane").find(shown);
+                assert!(row.visible());
+                assert_eq!(row.label(), Some(label));
+                let view = v.read(cx);
+                assert_eq!(view.page, Page::Project(project.into()));
+                assert_eq!(view.project_scope.as_deref(), Some(project));
+                let d = view.chats.read(cx).delegate();
+                assert!(d.index(shown).is_some());
+                assert!(d.index(hidden).is_none());
+            })
+            .unwrap();
+        }
+        cx.update_window(h, |_, w, cx| w.click("nav-home", cx))
+            .unwrap();
+        settle(cx, h);
+        cx.update(|cx| {
+            let view = v.read(cx);
+            assert_eq!(view.page, Page::Home);
+            assert!(view.project_scope.is_none());
+            let d = view.chats.read(cx).delegate();
+            assert!(d.index("New-Canonical").is_some());
+            assert!(d.index("New-B").is_some());
+        });
+        // Archived chats are admitted and only filtered by the real menu.
+        publish(
+            cx,
+            Some(summary(
+                json!({"id":"archived-new","title":"Archived new chat","projectId":"a","state":"idle","createdAt":4000,"archivedAt":1}),
+            )),
+        );
+        let archived = |cx: &mut HeadlessAppContext| {
+            cx.update_window(h, |_, w, cx| {
+                let d = v.read(cx).chats.read(cx).delegate();
+                (
+                    d.archived,
+                    d.index("archived-new").is_some(),
+                    w.try_find("archives-active").is_some(),
+                )
+            })
+            .unwrap()
+        };
+        assert_eq!(archived(cx), (false, false, false));
+        super::contextual_navigation::probe_menu_choice(cx, h, "chat-filters", 0, dark);
+        settle(cx, h);
+        assert_eq!(archived(cx), (true, true, true));
+        super::contextual_navigation::probe_menu_choice(cx, h, "chat-filters", 0, dark);
+        settle(cx, h);
+        assert_eq!(archived(cx), (false, false, false));
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+    }
+    println!(
+        "sidebar new-chat admission: 1000+ rows, live inserts above selection/scroll, scopes, archive filter, focus and marked input passed"
+    );
 }

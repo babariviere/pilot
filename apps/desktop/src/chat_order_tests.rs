@@ -167,30 +167,26 @@ fn live_updates_reorder_without_writing_timestamps() {
     upsert(
         &mut chats,
         c(json!({"id":"b","state":"idle","updatedAt":500,"outcome":"done","outcomeAt":20})),
-        10,
     );
     assert_eq!(ids(&chats), ["a", "b"]);
     // A reply does.
     upsert(
         &mut chats,
         c(json!({"id":"b","state":"working","updatedAt":510,"lastUserMessageAt":505})),
-        10,
     );
     assert_eq!(ids(&chats), ["b", "a"]);
     assert_eq!(chats[0].order.activity, Stamp(510.));
-    // New chats join in order; the cap refuses rather than evicts.
+    // New chats join in order without evicting existing identities.
     upsert(
         &mut chats,
         c(json!({"id":"c","state":"idle","createdAt":25})),
-        10,
     );
     assert_eq!(ids(&chats), ["b", "a", "c"]);
     upsert(
         &mut chats,
         c(json!({"id":"d","state":"idle","createdAt":999})),
-        3,
     );
-    assert_eq!(ids(&chats), ["b", "a", "c"]);
+    assert_eq!(ids(&chats), ["d", "b", "a", "c"]);
 }
 
 #[test]

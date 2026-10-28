@@ -44,9 +44,7 @@ impl Metadata {
         let next = match wire["type"].as_str() {
             Some("sessions") => {
                 let mut next = Self::default();
-                let raw = wire["sessions"]
-                    .as_array()
-                    .filter(|v| v.len() <= crate::local_model::SESSION_CAP);
+                let raw = wire["sessions"].as_array();
                 if let Some(raw) = raw {
                     for row in raw {
                         let Some(id) = id(&row["id"]) else {
@@ -70,11 +68,6 @@ impl Metadata {
                 let Some(id) = id(&row["id"]) else {
                     return;
                 };
-                if !current.rows.contains_key(&id)
-                    && current.rows.len() >= crate::local_model::SESSION_CAP
-                {
-                    return;
-                }
                 let value = link(row);
                 if current.rows.get(&id) == Some(&value) {
                     return;

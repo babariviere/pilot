@@ -591,7 +591,9 @@ not a quiet chat alone. Bounded exponential reconnects, up to
 errors stop rather than spin. Resume uses the last accepted stream sequence;
 replacement split snapshots retain the last visible projection until complete.
 
-List: at most 1,000 summaries. Transcript: 256 entries, at most 512 rows before
+The sidebar retains all summaries supplied by the Local snapshot and live session
+events, then filters by project/archive and renders a virtualized list. No summary
+count limit silently drops newly created chats. Transcript: 256 entries, at most 512 rows before
 work folding, up to 32 running progress slots and 64 KiB per running tool output.
 Loaded message text and inline images have no per-message or aggregate source-byte
 limit. Entry/row capacity still stops further entry/history admission without
