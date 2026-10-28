@@ -794,6 +794,24 @@ impl TranscriptView {
         let focused = window.last_input_was_keyboard() && focus.contains_focused(window, cx);
         Some((focus, focused))
     }
+    // The list and scrollbar span the viewport; only message content is capped.
+    // Kit's row inset moves onto this capped column (the scroller row is
+    // px_0), so content keeps the composer's width and inset at any pane size.
+    fn render_readable_row(
+        &self,
+        ix: usize,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+        footer: Option<(gpui_kit::FocusHandle, bool)>,
+    ) -> impl IntoElement + use<> {
+        div()
+            .w_full()
+            .min_w_0()
+            .max_w(px(crate::ui::CONVERSATION_MAX_WIDTH))
+            .px_3()
+            .child(self.render_row(ix, cx, owner, footer))
+    }
+
     fn render_row(
         &self,
         ix: usize,
@@ -1090,7 +1108,7 @@ impl Render for TranscriptView {
                                     .map(|view| {
                                         let footer = Self::footer_focus(&view, ix, window, cx);
                                         view.read(cx)
-                                            .render_row(ix, cx, weak.clone(), footer)
+                                            .render_readable_row(ix, cx, weak.clone(), footer)
                                             .into_any_element()
                                     })
                                     .unwrap_or_else(|| div().into_any_element())
@@ -1098,6 +1116,7 @@ impl Render for TranscriptView {
                         )
                         .with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
                         .with_list_style(list_style)
+                        .with_row_style(StyleRefinement::default().flex().justify_center().px_0())
                         .jump_button(false),
                     ),
                 )
@@ -1108,34 +1127,56 @@ impl Render for TranscriptView {
                             || self.history_controls.recovery),
                     |v| {
                         v.child(
+                            // Anchored to the readable column's trailing edge,
+                            // not the far-right scrollbar. No hitbox of its own.
                             div()
                                 .absolute()
                                 .bottom_3()
-                                .right_3()
-                                .rounded(px(crate::appearance::Radius::CONTROL))
-                                // Opaque, so transcript text never shows through the control.
-                                .bg(crate::appearance::card(cx))
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                                    if v.history_guard.as_ref().is_some_and(|guard| !guard(w, cx)) {
-                                        cx.stop_propagation();
-                                    }
-                                }))
+                                .left_0()
+                                .right_0()
+                                .h_flex()
+                                .justify_center()
                                 .child(
-                                    crate::ui::action(
-                                        "latest",
-                                        if self.history_controls.failed {
-                                            "Retry latest"
-                                        } else {
-                                            "Latest"
-                                        },
-                                        crate::ui::Action::Secondary,
-                                    )
-                                    .icon(crate::app_icon::AppIcon::Latest.asset())
-                                    .on_click(cx.listener(
-                                        move |_, _, _, cx| cx.emit(LatestRequested(scope)),
-                                    )),
+                                    div()
+                                        .w_full()
+                                        .min_w_0()
+                                        .max_w(px(crate::ui::CONVERSATION_MAX_WIDTH))
+                                        .px_3()
+                                        .h_flex()
+                                        .justify_end()
+                                        .child(
+                                            div()
+                                                .rounded(px(crate::appearance::Radius::CONTROL))
+                                                // Opaque, so transcript text never shows through the control.
+                                                .bg(crate::appearance::card(cx))
+                                                .border_1()
+                                                .border_color(cx.theme().border)
+                                                .capture_any_mouse_down(cx.listener(
+                                                    |v, _, w, cx| {
+                                                        if v.history_guard
+                                                            .as_ref()
+                                                            .is_some_and(|guard| !guard(w, cx))
+                                                        {
+                                                            cx.stop_propagation();
+                                                        }
+                                                    },
+                                                ))
+                                                .child(
+                                                    crate::ui::action(
+                                                        "latest",
+                                                        if self.history_controls.failed {
+                                                            "Retry latest"
+                                                        } else {
+                                                            "Latest"
+                                                        },
+                                                        crate::ui::Action::Secondary,
+                                                    )
+                                                    .icon(crate::app_icon::AppIcon::Latest.asset())
+                                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                                        cx.emit(LatestRequested(scope))
+                                                    })),
+                                                ),
+                                        ),
                                 ),
                         )
                     },
@@ -1164,10 +1205,11 @@ impl Render for TranscriptView {
             .children(self.render_find(cx))
             .child(viewport.child(self.inline_survey(cx)).child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, window, cx| {
-                    weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_row(ix, cx, weak.clone(), footer).into_any_element() })
+                    weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_readable_row(ix, cx, weak.clone(), footer).into_any_element() })
                         .unwrap_or_else(|| div().into_any_element())
                 }).with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
-                        .with_list_style(list_style).jump_button(false)))
+                        .with_list_style(list_style)
+                        .with_row_style(StyleRefinement::default().flex().justify_center().px_0()).jump_button(false)))
             .child(div().v_flex().p_4().gap_2().border_t_1().border_color(cx.theme().border)
                 .child(Textarea::new(&self.composer).accessibility_id("composer").aria_label("Local echo composer"))
                 .child(div().h_flex().justify_between().gap_2()

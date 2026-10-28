@@ -312,9 +312,7 @@ impl TranscriptView {
                 .test_support()
                 .v_flex()
                 .min_w_0()
-                .px_3()
                 .py_2()
-                .gap_1()
                 .bg(crate::appearance::tray(cx))
                 .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
                     if v.find_marked(w, cx) {
@@ -349,64 +347,77 @@ impl TranscriptView {
                         }
                     }
                 }))
+                // The tray spans the pane; its controls keep the readable column.
                 .child(
                     div()
-                        .h_flex()
-                        .items_center()
+                        .id("transcript-find-column")
+                        .test_support()
+                        .v_flex()
+                        .w_full()
                         .min_w_0()
+                        .max_w(px(ui::CONVERSATION_MAX_WIDTH))
+                        .mx_auto()
+                        .px_3()
                         .gap_1()
                         .child(
-                            div().flex_1().min_w_0().child(
-                                Input::new(&self.find.input)
-                                    .id("transcript-find-query")
-                                    .small()
-                                    .aria_label("Find in loaded conversation"),
-                            ),
+                            div()
+                                .h_flex()
+                                .items_center()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Input::new(&self.find.input)
+                                            .id("transcript-find-query")
+                                            .small()
+                                            .aria_label("Find in loaded conversation"),
+                                    ),
+                                )
+                                .child(
+                                    ui::icon_action(
+                                        "find-previous",
+                                        "Previous match (Shift-Enter)",
+                                        AppIcon::Earlier,
+                                        Action::Quiet,
+                                    )
+                                    .disabled(count == 0 || self.find.busy)
+                                    .on_click(cx.listener(|v, _, w, cx| v.step_find(true, w, cx))),
+                                )
+                                .child(
+                                    ui::icon_action(
+                                        "find-next",
+                                        "Next match (Enter)",
+                                        AppIcon::Latest,
+                                        Action::Quiet,
+                                    )
+                                    .disabled(count == 0 || self.find.busy)
+                                    .on_click(cx.listener(|v, _, w, cx| v.step_find(false, w, cx))),
+                                )
+                                .child(
+                                    ui::icon_action(
+                                        "find-close",
+                                        "Close find (Escape)",
+                                        AppIcon::Close,
+                                        Action::Quiet,
+                                    )
+                                    .on_click(cx.listener(|v, _, w, cx| v.close_find(w, cx))),
+                                ),
                         )
-                        .child(
-                            ui::icon_action(
-                                "find-previous",
-                                "Previous match (Shift-Enter)",
-                                AppIcon::Earlier,
-                                Action::Quiet,
-                            )
-                            .disabled(count == 0 || self.find.busy)
-                            .on_click(cx.listener(|v, _, w, cx| v.step_find(true, w, cx))),
-                        )
-                        .child(
-                            ui::icon_action(
-                                "find-next",
-                                "Next match (Enter)",
-                                AppIcon::Latest,
-                                Action::Quiet,
-                            )
-                            .disabled(count == 0 || self.find.busy)
-                            .on_click(cx.listener(|v, _, w, cx| v.step_find(false, w, cx))),
-                        )
-                        .child(
-                            ui::icon_action(
-                                "find-close",
-                                "Close find (Escape)",
-                                AppIcon::Close,
-                                Action::Quiet,
-                            )
-                            .on_click(cx.listener(|v, _, w, cx| v.close_find(w, cx))),
-                        ),
-                )
-                .child(
-                    div()
-                        .h_flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .child(ui::text(Text::Caption, "Loaded messages · literal source"))
                         .child(
                             div()
-                                .id("find-status")
-                                .test_support()
-                                .aria_label(SharedString::from(status.clone()))
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(status),
+                                .h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(ui::text(Text::Caption, "Loaded messages · literal source"))
+                                .child(
+                                    div()
+                                        .id("find-status")
+                                        .test_support()
+                                        .aria_label(SharedString::from(status.clone()))
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(status),
+                                ),
                         ),
                 ),
         )

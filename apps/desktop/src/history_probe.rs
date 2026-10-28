@@ -70,21 +70,29 @@ fn page(
     assert!(cx.update(|cx| view.read(cx).text_parsers_ready(cx)));
 }
 // Real mounted bounds, shared by narrow, wide and explicitly sized cap cases.
-fn layout(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle) {
+fn layout(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle, last: u64) {
     cx.update_window(handle, |_, w, _| {
         let conversation = w.find("conversation").bounds();
         let viewport = w.find("viewport").bounds();
         let editor = w.find("conversation-editor").bounds();
+        // Kit's px_3 row inset, now on the capped column: 0.75rem, not a literal.
+        let inset = w.rem_size() * 0.75;
         let expected = conversation
             .size
             .width
             .min(px(crate::ui::CONVERSATION_MAX_WIDTH));
-        assert_eq!(viewport.size.width, expected);
+        assert_eq!(viewport.left(), conversation.left());
+        assert_eq!(viewport.right(), conversation.right());
         assert_eq!(editor.size.width, expected);
-        assert_eq!(viewport.left(), editor.left());
-        assert_eq!(viewport.right(), editor.right());
-        assert!(viewport.left() >= conversation.left() && viewport.right() <= conversation.right());
+        assert_eq!(editor.center().x, viewport.center().x);
+        let message = w.find(("message-actions", last)).bounds();
+        assert_eq!(message.left(), editor.left() + inset);
+        assert_eq!(message.right(), editor.right() - inset);
         assert!(editor.bottom() <= conversation.bottom());
+        // Contextual Latest, when shown, trails the readable column.
+        if let Some(latest) = w.try_find("latest") {
+            assert!(latest.bounds().right() <= editor.right() - inset + px(0.5));
+        }
     })
     .unwrap();
 }
@@ -340,10 +348,76 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                 });
                 settle(cx, handle);
                 cx.update(|cx| assert_eq!(cx.theme().mode, mode));
-                layout(cx, handle);
+                layout(cx, handle, if fitting { 100 } else { 119 });
+                if !fitting {
+                    // The real detail split must never receive the chat's track.
+                    // Reduced motion is not required: settle the shared transition.
+                    cx.update_window(handle, |_, w, cx| w.click("conversation-links-toggle", cx))
+                        .unwrap();
+                    settle(cx, handle);
+                    layout(cx, handle, 119);
+                    cx.update_window(handle, |_, w, _| {
+                        let slot = w.find("side-panel-slot").bounds();
+                        let viewport = w.find("viewport").bounds();
+                        assert!(viewport.right() <= slot.left() || viewport.bottom() <= slot.top());
+                    })
+                    .unwrap();
+                    contextual_scrollbar(
+                        cx,
+                        handle,
+                        captures.as_deref(),
+                        &format!("{key}-split"),
+                        width,
+                    );
+                    cx.update_window(handle, |_, w, cx| w.click("conversation-links-toggle", cx))
+                        .unwrap();
+                    settle(cx, handle);
+                    // Restore the same tail before testing history admission.
+                    cx.update(|cx| {
+                        view.read(cx)
+                            .transcript
+                            .clone()
+                            .update(cx, |t, cx| t.latest(cx))
+                    });
+                    settle(cx, handle);
+                    layout(cx, handle, 119);
+                }
                 if width == 1600. {
                     cx.update_window(handle, |_, w, _| {
-                        assert_eq!(w.find("viewport").bounds().size.width, px(960.));
+                        assert!(w.find("viewport").bounds().size.width > px(960.));
+                    })
+                    .unwrap();
+                    // Find's tray spans the pane; its controls keep the readable column.
+                    cx.update_window(handle, |_, w, cx| {
+                        let transcript = view.read(cx).transcript.clone();
+                        transcript.update(cx, |t, cx| t.open_find(w, cx));
+                    })
+                    .unwrap();
+                    settle(cx, handle);
+                    cx.update_window(handle, |_, w, _| {
+                        let inset = w.rem_size() * 0.75;
+                        let editor = w.find("conversation-editor").bounds();
+                        let tray = w.find("transcript-find").bounds();
+                        let column = w.find("transcript-find-column").bounds();
+                        let close = w.find("find-close").bounds();
+                        assert!(tray.size.width > px(960.), "tray spans the pane: {tray:?}");
+                        // The controls' column is the composer's column; its px_3 is the row inset.
+                        assert_eq!(column.left(), editor.left());
+                        assert_eq!(column.right(), editor.right());
+                        assert_eq!(close.right(), editor.right() - inset);
+                    })
+                    .unwrap();
+                    if let Some(dir) = &captures {
+                        cx.capture_screenshot(handle)
+                            .unwrap()
+                            .save(dir.join(format!("1600-{}-find.png", mode.name())))
+                            .unwrap();
+                    }
+                    cx.update_window(handle, |_, w, cx| w.click("find-close", cx))
+                        .unwrap();
+                    settle(cx, handle);
+                    cx.update_window(handle, |_, w, _| {
+                        assert!(w.try_find("transcript-find").is_none())
                     })
                     .unwrap();
                     if let Some(dir) = &captures {
@@ -354,7 +428,7 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                     }
                     assert!(commands.try_recv().is_err());
                     println!(
-                        "layout cap 1600 {}: 960pt conversation and editor",
+                        "layout cap 1600 {}: full viewport, 960pt message column and editor",
                         mode.name()
                     );
                     cx.update_window(handle, |_, w, _| w.remove_window())
@@ -576,6 +650,12 @@ pub fn run_history_probe(cx: &mut HeadlessAppContext) {
                             && latest.top() >= viewport.top()
                             && latest.bottom() <= viewport.bottom(),
                         "contextual Latest stays inside transcript: {latest:?} / {viewport:?}"
+                    );
+                    // It trails the readable column (inside its 1pt border), not the scrollbar.
+                    let edge = w.find("conversation-editor").bounds().right() - w.rem_size() * 0.75;
+                    assert!(
+                        latest.right() <= edge && latest.right() >= edge - px(1.5),
+                        "Latest trails the message column: {latest:?} / {edge:?}"
                     );
                 })
                 .unwrap();

@@ -74,9 +74,14 @@ focus, dismissal, geometry or shadows. Kit popovers, menus, selects and tooltips
 already use that popover token. Translucent modal scrims are separate from their
 opaque content; page/sidebar/list glass stays unchanged.
 
-The conversation and composer share `ui::CONVERSATION_MAX_WIDTH` (960pt outer
-cap), shrinking with the available pane width. Keep their existing 12pt content
-insets aligned; pages and artifact inspectors retain their separate 760pt cap.
+Message content and composer share `ui::CONVERSATION_MAX_WIDTH` (960pt outer
+cap), centered and shrinking with the available pane width. The transcript's
+existing scroller fills that pane, placing its scrollbar at the far right edge,
+never across an open detail split. Kit's 0.75rem row inset sits on the capped
+column, so message text aligns with the composer at every width. The find tray,
+contextual Latest and loading/empty placeholders follow the same column; only
+the scroller and tray background span the pane. Pages and artifact inspectors
+retain their separate 760pt cap.
 Contextual recovery, delivery/Unknown information and errors sit above the tray,
 not inside or below its editor/actions. Never mount an empty recovery region.
 The transcript opts into Kit's scrolling scrollbar mode, even when global chrome

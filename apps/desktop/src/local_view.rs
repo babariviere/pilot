@@ -2552,9 +2552,10 @@ impl Render for LocalViewer {
                             .children(self.mission_context_action(cx))
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
-                    .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto()
-                        .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
-                        .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().justify_center().p_6().gap_2()
+                    .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().when(self.artifacts_open, |d| d.max_w(px(760.)).mx_auto())
+                        // Placeholders keep the readable column; only the transcript scroller spans the pane.
+                        .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
+                        .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().justify_center().p_6().gap_2()
                             .child(div().font_semibold().child("Choose a chat"))
                             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
                         .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
