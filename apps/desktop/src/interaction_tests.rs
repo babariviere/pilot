@@ -1,6 +1,9 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
 
+#[path = "interaction_retention_tests.rs"]
+mod retention;
+
 #[tokio::test]
 async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing_writer() {
     let daemon = Daemon::start(Behavior::Accept).await;
