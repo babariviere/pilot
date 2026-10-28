@@ -26,8 +26,7 @@ impl LocalViewer {
         !self.mission_open
             && !self.add_project_open
             && self.jump.is_none()
-            && self.queue_forms.is_empty()
-            && self.queue_open.is_none()
+            && self.queue_checkpoint_safe(cx)
             && self.chat_actions.read(cx).restart_safe()
             && self.mission.read(cx).restart_safe(cx)
             && self.missions.read(cx).restart_safe(cx)

@@ -25,26 +25,6 @@ impl Row {
     pub(crate) fn text(&self) -> Option<&str> {
         self.content.as_str().filter(|s| s.len() <= TEXT_BYTES)
     }
-    pub(crate) fn preview(&self) -> String {
-        if let Some(text) = self.content.as_str() {
-            return text.chars().take(160).collect();
-        }
-        let mut preview = String::new();
-        if let Some(parts) = self.content.as_array() {
-            for text in parts.iter().filter_map(|p| p["text"].as_str()).take(4) {
-                let remaining = 160usize.saturating_sub(preview.chars().count());
-                if remaining == 0 {
-                    break;
-                }
-                preview.extend(text.chars().take(remaining));
-            }
-        }
-        if preview.is_empty() {
-            "Structured message (attachments or unsupported content)".into()
-        } else {
-            format!("{preview} · structured message")
-        }
-    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Snapshot {
@@ -181,6 +161,19 @@ impl State {
         };
         self.attempt = Some((op.clone(), Outcome::Pending));
         Ok(op)
+    }
+    /// Whether a retained draft still owns its captured row against what Local
+    /// currently publishes for that id (None: no longer queued). Otherwise it
+    /// holds nothing to lose and the next open captures the current row.
+    /// Pending and uncertain receipts are always kept, so queue visibility never
+    /// settles them. An acknowledged capture stays only while still current.
+    pub(crate) fn retains(&self, captured: &Row, unsaved: bool, current: Option<&Row>) -> bool {
+        match self.attempt.as_ref().map(|(_, o)| o) {
+            Some(Outcome::Pending | Outcome::Unknown(_)) => true,
+            _ if unsaved => true,
+            Some(Outcome::Acknowledged) => current == Some(captured),
+            Some(Outcome::NotSent(_)) | None => false,
+        }
     }
     pub(crate) fn finish(&mut self, op: &Operation, outcome: Outcome) -> bool {
         let Some((_, current)) = self

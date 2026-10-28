@@ -7,19 +7,30 @@ underlying queue or dispatch order. Five rows fit before scrolling;
 an empty queue adds no spacer. Each row leads with a muted delivery-mode icon and
 first-line preview, with Edit and Delete icons on the right, revealed on row hover
 or while keyboard focus is inside that row. Their reserved slots never reflow. Clicking the preview or
-Edit opens that exact message in the existing focused native popup. Delete opens
-its existing confirmation and never dispatches removal by itself. There is no
-Manage queue control. **Queue drafts** remains available when only retained edits or
-receipts remain. These are native Kit buttons with names, tooltips and keyboard
-access, not hover-only actions. The queue is no longer repeated in the header or history.
+Edit opens that exact message inline, in place of its row, with focus in its text.
+Delete opens the same inline editor at its confirmation and never dispatches
+removal by itself. These are native Kit buttons with names, tooltips and keyboard
+access, not hover-only actions. The queue is not repeated in the header or history.
 It lists only `queue_update.items`, never automatic input or held-system controls.
-The main composer, transcript, selection and Stop remain mounted. A captured
-message has its own retained native textarea, delivery selection and receipt.
-Save preserves its delivery mode unless the user explicitly selects another.
-Remove requires a second confirmation. Empty text never means Remove or Send.
-Retained drafts remain selectable in the popup even while other messages are queued.
-The popup retains full text preview/copy, including a read-only preview of structured
-messages and their attachment count. Structured content never becomes a text edit.
+The main composer, transcript, selection and Stop stay mounted and usable.
+
+The inline editor holds the delivery-mode toggle, the message text, **Remove…**,
+**Copy**, **Cancel** (Escape) and **Save** (Command-Return; plain Return is text).
+Save preserves the delivery mode unless the user toggles it. Remove asks once
+more. Empty text never means Remove or Send. Cancel keeps the edit: the row shows an
+unsaved dot and reopening restores the same native draft, receipt and focus.
+**Discard** drops an unsaved edit explicitly. A saved edit closes its editor only
+if nothing changed since that submit (a per-draft intent serial, not text
+equality), and returns focus to the composer only if the editor still held it. Structured content
+is a read-only preview with Copy; it never becomes a text edit.
+
+Queue edits are separate from the composer's own draft. When Local stops queueing
+a message that still has unsent local text, its row stays in the tray as **No
+longer queued**. Opening it offers **Move to composer**, which fills only an empty,
+writable composer with no question, composition or unresolved send, and never
+sends: Return or Option-Return then chooses steer or follow-up. Otherwise the text
+stays with the row and says why. A pending or uncertain operation's own payload is
+never offered as unsent text; it stays visible with its receipt and Copy.
 
 ## Safety contract
 
@@ -37,7 +48,12 @@ messages and their attachment count. Structured content never becomes a text edi
   admission. They do not invoke native input extensions again before checking
   a stale capture. Legacy unguarded behavior is unchanged.
 - A row consumed, removed or changed since capture is never re-submitted as a
-  new send. A stream/GET equality match cannot settle a lost response. Pending,
+  new send. Each open uses the row Local currently publishes: a draft keeps its
+  capture while pending or uncertain (always, whatever the queue later shows,
+  so visibility never settles a receipt), while an acknowledged capture is still
+  current, or while it holds unsaved text. An uncertain row is never retried;
+  Discard appears only once it is no longer queued. Unsaved text moves onto a changed row's new capture with a notice, so
+  Save checks the current guard. A stream/GET equality match cannot settle a lost response. Pending,
   acknowledged and uncertain operations cannot be replayed from the form.
 - Structured/image-bearing or oversized content remains intact and cannot be
   edited as text. Exact removal remains possible. Text edits cap at64KiB; queue
@@ -45,10 +61,12 @@ messages and their attachment count. Structured content never becomes a text edi
   queue snapshots disable mutation, never silently truncate an editable payload.
 
 Drafts and receipts are retained without lifetime message/chat count limits in
-this window, not across app restart. Close does not cancel an admitted operation.
+this window, not across app restart. Cancel does not stop an admitted operation.
 Completion updates only its immutable operation, without reopening or taking
-focus. Preedit is guarded before blur and across internal pointer actions;
-plain Return remains text, Command-Return explicitly saves, Escape closes only
+focus. Preedit is guarded before blur and across internal pointer actions.
+While an inline queue composition is active, root navigation (menus,
+shortcuts, Tab, Focus Composer) waits for it; without one nothing is blocked.
+Plain Return remains text, Command-Return explicitly saves, Escape cancels only
 outside composition. No global delivery or keyboard defaults change.
 
 ## In the conversation
@@ -105,7 +123,7 @@ Return in the production root through Sending, reservation, queue echo before an
 after the ACK, both stream orders, lost ACK, refusal, older-history reading and
 navigation at 680/1100 light/dark. The same target measures zero/one/two/eight
 queue layouts inside the actual tray, stable mode-group order, overflow, unchanged
-empty insets, exact-row opening, text/structured copy and opaque popup surfaces.
+empty insets, exact-row opening and text/structured copy.
 Pixel checks verify hidden-at-rest, row-hover and keyboard-focus action reveal,
 including sibling actions, while other rows stay quiet and bounds remain unchanged.
 
@@ -114,7 +132,7 @@ including sibling actions, while other rows stay quiet and bounds remain unchang
 Swift `QueuedMessageEditor`, `QueuedMessageEditing` and `ComposerState` separate
 queue drafts from the main draft but use ID-only availability, text replacement
 and steer/follow-up submission shortcuts. They are not a safety precedent for
-the popup. Existing server queue routes serialize disappearance correctly but
+the inline editor. Existing server queue routes serialize disappearance correctly but
 had no captured-row precondition; the opt-in guard preserves legacy callers.
 Session metadata persistence/errors can follow the kernel mutation, so all
 post-dispatch failures remain Unknown, not automatically retryable.
@@ -122,7 +140,8 @@ post-dispatch failures remain Unknown, not automatically retryable.
 Scoped checks: `queued_message` library state/transport filter and native target,
 kernel `queue-guard.test.ts` plus existing queue tests, queue-only server route
 tests, TypeScript typecheck and matching changed-source lint. Native checks use
-the actual production popup/root in680/1100 light/dark, synthetic HTTP only,
-including preedit-beforeblur, retained main draft, default mode, missing capture,
-explicit removal and exact late ACK. Offscreen captures are not OS IME, native
+the actual production root at 680/1100 light/dark, synthetic HTTP only,
+including preedit before blur, retained main draft, Cancel/reopen, explicit mode, intent serial,
+removal after an acknowledged edit, ACK before republish, external change,
+refusal, Unknown, restore to the composer and exact late ACK. Offscreen captures are not OS IME, native
 GPU smoothness, live daemon writes, Linux or product acceptance evidence.

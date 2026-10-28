@@ -114,6 +114,7 @@ impl LocalViewer {
             || self.page != Page::Chat
             || self.artifacts_open
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
+            || self.queue_marked(w, cx)
         {
             return;
         }

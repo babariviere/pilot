@@ -68,7 +68,10 @@ impl Global for Exits {}
 
 impl LocalViewer {
     pub(super) fn request_menu_quit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        if self.restart_pending || self.editor.update(cx, |e, cx| e.marked(w, cx)) {
+        if self.restart_pending
+            || self.editor.update(cx, |e, cx| e.marked(w, cx))
+            || self.queue_marked(w, cx)
+        {
             // Keep the composition; show where it is when Quit came from another window.
             w.activate_window();
             return;
@@ -106,7 +109,7 @@ impl LocalViewer {
     pub(super) fn menu_navigation_ready(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         use gpui_kit::{EntityInputHandler, component::WindowExt};
         !self.restart_pending
-            && self.queue_open.is_none()
+            && !self.queue_marked(w, cx)
             && self.jump.is_none()
             && !self.mission_open
             && !self.add_project_open

@@ -51,7 +51,11 @@ impl LocalViewer {
         self.link_epoch += 1;
         // A resource search is newer user intent. Only its explicit activation
         // closes the palette before entering these existing guarded routes.
-        if self.jump.is_some() || self.mission_open || self.add_project_open {
+        if self.jump.is_some()
+            || self.mission_open
+            || self.add_project_open
+            || self.queue_marked(window, cx)
+        {
             return false;
         }
         if self.missions.update(cx, |m, cx| m.brief_marked(window, cx)) {

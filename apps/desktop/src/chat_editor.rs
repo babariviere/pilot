@@ -1015,6 +1015,37 @@ impl ChatEditor {
         self.changed(cx);
         true
     }
+    /// Puts a retained, never-sent queue edit into this chat's empty composer,
+    /// like typing. Never sends and never overwrites; false leaves it with the queue.
+    pub(crate) fn restore_queued_text(
+        &mut self,
+        chat: &str,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let key = format!("chat:{chat}");
+        if self.selected.as_deref() != Some(key.as_str())
+            || !self.ready()
+            || !self.writable
+            || self.error.is_some()
+            || self.questions.current.is_some()
+            || self.waiting()
+            || self.sending.contains_key(&key)
+            || self.sending(chat).is_some()
+            || self.marked(window, cx)
+            || text.len() > TEXT_CAP
+            || !self.text.read(cx).value().is_empty()
+        {
+            return false;
+        }
+        self.text.update(cx, |state, cx| {
+            state.set_value(text.to_owned(), window, cx);
+            state.focus(window, cx);
+        });
+        self.changed(cx);
+        true
+    }
     pub(crate) fn can_adopt_creation(
         &mut self,
         key: &str,

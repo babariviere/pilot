@@ -606,8 +606,7 @@ impl ListDelegate for ChatList {
 pub struct LocalViewer {
     session_failure_fence: crate::session_failure::Fence,
     session_failure_focus: gpui_kit::FocusHandle,
-    queue_forms: Vec<(Entity<queued_message_view::Popup>, Subscription)>,
-    queue_open: Option<Entity<queued_message_view::Popup>>,
+    queue_forms: Vec<(Entity<queued_message_view::Form>, Subscription)>,
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
     workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
@@ -1702,7 +1701,6 @@ impl LocalViewer {
             missions,
             mission_context,
             queue_forms: Vec::new(),
-            queue_open: None,
             conversation_links: None,
             workspace_changes: None,
             session_failure_fence: Default::default(),
@@ -2455,10 +2453,10 @@ impl Render for LocalViewer {
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
                 if v.restart_pending {cx.stop_propagation();return;}
-                if let Some(form)=&v.queue_open {
-                    let marked=form.update(cx,|f,cx|f.marked(w,cx));
+                // An inline queue composition keeps its keys; nothing else is fenced.
+                if v.queue_marked(w,cx) {
                     let key=e.keystroke.key.as_str(); let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
-                    if (marked && matches!(key,"enter"|"escape"|"tab")) || (modified && !matches!(key,"c"|"v"|"x"|"a"|"z"|"q"|"enter")) {cx.stop_propagation();}
+                    if matches!(key,"enter"|"escape"|"tab") || (modified && !matches!(key,"c"|"v"|"x"|"a"|"z"|"q")) {cx.stop_propagation();}
                 }
                 if v.add_project_open {
                     let modified=e.keystroke.modifiers.platform||e.keystroke.modifiers.control;
@@ -2491,7 +2489,7 @@ impl Render for LocalViewer {
                 view.request_menu_quit(w,cx);
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
-                if view.jump.is_some()||view.mission_open||view.add_project_open{return;}
+                if view.jump.is_some()||view.mission_open||view.add_project_open||view.queue_marked(window,cx){return;}
                 if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))

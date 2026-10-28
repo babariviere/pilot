@@ -87,3 +87,54 @@ fn queue_snapshot_bounds_duplicates_and_unknown_mode_fail_closed() {
     assert!(!s.unavailable);
     assert!(s.rows[0].token.is_none());
 }
+
+#[test]
+fn retained_drafts_follow_the_current_capture() {
+    let src = source();
+    let r = row();
+    let mut edited = r.clone();
+    edited.content = json!("Edited 🦀");
+    edited.token = Some("c".repeat(64));
+    let edit = || Change::Edit {
+        text: "Edited 🦀".into(),
+        mode: None,
+    };
+    // Untouched drafts never pin a capture; unsaved text survives any race.
+    let s = State::default();
+    for current in [Some(&r), Some(&edited), None] {
+        assert!(!s.retains(&r, false, current));
+        assert!(s.retains(&r, true, current));
+    }
+    // Happy: an acknowledged edit pins its capture only until Local republishes,
+    // then a fresh capture removes the current row with its own guard.
+    let mut s = State::default();
+    let op = s.begin(&src, &r, edit()).unwrap();
+    assert!(s.retains(&r, false, Some(&edited)) && s.retains(&r, false, None));
+    assert!(s.finish(&op, Outcome::Acknowledged));
+    assert!(s.retains(&r, false, Some(&r)) && s.blocked());
+    assert!(s.begin(&src, &r, Change::Remove).is_err());
+    assert!(!s.retains(&r, false, Some(&edited)) && !s.retains(&r, false, None));
+    let mut fresh = State::default();
+    let remove = fresh.begin(&src, &edited, Change::Remove).unwrap();
+    assert_eq!(remove.row.token, edited.token);
+    // Refused before dispatch: nothing is pinned and the same capture may try again.
+    let mut s = State::default();
+    let op = s.begin(&src, &r, Change::Remove).unwrap();
+    assert!(s.finish(&op, Outcome::NotSent("refused")));
+    assert!(!s.blocked() && !s.retains(&r, false, Some(&r)));
+    assert!(s.begin(&src, &r, Change::Remove).is_ok());
+    // Unknown: kept whatever the queue shows later, and never repeated.
+    for change in [edit(), Change::Remove] {
+        let mut s = State::default();
+        let op = s.begin(&src, &r, change).unwrap();
+        assert!(s.finish(&op, Outcome::Unknown("lost")));
+        assert!(
+            !s.finish(&op, Outcome::Acknowledged),
+            "visibility never settles it"
+        );
+        for current in [Some(&r), Some(&edited), None] {
+            assert!(s.retains(&r, false, current) && s.blocked());
+        }
+        assert!(s.begin(&src, &r, Change::Remove).is_err());
+    }
+}
