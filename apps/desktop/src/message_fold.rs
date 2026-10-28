@@ -1,4 +1,5 @@
-//! Bounded user-message presentation. Assistant source and loaded-source Find are untouched.
+//! Bounded user-message presentation, and automatic input folded to one line
+//! by default. Assistant source and loaded-source Find are untouched.
 use crate::{
     model::{Message, ReaderKey},
     session_todos::Source,
@@ -72,7 +73,7 @@ pub(crate) fn plain(source: &str) -> String {
     )
 }
 fn eligible(row: &Message) -> bool {
-    row.label().starts_with("You")
+    (row.label().starts_with("You") || row.automatic().is_some())
         && row.work_data().is_none()
         && row.artifact_data().is_none()
         && row.image_data().is_none()
@@ -85,7 +86,14 @@ struct Entry {
     source: Arc<String>,
     preview: Preview,
     html: String,
+    /// Automatic input folds whatever its length; collapsed it shows no source.
+    automatic: bool,
     expanded: bool,
+}
+impl Entry {
+    fn foldable(&self) -> bool {
+        self.automatic || self.preview.long
+    }
 }
 #[derive(Default)]
 pub(crate) struct Folds {
@@ -130,10 +138,18 @@ impl Folds {
                 self.entries.push_back(prior.unwrap());
                 continue;
             }
-            let preview = preview(row.source());
+            let automatic = row.automatic().is_some();
+            let preview = if automatic {
+                Preview {
+                    long: false,
+                    text: String::new(),
+                }
+            } else {
+                preview(row.source())
+            };
             let expanded = prior
                 .filter(|e| row.source().starts_with(e.source.as_str()))
-                .map_or(!preview.long, |e| e.expanded);
+                .map_or(!(automatic || preview.long), |e| e.expanded);
             self.entries.push_back(Entry {
                 scope: self.scope.clone(),
                 key: row.reader_key().unwrap(),
@@ -144,6 +160,7 @@ impl Folds {
                     String::new()
                 },
                 preview,
+                automatic,
                 expanded,
             });
             while self.entries.len() > CACHE_ROWS
@@ -158,13 +175,13 @@ impl Folds {
             }
         }
     }
+    /// Whether the row has a fold control: a long user message or automatic input.
     pub(crate) fn long(&self, row: &Message) -> bool {
-        self.index(row)
-            .is_some_and(|i| self.entries[i].preview.long)
+        self.index(row).is_some_and(|i| self.entries[i].foldable())
     }
     pub(crate) fn collapsed(&self, row: &Message) -> bool {
         self.index(row)
-            .is_some_and(|i| self.entries[i].preview.long && !self.entries[i].expanded)
+            .is_some_and(|i| self.entries[i].foldable() && !self.entries[i].expanded)
     }
     pub(crate) fn html(&self, row: &Message) -> Option<&str> {
         self.collapsed(row)

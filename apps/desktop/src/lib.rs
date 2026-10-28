@@ -29,6 +29,7 @@ mod path_completion;
 mod path_completion_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::path_completion_probe::run_path_completion_probe;
+mod automatic_input;
 mod message_time;
 mod provider_usage;
 #[cfg(feature = "native-probes")]

@@ -246,6 +246,10 @@ impl TranscriptView {
         if row.label().starts_with("You") && !self.readonly {
             return None;
         }
+        // Folded automatic input shows only its line; no parser until expanded.
+        if row.automatic().is_some() && self.folds.collapsed(row) {
+            return None;
+        }
         let id = row.id();
         if self.folds.long(row)
             && let Some(key) = row.reader_key()
@@ -816,6 +820,55 @@ impl TranscriptView {
             .child(self.render_row(ix, cx, owner, footer))
     }
 
+    /// A text row's parser view, or its plain source before a parser exists.
+    fn render_text(
+        &self,
+        ix: usize,
+        row: &Message,
+        user: bool,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+    ) -> gpui_kit::AnyElement {
+        match &self.text_states[ix] {
+            Some(state) => crate::markdown_mermaid::install(
+                crate::typography::rich(
+                    TextView::new(state),
+                    crate::typography::current(cx),
+                    if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
+                        crate::typography::Content::PlainChat
+                    } else {
+                        crate::typography::Content::Chat
+                    },
+                    cx,
+                ),
+                row.id(),
+                row.source(),
+            )
+            .selectable(true)
+            .scrollable(false)
+            .stream_fade(!self.folds.collapsed(row))
+            .on_link_click({
+                let generation = self.history_scope;
+                move |url, event, _, cx| {
+                    if event.is_right_click() || event.is_middle_click() {
+                        return;
+                    }
+                    let _ = owner.update(cx, |_, cx| {
+                        cx.emit(LinkOpen {
+                            url: url.to_string(),
+                            generation,
+                        })
+                    });
+                }
+            })
+            .into_any_element(),
+            None => div()
+                .w_full()
+                .child(SharedString::from(row.source().to_string()))
+                .into_any_element(),
+        }
+    }
+
     fn render_row(
         &self,
         ix: usize,
@@ -915,6 +968,20 @@ impl TranscriptView {
                 .into_any_element()
         });
         let sent = status.or(sent);
+        if row.automatic().is_some() {
+            let trailing = div()
+                .id(("message-actions", row.id()))
+                .test_support()
+                .flex_none()
+                .h_flex()
+                .h(px(20.))
+                .items_center()
+                .gap(px(6.))
+                .when_some(footer_focus, |f, focus| f.track_focus(&focus))
+                .children([sent, Some(copy)].into_iter().flatten())
+                .into_any_element();
+            return self.render_automatic(ix, cx, owner, found, trailing);
+        }
         // User messages read time, copy (trailing); replies read copy, time.
         let footer = div()
             .id(("message-actions", row.id()))
@@ -952,45 +1019,7 @@ impl TranscriptView {
                     .py(px(10.))
             })
             .when(!user, |b| b.w_full())
-            .child(match &self.text_states[ix] {
-                Some(state) => crate::markdown_mermaid::install(
-                    crate::typography::rich(
-                        TextView::new(state),
-                        crate::typography::current(cx),
-                        if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
-                            crate::typography::Content::PlainChat
-                        } else {
-                            crate::typography::Content::Chat
-                        },
-                        cx,
-                    ),
-                    row.id(),
-                    row.source(),
-                )
-                .selectable(true)
-                .scrollable(false)
-                .stream_fade(!self.folds.collapsed(row))
-                .on_link_click({
-                    let owner = owner.clone();
-                    let generation = self.history_scope;
-                    move |url, event, _, cx| {
-                        if event.is_right_click() || event.is_middle_click() {
-                            return;
-                        }
-                        let _ = owner.update(cx, |_, cx| {
-                            cx.emit(LinkOpen {
-                                url: url.to_string(),
-                                generation,
-                            })
-                        });
-                    }
-                })
-                .into_any_element(),
-                None => div()
-                    .w_full()
-                    .child(SharedString::from(row.source().to_string()))
-                    .into_any_element(),
-            })
+            .child(self.render_text(ix, row, user, cx, owner.clone()))
             .children(self.fold_controls(row, cx, owner));
         div()
             .id(("message", row.id()))

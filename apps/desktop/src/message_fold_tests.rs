@@ -121,3 +121,51 @@ fn byte_boundary_crlf_and_cluster_never_resume_prefix() {
     let p = preview(&source);
     assert_eq!(p.text, format!("{}\r\n", "a".repeat(799)));
 }
+
+fn automatic(id: u64, source: &str) -> Message {
+    let entry = serde_json::json!({"kind":"pi.user","origin":"job"});
+    Message::live(id, "Automatic input · entry 9".into(), source.into())
+        .with_automatic(crate::automatic_input::Automatic::read(&entry))
+        .anchored(ReaderKey::model(9, 0, Some(0)))
+}
+
+#[test]
+fn automatic_input_folds_by_default_whatever_its_length() {
+    let mut f = Folds::default();
+    let short = automatic(1, "Job finished");
+    f.sync(std::slice::from_ref(&short));
+    assert!(f.long(&short) && f.collapsed(&short));
+    // Collapsed automatic input shows no source prefix; the row says what it is.
+    assert_eq!(f.html(&short), Some(""));
+    f.toggle(&short);
+    assert!(f.long(&short) && !f.collapsed(&short));
+    assert_eq!(f.html(&short), None);
+    f.toggle(&short);
+    assert!(f.collapsed(&short));
+    // A typed message with the same words and key never folds while short.
+    let typed = row(1, "Job finished");
+    f.sync(std::slice::from_ref(&typed));
+    assert!(!f.long(&typed) && !f.collapsed(&typed));
+}
+
+#[test]
+fn automatic_expansion_survives_reconnect_and_resets_for_other_source() {
+    let mut f = Folds::default();
+    let r = automatic(1, "Mission notice");
+    f.sync(std::slice::from_ref(&r));
+    f.toggle(&r);
+    // A reconnect snapshot re-allocates the presentation row at the same key.
+    let again = automatic(77, "Mission notice");
+    f.sync(std::slice::from_ref(&again));
+    assert!(!f.collapsed(&again));
+    // Different content at that key is a new message: folded again.
+    let other = automatic(77, "Other notice");
+    f.sync(std::slice::from_ref(&other));
+    assert!(f.collapsed(&other));
+    // A row without a canonical key is not foldable.
+    let live = Message::live(5, "Automatic input".into(), "x".into()).with_automatic(
+        crate::automatic_input::Automatic::read(&serde_json::json!({"origin":"job"})),
+    );
+    f.sync(std::slice::from_ref(&live));
+    assert!(!f.long(&live));
+}

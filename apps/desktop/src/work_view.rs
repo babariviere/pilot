@@ -89,15 +89,16 @@ fn step_id(step: &Step) -> String {
     }
 }
 #[derive(Default)]
-struct Caption {
-    verb: String,
-    subject: String,
-    meta: String,
-    status: String,
-    error: bool,
-    mono: bool,
+pub(crate) struct Caption {
+    pub(crate) verb: String,
+    pub(crate) subject: String,
+    pub(crate) meta: String,
+    pub(crate) status: String,
+    pub(crate) error: bool,
+    pub(crate) mono: bool,
 }
-fn disclosure(
+/// The transcript's one-line disclosure: chevron, glyph, muted verb and subject.
+pub(crate) fn disclosure(
     id: SharedString,
     caption: Caption,
     open: bool,

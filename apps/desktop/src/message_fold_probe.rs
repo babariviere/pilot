@@ -47,6 +47,139 @@ fn reveal_footer(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
 fn row(id: u64, text: String) -> Message {
     Message::live(id, "You".into(), text).anchored(crate::model::ReaderKey::model(id, 0, Some(0)))
 }
+fn automatic(id: u64, entry: u64, source: &str, extra: serde_json::Value) -> Message {
+    let mut value = serde_json::json!({"kind":"pi.user"});
+    value
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    Message::live(
+        id,
+        format!("Automatic input · entry {entry}"),
+        source.into(),
+    )
+    .with_automatic(crate::automatic_input::Automatic::read(&value))
+    .anchored(crate::model::ReaderKey::model(entry, 0, Some(0)))
+}
+fn job_source() -> String {
+    "- build (j1): failed, exit code 2. Output: /tmp/out\r\n\nHiddenNeedle e\u{301} 👩‍💻 <tail> &\n"
+        .into()
+}
+fn automatic_rows(id: u64) -> Vec<Message> {
+    vec![
+        Message::live(20, "You".into(), "Typed words".into())
+            .anchored(crate::model::ReaderKey::model(20, 0, Some(0))),
+        automatic(id, 21, &job_source(), serde_json::json!({"origin":"job"})),
+        automatic(
+            22,
+            22,
+            "Agent-facing mission notice",
+            serde_json::json!({"origin":"mission","data":{"event":{"text":"Task #3 marked done"}}}),
+        ),
+    ]
+}
+/// Automatic input: one folded line by default, exact source on copy and expand.
+fn automatic_section(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    t: &Entity<TranscriptView>,
+    capture: Option<std::path::PathBuf>,
+) {
+    let toggle = |id: u64| SharedString::from(format!("automatic-toggle-{id}"));
+    let expanded = |cx: &mut HeadlessAppContext, id: u64| {
+        cx.update_window(h, |_, w, _| {
+            w.find_all(("automatic-body", id))
+                .iter()
+                .any(|b| b.visible())
+        })
+        .unwrap()
+    };
+    cx.update(|cx| {
+        t.update(cx, |t, cx| {
+            t.fold_scope(Some(crate::session_todos::Source::new(
+                LocalOptions::synthetic(9),
+                "automatic-chat".into(),
+                3,
+            )));
+            t.replace_readonly(automatic_rows(21), true, cx);
+        })
+    });
+    settle(cx, h);
+    assert!(!expanded(cx, 21) && !expanded(cx, 22), "folded by default");
+    if let Some(p) = &capture {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(format!("{}-folded.png", p.display()))
+            .unwrap();
+    }
+    cx.update_window(h, |_, w, cx| {
+        let viewport = w.find("viewport").bounds();
+        let line = w.find(toggle(21));
+        assert!(line.visible() && line.bounds().right() <= viewport.right());
+        assert!(line.bounds().size.height < px(40.), "one compact line");
+        assert!(w.find_all(toggle(20)).is_empty(), "typed input never folds");
+        assert!(
+            w.find_all(("message-fold", 21u64)).is_empty(),
+            "no long-message preview controls"
+        );
+        let mission = w.find(toggle(22)).label().unwrap_or_default().to_string();
+        assert!(mission.contains("Task #3 marked done"), "{mission}");
+        let job = w.find(toggle(21)).label().unwrap_or_default().to_string();
+        assert!(
+            job.starts_with("Show automatic input: Background job"),
+            "{job}"
+        );
+        // Folded input still copies its exact full source.
+        crate::transcript_view::click_copy(w, 21, cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().unwrap(),
+            job_source()
+        );
+        w.click(toggle(21), cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(expanded(cx, 21) && !expanded(cx, 22));
+    if let Some(p) = &capture {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(format!("{}-expanded.png", p.display()))
+            .unwrap();
+    }
+    cx.update(|cx| {
+        assert_eq!(
+            t.read(cx)
+                .history_probe_row(21)
+                .read(cx)
+                .rendered_text()
+                .source(),
+            crate::message_fold::plain(&job_source())
+        );
+        assert!(!t.read(cx).reading_mark(cx).unwrap().following);
+    });
+    // Keyboard: the mounted disclosure keeps focus; Escape folds, Enter opens.
+    for (key, open) in [("escape", false), ("enter", true), ("space", false)] {
+        cx.update_window(h, |_, w, cx| w.press(key, cx)).unwrap();
+        settle(cx, h);
+        assert_eq!(expanded(cx, 21), open, "{key}");
+    }
+    cx.update_window(h, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    settle(cx, h);
+    // Reconnect: a fresh allocation at the same canonical entry keeps intent.
+    cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(automatic_rows(99), true, cx)));
+    settle(cx, h);
+    assert!(expanded(cx, 99) && !expanded(cx, 22));
+    cx.update_window(h, |_, w, cx| {
+        crate::transcript_view::click_copy(w, 99, cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().unwrap(),
+            job_source()
+        );
+    })
+    .unwrap();
+    settle(cx, h);
+}
 pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_FOLD_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
@@ -443,6 +576,14 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                     source()
                 );
             });
+            automatic_section(
+                cx,
+                h,
+                &t,
+                captures
+                    .as_ref()
+                    .map(|p| p.join(format!("automatic-{width}-{dark}"))),
+            );
             assert!(writes.try_recv().is_err(), "disclosure never sends");
             println!("message_fold native {width} dark={dark}: passed");
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();

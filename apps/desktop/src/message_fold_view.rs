@@ -5,8 +5,9 @@ use crate::{
     ui::{self, Action},
 };
 use gpui_kit::{
-    App, Context, InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Window,
-    component::{ActiveTheme, StyledExt},
+    App, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    component::{ActiveTheme, Disableable, StyledExt},
     div,
     prelude::FluentBuilder,
 };
@@ -59,12 +60,16 @@ impl TranscriptView {
             .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
         cx.notify();
     }
-    pub(super) fn fold_controls(
+    /// The guarded focus scope of a row's fold control. Space/Enter toggle,
+    /// Escape collapses; pointer input waits for marked text to settle.
+    fn fold_scope_div(
         &self,
         row: &Message,
-        cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
-    ) -> Option<impl IntoElement + use<>> {
+    ) -> Option<(
+        gpui_kit::Div,
+        impl Fn(&mut Window, &mut App) + Clone + use<>,
+    )> {
         if !self.folds.long(row) {
             return None;
         }
@@ -76,46 +81,54 @@ impl TranscriptView {
             self.history_scope,
         );
         let focus = self.fold_focus.get(&key.clone()?)?.clone();
-        let escape_owner = owner.clone();
-        let escape_key = key.clone();
-        let escape_source = source.clone();
+        let toggle = {
+            let owner = owner.clone();
+            move |w: &mut Window, cx: &mut App| {
+                let _ = owner.update(cx, |v, cx| {
+                    v.toggle_fold(id, key.clone(), source.clone(), scope, w, cx)
+                });
+            }
+        };
+        let keys = toggle.clone();
+        let wrapper = div()
+            .track_focus(&focus)
+            .h_flex()
+            .gap_2()
+            .items_center()
+            .capture_any_mouse_down(move |_, w, cx| {
+                let allowed = owner
+                    .update(cx, |v, cx| v.tool_preview_ready(w, cx))
+                    .unwrap_or(false);
+                if !allowed {
+                    cx.stop_propagation();
+                }
+            })
+            .capture_key_down(move |e, w, cx| {
+                if matches!(e.keystroke.key.as_str(), "space" | "enter")
+                    || (e.keystroke.key == "escape" && !collapsed)
+                {
+                    cx.stop_propagation();
+                    keys(w, cx);
+                }
+            });
+        Some((wrapper, toggle))
+    }
+    pub(super) fn fold_controls(
+        &self,
+        row: &Message,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+    ) -> Option<impl IntoElement + use<>> {
+        if row.automatic().is_some() {
+            return None;
+        }
+        let collapsed = self.folds.collapsed(row);
+        let (wrapper, toggle) = self.fold_scope_div(row, owner)?;
         Some(
-            div()
-                .track_focus(&focus)
-                .h_flex()
-                .gap_2()
-                .items_center()
-                .capture_any_mouse_down({
-                    let owner = owner.clone();
-                    move |_, w, cx| {
-                        let allowed = owner
-                            .update(cx, |v, cx| v.tool_preview_ready(w, cx))
-                            .unwrap_or(false);
-                        if !allowed {
-                            cx.stop_propagation();
-                        }
-                    }
-                })
-                .capture_key_down(move |e, w, cx| {
-                    if matches!(e.keystroke.key.as_str(), "space" | "enter")
-                        || (e.keystroke.key == "escape" && !collapsed)
-                    {
-                        cx.stop_propagation();
-                        let _ = escape_owner.update(cx, |v, cx| {
-                            v.toggle_fold(
-                                id,
-                                escape_key.clone(),
-                                escape_source.clone(),
-                                scope,
-                                w,
-                                cx,
-                            )
-                        });
-                    }
-                })
+            wrapper
                 .child(
                     ui::action(
-                        ("message-fold", id),
+                        ("message-fold", row.id()),
                         if collapsed { "Show more" } else { "Show less" },
                         Action::Quiet,
                     )
@@ -132,11 +145,7 @@ impl TranscriptView {
                     } else {
                         "Collapse message"
                     })
-                    .on_click(move |_, w, cx| {
-                        let _ = owner.update(cx, |v, cx| {
-                            v.toggle_fold(id, key.clone(), source.clone(), scope, w, cx)
-                        });
-                    }),
+                    .on_click(move |_, w, cx| toggle(w, cx)),
                 )
                 .when(collapsed, |d| {
                     d.child(
@@ -150,5 +159,103 @@ impl TranscriptView {
                     )
                 }),
         )
+    }
+    /// Automatic input as one disclosure line, like a work row: what it is and
+    /// its first line. Expanded, the exact plain source follows; copy and the
+    /// sent time stay on the line, folded or not.
+    pub(super) fn render_automatic(
+        &self,
+        ix: usize,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+        found: Option<SharedString>,
+        trailing: gpui_kit::AnyElement,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let row = &self.transcript.messages()[ix];
+        let automatic = row.automatic().expect("automatic row");
+        let collapsed = !self.folds.long(row) || self.folds.collapsed(row);
+        let sentence = automatic.sentence().to_owned();
+        let preview = automatic.preview(row.source()).unwrap_or_default();
+        let mut button = crate::work_view::disclosure(
+            SharedString::from(format!("automatic-toggle-{}", row.id())),
+            crate::work_view::Caption {
+                verb: sentence.clone(),
+                subject: preview.clone(),
+                ..Default::default()
+            },
+            !collapsed,
+            Some(automatic.origin.icon()),
+            cx,
+        )
+        .accessibility_label(SharedString::from(format!(
+            "{} automatic input: {sentence}",
+            if collapsed { "Show" } else { "Hide" }
+        )));
+        if let Some(sender) = &automatic.sender {
+            let parts = [
+                sentence.as_str(),
+                preview.as_str(),
+                &format!("From chat {sender}"),
+            ];
+            let tooltip: Vec<&str> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+            button = button.tooltip(SharedString::from(tooltip.join(" · ")));
+        }
+        let line = match self.fold_scope_div(row, owner.clone()) {
+            Some((wrapper, toggle)) => wrapper
+                .flex_1()
+                .min_w_0()
+                .child(button.on_click(move |_, w, cx| toggle(w, cx)))
+                .into_any_element(),
+            // Without a canonical key there is no fold state: the line still
+            // names the input, and copy keeps its exact source.
+            None => div()
+                .flex_1()
+                .min_w_0()
+                .child(button.disabled(true))
+                .into_any_element(),
+        };
+        div()
+            .id(("message", row.id()))
+            .group("message")
+            .v_flex()
+            .gap_2()
+            .w_full()
+            .min_w_0()
+            .when_some(found, |m, text| {
+                m.child(
+                    div()
+                        .id(("find-target", row.id()))
+                        .test_support()
+                        .aria_label(text.clone())
+                        .min_w_0()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .whitespace_normal()
+                        .child(text),
+                )
+            })
+            .child(
+                div()
+                    .h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .items_center()
+                    .child(line)
+                    .child(trailing),
+            )
+            .when(!collapsed, |m| {
+                m.child(
+                    div()
+                        .id(("automatic-body", row.id()))
+                        .test_support()
+                        .v_flex()
+                        .pl_4()
+                        .border_l_1()
+                        .border_color(cx.theme().border)
+                        .min_w_0()
+                        .child(self.render_text(ix, row, false, cx, owner)),
+                )
+            })
     }
 }

@@ -49,6 +49,8 @@ pub(crate) struct Message {
     sent: Option<u64>,
     /// A historical ask_user record (pilot.question), shown as a disclosure.
     question: Option<Arc<crate::question_entry::Record>>,
+    /// Structured provenance of automatic input; None for typed input.
+    automatic: Option<Arc<crate::automatic_input::Automatic>>,
 }
 
 impl Message {
@@ -79,6 +81,7 @@ impl Message {
             pending: None,
             sent: None,
             question: None,
+            automatic: None,
         }
     }
     pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
@@ -153,6 +156,17 @@ impl Message {
     pub(crate) fn with_sent(mut self, sent: Option<u64>) -> Self {
         self.sent = sent;
         self
+    }
+    pub(crate) fn with_automatic(
+        mut self,
+        automatic: Option<crate::automatic_input::Automatic>,
+    ) -> Self {
+        self.automatic = automatic.map(Arc::new);
+        self
+    }
+    /// Automatic input, classified only from the entry's structured origin.
+    pub(crate) fn automatic(&self) -> Option<&crate::automatic_input::Automatic> {
+        self.automatic.as_deref()
     }
     pub(crate) fn image_data(&self) -> Option<&Arc<crate::conversation_images::Source>> {
         self.image.as_ref()
@@ -364,6 +378,7 @@ impl Transcript {
             pending: None,
             sent: None,
             question: None,
+            automatic: None,
         });
     }
 
@@ -454,6 +469,7 @@ fn history_message(ix: usize) -> Message {
         pending: None,
         sent: None,
         question: None,
+        automatic: None,
     }
 }
 

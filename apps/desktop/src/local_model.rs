@@ -668,7 +668,24 @@ impl LiveTranscript {
                     ));
                 }
             }
+        } else if kind == "pilot.activity" && entry["model"].as_array().is_none_or(|m| m.is_empty())
+        {
+            // A kernel activity note, one folded line like Swift's event row.
+            if let Some(text) = entry["data"]["text"]
+                .as_str()
+                .filter(|text| !text.trim().is_empty())
+            {
+                rows.push(
+                    Message::live(
+                        id * 64,
+                        format!("Automatic input · entry {id}"),
+                        text.into(),
+                    )
+                    .with_automatic(crate::automatic_input::Automatic::read(entry)),
+                );
+            }
         } else if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
+            let automatic = crate::automatic_input::Automatic::read(entry);
             for (ix, value) in models.iter().take(32).enumerate() {
                 let first_row = rows.len();
                 if ix == 0
@@ -692,7 +709,7 @@ impl LiveTranscript {
                 }
                 // Authorship is structured provenance, never inferred from body text.
                 let label = if role == "user" {
-                    if entry["origin"].is_string() {
+                    if automatic.is_some() {
                         "Automatic input"
                     } else {
                         "You"
@@ -727,7 +744,8 @@ impl LiveTranscript {
                         rows.push(message(key, value, &format!("toolResult · entry {id}")));
                     }
                 } else {
-                    let row = message(key, value, &format!("{label} · entry {id}"));
+                    let row = message(key, value, &format!("{label} · entry {id}"))
+                        .with_automatic(automatic.clone().filter(|_| role == "user"));
                     let only_images = row.source() == "[No text content]"
                         && value["content"].as_array().is_some_and(|blocks| {
                             blocks.iter().any(|block| block["type"] == "image")
@@ -2002,5 +2020,87 @@ mod tests {
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"entry_appended","entry":{"id":1,"kind":"pi.metadata","model":[{"role":"context","content":[]}]}}));
         assert!(model.rows().is_empty());
+    }
+
+    #[test]
+    fn automatic_rows_carry_structured_origin_through_snapshot_and_live_commit() {
+        use crate::automatic_input::Origin;
+        let user = |id: u64, text: &str| json!({"id":id,"kind":"pi.user","model":[{"role":"user","content":text}]});
+        let mut job = user(2, "- build (j1): failed, exit code 2.");
+        job["origin"] = json!("job");
+        let mut mission = user(3, "Long notice for the agent");
+        mission["origin"] = json!("mission");
+        mission["data"] = json!({"event":{"kind":"mission_updated","text":"Mission updated"}});
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[user(1, "Typed"), job, mission]}));
+        let rows = model.rows();
+        let kinds: Vec<_> = rows
+            .iter()
+            .map(|r| (r.source().to_owned(), r.automatic().map(|a| a.origin)))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("Typed".into(), None),
+                (
+                    "- build (j1): failed, exit code 2.".into(),
+                    Some(Origin::Job)
+                ),
+                ("Long notice for the agent".into(), Some(Origin::Mission)),
+            ]
+        );
+        assert!(rows[0].label().starts_with("You"));
+        assert_eq!(rows[2].automatic().unwrap().sentence(), "Mission updated");
+        // The live stream commits user input as message_end with the same provenance.
+        let mut coordinator = user(4, "Please rebase");
+        coordinator["origin"] = json!("coordinator");
+        coordinator["sourceSessionId"] = json!("coordinator-chat");
+        model.apply(&json!({"type":"message_end","entry":coordinator}));
+        let rows = model.rows();
+        let last = rows.last().unwrap().automatic().unwrap();
+        assert_eq!(last.origin, Origin::Coordinator);
+        assert_eq!(last.sender.as_deref(), Some("coordinator-chat"));
+        assert_eq!(rows.last().unwrap().source(), "Please rebase");
+        // Kernel activity: decision notices and PR notes are not the user's words.
+        model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pilot.activity",
+            "data":{"text":"Full notice","event":{"kind":"mission_decisions_changed","text":"Decisions changed"}},
+            "model":[{"role":"user","content":"Full notice"}]}}));
+        model.apply(
+            &json!({"type":"entry_appended","entry":{"id":6,"kind":"pilot.activity",
+            "data":{"text":"Rebased PR #12 onto main"},"model":[]}}),
+        );
+        model.apply(
+            &json!({"type":"entry_appended","entry":{"id":7,"kind":"pilot.activity","model":[]}}),
+        );
+        let rows = model.rows();
+        let tail: Vec<_> = rows[rows.len() - 2..]
+            .iter()
+            .map(|r| {
+                let a = r.automatic().unwrap();
+                (
+                    a.origin,
+                    a.sentence().to_owned(),
+                    r.source().to_owned(),
+                    r.label().starts_with("You"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tail,
+            [
+                (
+                    Origin::Mission,
+                    "Decisions changed".into(),
+                    "Full notice".into(),
+                    false
+                ),
+                (
+                    Origin::Activity,
+                    "Activity".into(),
+                    "Rebased PR #12 onto main".into(),
+                    false
+                ),
+            ]
+        );
     }
 }

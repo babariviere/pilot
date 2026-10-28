@@ -29,6 +29,21 @@ long user message receives the default preview. Already known short user rows
 do not automatically fold when extended past the threshold.
 
 Kit Buttons provide a calm chevron and explicit Show more/Show less action.
+
+## Automatic input
+
+Automatic input (a `pi.user` entry carrying the protocol's structured
+`origin`) folds to one disclosure line by default, like the Swift app's
+`ChatEventRow`, whatever its length. Classification reads only that
+metadata, never the body; unknown future origins stay automatic under the
+generic "Automatic message" name, and typed input, agent questions and answers
+are unchanged. The line reuses the work-row disclosure: chevron, origin glyph,
+the kernel's `data.event.text` summary or the Swift source name, then the
+first source line. A known sending chat is tooltip-only provenance. Folded rows
+build no parser; expanding shows the exact escaped plain source under a
+hairline. Copy and the sent time sit on the line, folded or not, and copy the
+exact loaded source. Intent, keys, guards, focus and reset/reconnect retention
+are the long-message rules above.
 Both Show more and Show less follow the message body, after the preview or the
 expanded content respectively.
 Enter/Space toggle within the mounted disclosure; Escape collapses it. These
