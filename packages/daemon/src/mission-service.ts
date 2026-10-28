@@ -1,6 +1,7 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
 import { randomUUID } from "node:crypto";
 import type { MissionAction, MissionContext } from "@pilot/kernel";
+import { validateMissionAuthoring } from "@pilot/kernel/mission-authoring";
 import type {
 	ArtifactRevision,
 	CreateMissionRequest,
@@ -803,6 +804,7 @@ export class MissionService {
 				`Only the mission coordinator can use ${action === "task" && args.order === undefined ? "task model or thinking" : action}`,
 			);
 		const actor = { sessionId };
+		validateMissionAuthoring(action, args);
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {

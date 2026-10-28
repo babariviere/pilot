@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./mission-authoring": "./src/mission-authoring.ts",
 		"./review-boundary": "./src/review-boundary.ts",
 		"./review-history": "./src/review-history.ts",
 		"./shared-model-catalog": "./src/shared-model-catalog.ts",

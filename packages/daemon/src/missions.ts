@@ -409,12 +409,18 @@ function noticeFrom(row: Row): MissionNotice {
 	};
 }
 
-function text(value: unknown, name: string, max: number, options: { optional?: boolean; empty?: boolean } = {}) {
+function text(
+	value: unknown,
+	name: string,
+	max: number,
+	options: { optional?: boolean; empty?: boolean; codePoints?: boolean } = {},
+) {
 	if (value === undefined && options.optional) return undefined;
 	if (typeof value !== "string") throw new Error(`${name} must be a string`);
 	const trimmed = value.trim();
 	if (!trimmed && !options.empty) throw new Error(`${name} is required`);
-	if (value.length > max) throw new Error(`${name} is too long (max ${max} characters)`);
+	if ((options.codePoints ? Array.from(value).length : value.length) > max)
+		throw new Error(`${name} is too long (max ${max} characters)`);
 	return trimmed;
 }
 
@@ -2147,7 +2153,7 @@ export class MissionStore {
 		const brief = input.brief === undefined ? undefined : text(input.brief, "brief", MAX_BRIEF, { empty: true });
 		if (input.tasks !== undefined && !Array.isArray(input.tasks)) throw new Error("tasks must be an array");
 		const tasks = (input.tasks ?? []).map((task) => ({
-			title: text(task?.title, "task title", MAX_TITLE)!,
+			title: text(task?.title, "task title", MAX_TITLE, { codePoints: true })!,
 			body: text(task?.body, "task body", MAX_TEXT, { optional: true, empty: true }),
 		}));
 		const id = randomUUID();
@@ -2796,7 +2802,8 @@ export class MissionStore {
 	}
 
 	private insertTask(id: string, write: MissionTaskWrite, actor: MissionActor): MissionTask {
-		const title = text(write.title, "title", MAX_TITLE)!;
+		// Task authoring uses Unicode code points, matching the agent schema and write boundary.
+		const title = text(write.title, "title", MAX_TITLE, { codePoints: true })!;
 		const fields = this.taskFields(id, write);
 		const now = Date.now();
 		const number = num(this.one("SELECT COALESCE(MAX(number), 0) + 1 AS n FROM tasks WHERE mission_id = ?", id)!.n!);
@@ -3034,7 +3041,8 @@ export class MissionStore {
 		const projected = this.resolveTask(id, taskId);
 		const before = this.rawTask(projected);
 		const fields = this.taskFields(id, write, before.id);
-		const title = write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE)!;
+		const title =
+			write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE, { codePoints: true })!;
 		let owner = before.sessionId ?? null;
 		if (write.sessionId !== undefined) {
 			if (actor.sessionId) throw new Error("Chats claim tasks with the claim action; only the user assigns them");

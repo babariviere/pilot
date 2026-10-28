@@ -128,6 +128,9 @@ unchanged; outstanding accounting memory and release verification is documented 
   open issues), readable through `mission get` with the task ID. Delivered members cannot claim new
   tasks and stay in the chat list until archived. A user can explicitly assign with
   `overrideRetirement: true`; new tasks normally start fresh chats. Legacy task records remain unchanged.
+  Agent tool writes allow 1000 Unicode code points for decision text, 200 for task titles, 4000 for
+  task bodies and 12000 for briefs (including whitespace). Oversize writes must be summarized with
+  links to supporting material. Existing content stays readable; unrelated edits preserve legacy fields.
   Routine comments batch for 30 seconds, including when idle. ACK-only and explicitly informational
   comments do not wake the coordinator. Blockers, needs-you, failures and structured task delivery
   bypass settlement; coordinator self-writes never wake it. Notices retain durable retry identities.

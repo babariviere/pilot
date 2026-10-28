@@ -2,6 +2,7 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { validateMissionAuthoring } from "./mission-authoring.ts";
 
 export const MISSION_TOOL = "mission";
 
@@ -51,11 +52,12 @@ export type MissionCall = (action: MissionAction, args: Record<string, JsonValue
 const taskStatus = StringEnum(["todo", "in_progress", "blocked", "in_review", "delegated", "done", "dropped"] as const);
 
 export function createMissionTool(call: MissionCall, coordinator = false): ToolDefinition {
-	return defineTool({
+	const tool = defineTool({
 		name: MISSION_TOOL,
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
+Authoring limits (Unicode code points, including whitespace): decision text 1000, task title 200/body 4000, brief 12000. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
@@ -114,12 +116,14 @@ Actions:
 						: "For claim or release: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed/released and skipped. Use instead of id.",
 				}),
 			),
-			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),
+			markdown: Type.Optional(
+				Type.String({ description: "Complete replacement brief: max 12000 Unicode code points." }),
+			),
 			expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Brief revision you edited." })),
 			revision: Type.Optional(Type.Integer({ minimum: 1, description: "Brief revision to read." })),
-			title: Type.Optional(Type.String({ maxLength: 200 })),
+			title: Type.Optional(Type.String({ description: "Task title: max 200 Unicode code points." })),
 			goal: Type.Optional(Type.String({ maxLength: 4000 })),
-			body: Type.Optional(Type.String({ maxLength: 8000, description: "Task details." })),
+			body: Type.Optional(Type.String({ description: "Task details: max 4000 Unicode code points." })),
 			status: Type.Optional(taskStatus),
 			completion: Type.Optional(
 				Type.Object({
@@ -143,7 +147,12 @@ Actions:
 			audience: Type.Optional(StringEnum(["all", "coordinator", "reference"] as const)),
 			filter: Type.Optional(StringEnum(["open", "done", "all"] as const)),
 			mine: Type.Optional(Type.Boolean({ description: "tasks: only your tasks." })),
-			text: Type.Optional(Type.String({ maxLength: 8000, description: "Decision, comment or log text." })),
+			text: Type.Optional(
+				Type.String({
+					description:
+						"Decision text: max 1000 Unicode code points (decide/propose). Comment or log text: max 8000.",
+				}),
+			),
 			anchor: Type.Optional(
 				Type.String({ maxLength: 8000, description: "Quoted brief excerpt a comment refers to." }),
 			),
@@ -160,8 +169,10 @@ Actions:
 						tasks: Type.Optional(
 							Type.Array(
 								Type.Object({
-									title: Type.String({ maxLength: 200 }),
-									body: Type.Optional(Type.String({ maxLength: 8000 })),
+									title: Type.String({ description: "Task title: max 200 Unicode code points." }),
+									body: Type.Optional(
+										Type.String({ description: "Task body: max 4000 Unicode code points." }),
+									),
 								}),
 								{
 									minItems: 1,
@@ -228,7 +239,10 @@ Actions:
 				: {}),
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			resourceId: Type.Optional(
-				Type.String({ maxLength: 128, description: "Linked ticket ID from links: ticket, updateLink or split." }),
+				Type.String({
+					maxLength: 128,
+					description: "Linked ticket ID from links: ticket, updateLink or split.",
+				}),
 			),
 			linearRole: Type.Optional(
 				StringEnum(["reference", "managed", "contribution"] as const, {
@@ -290,6 +304,7 @@ Actions:
 		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
 			signal?.throwIfAborted();
 			const { action, ...rest } = params;
+			validateMissionAuthoring(action, rest);
 			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
 				string,
 				JsonValue
@@ -298,4 +313,24 @@ Actions:
 			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
 		},
 	});
+	// TypeBox's maxLength counts graphemes and short-circuits custom errors. Use descriptions
+	// for model-facing limits and enforce code points with an explicit runtime
+	// refinement and actionable errors. Keep executable metadata out of model declarations.
+	const authoringError = (value: unknown) => {
+		if (!value || typeof value !== "object") return undefined;
+		const { action, ...args } = value as Record<string, unknown>;
+		try {
+			if (typeof action === "string") validateMissionAuthoring(action, args);
+		} catch (error) {
+			return (error as Error).message;
+		}
+		return undefined;
+	};
+	const parameters = Type.Refine(
+		tool.parameters,
+		(value) => !authoringError(value),
+		(value) => authoringError(value) ?? "Invalid mission authoring input",
+	);
+	Object.defineProperty(parameters, "~refine", { enumerable: false });
+	return { ...tool, parameters };
 }

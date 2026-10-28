@@ -25,6 +25,89 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("agent authoring limits validate supplied writes without restricting legacy reads or unrelated edits", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Limits",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const call = (action: Parameters<MissionService["call"]>[1], args: Record<string, unknown>) =>
+		f.service.call(lead.id, action, args);
+	const title = "😀".repeat(200);
+	const body = "😀".repeat(4000);
+	const task = (await call("task", { title, body })) as { id: string };
+	for (const id of [undefined, task.id]) {
+		await assert.rejects(
+			call("task", { ...(id ? { id } : {}), title: `${title}x` }),
+			/201 characters; limit is 200.*Summarize and link/,
+		);
+		await assert.rejects(
+			call("task", { ...(id ? { id } : {}), title: "Valid", body: `${body}x` }),
+			/4001 characters; limit is 4000/,
+		);
+	}
+	await call("task", { id: task.id, title, body });
+	const ticket = (await call("link", { url: "https://linear.app/acme/issue/ENG-12" })) as { id: string };
+	await call("updateLink", { resourceId: ticket.id, linearRole: "managed" });
+	for (const [field, max] of [
+		["title", 200],
+		["body", 4000],
+	] as const) {
+		const before = f.store.tasks(mission.id).length;
+		await assert.rejects(
+			call("split", {
+				resourceId: ticket.id,
+				tasks: [{ title: "Must not be created" }, { title: "Split", [field]: "😀".repeat(max + 1) }],
+			}),
+			new RegExp(`${max + 1} characters; limit is ${max}`),
+		);
+		assert.equal(f.store.tasks(mission.id).length, before);
+	}
+	await call("split", { resourceId: ticket.id, tasks: [{ title: "x".repeat(200), body }] });
+	assert.equal(f.store.task(mission.id, task.id).title, title);
+	assert.equal(f.store.task(mission.id, task.id).body, body);
+	await call("decide", { text: "😀".repeat(1000) });
+	await assert.rejects(call("decide", { text: `${"😀".repeat(1000)}x` }), /1001 characters; limit is 1000/);
+	const decision = f.store.addDecision(mission.id, "x".repeat(1001));
+	await call("propose", { decisionId: decision.id, text: "😀".repeat(1000), reason: "Concise replacement" });
+	await assert.rejects(
+		call("propose", { decisionId: decision.id, text: "x".repeat(1001), reason: "Too long" }),
+		/1001 characters; limit is 1000/,
+	);
+	for (const expectedRevision of [0, 1]) {
+		await assert.rejects(
+			call("brief", { markdown: `${"😀".repeat(12000)}x`, expectedRevision }),
+			/12001 characters; limit is 12000/,
+		);
+		await call("brief", { markdown: `${expectedRevision}${"😀".repeat(11999)}`, expectedRevision });
+	}
+	// User/storage paths retain existing capacities. No new cap applies to loaded records.
+	const legacyBody = "x".repeat(6000);
+	const legacy = f.store.addTask(mission.id, { title: "Legacy", body: legacyBody });
+	const legacyBrief = "x".repeat(12001);
+	f.store.writeBrief(mission.id, legacyBrief, 2);
+	assert.equal(((await call("get", { id: legacy.id })) as { body: string }).body, legacyBody);
+	assert.equal(((await call("brief", {})) as { markdown: string }).markdown, legacyBrief);
+	assert.ok(JSON.stringify(await call("decisions", {})).includes(decision.text));
+	await call("task", { id: legacy.id, title: "Renamed", status: "blocked" });
+	assert.equal(f.store.task(mission.id, legacy.id).body, legacyBody);
+	await assert.rejects(call("task", { id: legacy.id, body: legacyBody }), /6000 characters; limit is 4000/);
+	assert.equal(f.store.task(mission.id, legacy.id).body, legacyBody);
+	await call("task", { id: legacy.id, body: "Summarized" });
+	assert.equal(f.store.task(mission.id, legacy.id).body, "Summarized");
+	// Synthetic imported legacy title, larger than current storage creation permits.
+	const legacyTitle = "x".repeat(201);
+	f.store["run"]("UPDATE tasks SET title = ? WHERE id = ?", legacyTitle, legacy.id);
+	assert.equal(((await call("get", { id: legacy.id })) as { title: string }).title, legacyTitle);
+	await call("task", { id: legacy.id, body: "Other field edited" });
+	assert.equal(f.store.task(mission.id, legacy.id).title, legacyTitle);
+	await assert.rejects(call("task", { id: legacy.id, title: legacyTitle }), /201 characters; limit is 200/);
+	await f.store.durable();
+});
+
 test("coordinator tools associate, explicitly upgrade and split Linear ticket work with live context", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn(),

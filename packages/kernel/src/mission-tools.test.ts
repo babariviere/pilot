@@ -12,12 +12,78 @@ import {
 	getCurrentTools,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
+	validateToolArguments,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createMissionTool, MISSION_TOOL } from "./mission-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
+
+test("mission authoring boundaries match runtime schema and reject before IPC", async () => {
+	for (const coordinator of [false, true]) {
+		let calls = 0;
+		const tool = createMissionTool(async () => {
+			calls++;
+			return {};
+		}, coordinator);
+		assert.doesNotMatch(JSON.stringify(tool.parameters), /~refine/);
+		assert.match(JSON.stringify(tool.parameters), /Unicode code points/);
+		const cases = [
+			{ action: "task", field: "title", max: 200 },
+			{ action: "task", field: "body", max: 4000 },
+			{ action: "brief", field: "markdown", max: 12000 },
+			{ action: "decide", field: "text", max: 1000 },
+			...(coordinator ? [{ action: "propose", field: "text", max: 1000 }] : []),
+		];
+		for (const { action, field, max } of cases) {
+			// Astral symbols, combining sequences and whitespace count as code points, not graphemes/UTF-16.
+			for (const prefix of ["", "😀", "e\u0301", " \n"]) {
+				const value = prefix + "x".repeat(max - Array.from(prefix).length);
+				const args = { action, [field]: value };
+				validateToolArguments(tool, { type: "toolCall", id: "max", name: "mission", arguments: args });
+				await tool.execute("max", args as never, undefined, undefined, {} as never);
+				const before = calls;
+				const over = { ...args, [field]: `${value}x` };
+				assert.throws(
+					() => validateToolArguments(tool, { type: "toolCall", id: "over", name: "mission", arguments: over }),
+					new RegExp(`${max + 1} characters; limit is ${max}.*Summarize and link`),
+				);
+				await assert.rejects(
+					tool.execute("over", over as never, undefined, undefined, {} as never),
+					new RegExp(`${max + 1} characters; limit is ${max}.*Summarize and link`),
+				);
+				assert.equal(calls, before);
+			}
+		}
+		for (const action of ["comment", "log"]) {
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "other",
+				name: "mission",
+				arguments: { action, text: "x".repeat(1001) },
+			});
+		}
+		if (coordinator) {
+			for (const [field, max] of [
+				["title", 200],
+				["body", 4000],
+			] as const) {
+				const args = { action: "split", tasks: [{ title: "A", [field]: "😀".repeat(max) }] };
+				validateToolArguments(tool, { type: "toolCall", id: "split", name: "mission", arguments: args });
+				await tool.execute("split", args as never, undefined, undefined, {} as never);
+				args.tasks[0]![field] += "x";
+				assert.throws(() =>
+					validateToolArguments(tool, { type: "toolCall", id: "split", name: "mission", arguments: args }),
+				);
+				await assert.rejects(
+					tool.execute("split", args as never, undefined, undefined, {} as never),
+					new RegExp(`${max + 1} characters; limit is ${max}`),
+				);
+			}
+		}
+	}
+});
 
 test("ticket tool declarations expose explicit role upgrades and bounded local splits only to coordinators", () => {
 	const member = createMissionTool(async () => null);
