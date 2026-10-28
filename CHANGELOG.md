@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.83.0](https://github.com/babariviere/pilot/compare/v1.82.0...v1.83.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** ease chat side panels open and closed ([b7aca74](https://github.com/babariviere/pilot/commit/b7aca749eed00df77943f0568f4d187317330b8b))
+* **desktop:** quieter sidebar chat rows ([87aea06](https://github.com/babariviere/pilot/commit/87aea062d3ab30c1be448d1bb46619b93b6c593d))
+* **desktop:** read every mission comment natively ([bf4c701](https://github.com/babariviere/pilot/commit/bf4c70100756421ec24dd07647589c56affd197b))
+* **desktop:** show message copy and sent time below messages ([f821c78](https://github.com/babariviere/pilot/commit/f821c78b89428e3c8223493c6fc0ea5c878d6368))
+* **desktop:** show sent messages in the conversation before the agent consumes them ([41d3362](https://github.com/babariviere/pilot/commit/41d33627e318bb6408d091da2b79d36bd7364e11))
+* **desktop:** show the chat project as a subtitle under the title ([d26b647](https://github.com/babariviere/pilot/commit/d26b64781bda8f36e44b15acd5b0cc9bc1275364))
+* **desktop:** still chat-row state corners ([494edc7](https://github.com/babariviere/pilot/commit/494edc755e0bc71b41ebed324e25c4334129d44f))
+* **experiments:** add native Rust AppKit chat comparison ([4451f05](https://github.com/babariviere/pilot/commit/4451f050625b5728db0d4bc3bc754a00c2978b6c))
+
+
+### Bug Fixes
+
+* **desktop:** align chat header title and project baselines ([437f2b7](https://github.com/babariviere/pilot/commit/437f2b7fc0ee188e88fb9731116b678199283635))
+* **desktop:** explain a busy chat's model lock in context ([e996742](https://github.com/babariviere/pilot/commit/e9967425eb3e0a061d569fcc386bbd2a5440ae65))
+* **desktop:** keep an accepted message visible until its queue row arrives ([c5a8783](https://github.com/babariviere/pilot/commit/c5a87838266c2739db756cb8a3a5fd9938841409))
+* **desktop:** keep popup content surfaces opaque ([6a64217](https://github.com/babariviere/pilot/commit/6a64217b40b635af1fb069ccc3f2a7a8a9f19e4a))
+* **desktop:** reach the newest history window by scrolling to the bottom ([3a3c63a](https://github.com/babariviere/pilot/commit/3a3c63a7149426610dc55563931afeb37dc7e84f))
+* **desktop:** resume transcript follow after scrollbar input ([63e2514](https://github.com/babariviere/pilot/commit/63e251432d2e5518f232f2e313bbbae358eb8bd6))
+* **desktop:** route canonical chat deep links ([bf18d86](https://github.com/babariviere/pilot/commit/bf18d86a338118705f5722197c8372b13e354d53))
+* **desktop:** show message sent time on keyboard focus and in the user locale ([3da14c8](https://github.com/babariviere/pilot/commit/3da14c885bc4879cd8c973f4211b3e0d840ae3ae))
+* **desktop:** size native Mermaid to its content and wrap labels at words ([853ea14](https://github.com/babariviere/pilot/commit/853ea147904fe59878be98d2c1f74e26f39f6767))
+* **experiments:** isolate native chat qualification blockers ([354e44d](https://github.com/babariviere/pilot/commit/354e44db8a3ef0d20e61009413b3763d59e624cd))
+* **experiments:** qualify native chat undo and anchoring ([5a9036a](https://github.com/babariviere/pilot/commit/5a9036a081f2c4de5bf35f887409caac89b2fb24))
+
+
+### Performance Improvements
+
+* **desktop:** lighter sidebar scroll frames ([25aa8a0](https://github.com/babariviere/pilot/commit/25aa8a09f6038998f31819503ebee04da606407f))
+
 ## [1.82.0](https://github.com/babariviere/pilot/compare/v1.81.0...v1.82.0) (2026-10-28)
 
 
