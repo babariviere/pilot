@@ -65,6 +65,26 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf
             .unwrap();
     }
 }
+/// Wheel the page until the whole element is in view; the overview's height
+/// depends on how much needs the user.
+fn into_view(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
+    let below = cx
+        .update_window(h, |_, w, _| {
+            w.find(id).bounds().bottom() - w.find("missions-page").bounds().bottom()
+        })
+        .unwrap();
+    if below > px(0.) {
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "missions-page",
+                ScrollDelta::Pixels(point(px(0.), -below - px(8.))),
+                cx,
+            )
+        })
+        .unwrap();
+        settle(cx, h);
+    }
+}
 pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
     let dir = std::env::var_os("PILOT_NEXT_MISSIONS_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
@@ -409,6 +429,7 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             crate::mission_browser_view::probe_menu_command(cx, h, "Copy goal");
+            into_view(cx, h, "mission-chat-chat-A");
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().unwrap(),
@@ -430,6 +451,8 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
                 matches!(v.page, Page::Mission(_)) && !v.missions.read(cx).busy
             });
             overview_at_a_glance(cx, h, &view, &dir, width, mode);
+            needs_you_attention(cx, h, &view, &dir, width, mode, &server);
+            into_view(cx, h, "mission-chat-chat-B");
             cx.update_window(h, |_, w, cx| w.click("mission-chat-chat-B", cx))
                 .unwrap();
             settle(cx, h);
@@ -506,7 +529,140 @@ fn overview_detail() -> serde_json::Value {
         {"id":"task-D","number":4,"title":"Review exact links","status":"in_review","order":4,"sessionId":"not-loaded"},
         {"id":"task-E","number":5,"title":"Waiting on a decision","status":"blocked","order":5},
     ]);
+    // The user coordinates: open agent comments addressed to nobody need them.
+    v["mission"]["coordinatorSessionId"] = json!(null);
+    let comment = |i: usize| json!({"id":format!("comment-{i}"),"text":format!("Agent question {i}: which region should the canary use? 日本語 👩‍💻"),"authorSessionId":"chat-B","createdAt":i});
+    let mut comments: Vec<_> = (1..=6).map(comment).collect();
+    comments.push(json!({"id":"comment-mine","text":"My own note","createdAt":7}));
+    comments.push(json!({"id":"comment-coordinator","text":"For chat-A","authorSessionId":"chat-B","targetSessionId":"chat-A","createdAt":8}));
+    v["comments"] = json!(comments);
+    let ticket = |id: &str, state: &str, at: u64| json!({"id":id,"kind":"linear.issue","linearRole":"managed","relationship":"reference","url":format!("https://linear.app/acme/issue/{id}"),"externalId":id,"title":"Ship the overview","createdAt":at,"linearSync":{"state":state,"reason":"Its status was changed in Linear. Review the ticket before resuming.","error":"Linear returned HTTP 500","updatedAt":at}});
+    v["resources"] = json!([
+        ticket("ENG-2", "error", 2),
+        ticket("ENG-1", "paused", 1),
+        ticket("ENG-3", "synced", 0)
+    ]);
+    v["decisions"] =
+        json!([{"id":"decision-3","number":3,"audience":"all","text":"Keep the overview calm."}]);
+    v["decisionProposals"] = json!([
+        {"id":"proposal-A","decisionId":"decision-3","kind":"edit","status":"pending","reason":"Show comments in Needs you.\nThe user coordinates this mission.","text":"Keep the overview calm and complete."},
+        {"id":"proposal-gone","decisionId":"decision-removed","kind":"remove","status":"pending","reason":"Target is gone"},
+    ]);
     v
+}
+/// Tickets, comments and proposals follow chats and blocked tasks, five per
+/// kind with the full count; a proposal opens its expanded Decisions row.
+fn needs_you_attention(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    dir: &Option<PathBuf>,
+    width: f32,
+    mode: ThemeMode,
+    server: &Server,
+) {
+    let requests = server.state.lock().unwrap().seen.len();
+    cx.update_window(h, |_, w, _| {
+        let order = [
+            "mission-needs-chat-chat-B",
+            "mission-needs-task-task-E",
+            "mission-needs-ticket-ENG-1",
+            "mission-needs-ticket-ENG-2",
+            "mission-needs-comment-comment-1",
+            "mission-needs-comment-comment-5",
+            "mission-needs-comments-more",
+            "mission-needs-proposal-proposal-A",
+        ];
+        for pair in order.windows(2) {
+            assert!(
+                w.find(pair[0]).bounds().top() < w.find(pair[1]).bounds().top(),
+                "{pair:?}"
+            );
+        }
+        for absent in [
+            "mission-needs-ticket-ENG-3",
+            "mission-needs-comment-comment-6",
+            "mission-needs-comment-comment-mine",
+            "mission-needs-comment-comment-coordinator",
+            "mission-needs-proposal-proposal-gone",
+            "mission-needs-tickets-more",
+            "mission-needs-proposals-more",
+            "mission-needs-error",
+        ] {
+            assert!(w.try_find(absent).is_none(), "{absent}");
+        }
+        // Static rows keep their whole reason inside the reading column.
+        let page = w.find("missions-page").bounds();
+        let ticket = w.find("mission-needs-ticket-ENG-1").bounds();
+        assert!(ticket.left() >= page.left() && ticket.right() <= page.right());
+        assert!(ticket.size.height > px(30.), "title and reason: {ticket:?}");
+        assert!(w.try_find("decisions-proposal-proposal-A").is_none());
+    })
+    .unwrap();
+    capture(
+        cx,
+        h,
+        dir,
+        format!("{}-{}-overview-needs-you.png", width as u32, mode.name()),
+    );
+    // Keyboard: the proposal row opens Decisions on that proposal, expanded
+    // and scrolled to the top of the page.
+    cx.update_window(h, |_, w, cx| {
+        let row = "mission-needs-proposal-proposal-A";
+        for _ in 0..80 {
+            w.press("tab", cx);
+            if w.find(row).focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(w.find(row).focused(), Some(true));
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        let page = w.find("missions-page").bounds();
+        let proposal = w.find("decisions-proposal-proposal-A").bounds();
+        assert!(
+            proposal.top() >= page.top() - px(1.) && proposal.top() < page.top() + px(40.),
+            "proposal at the top: {proposal:?} in {page:?}"
+        );
+        assert!(w.find("proposal-reason-proposal-A").visible());
+    })
+    .unwrap();
+    capture(
+        cx,
+        h,
+        dir,
+        format!("{}-{}-overview-proposal.png", width as u32, mode.name()),
+    );
+    assert_eq!(
+        server.state.lock().unwrap().seen.len(),
+        requests,
+        "Needs you reads the retained detail, no request"
+    );
+    // Close Decisions again and return to the top for the remaining checks.
+    let to_top = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "decisions-proposal-proposal-A",
+                ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    to_top(cx);
+    cx.update_window(h, |_, w, cx| w.click("mission-decisions-open", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("decisions-proposal-proposal-A").is_none());
+        assert!(w.find("mission-needs-proposal-proposal-A").visible());
+    })
+    .unwrap();
+    cx.update(|cx| assert!(view.read(cx).missions.read(cx).detail.is_some()));
 }
 fn overview_at_a_glance(
     cx: &mut HeadlessAppContext,

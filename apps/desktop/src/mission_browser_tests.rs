@@ -153,3 +153,105 @@ fn overview_summary_covers_every_received_task_by_work_status() {
     let d = detail(&key, &v).unwrap();
     assert!(d.summary.counts.is_empty() && d.summary.total() == 0);
 }
+
+#[test]
+fn attention_projects_tickets_comments_and_proposals_like_swift() {
+    let key = f::key("mission-A");
+    let mut v = f::detail(&key.id);
+    let ticket = |id: &str, state: &str, at: u64| json!({"id":id,"kind":"linear.issue","linearRole":"managed","relationship":"reference","url":"https://linear.app/x/issue/ENG-1","externalId":"ENG-1","title":"Ship it","createdAt":at,"linearSync":{"state":state,"reason":"Status was changed in Linear. Review the ticket.","error":"\nHTTP 500\nmore","updatedAt":at}});
+    let mut task_ticket = ticket("task-scoped", "paused", 1);
+    task_ticket["taskId"] = json!("task-A");
+    let mut reference = ticket("reference", "paused", 1);
+    reference["linearRole"] = json!("reference");
+    let mut slack = ticket("slack", "paused", 1);
+    slack["kind"] = json!("slack.message");
+    let mut bare = ticket("bare", "error", 9);
+    for k in ["externalId", "title", "linearSync"] {
+        bare.as_object_mut().unwrap().remove(k);
+    }
+    bare["linearSync"] = json!({"state":"error","updatedAt":9});
+    v["resources"] = json!([
+        ticket("t-late", "error", 5),
+        ticket("t-b", "paused", 2),
+        ticket("t-a", "paused", 2),
+        ticket("synced", "synced", 1),
+        task_ticket,
+        reference,
+        slack,
+        bare
+    ]);
+    let comment = |id: &str| json!({"id":id,"text":format!("Question {id} 私"),"authorSessionId":"chat-B","createdAt":1});
+    let mut targeted = comment("targeted");
+    targeted["targetSessionId"] = json!("chat-A");
+    let mut resolved = comment("resolved");
+    resolved["resolvedAt"] = json!(2);
+    let mut own = comment("own");
+    own.as_object_mut().unwrap().remove("authorSessionId");
+    v["comments"] = json!([comment("c2"), targeted, resolved, own, comment("c1")]);
+    v["decisions"] = json!([{"id":"d7","number":7,"audience":"all","text":"Keep it"}]);
+    let proposal = |id: &str, target: &str, status: &str| json!({"id":id,"decisionId":target,"kind":"edit","status":status,"reason":"Simpler.\nDetails","text":"New"});
+    v["decisionProposals"] = json!([
+        proposal("p1", "d7", "pending"),
+        proposal("gone", "removed", "pending"),
+        proposal("done", "d7", "accepted")
+    ]);
+    // A coordinator receives comments addressed to nobody.
+    let d = detail(&key, &v).unwrap();
+    let a = d.attention.as_ref().unwrap();
+    let ids: Vec<_> = a.tickets.iter().map(|t| t.id.as_str()).collect();
+    assert_eq!(ids, ["t-a", "t-b", "t-late", "bare"]);
+    assert_eq!(a.tickets[0].label, "ENG-1 Ship it");
+    assert_eq!(
+        a.tickets[0].reason,
+        "Linear updates paused. Status was changed in Linear."
+    );
+    assert_eq!(a.tickets[2].reason, "Couldn't update Linear: HTTP 500");
+    assert_eq!(
+        (a.tickets[3].label.as_str(), a.tickets[3].reason.as_str()),
+        ("Linear ticket", "Couldn't update Linear: unknown error")
+    );
+    assert!(a.comments.is_empty());
+    assert_eq!(a.proposals.len(), 1);
+    assert_eq!(
+        (a.proposals[0].id.as_str(), a.proposals[0].number),
+        ("p1", 7)
+    );
+    assert_eq!(a.proposals[0].reason, "Simpler.\nDetails");
+    // While the user coordinates, open agent comments to nobody need the user, in received order.
+    v["mission"]["coordinatorSessionId"] = json!(null);
+    let d = detail(&key, &v).unwrap();
+    let a = d.attention.unwrap();
+    assert_eq!(
+        a.comments.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        ["c2", "c1"]
+    );
+    assert_eq!(a.comments[0].text, "Question c2 私");
+    // Every received item counts; the overview shows five per kind.
+    v["comments"] = json!(
+        (0..40)
+            .map(|i| comment(&format!("c{i}")))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        detail(&key, &v).unwrap().attention.unwrap().comments.len(),
+        40
+    );
+    // Absent lists add nothing; malformed ones, or malformed decisions, are an error
+    // beside the rest of the overview, never an empty Needs you.
+    let mut absent = f::detail(&key.id);
+    absent.as_object_mut().unwrap().remove("comments");
+    absent.as_object_mut().unwrap().remove("resources");
+    let a = detail(&key, &absent).unwrap().attention.unwrap();
+    assert!(a.tickets.is_empty() && a.comments.is_empty() && a.proposals.is_empty());
+    for (field, value) in [
+        ("comments", json!({})),
+        ("resources", json!("x")),
+        ("decisions", json!(null)),
+    ] {
+        let mut bad = v.clone();
+        bad[field] = value;
+        let d = detail(&key, &bad).unwrap();
+        assert!(d.attention.is_err(), "{field}");
+        assert_eq!(d.summary.total(), 2);
+    }
+}

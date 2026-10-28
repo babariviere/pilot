@@ -3,12 +3,83 @@
 use super::*;
 use crate::{
     app_icon::AppIcon,
-    mission_browser::{Detail, Summary, Task as Row},
+    mission_browser::{Attention, Detail, Proposal, Summary, Task as Row},
 };
 use gpui_kit::AnyElement;
 
 /// Rows a section shows before its Show all action, as in Swift's Overview.
 pub(crate) const SECTION_ROWS: usize = 5;
+
+fn first_line(s: &str) -> String {
+    s.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or_default()
+        .to_owned()
+}
+/// A row with nowhere to go yet: its reason is the content, wrapped in full.
+/// Insets match the content of the quiet Kit button rows around it.
+const ROW_INSET: f32 = 10.;
+fn note_row(
+    id: String,
+    icon: AppIcon,
+    title: Option<&str>,
+    detail: &str,
+    cx: &Context<Browser>,
+) -> AnyElement {
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .h_flex()
+        .w_full()
+        .min_w_0()
+        .items_start()
+        .gap(px(Space::CONTROL))
+        .px(px(ROW_INSET))
+        .py(px(2.))
+        .child(div().pt(px(2.)).child(icon.inline()))
+        .child(
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .children(title.map(|t| ui::text(Text::Body, SharedString::from(t.to_owned()))))
+                .child(
+                    ui::text(
+                        if title.is_some() {
+                            Text::Caption
+                        } else {
+                            Text::Body
+                        },
+                        SharedString::from(detail.to_owned()),
+                    )
+                    .when(title.is_some(), |t| {
+                        t.text_color(cx.theme().muted_foreground)
+                    }),
+                ),
+        )
+        .into_any_element()
+}
+/// "3 more comments": Overview shows five per kind but keeps the full count.
+fn overflow(
+    id: &'static str,
+    total: usize,
+    noun: [&str; 2],
+    cx: &Context<Browser>,
+) -> Option<impl IntoElement> {
+    let more = total.saturating_sub(SECTION_ROWS);
+    (more > 0).then(|| {
+        ui::text(
+            Text::Caption,
+            SharedString::from(format!("{more} more {}", noun[usize::from(more > 1)])),
+        )
+        .id(id)
+        .test_support()
+        .px(px(ROW_INSET))
+        .text_color(cx.theme().muted_foreground)
+    })
+}
 
 impl Browser {
     pub(super) fn project_label(&self, id: &str) -> String {
@@ -292,11 +363,20 @@ impl Browser {
             .disabled(!self.can_reveal(generation, cx))
             .on_click(cx.listener(move |v, _, w, cx| v.reveal_task(None, generation, w, cx)))
     }
-    /// Needs you, only when something does: member chats, then blocked tasks.
+    /// Needs you, only when something does, in Swift's order: member chats,
+    /// blocked tasks, Linear tickets, comments, then decision proposals.
     pub(super) fn needs_you_view(&self, d: &Detail, cx: &Context<Self>) -> Option<AnyElement> {
         let chats = self.needy_chats(d);
         let blocked = &d.summary.blocked;
-        if chats.is_empty() && blocked.is_empty() {
+        let empty = Attention::default();
+        let attention = d.attention.as_ref().unwrap_or(&empty);
+        if chats.is_empty()
+            && blocked.is_empty()
+            && d.attention.is_ok()
+            && attention.tickets.is_empty()
+            && attention.comments.is_empty()
+            && attention.proposals.is_empty()
+        {
             return None;
         }
         let mut section = div()
@@ -320,7 +400,107 @@ impl Browser {
                 cx,
             ));
         }
+        for t in attention.tickets.iter().take(SECTION_ROWS) {
+            section = section.child(note_row(
+                format!("mission-needs-ticket-{}", t.id),
+                AppIcon::Links,
+                Some(&t.label),
+                &t.reason,
+                cx,
+            ));
+        }
+        section = section.children(overflow(
+            "mission-needs-tickets-more",
+            attention.tickets.len(),
+            ["Linear ticket", "Linear tickets"],
+            cx,
+        ));
+        for c in attention.comments.iter().take(SECTION_ROWS) {
+            section = section.child(note_row(
+                format!("mission-needs-comment-{}", c.id),
+                AppIcon::Info,
+                None,
+                &c.text,
+                cx,
+            ));
+        }
+        section = section.children(overflow(
+            "mission-needs-comments-more",
+            attention.comments.len(),
+            ["comment", "comments"],
+            cx,
+        ));
+        for p in attention.proposals.iter().take(SECTION_ROWS) {
+            section = section.child(self.proposal_row(p, cx));
+        }
+        if attention.proposals.len() > SECTION_ROWS {
+            let generation = self.generation;
+            section = section.child(
+                ui::action(
+                    "mission-needs-proposals-more",
+                    SharedString::from(format!("Show all {} proposals", attention.proposals.len())),
+                    Action::Quiet,
+                )
+                .self_start()
+                .disabled(!self.can_review(generation))
+                .on_click(
+                    cx.listener(move |v, _, w, cx| v.reveal_proposal(None, generation, w, cx)),
+                ),
+            );
+        }
+        if let Err(e) = &d.attention {
+            section = section.child(
+                div()
+                    .id("mission-needs-error")
+                    .test_support()
+                    .child(Notice::new(*e).tone(Tone::Warning)),
+            );
+        }
         Some(section.into_any_element())
+    }
+    /// Opens the decisions disclosure on this pending proposal.
+    fn proposal_row(&self, p: &Proposal, cx: &Context<Self>) -> AnyElement {
+        let generation = self.generation;
+        let id = p.id.clone();
+        let title = format!("Decision D{}: proposed change", p.number);
+        let reason = first_line(&p.reason);
+        ui::action(
+            SharedString::from(format!("mission-needs-proposal-{}", p.id)),
+            "",
+            Action::Quiet,
+        )
+        .w_full()
+        .justify_start()
+        .disabled(!self.can_review(generation))
+        .accessibility_label(SharedString::from(format!(
+            "{title}. {reason}. Review in Decisions"
+        )))
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap(px(Space::CONTROL))
+                .child(AppIcon::Read.inline())
+                .child(
+                    ui::text(Text::Body, SharedString::from(title))
+                        .flex_none()
+                        .text_left(),
+                )
+                .child(
+                    ui::text(Text::Caption, SharedString::from(reason))
+                        .flex_1()
+                        .min_w_0()
+                        .text_left()
+                        .truncate()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+        )
+        .on_click(
+            cx.listener(move |v, _, w, cx| v.reveal_proposal(Some(id.clone()), generation, w, cx)),
+        )
+        .into_any_element()
     }
     fn needy_chat_row(&self, d: &Detail, c: &Chat, cx: &Context<Self>) -> AnyElement {
         let generation = self.generation;

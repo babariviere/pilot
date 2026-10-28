@@ -2,7 +2,7 @@
 use super::*;
 use crate::mission_decisions::{Section, Text as BoundedText};
 use gpui_kit::component::ActiveTheme;
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 #[derive(Default)]
 pub(crate) struct Disclosure {
@@ -11,6 +11,8 @@ pub(crate) struct Disclosure {
     expanded: HashSet<String>,
     decisions: usize,
     proposals: usize,
+    /// Element a Needs you row asked to bring to the top, until it paints.
+    reveal: Rc<RefCell<Option<String>>>,
 }
 impl Disclosure {
     pub(super) fn reconcile(&mut self, d: &Detail) {
@@ -34,6 +36,63 @@ impl Disclosure {
     }
 }
 impl Browser {
+    pub(super) fn can_review(&self, generation: u64) -> bool {
+        self.generation == generation && self.decision_source().is_some()
+    }
+    /// Opens Decisions on one pending proposal, or on the pending proposals,
+    /// and scrolls it to the top of the page once it paints.
+    pub(super) fn reveal_proposal(
+        &mut self,
+        id: Option<String>,
+        generation: u64,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_review(generation) || self.brief_marked(w, cx) {
+            return;
+        }
+        let index = self.decision_source().and_then(|d| {
+            let s = d.decisions.as_ref().ok()?;
+            s.proposals
+                .rows
+                .iter()
+                .flatten()
+                .position(|p| Some(&p.id) == id.as_ref())
+        });
+        let key = match (id, index) {
+            (Some(id), Some(i)) => {
+                self.decisions.proposals = self.decisions.proposals.max(i + 1);
+                self.decisions.expanded.insert(format!("proposal-{id}"));
+                format!("proposal-{id}")
+            }
+            _ => "proposals".to_owned(),
+        };
+        self.decisions.opened = true;
+        *self.decisions.reveal.borrow_mut() = Some(key);
+        self.focus.focus(w, cx);
+        cx.notify();
+    }
+    /// Scrolls the page so this element's top meets the viewport's, once.
+    fn reveal_anchor(&self, key: String) -> Option<impl IntoElement + use<>> {
+        (self.decisions.reveal.borrow().as_ref() == Some(&key)).then(|| {
+            let (reveal, handle) = (self.decisions.reveal.clone(), self.detail_scroll.clone());
+            gpui_kit::canvas(
+                move |b, w, _| {
+                    if reveal.borrow_mut().take_if(|k| *k == key).is_some() {
+                        let top = b.top() - handle.offset().y;
+                        let y = (handle.bounds().top() - top).min(px(0.));
+                        handle.set_offset(gpui_kit::point(handle.offset().x, y));
+                        w.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_0()
+        })
+    }
     fn decision_source(&self) -> Option<&Arc<Detail>> {
         let d = self.detail.as_ref()?;
         (self.route == Some(Route::Detail(d.key.clone()))
@@ -300,10 +359,15 @@ impl Browser {
         }
         section = section
             .child(
-                ui::text(Text::Label, "Pending proposals")
-                    .font_semibold()
-                    .id("decisions-proposals-heading")
-                    .test_support(),
+                div()
+                    .relative()
+                    .child(
+                        ui::text(Text::Label, "Pending proposals")
+                            .font_semibold()
+                            .id("decisions-proposals-heading")
+                            .test_support(),
+                    )
+                    .children(self.reveal_anchor("proposals".into())),
             )
             .child(
                 ui::text(
@@ -330,6 +394,7 @@ impl Browser {
                         proposal.id
                     )))
                     .test_support()
+                    .relative()
                     .v_flex()
                     .w_full()
                     .min_w_0()
@@ -337,6 +402,7 @@ impl Browser {
                     .p(px(Space::SIDEBAR))
                     .bg(ui::Surface::Tray.color(cx))
                     .rounded(px(ui::Radius::ROW))
+                    .children(self.reveal_anchor(id.clone()))
                     .child(
                         ui::text(
                             Text::Body,

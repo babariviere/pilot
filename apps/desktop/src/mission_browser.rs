@@ -220,8 +220,138 @@ impl Summary {
     }
 }
 #[derive(Clone, Debug)]
+pub(crate) struct Comment {
+    pub(crate) id: String,
+    pub(crate) text: String,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Proposal {
+    pub(crate) id: String,
+    pub(crate) number: u64,
+    pub(crate) reason: String,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Ticket {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) reason: String,
+}
+/// Needs you beyond chats and blocked tasks, as in Swift's MissionNeedsYou:
+/// paused or failed mission-level managed Linear tickets, open agent comments
+/// addressed to nobody while the user coordinates, and pending proposals.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Attention {
+    pub(crate) tickets: Vec<Ticket>,
+    pub(crate) comments: Vec<Comment>,
+    pub(crate) proposals: Vec<Proposal>,
+}
+fn attention(
+    v: &Value,
+    coordinator: bool,
+    decisions: &Result<crate::mission_decisions::Snapshot, &'static str>,
+) -> Result<Attention, &'static str> {
+    let decisions = decisions.as_ref().map_err(|e| *e)?;
+    let list = |name: &str| match v.get(name) {
+        None => Ok(&[][..]),
+        Some(v) => v
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or("Mission comments or links are malformed."),
+    };
+    let mut tickets = Vec::new();
+    for r in list("resources")? {
+        let state = r["linearSync"]["state"].as_str();
+        if !r["taskId"].is_null()
+            || r["kind"] != "linear.issue"
+            || r["linearRole"] != "managed"
+            || !matches!(state, Some("paused" | "error"))
+        {
+            continue;
+        }
+        let created = r["createdAt"]
+            .as_f64()
+            .ok_or("Invalid mission link time.")?;
+        let label = [&r["externalId"], &r["title"]]
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let sync = &r["linearSync"];
+        let reason = if state == Some("paused") {
+            match first_sentence(sync["reason"].as_str()) {
+                Some(s) => format!("Linear updates paused. {s}."),
+                None => "Linear updates paused.".into(),
+            }
+        } else {
+            let why = first_line(sync["error"].as_str())
+                .or_else(|| sync["reason"].as_str().filter(|s| !s.is_empty()))
+                .unwrap_or("unknown error");
+            format!("Couldn't update Linear: {why}")
+        };
+        tickets.push((
+            created,
+            Ticket {
+                id: id(&r["id"])?,
+                label: if label.is_empty() {
+                    "Linear ticket".into()
+                } else {
+                    bounded(&label, 512)
+                },
+                reason: bounded(&reason, 1024),
+            },
+        ));
+    }
+    tickets.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
+    let mut comments = Vec::new();
+    // With a coordinator, comments addressed to nobody go to it, not the user.
+    if !coordinator {
+        for c in list("comments")? {
+            // The user's own comments are not waiting on the user.
+            if c["resolvedAt"].is_null()
+                && c["targetSessionId"].is_null()
+                && !c["authorSessionId"].is_null()
+            {
+                comments.push(Comment {
+                    id: id(&c["id"])?,
+                    text: text(&c["text"], 2048)?,
+                });
+            }
+        }
+    }
+    let current = decisions.decisions.rows.as_deref().unwrap_or_default();
+    let proposals = decisions
+        .proposals
+        .rows
+        .iter()
+        .flatten()
+        .filter_map(|p| {
+            let number = current.iter().find(|d| d.id == p.target)?.number;
+            Some(Proposal {
+                id: p.id.clone(),
+                number,
+                reason: p.reason.value.clone(),
+            })
+        })
+        .collect();
+    Ok(Attention {
+        tickets: tickets.into_iter().map(|t| t.1).collect(),
+        comments,
+        proposals,
+    })
+}
+fn first_line(s: Option<&str>) -> Option<&str> {
+    s?.lines().map(str::trim).find(|s| !s.is_empty())
+}
+/// Swift's MissionTicketSyncLine: the text before the first ". ", without a final period.
+fn first_sentence(s: Option<&str>) -> Option<&str> {
+    let s = s?;
+    let s = s.split(". ").next().unwrap_or(s);
+    Some(s.strip_suffix('.').unwrap_or(s)).filter(|s| !s.is_empty())
+}
+#[derive(Clone, Debug)]
 pub(crate) struct Detail {
     pub(crate) decisions: Result<crate::mission_decisions::Snapshot, &'static str>,
+    pub(crate) attention: Result<Attention, &'static str>,
     pub(crate) key: Key,
     pub(crate) title: String,
     pub(crate) status: String,
@@ -291,8 +421,11 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         }
         Some(clip_text(&v["brief"]["markdown"], 32768, &mut clipped)?)
     };
+    let decisions = crate::mission_decisions::project(v);
+    let coordinator = optional_id(&m["coordinatorSessionId"])?;
     Ok(Detail {
-        decisions: crate::mission_decisions::project(v),
+        attention: attention(v, coordinator.is_some(), &decisions),
+        decisions,
         key: key.clone(),
         title: text(&m["title"], 800)?,
         status: text(&m["status"], 40)?,
@@ -300,7 +433,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         goal,
         brief,
         clipped,
-        coordinator: optional_id(&m["coordinatorSessionId"])?,
+        coordinator,
         task_count: tasks.len(),
         tasks: tasks.into_iter().take(DISPLAY_TASKS).collect(),
         counts: counts(m)?,
