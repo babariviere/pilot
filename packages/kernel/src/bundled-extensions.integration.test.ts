@@ -203,7 +203,6 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 			JSON.stringify({
 				version: 1,
 				windows: blocked ? [{ provider: "openai", label: "Usage limit", usedPercent: 100 }] : [],
-				forced: [],
 			}),
 		);
 	await savePolicy(false);

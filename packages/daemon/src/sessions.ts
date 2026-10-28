@@ -139,7 +139,6 @@ import {
 	recordSubscriptionLimit,
 	refreshSubscriptionPolicy,
 	type SubscriptionPolicy,
-	subscriptionWindowKey,
 	windowUnexpired,
 } from "./subscription-policy.ts";
 import {
@@ -8397,7 +8396,7 @@ export class SessionManager {
 			subscriptionPause.windows.some(
 				(window) =>
 					window.provider === this.subscriptionProviderOf(meta, worker) &&
-					!meta.subscriptionPolicy?.forced.includes(subscriptionWindowKey(window)),
+					!meta.subscriptionPolicy?.force?.includes(window.provider),
 			);
 		// Compaction runs without a turn: show it as work, but keep the last result.
 		const workerState = worker?.state === "idle" && worker.compacting ? "working" : worker?.state;
@@ -9424,7 +9423,7 @@ export class SessionManager {
 		const windows =
 			policy?.windows.filter((window) => providers.has(window.provider) && windowUnexpired(window)) ?? [];
 		if (!windows.length) return undefined;
-		const unforced = windows.filter((window) => !policy?.forced.includes(subscriptionWindowKey(window)));
+		const unforced = windows.filter((window) => !policy?.force?.includes(window.provider));
 		return unforced.length ? { windows: unforced } : { windows, forced: true };
 	}
 
@@ -9490,7 +9489,6 @@ export class SessionManager {
 			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
 			if (meta.continuedTo) throw new Conflict("Continue in the replacement chat");
 			meta.subscriptionPolicy = refreshSubscriptionPolicy(meta.subscriptionPolicy, this.subscriptionUsage);
-			meta.subscriptionPolicy.forced = force ? meta.subscriptionPolicy.windows.map(subscriptionWindowKey) : [];
 			if (force && meta.subscriptionPolicy.windows.length)
 				meta.subscriptionPolicy.force = [...SUBSCRIPTION_PROVIDERS];
 			else delete meta.subscriptionPolicy.force;

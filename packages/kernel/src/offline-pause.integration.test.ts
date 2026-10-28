@@ -42,7 +42,7 @@ async function fixture(t: TestContext) {
 		await rename(`${policy}.tmp`, policy);
 	};
 	await online(false);
-	await writeFile(quota, JSON.stringify({ version: 1, windows: [], forced: [] }));
+	await writeFile(quota, JSON.stringify({ version: 1, windows: [] }));
 	const runtime = await ModelRuntime.create({
 		credentials: new InMemoryCredentialStore(),
 		modelsPath: null,
@@ -163,7 +163,6 @@ for (const reason of ["offline", "usage"] as const) {
 				JSON.stringify({
 					version: 1,
 					windows: [{ provider: "openai", label: "5h", usedPercent: 95 }],
-					forced: [],
 				}),
 			);
 		assert.equal(session.toolsRunning, true);
@@ -177,7 +176,7 @@ for (const reason of ["offline", "usage"] as const) {
 		assert.equal(entries.filter((entry) => entry.kind === "pi.tool-result").length, 1);
 		assert.ok(!JSON.stringify(entries).includes("interrupted"));
 		await f.online(true);
-		await writeFile(f.quota, JSON.stringify({ version: 1, windows: [], forced: [] }));
+		await writeFile(f.quota, JSON.stringify({ version: 1, windows: [] }));
 		session.resumeAfterUpdate();
 		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 		assert.equal(f.effects(), 2, "resuming never replays completed effects");
@@ -232,7 +231,7 @@ test("online alone cannot bypass a subscription pause, update tool drain or a ma
 		usedPercent: 95,
 		resetsAt: new Date(Date.now() + 60_000).toISOString(),
 	};
-	await writeFile(f.quota, JSON.stringify({ version: 1, windows: [window], forced: [] }));
+	await writeFile(f.quota, JSON.stringify({ version: 1, windows: [window] }));
 	f.faux.setResponses([
 		fauxAssistantMessage([fauxToolCall("effect", {})], { stopReason: "toolUse" }),
 		fauxAssistantMessage("done"),
@@ -243,7 +242,7 @@ test("online alone cannot bypass a subscription pause, update tool drain or a ma
 	await delay(40);
 	assert.equal(f.faux.state.callCount, 0, "subscription gate remains independent");
 	await session.pauseForUpdate();
-	await writeFile(f.quota, JSON.stringify({ version: 1, windows: [], forced: [] }));
+	await writeFile(f.quota, JSON.stringify({ version: 1, windows: [] }));
 	await delay(40);
 	assert.equal(f.effects(), 0);
 	await session.abort();

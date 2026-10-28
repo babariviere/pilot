@@ -12,16 +12,25 @@ export const SUBSCRIPTION_PAUSE_PERCENT = 95;
 export interface SubscriptionPolicy {
 	version: 1;
 	windows: SubscriptionPauseWindow[];
-	/** Window keys admission may pass (the gate's contract). Derived from `force` for current windows. */
-	forced: string[];
-	/** Force work: providers whose windows are ignored until the chat has no blocked window left. */
+	/** Force work: providers admission ignores until the chat has no blocked window left. */
 	force?: SubscriptionProvider[];
 	/** Prevent a stale/lower cache replay from releasing a known blocked window. */
 	observed?: Partial<Record<SubscriptionProvider, number>>;
 }
 
-export const subscriptionWindowKey = (window: SubscriptionPauseWindow): string =>
-	JSON.stringify([window.provider, window.label, window.resetsAt ?? null]);
+/** Older policies stored Force work as window keys: JSON [provider, label, resetsAt]. */
+function legacyForce(policy: SubscriptionPolicy | undefined): SubscriptionProvider[] | undefined {
+	const forced = (policy as { forced?: unknown } | undefined)?.forced;
+	if (policy?.force || !Array.isArray(forced)) return policy?.force;
+	return forced.flatMap((key) => {
+		try {
+			const provider = JSON.parse(key)[0];
+			return SUBSCRIPTION_PROVIDERS.includes(provider) ? [provider] : [];
+		} catch {
+			return [];
+		}
+	});
+}
 
 export function windowUnexpired(window: SubscriptionPauseWindow, now = Date.now()): boolean {
 	const reset = Date.parse(window.resetsAt ?? "");
@@ -49,8 +58,6 @@ export function recordSubscriptionLimit(
 			...(Number.isFinite(reset) && reset > now ? { resetsAt: new Date(reset).toISOString() } : {}),
 		});
 	}
-	const keys = new Set(next.windows.filter((window) => window.provider === limit.provider).map(subscriptionWindowKey));
-	next.forced = next.forced.filter((key) => !keys.has(key));
 	const force = next.force?.filter((provider) => provider !== limit.provider);
 	if (force?.length) next.force = force;
 	else delete next.force;
@@ -96,19 +103,14 @@ export function refreshSubscriptionPolicy(
 				observed[provider] = previous.observed[provider];
 		}
 	}
-	const keys = new Set(windows.map(subscriptionWindowKey));
 	// A reading can move a window's reset time or add a window; Force work still covers it.
-	const force = windows.length ? previous?.force?.filter((provider) => SUBSCRIPTION_PROVIDERS.includes(provider)) : [];
+	const force = windows.length
+		? [...new Set(legacyForce(previous)?.filter((provider) => SUBSCRIPTION_PROVIDERS.includes(provider)))]
+		: [];
 	return {
 		version: 1,
 		windows,
-		forced: [
-			...new Set([
-				...(previous?.forced ?? []).filter((key) => keys.has(key)),
-				...windows.filter((window) => force?.includes(window.provider)).map(subscriptionWindowKey),
-			]),
-		],
-		...(force?.length ? { force } : {}),
+		...(force.length ? { force } : {}),
 		...(Object.keys(observed).length ? { observed } : {}),
 	};
 }

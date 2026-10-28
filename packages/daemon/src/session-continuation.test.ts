@@ -278,7 +278,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	meta.agentPullRequests = [pr];
 	meta.boundPullRequests = [pr];
 	meta.unboundPullRequests = ["https://github.com/octo/repo/pull/2"];
-	meta.subscriptionPolicy = { version: 1, windows: [], forced: ["OLD FORCE"] };
+	meta.subscriptionPolicy = { version: 1, windows: [], force: ["openai"] };
 	meta.executionPermission = { authorizationId: "grant", level: "implement" };
 	await f.sessions["save"](meta);
 	const source = (await f.sessions["ensureWorker"](f.id)) as FakeWorker;
@@ -319,7 +319,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	assert.equal(f.sessions.get(f.id)?.subagents?.[0]?.retired, true);
 	assert.equal(f.sessions.get(f.id)?.subagents?.[0]?.state, "idle");
 	assert.equal(f.sessions.get(changed.id)?.subagents, undefined);
-	assert.deepEqual(f.sessions["metas"].get(changed.id)?.subscriptionPolicy?.forced, []);
+	assert.equal(f.sessions["metas"].get(changed.id)?.subscriptionPolicy?.force, undefined);
 	assert.doesNotThrow(() => f.sessions["assertOwnedWorkspace"](f.sessions["metas"].get(changed.id)!));
 	assert.throws(() => f.sessions.assertWritable(f.id), Conflict);
 	await assert.rejects(f.sessions.send(f.id, "no"), Conflict);

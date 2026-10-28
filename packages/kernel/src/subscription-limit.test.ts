@@ -72,7 +72,6 @@ for (const thrown of [false, true])
 				JSON.stringify({
 					version: 1,
 					windows: blocked ? [{ provider: "openai", label: "Usage limit", usedPercent: 100 }] : [],
-					forced: [],
 				}),
 			);
 			await rename(`${path}.tmp`, path);

@@ -34,7 +34,6 @@ async function fixture(t: TestContext) {
 			JSON.stringify({
 				version: 1,
 				windows: blocked ? [{ provider: physical.provider, label: "Usage limit", usedPercent: 100 }] : [],
-				forced: [],
 			}),
 		);
 		await rename(`${policy}.tmp`, policy);

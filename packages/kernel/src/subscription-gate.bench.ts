@@ -8,7 +8,7 @@ import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 const directory = await mkdtemp(join(tmpdir(), "pilot-quota-bench-"));
 try {
 	const path = join(directory, "policy.json");
-	await writeFile(path, JSON.stringify({ version: 1, windows: [], forced: [] }));
+	await writeFile(path, JSON.stringify({ version: 1, windows: [] }));
 	const samples: Record<string, Array<{ wallMs: number; cpuMs: number }>> = { before: [], after: [] };
 	for (let sample = 0; sample < 5; sample++) {
 		for (const label of sample % 2 ? ["after", "before"] : ["before", "after"]) {

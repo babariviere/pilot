@@ -151,16 +151,16 @@ test("a 95% reading holds durable work, not idle results, and force is chat/chil
 	const policyFile = (id: string) => join(f.home, "sessions", id, "subscription-policy.json");
 	const blocked = JSON.parse(await readFile(policyFile(first), "utf8"));
 	assert.equal(blocked.windows.length, 1);
-	assert.deepEqual(blocked.forced, []);
+	assert.equal(blocked.force, undefined);
 	await f.sessions.forceSubscription(first, true);
 	assert.equal(f.sessions.get(first)?.subscriptionPause?.forced, true);
 	assert.equal(f.sessions.get(first)?.working, true);
 	assert.equal(f.sessions.get(second)?.subscriptionPause?.forced, undefined);
-	assert.equal(JSON.parse(await readFile(policyFile(first), "utf8")).forced.length, 1);
-	assert.equal(JSON.parse(await readFile(policyFile(second), "utf8")).forced.length, 0);
-	assert.equal(
-		JSON.parse(await readFile(join(f.home, "sessions", first, "meta.json"), "utf8")).subscriptionPolicy.forced.length,
-		1,
+	assert.deepEqual(JSON.parse(await readFile(policyFile(first), "utf8")).force, ["anthropic", "openai"]);
+	assert.equal(JSON.parse(await readFile(policyFile(second), "utf8")).force, undefined);
+	assert.deepEqual(
+		JSON.parse(await readFile(join(f.home, "sessions", first, "meta.json"), "utf8")).subscriptionPolicy.force,
+		["anthropic", "openai"],
 	);
 	await f.sessions.forceSubscription(first, false);
 	assert.equal(f.sessions.subscriptionPaused(first), true);
@@ -241,7 +241,7 @@ test("force work stays on when a fresh reading moves the reset time or adds a wi
 	assert.equal(f.sessions.get(id)?.subscriptionPause?.windows.length, 2);
 	assert.equal(f.sessions.get(id)?.subscriptionPause?.forced, true);
 	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
-	assert.equal(policy.forced.length, 2, "the admission gate passes the moved and new windows");
+	assert.deepEqual(policy.force, ["anthropic", "openai"], "the admission gate passes the moved and new windows");
 });
 
 test("the reset timer releases work and expires force without a new provider reading", async (t) => {
@@ -260,7 +260,7 @@ test("the reset timer releases work and expires force without a new provider rea
 	const policyFile = join(f.home, "sessions", id, "subscription-policy.json");
 	const forcedPolicy = JSON.parse(await readFile(policyFile, "utf8"));
 	assert.equal(forcedPolicy.windows.length, 1);
-	assert.equal(forcedPolicy.forced.length, 1);
+	assert.deepEqual(forcedPolicy.force, ["anthropic", "openai"]);
 	// Summary notifications use the current clock; unrelated notifications can show the reset
 	// before its policy write completes. Observe the notification and persistence separately.
 	const resumed = new Promise<void>((resolve) =>
@@ -278,7 +278,7 @@ test("the reset timer releases work and expires force without a new provider rea
 	assert.equal(f.sessions.get(id)?.subscriptionPause, undefined);
 	const policy = JSON.parse(await readFile(policyFile, "utf8"));
 	assert.deepEqual(policy.windows, []);
-	assert.deepEqual(policy.forced, []);
+	assert.equal(policy.force, undefined);
 });
 
 test("a known pause and its per-chat force survive daemon restart when provider usage is unavailable", async (t) => {
@@ -311,7 +311,7 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 	await reopened["start"](id);
 	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
 	assert.equal(policy.windows[0]?.usedPercent, 97);
-	assert.deepEqual(policy.forced, []);
+	assert.equal(policy.force, undefined);
 });
 
 test("provider-reported limits acknowledge only a persisted resumable pause, and survive a daemon restart", async (t) => {

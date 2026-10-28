@@ -36,8 +36,8 @@ test("subscription pause gates parent models/tools and survives reopen without r
 		usedPercent: 95,
 		resetsAt: new Date(Date.now() + 60_000).toISOString(),
 	};
-	const save = (windows: unknown[], forced: string[] = []) =>
-		writeFile(policyPath, JSON.stringify({ version: 1, windows, forced }));
+	const save = (windows: unknown[], force?: string[]) =>
+		writeFile(policyPath, JSON.stringify({ version: 1, windows, ...(force ? { force } : {}) }));
 	await save([window]);
 	const entered = gate(),
 		started = gate(),
@@ -127,7 +127,7 @@ test("subscription pause gates parent models/tools and survives reopen without r
 		await session.submit("stable", "work", "followUp");
 		await entered.promise;
 		assert.equal(faux.state.callCount, 0, "a paused request cannot dispatch to the model");
-		await save([window], [JSON.stringify(["openai", "5h", window.resetsAt])]);
+		await save([window], ["openai"]);
 		await started.promise;
 		await save([window]);
 		holdingTool = true;
