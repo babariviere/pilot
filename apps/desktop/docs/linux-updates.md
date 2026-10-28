@@ -69,8 +69,7 @@ Install first pauses agents, as the Swift app does: the app calls
 every five seconds) until each agent has paused at a tool boundary. Input is not
 fenced while waiting, and Cancel stops the renewals so agents resume within the
 30 second lease. pilotd keeps running across the app swap, so background jobs and
-open terminals do not block installation; they only end when the later daemon
-handoff replaces pilotd.
+open terminals do not block GUI installation. The daemon is not replaced.
 
 The existing private daemon owner proof and nonrenewable reservation bind
 boot, process, profile, policy and exact retained runtime root. Linux capsules
@@ -89,9 +88,10 @@ Desktop launchers such as KDE may run the app as a systemd user service, whose s
 kills its whole cgroup once the app exits. When the app runs in a `.service` and a
 probe succeeds, the helper starts through `systemd-run --user --scope`, which moves it
 into its own scope and execs it in place (same parent, same inherited descriptors), so
-the helper and the relaunched app survive. Otherwise it starts directly. After startup
-ACK, a daemon swap that fails (for example 503 while the old daemon's freeze lapses)
-is retried every five minutes, up to twelve times.
+the helper and the relaunched app survive. Otherwise it starts directly. Startup
+ACK releases the reservation, not a daemon replacement. There is no automatic
+daemon-upgrade retry. Explicit daemon upgrade currently supports only the scoped
+[macOS launch-agent handoff](daemon-upgrades.md); Linux owners remain unchanged.
 
 Relaunch uses the new native executable directly, preserving the desktop-session
 environment and the receipt-bound profile/policy. Spawn success is not startup
@@ -135,9 +135,9 @@ both debug and optimized (`--release`, with the test-only `native-probes`/`fixtu
 features): actual old/new GPUI buffers, signed
 whole-payload exchange after explicit COMMIT and OS parent exit, durable startup
 ACK, retained Unicode draft/history, and one unchanged daemon boot/process/root
-until startup ACK. After the ACK the new app pauses the old daemon's tools
-(`POST /api/update/pause`), stops that exact process and starts its own runtime;
-the success case checks that exactly one daemon, on the new runtime, remains.
+until startup ACK. Historical fixtures additionally exercised the former automatic
+daemon handoff; that handoff has been removed. Current GUI-update startup leaves
+the existing daemon running and does not claim a daemon upgrade.
 Each invalid candidate affirmatively failed without installation or GUI exit.
 These ran on a temporary filesystem, not distro-wide, power-loss, physical IME
 or production-feed qualification.

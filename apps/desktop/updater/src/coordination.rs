@@ -104,7 +104,7 @@ pub(crate) fn private_json(path: &Path, cap: u64) -> Result<Value, Error> {
     }
     serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)
 }
-fn record(location: &Location) -> Result<Value, Error> {
+pub(crate) fn record(location: &Location) -> Result<Value, Error> {
     use sha2::{Digest, Sha256};
     if location.policy.len() > POLICY_NAMES.len()
         || location.policy.iter().any(|(key, value)| {
@@ -265,78 +265,6 @@ pub fn selected(location: &Location, current: &Path, trust: &Trust) -> Result<Pa
     validate_capsule(&root, trust, &accepted, Some(&current_id))?;
     Ok(root.to_owned())
 }
-/// Result of asking the profile's daemon to make way for this app's runtime.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Handoff {
-    /// No daemon, this app's runtime, or a daemon the app did not start.
-    Unchanged,
-    /// Tools were still running when the wait ended. The daemon resumes on its own.
-    Busy,
-    /// The older daemon exited; this app can start its own runtime.
-    Stopped,
-}
-/// Stops a daemon running an older retained app runtime from the same store as
-/// `current`, so the updated app can start its own. Running tools are paused
-/// through the daemon's update endpoint first; nothing is interrupted mid-tool.
-pub fn retire_older_owner(
-    location: &Location,
-    current: &Path,
-    wait: Duration,
-) -> Result<Handoff, Error> {
-    let Ok(record) = record(location) else {
-        return Ok(Handoff::Unchanged);
-    };
-    if !owner_live(&location.home) {
-        return Ok(Handoff::Unchanged);
-    }
-    let runtime = Path::new(
-        record["runtimeRoot"]
-            .as_str()
-            .ok_or(Error::RuntimeUnverified)?,
-    );
-    let capsule = capsule_root(runtime)?;
-    if !older_in_same_store(&capsule, current) {
-        return Ok(Handoff::Unchanged);
-    }
-    let pid = record["pid"]
-        .as_i64()
-        .filter(|p| *p > 1 && *p <= i32::MAX as i64)
-        .ok_or(Error::RuntimeUnverified)? as i32;
-    let node = runtime
-        .join("node/bin/node")
-        .canonicalize()
-        .map_err(|_| Error::Identity)?;
-    if crate::helper::process_executable(pid)? != node {
-        return Ok(Handoff::Unchanged);
-    }
-    let until = std::time::Instant::now() + wait;
-    loop {
-        // Each call renews the daemon's 30 second admission lease while tools drain.
-        if request_pause(location, pid)? {
-            break;
-        }
-        if std::time::Instant::now() >= until {
-            return Ok(Handoff::Busy);
-        }
-        std::thread::sleep(Duration::from_secs(1));
-    }
-    if crate::helper::process_executable(pid)? != node {
-        return Err(Error::Identity);
-    }
-    // SAFETY: signals the exact daemon process verified above.
-    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
-        return Err(Error::Native);
-    }
-    let until = std::time::Instant::now() + Duration::from_secs(120);
-    // SAFETY: signal 0 only checks that the process still exists.
-    while owner_live(&location.home) || unsafe { libc::kill(pid, 0) } == 0 {
-        if std::time::Instant::now() >= until {
-            return Err(Error::RuntimeUnverified);
-        }
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    Ok(Handoff::Stopped)
-}
 /// Asks the profile's running daemon to pause its agents once their current tool calls
 /// finish, as the Swift app does before installing. Each call renews the daemon's
 /// 30 second pause lease; agents resume on their own once calls stop. Returns whether
@@ -379,15 +307,10 @@ fn request_pause(location: &Location, pid: i32) -> Result<bool, Error> {
     }
     Ok(paused["ready"] == true)
 }
-/// Retained capsules live at `<store>/<id>/<root>`.
-fn older_in_same_store(capsule: &Path, current: &Path) -> bool {
-    let store = |root: &Path| root.parent().and_then(Path::parent).map(Path::to_owned);
-    capsule != current && store(capsule).is_some() && store(capsule) == store(current)
-}
 /// Whether a process holds the daemon's SQLite profile lease (`BEGIN EXCLUSIVE`
 /// for the daemon's lifetime). Only queries the lock (F_GETLK); never takes it.
 /// Unknown answers count as live, keeping the existing strict path.
-fn owner_live(home: &Path) -> bool {
+pub(crate) fn owner_live(home: &Path) -> bool {
     use std::os::fd::AsRawFd;
     let file = match fs::OpenOptions::new()
         .read(true)
@@ -409,7 +332,7 @@ fn owner_live(home: &Path) -> bool {
     let unlocked = i32::from(libc::F_UNLCK);
     i32::from(lock.l_type) != unlocked
 }
-fn validate_capsule(
+pub(crate) fn validate_capsule(
     root: &Path,
     trust: &Trust,
     accepted: &[String],
@@ -755,7 +678,7 @@ impl Guard {
         Ok((guard.capsule, guard.location, guard.ui_only))
     }
 }
-fn random_hex() -> Result<String, Error> {
+pub(crate) fn random_hex() -> Result<String, Error> {
     use ring::rand::SecureRandom;
     let mut b = [0; 32];
     ring::rand::SystemRandom::new()
@@ -801,19 +724,6 @@ fn random_operation() -> Result<String, Error> {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
-
-    #[test]
-    fn only_other_capsules_in_this_store_are_older_owners() {
-        let store = Path::new("/data/pilot-next/runtimes");
-        let current = store.join("bbbb/payload");
-        assert!(older_in_same_store(&store.join("aaaa/payload"), &current));
-        assert!(!older_in_same_store(&current, &current));
-        assert!(!older_in_same_store(
-            Path::new("/elsewhere/runtimes/aaaa/payload"),
-            &current
-        ));
-        assert!(!older_in_same_store(Path::new("/payload"), &current));
-    }
 
     #[test]
     fn public_configuration_fingerprint_is_independent_of_json_map_features() {

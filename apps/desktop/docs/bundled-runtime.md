@@ -90,12 +90,13 @@ or incompatible hello refuses relaunch without starting a replacement. Update
 receipts select this path only when explicitly prepared for an external connection;
 managed retained receipts never silently fall back. Bundled exact-capsule validation
 and all other startup refusals remain unchanged. See [UI iteration](ui-iteration.md).
+The separate confirmed daemon-upgrade action has independent native ownership
+checks; see [Explicit daemon upgrade](daemon-upgrades.md).
 
-There is no standalone GPUI daemon-restart command. Settings' **Install and
-restart…** installs/relaunches the GUI using the retained-runtime update contract;
-it is not a restart control for a Swift-owned daemon. Its older-retained-runtime
-handoff only targets Next's own store, never a Swift-app runtime. An externally
-managed daemon must continue to be managed by its existing owner.
+Settings' **Install and restart…** replaces only the GUI. The separate explicit
+[daemon upgrade](daemon-upgrades.md) supports a narrowly verified macOS Swift
+launch agent, preserving its label, ownership and profile. Startup never upgrades
+a daemon automatically. Other external owners remain externally managed.
 
 Bundled launch uses the existing configured Local home/port. It does not silently
 select a new profile, import Swift state or retarget retained drafts/operations.

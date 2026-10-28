@@ -26,6 +26,10 @@ actions!(settings, [OpenSettings, CloseSettings, SaveSettings]);
 
 /// Non-rendering state owner retained by the Local window and any open Settings window.
 pub(crate) struct SettingsPreferences {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) daemon_upgrade: Option<Entity<crate::daemon_upgrade_view::DaemonUpgrade>>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) daemon_options: Option<crate::LocalOptions>,
     pub(super) diagnostics: Option<Entity<crate::diagnostics_view::Diagnostics>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) updater: Option<Entity<crate::updates_view::Updates>>,
@@ -48,6 +52,10 @@ pub(crate) struct SettingsPreferences {
 impl SettingsPreferences {
     pub(crate) fn new(source: Option<Result<PathBuf, SettingsError>>) -> Self {
         Self {
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            daemon_upgrade: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            daemon_options: None,
             diagnostics: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             updater: None,
@@ -74,9 +82,22 @@ impl SettingsPreferences {
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.updater.is_none() {
+            let daemon = self.daemon_upgrade.clone().unwrap_or_else(|| {
+                cx.new(|cx| crate::daemon_upgrade_view::DaemonUpgrade::new(self.daemon_options.clone(), cx))
+            });
+            self.update_events.push(cx.subscribe(&daemon, |_, _, event, cx| {
+                cx.emit(match event {
+                    crate::daemon_upgrade_view::Event::Request => crate::updates_view::Event::UpgradeDaemon,
+                    crate::daemon_upgrade_view::Event::Changed => crate::updates_view::Event::DaemonChanged,
+                });
+            }));
+            self.daemon_upgrade = Some(daemon);
             let location = self.update_location.clone();
             let connection = self.update_connection.clone();
             let updater = cx.new(|cx| crate::updates_view::Updates::new(location, connection, cx));
+            if let Some(daemon) = &self.daemon_upgrade {
+                daemon.update(cx, |daemon, _| daemon.updater_guard = Some(updater.clone()));
+            }
             self.update_events
                 .push(cx.subscribe(&updater, |_, _, event, cx| cx.emit(*event)));
             self.updater = Some(updater);
@@ -755,6 +776,9 @@ impl SettingsView {
         {
             if let Some(updater) = updater {
                 view = view.child(updater);
+            }
+            if let Some(daemon) = owner.daemon_upgrade.clone() {
+                view = view.child(daemon);
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]

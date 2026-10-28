@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 pub(crate) enum Event {
     Restart,
     Changed,
+    UpgradeDaemon,
+    DaemonChanged,
 }
 pub(crate) struct Updates {
     controller: Option<Updater<Worker>>,

@@ -130,6 +130,12 @@ pub(crate) mod transcript_find_probe;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "update_lifecycle.rs"]
 mod update_lifecycle;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "daemon_upgrade_lifecycle.rs"]
+mod daemon_upgrade_lifecycle;
+#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
+#[path = "daemon_upgrade_lifecycle_probe.rs"]
+pub(crate) mod daemon_upgrade_lifecycle_probe;
 #[cfg(feature = "native-probes")]
 #[path = "workbench_probe.rs"]
 pub(crate) mod workbench_probe;
@@ -623,6 +629,7 @@ pub struct LocalViewer {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_generation: u64,
     pub(super) restart_pending: bool,
+    pub(super) daemon_upgrade_pending: bool,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_timeout: Option<Task<()>>,
     #[cfg(feature = "native-probes")]
@@ -822,6 +829,7 @@ impl LocalViewer {
             {
                 owner.update_location = options.update_location();
                 owner.update_connection = options.external_update_connection();
+                owner.daemon_options = Some(options.clone());
             }
             owner.load(cx);
         });
@@ -1683,6 +1691,7 @@ impl LocalViewer {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_generation: 0,
             restart_pending: false,
+            daemon_upgrade_pending: false,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_timeout: None,
             #[cfg(feature = "native-probes")]

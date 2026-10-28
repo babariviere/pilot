@@ -29,6 +29,21 @@ pub struct LocalOptions {
 }
 
 impl LocalOptions {
+    /// Context for an explicit request only. The native bridge must prove the
+    /// actual owner and service; this getter never grants lifecycle authority.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn daemon_upgrade_location(
+        &self,
+    ) -> Option<pilot_desktop_updater::coordination::Location> {
+        #[cfg(target_os = "macos")]
+        return Some(pilot_desktop_updater::coordination::Location {
+            home: self.native_home.clone()?,
+            port: self.port,
+            policy: self.update_policy.clone(),
+        });
+        #[cfg(not(target_os = "macos"))]
+        None
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn update_location(&self) -> Option<pilot_desktop_updater::coordination::Location> {
         if self.externally_managed {

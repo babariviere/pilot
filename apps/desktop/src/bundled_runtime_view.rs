@@ -49,11 +49,6 @@ impl BundledRuntimeView {
                 let reply = std::env::current_exe()
                     .map_err(|_| "Cannot locate this app executable.")
                     .and_then(|executable| bundled_runtime::start(executable, worker_cancel));
-                // An update relaunch upgrades the daemon after acknowledging startup instead.
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                if reply.is_ok() && bundled_runtime::update_receipt().is_none() {
-                    bundled_runtime::upgrade_daemon_in_background();
-                }
                 let _ = send.send_blocking(reply);
             });
         let error = started

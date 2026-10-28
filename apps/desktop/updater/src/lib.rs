@@ -6,6 +6,7 @@ use std::time::Duration;
 ))]
 pub mod app_update;
 pub mod archive;
+pub mod daemon_upgrade;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")

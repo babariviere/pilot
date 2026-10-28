@@ -630,58 +630,44 @@ fn own_capsule(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<Pa
     linux::publish(root, &data.join("pilot-next/runtimes"), cancel, deadline)
 }
 
-/// Once this app is running, replace a daemon still on an older app runtime with
-/// this app's runtime. Waits for running tools to pause and retries while busy;
-/// the Local client reconnects to the new daemon on its own.
-pub(crate) fn upgrade_daemon_in_background() {
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let _ = std::thread::Builder::new()
-        .name("daemon-upgrade".into())
-        .spawn(|| {
-            // Right after an update the old daemon may still hold its install freeze
-            // (503) until startup ACK or expiry. Treat failures like Busy, within a bound.
-            let mut failures = 0;
-            loop {
-                match upgrade_daemon() {
-                    Ok(pilot_desktop_updater::coordination::Handoff::Busy) => {}
-                    Ok(_) => return,
-                    Err(error) => {
-                        eprintln!("The daemon was not updated: {error}");
-                        failures += 1;
-                        if failures >= 12 {
-                            return;
-                        }
-                    }
-                }
-                std::thread::sleep(Duration::from_secs(300));
-            }
-        });
-}
-
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn upgrade_daemon() -> Result<pilot_desktop_updater::coordination::Handoff, Failure> {
-    use pilot_desktop_updater::coordination::{self, Handoff};
-    let executable = std::env::current_exe().map_err(|_| "Cannot locate this app executable.")?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let deadline = Instant::now() + Duration::from_secs(45);
-    let root = package_root(&executable)?;
+/// Explicit, checkpointed request only. The native bridge preserves the existing
+/// launch agent and refuses custom/foreground owners without acquiring authority.
+pub(crate) fn upgrade_daemon_explicit(
+    location: pilot_desktop_updater::coordination::Location,
+    daemon_id: String,
+    lineage_id: String,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
+    use pilot_desktop_updater::daemon_upgrade::Failure;
     #[cfg(target_os = "macos")]
-    let capsule = {
-        let trust = pilot_desktop_updater::helper::compiled_trust()
-            .map_err(|_| "Update trust is unconfigured.")?;
-        own_capsule(root, &trust, &cancel, deadline)?
-    };
-    #[cfg(target_os = "linux")]
-    let capsule = own_capsule(root, &cancel, deadline)?;
-    let handoff =
-        coordination::retire_older_owner(&runtime_location()?, &capsule, Duration::from_secs(30))
-            .map_err(
-            |_| "The running daemon could not be stopped for the update. It was left running.",
-        )?;
-    if handoff == Handoff::Stopped {
-        start_runtime(executable, cancel, false)?;
+    {
+        let executable = std::env::current_exe().map_err(|_| Failure::Unverified)?;
+        let root = package_root(&executable).map_err(|_| Failure::Unverified)?;
+        let deadline = Instant::now() + Duration::from_secs(45);
+        validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
+        let trust =
+            pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
+        let capsule = own_capsule(root, &trust, &cancel, deadline).map_err(|_| {
+            if cancel.load(Ordering::Acquire) {
+                Failure::Cancelled
+            } else {
+                Failure::Unverified
+            }
+        })?;
+        pilot_desktop_updater::daemon_upgrade::upgrade(
+            location,
+            &capsule,
+            &trust,
+            &daemon_id,
+            &lineage_id,
+            &cancel,
+        )
     }
-    Ok(handoff)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (location, daemon_id, lineage_id, cancel);
+        Err(Failure::Unsupported)
+    }
 }
 
 // Preserve explicit denial and retention policy without forwarding broker authority,

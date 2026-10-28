@@ -14,6 +14,8 @@ impl LocalViewer {
             |view, _, event, window, cx| match event {
                 crate::updates_view::Event::Restart => view.begin_update_restart(window, cx),
                 crate::updates_view::Event::Changed => view.advance_update_restart(window, cx),
+                crate::updates_view::Event::UpgradeDaemon => view.begin_daemon_upgrade(window, cx),
+                crate::updates_view::Event::DaemonChanged => view.advance_daemon_upgrade(window, cx),
             },
         ));
         self.update_events.push(
@@ -22,7 +24,7 @@ impl LocalViewer {
             }),
         );
     }
-    fn secondary_update_safe(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn secondary_update_safe(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         !self.mission_open
             && !self.add_project_open
             && self.jump.is_none()
@@ -160,6 +162,10 @@ impl LocalViewer {
     }
     pub(super) fn advance_update_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_update_navigation(window, cx);
+        if self.daemon_upgrade_pending {
+            self.advance_daemon_upgrade(window, cx);
+            return;
+        }
         self.acknowledge_update_startup(cx);
         #[cfg(feature = "native-probes")]
         if !self.restart_pending

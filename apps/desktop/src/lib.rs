@@ -10,6 +10,14 @@ mod bundled_runtime_view;
 pub mod desktop_entry;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod updates_view;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod daemon_upgrade_view;
+#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
+mod daemon_upgrade_probe;
+#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
+pub use daemon_upgrade_probe::run_daemon_upgrade_probe;
+#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
+pub use local_view::daemon_upgrade_lifecycle_probe::run_daemon_upgrade_lifecycle_probe;
 pub use bundled_runtime_view::BundledRuntimeView;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;

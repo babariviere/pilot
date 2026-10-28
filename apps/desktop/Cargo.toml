@@ -458,3 +458,8 @@ name = "chat_links"
 path = "tests/chat_links.rs"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "daemon_upgrade"
+harness = false
+required-features = ["native-probes"]
