@@ -139,7 +139,9 @@ fn parked_and_failure_transitions_rebuild_readonly_catalog_without_touching_draf
                 assert_eq!(e.can_choose_model(), can_change, "{state}");
                 if !can_change {
                     assert!(e.model_restriction().unwrap().contains(reason));
-                    assert!(e.has_model_notice());
+                    // Working is routine: explained in context, never as a persistent notice.
+                    assert_eq!(e.has_model_notice(), state != "working", "{state}");
+                    assert_eq!(e.model_waits_for_work(), state == "working", "{state}");
                     let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
                     assert!(!p.synced.as_ref().unwrap().2);
                     let (scope, epoch) = source(e);
@@ -162,6 +164,47 @@ fn parked_and_failure_transitions_rebuild_readonly_catalog_without_touching_draf
                 w,
                 cx,
             );
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+            assert!(matches!(
+                commands.try_recv().unwrap(),
+                WriteCommand::Model {
+                    action: chat_models::Action::Submit(_),
+                    ..
+                }
+            ));
+            assert!(commands.is_empty());
+        })
+    })
+    .unwrap();
+}
+#[gpui_kit::test]
+fn busy_chat_explains_model_lock_in_context_without_notice_or_post(cx: &mut TestAppContext) {
+    let (_server, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            // Editor busy (work or queued messages) with a healthy idle summary.
+            e.permission(true, true, cx);
+            e.sync_model_inputs(w, cx);
+            assert_eq!(e.model_restriction(), Some(chat_models::BUSY));
+            assert!(!e.can_choose_model());
+            assert!(e.visible_model_restriction().is_none());
+            assert!(!e.has_model_notice());
+            // Both menus were rebuilt with the disabled explanation row first.
+            let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
+            assert!(p.synced.as_ref().unwrap().5);
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+            e.choose_model(&scope, &epoch, "p/a", Some(&"high".into()), w, cx);
+            e.choose_model(&scope, &epoch, BUSY_ITEM, None, w, cx);
+            assert!(commands.is_empty());
+            assert_eq!(e.model_choice().unwrap().model, "p/a");
+            // Idle again: the hint row goes away and one explicit switch is admitted.
+            e.permission(true, false, cx);
+            e.sync_model_inputs(w, cx);
+            assert!(e.can_choose_model() && !e.model_waits_for_work());
+            let p = e.models.as_ref().unwrap().picker.as_ref().unwrap();
+            assert!(!p.synced.as_ref().unwrap().5);
             let (scope, epoch) = source(e);
             e.choose_model(&scope, &epoch, "p/b", None, w, cx);
             assert!(matches!(

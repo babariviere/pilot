@@ -19,6 +19,17 @@ mod subscription;
 #[cfg(test)]
 #[path = "chat_model_picker_tests.rs"]
 mod tests;
+/// Disabled menu row that explains a busy chat's locked model/thinking to keyboard users.
+const BUSY_ITEM: &str = ":busy";
+fn busy_item() -> Item {
+    Item {
+        id: BUSY_ITEM.into(),
+        title: "Available when this chat is idle".into(),
+        detail: "After its work and queued messages finish".into(),
+        disabled: true,
+        search: SharedString::default(),
+    }
+}
 #[derive(Clone)]
 struct Item {
     id: String,
@@ -69,8 +80,8 @@ pub(super) struct Picker {
     loading: bool,
     models: Entity<SelectState<SearchableVec<Item>>>,
     thinking: Entity<SelectState<SearchableVec<Item>>>,
-    /// Choice, new draft, editable, failed, continuable: the inputs items were built from.
-    synced: Option<(Option<ModelChoice>, bool, bool, bool, bool)>,
+    /// Choice, new draft, editable, failed, continuable, waiting for work: the inputs items were built from.
+    synced: Option<(Option<ModelChoice>, bool, bool, bool, bool, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 pub(super) struct Models {
@@ -168,7 +179,7 @@ impl ChatEditor {
                     .picker
                     .as_ref()
                     .and_then(|p| p.synced.as_ref())
-                    .is_some_and(|(_, _, old_editable, _, _)| *old_editable == editable)
+                    .is_some_and(|(_, _, old_editable, _, _, _)| *old_editable == editable)
             {
                 return;
             }
@@ -485,6 +496,7 @@ impl ChatEditor {
         }
         let editable = self.can_choose_model();
         let continuable = self.can_continue();
+        let waiting = self.model_waits_for_work();
         let failed = self
             .model_target()
             .is_some_and(|t| t.failed_source.is_some());
@@ -499,7 +511,15 @@ impl ChatEditor {
         let Some(c) = &p.catalog else {
             return;
         };
-        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable, failed, continuable)) {
+        let inputs = (
+            choice.clone(),
+            is_new,
+            editable,
+            failed,
+            continuable,
+            waiting,
+        );
+        if p.synced.as_ref() == Some(&inputs) {
             return;
         }
         let mut items: Vec<_> = c
@@ -575,6 +595,10 @@ impl ChatEditor {
             }));
         }
         let selected = choice.as_ref().map(|c| c.model.clone()).unwrap_or_default();
+        if waiting {
+            items.insert(0, busy_item());
+            levels.insert(0, busy_item());
+        }
         p.models.update(cx, |s, cx| {
             s.prepare_navigation(w, cx);
             s.set_items(SearchableVec::new(items), w, cx);
@@ -594,7 +618,11 @@ impl ChatEditor {
             s.set_items(SearchableVec::new(levels), w, cx);
             s.set_selected_value(&selected, w, cx);
         });
-        p.synced = Some((choice, is_new, editable, failed, continuable));
+        p.synced = Some(inputs);
+    }
+    /// A healthy chat that is only waiting for its work. Explained in context, not as a notice.
+    fn model_waits_for_work(&self) -> bool {
+        self.model_restriction() == Some(chat_models::BUSY)
     }
     fn model_uncertain(&self) -> Option<&chat_models::Attempt> {
         let id = self.selected.as_deref()?.strip_prefix("chat:")?;
@@ -666,9 +694,7 @@ impl ChatEditor {
                     .or(Some("Model changes require a healthy idle chat."));
             }
             if self.busy {
-                return Some(
-                    "Wait for this chat's work and queued messages to finish before changing its model or thinking.",
-                );
+                return Some(chat_models::BUSY);
             }
         }
         None
@@ -683,6 +709,9 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) {
         if self.marked(w, cx) {
+            return;
+        }
+        if id == BUSY_ITEM {
             return;
         }
         self.changed(cx);
@@ -930,6 +959,25 @@ impl ChatEditor {
             .unwrap_or(0);
         let actual = self.model_choice();
         let loading = p.is_some_and(|p| p.loading && p.catalog.is_none());
+        // Hover help; the keyboard path is the open menu's disabled first row.
+        let waiting = self.model_waits_for_work();
+        let field = move |id: &'static str| {
+            let field = div().id(id);
+            #[cfg(any(test, feature = "native-probes"))]
+            let field = field.test_support();
+            field.flex_1().min_w_0().when(waiting, |d| {
+                d.tooltip(|w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::element(|_, _| {
+                        let help = ui::text(ui::Text::Caption, chat_models::BUSY)
+                            .id("chat-model-busy-help");
+                        #[cfg(any(test, feature = "native-probes"))]
+                        let help = help.test_support();
+                        help
+                    })
+                    .build(w, cx)
+                })
+            })
+        };
         let model_label: SharedString = if loading {
             "Loading models…".into()
         } else {
@@ -964,7 +1012,7 @@ impl ChatEditor {
                 }
             }))
             .children(p.map(|p| {
-                div().flex_1().min_w_0().max_w_40().child(
+                field("chat-model-field").max_w_40().child(
                     Select::new(&p.models)
                         .id("chat-model")
                         .small()
@@ -980,7 +1028,7 @@ impl ChatEditor {
                 )
             }))
             .children(p.map(|p| {
-                div().flex_1().min_w_0().max_w_32().child(
+                field("chat-thinking-field").max_w_32().child(
                     Select::new(&p.thinking)
                         .id("chat-thinking")
                         .small()
@@ -1028,9 +1076,10 @@ impl ChatEditor {
         {
             return None;
         }
-        // The subscription row explains a held chat and offers its actions.
+        // The subscription row explains a held chat and offers its actions. A chat
+        // that is only working is explained by the model/thinking tooltip and menu.
         self.model_restriction()
-            .filter(|reason| *reason != chat_models::PAUSED)
+            .filter(|reason| *reason != chat_models::PAUSED && *reason != chat_models::BUSY)
     }
     pub(super) fn has_model_notice(&self) -> bool {
         self.model_target()

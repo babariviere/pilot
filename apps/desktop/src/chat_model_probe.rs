@@ -235,30 +235,85 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
                 settle(cx, h);
-                if state == "failed"
+                if matches!(state, "failed" | "working")
+                    && extra.is_none()
+                    && writable
                     && let Some(d) = &dir
                 {
                     cx.capture_screenshot(h)
                         .unwrap()
                         .save(d.join(format!(
-                            "{}-{}-model-failure.png",
+                            "{}-{}-model-{}.png",
                             width as u32,
-                            mode.name()
+                            mode.name(),
+                            if state == "failed" { "failure" } else { "busy" }
                         )))
                         .unwrap();
                 }
                 cx.update_window(h, |_, w, cx| {
                     // A held chat is explained by its subscription row, which owns its recovery.
-                    let reason = if extra == Some("subscriptionPause") {
-                        "subscription-limit"
-                    } else {
-                        "chat-model-restriction"
-                    };
-                    assert!(w.find(reason).bounds().size.height > px(0.));
+                    // A working chat is routine: no persistent notice, only contextual help.
+                    match (state, extra) {
+                        ("working", None) => {
+                            assert!(w.try_find("chat-model-restriction").is_none());
+                            assert!(w.try_find("chat-model-busy-help").is_none());
+                            w.hover("chat-model-field", cx);
+                        }
+                        (_, Some("subscriptionPause")) => {
+                            assert!(w.find("subscription-limit").bounds().size.height > px(0.))
+                        }
+                        _ => {
+                            assert!(w.find("chat-model-restriction").bounds().size.height > px(0.))
+                        }
+                    }
+                })
+                .unwrap();
+                if (state, extra) == ("working", None) {
+                    cx.advance_clock(Duration::from_secs(1));
+                    settle(cx, h);
+                    if let Some(d) = &dir {
+                        cx.capture_screenshot(h)
+                            .unwrap()
+                            .save(d.join(format!(
+                                "{}-{}-model-busy-help.png",
+                                width as u32,
+                                mode.name()
+                            )))
+                            .unwrap();
+                    }
+                    cx.update_window(h, |_, w, cx| {
+                        assert!(w.find("chat-model-busy-help").bounds().size.height > px(0.));
+                        w.hover("composer-input", cx);
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                }
+                cx.update_window(h, |_, w, cx| {
                     w.click("chat-model", cx);
                 })
                 .unwrap();
                 settle(cx, h);
+                if state == "working"
+                    && extra.is_none()
+                    && let Some(d) = &dir
+                {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(d.join(format!(
+                            "{}-{}-model-busy-menu.png",
+                            width as u32,
+                            mode.name()
+                        )))
+                        .unwrap();
+                }
+                if (state, extra) == ("working", None) {
+                    // Keyboard/menu path: the open menu names why choices are disabled.
+                    cx.update_window(h, |_, w, _| {
+                        let hint = w.find("model-option-:busy");
+                        assert!(hint.bounds().size.height > px(0.));
+                    })
+                    .unwrap();
+                }
                 cx.update_window(h, |_, w, cx| {
                     w.click("model-option-p/b", cx);
                     w.press("escape", cx);
@@ -283,6 +338,19 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                         "Retained model draft 日本語 👩‍💻"
                     );
                 });
+                if (state, extra) == ("working", None) {
+                    // Escape returned focus to the Model trigger; Down reopens it by keyboard.
+                    cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
+                    settle(cx, h);
+                    cx.update_window(h, |_, w, cx| {
+                        assert!(w.find("model-option-:busy").bounds().size.height > px(0.));
+                        w.press("escape", cx);
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                    assert_eq!(server.posts(), 0);
+                    cx.update(|cx| assert_eq!(text.read(cx).selected_range(), selection));
+                }
             }
             // A failed chat becoming healthy/parked must not keep a stale UI lock.
             server.seen.lock().unwrap().mode = Mode::Parked;

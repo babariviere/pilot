@@ -157,6 +157,9 @@ pub(crate) struct SessionModel {
 /// A held chat changes model only through the explicit continuation.
 pub(crate) const PAUSED: &str =
     "This chat is paused at a subscription limit. Continue with another model or force work.";
+/// Routine while a chat works. Shown in context (model/thinking tooltip and menu), not as a notice.
+pub(crate) const BUSY: &str =
+    "Model and thinking can change after this chat's work and queued messages finish.";
 impl SessionModel {
     pub(crate) fn read(v: &Value) -> Self {
         let next = &v["nextAttemptModel"];
@@ -210,9 +213,7 @@ impl SessionModel {
                 .as_array()
                 .is_some_and(|jobs| !jobs.is_empty())
         {
-            Some(
-                "Wait for this chat's work and queued messages to finish before changing its model or thinking.",
-            )
+            Some(BUSY)
         } else if failure_source(v).is_some() {
             None
         } else if !matches!(v["state"].as_str(), Some("idle" | "parked")) {
