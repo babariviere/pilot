@@ -92,6 +92,52 @@ impl Chart {
             .collect::<Vec<_>>();
         (!rows.is_empty()).then_some(Readout { label, rows })
     }
+    /// Weighted interpolation keeps even the widest finite signed domain finite.
+    pub(crate) fn ticks(&self) -> Vec<(f32, String)> {
+        let (low, high) = self.range;
+        let steps = if low == high {
+            0
+        } else if self.height < 160. {
+            2
+        } else {
+            4
+        };
+        let mut values = (0..=steps)
+            .map(|i| {
+                let t = if steps == 0 {
+                    0.5
+                } else {
+                    i as f64 / steps as f64
+                };
+                (t as f32, low * (1. - t) + high * t)
+            })
+            .collect::<Vec<_>>();
+        values.dedup_by(|a, b| a.1 == b.1);
+        let mut ticks = values
+            .iter()
+            .map(|&(t, value)| {
+                let label = if value != 0. && (value.abs() < 0.001 || value.abs() >= 10000.) {
+                    format!("{value:.3e}")
+                } else {
+                    let text = format!("{value:.3}");
+                    let text = text.trim_end_matches('0').trim_end_matches('.');
+                    if text == "-0" {
+                        "0".into()
+                    } else {
+                        text.into()
+                    }
+                };
+                (t, label)
+            })
+            .collect::<Vec<_>>();
+        // Close explicit bounds need more precision than ordinary axis labels.
+        if ticks.windows(2).any(|pair| pair[0].1 == pair[1].1) {
+            for (tick, (_, value)) in ticks.iter_mut().zip(values) {
+                tick.1 = format!("{value:e}");
+            }
+        }
+        ticks
+    }
     pub(crate) fn parse(v: &Value) -> Result<Self, &'static str> {
         let kind = v["kind"].as_str().unwrap_or("line");
         let stacked = v["stacked"] == true;
@@ -314,6 +360,36 @@ pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn scale_ticks_are_readable_and_finite_for_signed_constant_and_extreme_domains() {
+        for (low, high) in [(-6., 10.), (3., 3.), (-1e308, 1e308), (5e-324, 1e-323)] {
+            let chart = Chart::parse(
+                &json!({"kind":"bar","x":["a"],"yMin":low,"yMax":high,"series":[{"values":[1]}]}),
+            )
+            .unwrap();
+            let ticks = chart.ticks();
+            assert!(!ticks.is_empty());
+            assert!(ticks.len() <= 5);
+            for (at, label) in &ticks {
+                assert!((0.0..=1.0).contains(at));
+                assert!(label.parse::<f64>().unwrap().is_finite(), "{label}");
+                assert!(label.len() <= 12, "{label}");
+            }
+            if low == high {
+                assert_eq!(ticks[0], (0.5, "3".into()));
+            }
+        }
+        let chart = Chart::parse(&json!({"height":100,"kind":"bar","x":["a"],"yMin":-2,"yMax":2,"series":[{"values":[1]}]})).unwrap();
+        assert_eq!(
+            chart.ticks(),
+            vec![(0., "-2".into()), (0.5, "0".into()), (1., "2".into())]
+        );
+        let close = Chart::parse(
+            &json!({"kind":"bar","x":["a"],"yMin":100000,"yMax":100001,"series":[{"values":[1]}]}),
+        )
+        .unwrap();
+        assert!(close.ticks().windows(2).all(|p| p[0].1 != p[1].1));
+    }
     #[test]
     fn stacked_bars_separate_signs_keep_nulls_and_clip_finite_intervals() {
         let mut value = json!({"kind":"bar","stacked":true,"x":["a","b","c"],"series":[{"values":[2,-2,0]},{"values":[3,-4,0]},{"values":[-1,1,null]}]});
