@@ -169,6 +169,10 @@ durations nor clocks. Keep shared lifecycle checks separate from static catalog
 screenshots. Native phase checks are not visible smoothness/FPS/CPU/RSS proof.
 Dither marks chat-row state (sidebar, Inbox) and the Home sky only. The composer,
 buttons, progress bars and cards never carry it; the working line covers live work.
+Row corners hold still (Pilot Next differs from Swift's rippling loops): working
+keeps a still ring texture, the other states a steady density, and the section
+heading and caption name the state. Only a state change (600 ms dissolve) and
+pointer recession (300 ms) move a corner, so the clock runs only then.
 
 Glass: `appearance::enable_glass` (called by the app before its windows open) makes
 the window background blur what is behind it on macOS, KWin and Hyprland, and turns

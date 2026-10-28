@@ -1,7 +1,6 @@
 //! Trusted app decoration. Swift DitherCorner.swift geometry, not artifact execution.
 use std::time::Duration;
 
-pub(crate) const FPS: u32 = 12;
 pub(crate) const HOVER: Duration = Duration::from_millis(300);
 pub(crate) const DISSOLVE: Duration = Duration::from_millis(600);
 pub(crate) const BAYER: [u8; 64] = [
@@ -18,9 +17,6 @@ pub(crate) enum Signal {
     Ready,
 }
 impl Signal {
-    pub(crate) fn moving(self) -> bool {
-        matches!(self, Self::Working | Self::NeedsYou)
-    }
     pub(crate) fn rgb(self, dark: bool) -> u32 {
         match self {
             Self::Working if dark => 0x818cf8,
@@ -50,7 +46,6 @@ impl Spec {
 pub(crate) struct Snapshot {
     pub spec: Spec,
     pub previous: Option<Signal>,
-    pub frame: usize,
     pub mix: f64,
     pub recede: f64,
     pub ticking: bool,
@@ -105,20 +100,14 @@ impl Timeline {
             progress(now, self.hover_at, HOVER)
         };
         let recede = self.hover_from + (self.hover_to - self.hover_from) * ease(hover, false);
+        // Corners hold still; only a state dissolve or hover recession moves them.
         let fast = mix < 1. || (hover < 1. && self.hover_from != self.hover_to);
-        let looping = self.spec.signal.is_some_and(Signal::moving)
-            || (mix < 1. && self.previous.is_some_and(Signal::moving));
         Snapshot {
             spec: self.spec,
             previous: self.previous,
-            frame: if still {
-                0
-            } else {
-                ((now.as_secs_f64() * f64::from(FPS)).floor() as u64 % 72) as usize
-            },
             mix,
             recede,
-            ticking: !still && (looping || fast),
+            ticking: !still && fast,
             fast: !still && fast,
         }
     }
@@ -145,35 +134,29 @@ fn ease(t: f64, both: bool) -> f64 {
 fn threshold(x: usize, y: usize) -> f64 {
     (f64::from(BAYER[(y & 7) * 8 + (x & 7)]) + 0.5) / 64.
 }
-fn coverage(signal: Signal, background: bool, u: f64, v: f64, frame: usize, recede: f64) -> f64 {
+fn coverage(signal: Signal, background: bool, u: f64, v: f64, recede: f64) -> f64 {
     let dx = u / (46. * (1. - 0.55 * recede));
     let dy = v / (25. * (1. - 0.45 * recede));
     let distance = dx.hypot(dy);
     let f = (1. - distance).max(0.);
     let field = f * f * (3. - 2. * f);
-    let phase = std::f64::consts::TAU * frame as f64 / 36.;
     field
         * match signal {
-            Signal::Working if background => {
-                0.36 + 0.12
-                    * (0.5
-                        + 0.5 * (distance * 10. - std::f64::consts::TAU * frame as f64 / 72.).sin())
-            }
-            // A gentle ripple: several working rows should not make the list busy.
-            Signal::Working => 0.44 + 0.16 * (0.5 + 0.5 * (distance * 14. - phase).sin()),
-            Signal::NeedsYou => 0.5 + 0.22 * (0.5 + 0.5 * phase.sin()),
+            // Still rings: working rows keep their texture without motion.
+            Signal::Working if background => 0.36 + 0.12 * (0.5 + 0.5 * (distance * 10.).sin()),
+            Signal::Working => 0.44 + 0.16 * (0.5 + 0.5 * (distance * 14.).sin()),
+            Signal::NeedsYou => 0.61,
             Signal::Failed => 0.68,
             Signal::Ready => 0.55,
         }
 }
-fn alpha(signal: Signal, background: bool, frame: usize, recede: f64, x: usize, y: usize) -> u8 {
+fn alpha(signal: Signal, background: bool, recede: f64, x: usize, y: usize) -> u8 {
     let (w, h) = GRID;
     let amount = coverage(
         signal,
         background,
         w as f64 - x as f64 - 0.5,
         h as f64 - y as f64 - 0.5,
-        frame,
         recede,
     );
     if threshold(x, y) < amount {
@@ -191,23 +174,16 @@ fn kind(signal: Signal, background: bool) -> usize {
         Signal::Ready => 4,
     }
 }
-fn frames(k: usize) -> usize {
-    match k {
-        0 | 2 => 36,
-        1 => 72,
-        _ => 1,
-    }
-}
-
-/// Ten fixed alpha loops, about 360KiB total. Built once off the UI thread.
+/// Ten still alpha layers (each state, resting and receded), about 12KiB.
+/// Built once off the UI thread.
 /// No per-frame SVG/image allocation, sprite upload or sampling blur: cells paint
 /// as bounded native 2pt quads. A frame never interprets source or performs I/O.
 pub(crate) struct Atlas {
-    loops: Vec<Box<[u8]>>,
+    layers: Vec<Box<[u8]>>,
 }
 impl Atlas {
     pub(crate) fn build() -> Self {
-        let mut loops = Vec::with_capacity(10);
+        let mut layers = Vec::with_capacity(10);
         for k in 0..5 {
             for receded in [false, true] {
                 let signal = [
@@ -218,34 +194,24 @@ impl Atlas {
                     Signal::Ready,
                 ][k];
                 let (w, h) = GRID;
-                let mut bytes = Vec::with_capacity(w * h * frames(k));
-                for frame in 0..frames(k) {
-                    for y in 0..h {
-                        for x in 0..w {
-                            bytes.push(alpha(signal, k == 1, frame, f64::from(receded), x, y));
-                        }
+                let mut bytes = Vec::with_capacity(w * h);
+                for y in 0..h {
+                    for x in 0..w {
+                        bytes.push(alpha(signal, k == 1, f64::from(receded), x, y));
                     }
                 }
-                loops.push(bytes.into_boxed_slice());
+                layers.push(bytes.into_boxed_slice());
             }
         }
-        Self { loops }
+        Self { layers }
     }
     pub(crate) fn bytes(&self) -> usize {
-        self.loops.iter().map(|l| l.len()).sum()
+        self.layers.iter().map(|l| l.len()).sum()
     }
-    fn get(
-        &self,
-        signal: Signal,
-        background: bool,
-        frame: usize,
-        receded: bool,
-        point: (usize, usize),
-    ) -> u8 {
+    fn get(&self, signal: Signal, background: bool, receded: bool, point: (usize, usize)) -> u8 {
         let (x, y) = point;
         let k = kind(signal, background);
-        let (w, h) = GRID;
-        self.loops[k * 2 + usize::from(receded)][(frame % frames(k)) * w * h + y * w + x]
+        self.layers[k * 2 + usize::from(receded)][y * GRID.0 + x]
     }
 }
 pub(crate) fn cell(
@@ -260,23 +226,13 @@ pub(crate) fn cell(
         snapshot.spec.signal
     }?;
     let bg = snapshot.spec.background && snapshot.spec.signal == Some(signal);
-    let a = if let Some(atlas) = atlas {
-        if snapshot.recede == 0. || snapshot.recede == 1. {
-            atlas.get(signal, bg, snapshot.frame, snapshot.recede == 1., (x, y)) as f64
-        } else if snapshot.mix >= 1. && signal.moving() {
-            // Settled Swift loops crossfade their resting/receded layers on hover.
-            let rest = f64::from(atlas.get(signal, bg, snapshot.frame, false, (x, y))) / 255.
-                * (1. - snapshot.recede);
-            let receded = f64::from(atlas.get(signal, bg, snapshot.frame, true, (x, y))) / 255.
-                * snapshot.recede;
-            (receded + rest * (1. - receded)) * 255.
-        } else {
-            f64::from(alpha(signal, bg, snapshot.frame, snapshot.recede, x, y))
+    let a = match atlas {
+        Some(atlas) if snapshot.recede == 0. || snapshot.recede == 1. => {
+            atlas.get(signal, bg, snapshot.recede == 1., (x, y))
         }
-    } else {
-        f64::from(alpha(signal, bg, snapshot.frame, snapshot.recede, x, y))
+        _ => alpha(signal, bg, snapshot.recede, x, y),
     };
-    (a > 0.).then_some((signal, a as f32 / 255.))
+    (a > 0).then_some((signal, f32::from(a) / 255.))
 }
 
 #[cfg(test)]
@@ -316,41 +272,46 @@ mod tests {
         assert!(!end.ticking);
     }
     #[test]
-    fn loops_match_swift_periods_geometry_and_bounded_storage() {
+    fn still_layers_match_geometry_and_bounded_storage() {
         let atlas = Atlas::build();
-        assert!(atlas.bytes() < 400_000);
-        assert_eq!(atlas.loops.len(), 10);
-        for (signal, bg, period) in [
-            (Signal::Working, false, 36),
-            (Signal::Working, true, 72),
-            (Signal::NeedsYou, false, 36),
-            (Signal::Failed, false, 1),
-            (Signal::Ready, false, 1),
+        let (w, h) = GRID;
+        assert_eq!(atlas.bytes(), 10 * w * h);
+        for (signal, bg) in [
+            (Signal::Working, false),
+            (Signal::Working, true),
+            (Signal::NeedsYou, false),
+            (Signal::Failed, false),
+            (Signal::Ready, false),
         ] {
-            let (w, h) = GRID;
-            let mut changed = false;
+            let mut painted = 0;
             for y in 0..h {
                 for x in 0..w {
-                    let a = atlas.get(signal, bg, 0, false, (x, y));
-                    assert_eq!(a, atlas.get(signal, bg, period, false, (x, y)));
-                    assert_eq!(a, alpha(signal, bg, 0, 0., x, y));
-                    changed |= a != atlas.get(signal, bg, 9, false, (x, y));
+                    let a = atlas.get(signal, bg, false, (x, y));
+                    assert_eq!(a, alpha(signal, bg, 0., x, y));
+                    assert_eq!(
+                        atlas.get(signal, bg, true, (x, y)),
+                        alpha(signal, bg, 1., x, y)
+                    );
+                    painted += usize::from(a > 0);
                 }
             }
-            assert_eq!(changed, signal.moving());
+            assert!(painted > 0, "{signal:?} paints a corner");
         }
     }
     #[test]
     fn transitions_settle_reduce_motion_is_still_and_hover_does_not_resize() {
         let spec = Spec::row(Some(Signal::Working), false);
         let mut t = Timeline::new(spec);
-        assert!(t.snapshot(Duration::ZERO, false).ticking);
+        assert!(
+            !t.snapshot(Duration::ZERO, false).ticking,
+            "a settled corner is still"
+        );
         t.hover(true, Duration::ZERO, false);
         let middle = t.snapshot(Duration::from_millis(150), false);
         assert!(middle.recede > 0.5 && middle.recede < 1. && middle.fast);
         let end = t.snapshot(HOVER, false);
         assert_eq!(end.recede, 1.);
-        assert!(!end.fast && end.ticking);
+        assert!(!end.fast && !end.ticking);
         t.configure(Spec::row(Some(Signal::Failed), false), HOVER);
         assert_eq!(t.snapshot(HOVER, false).mix, 0.);
         let end = t.snapshot(HOVER + DISSOLVE, false);
@@ -358,7 +319,7 @@ mod tests {
         assert!(!end.ticking);
         t.configure(spec, Duration::from_secs(1));
         let still = t.snapshot(Duration::from_millis(1100), true);
-        assert_eq!((still.frame, still.mix, still.recede), (0, 1., 1.));
+        assert_eq!((still.mix, still.recede), (1., 1.));
         assert!(!still.ticking);
         t.configure(Spec::row(None, false), Duration::from_secs(2));
         assert!(!t.snapshot(Duration::from_secs(3), false).ticking);

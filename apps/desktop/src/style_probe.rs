@@ -116,7 +116,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                         "style-ready",
                     ]
                     .map(|id| window.find(id).bounds());
-                    let counts = ["style-failed", "style-ready"]
+                    let counts = ["style-fg", "style-failed", "style-ready"]
                         .map(|id| list.corners[id].read(cx).probe(cx).1);
                     (v.transcript.read(cx).probe_render_count(), rects, counts)
                 })
@@ -130,8 +130,9 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
     let snapshot=list.corners["style-bg"].read(cx).probe(cx).0;
     let (ticks,members,running)=dither_view::probe_clock(window,cx);
     assert_eq!(v.transcript.read(cx).probe_render_count(),baseline,"dither must not re-render the cached transcript");
-    for (id,count) in ["style-failed","style-ready"].into_iter().zip(static_counts) {assert_eq!(list.corners[id].read(cx).probe(cx).1,count,"nonmoving status must not be notified");}
-    json!({"frame":frame,"phase":snapshot.frame,"ticks":ticks,"members":members,"running":running,"root_renders":v.render_count,"transcript_renders":v.transcript.read(cx).probe_render_count()})
+    for (id,count) in ["style-fg","style-failed","style-ready"].into_iter().zip(static_counts) {assert_eq!(list.corners[id].read(cx).probe(cx).1,count,"settled corners must not be notified");}
+    assert!(!snapshot.ticking && members==0 && !running,"settled corners hold still without a clock");
+    json!({"frame":frame,"ticks":ticks,"members":members,"running":running,"root_renders":v.render_count,"transcript_renders":v.transcript.read(cx).probe_render_count()})
    }).unwrap());
             }
             let after = cx.capture_screenshot(handle).unwrap();
@@ -150,11 +151,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 }
                 changes.push(changed);
             }
-            assert!(
-                changes[..3].iter().all(|n| *n > 0),
-                "native working/background/needs-you pixels must actually animate: {changes:?}"
-            );
-            assert_eq!(&changes[3..], &[0, 0], "failed/ready must stay still");
+            assert_eq!(changes, [0; 5], "row corners hold still: {changes:?}");
             println!(
                 "{}",
                 json!({"width":width,"mode":mode.name(),"samples":trace,"changed_pixels":changes,"native_production_root":true})
@@ -248,7 +245,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
             pulse(cx, handle, 3, 50);
             let hover_end = cx.update(|cx| snapshot(&view, "style-fg", cx));
             assert_eq!(hover_end.recede, 1.);
-            assert!(hover_end.ticking && !hover_end.fast);
+            assert!(!hover_end.ticking && !hover_end.fast);
             let rect = cx
                 .update_window(handle, |_, window, _| window.find("style-fg").bounds())
                 .unwrap();
@@ -298,7 +295,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
             let (_, members, _) = cx
                 .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
                 .unwrap();
-            assert_eq!(members, 2);
+            assert_eq!(members, 0, "a settled change leaves the clock idle");
 
             // Filtered/unmounted corners retain models but lose their paint leases.
             cx.update_window(handle, |_, _, cx| {
@@ -338,7 +335,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
                     .1)
                     .unwrap(),
-                2
+                0
             );
 
             // Reduce Motion is still, including immediate hover recession.
@@ -352,7 +349,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             cx.run_until_parked();
             let still = cx.update(|cx| snapshot(&view, "style-bg", cx));
-            assert_eq!((still.frame, still.recede, still.ticking), (0, 1., false));
+            assert_eq!((still.recede, still.ticking), (1., false));
             pulse(cx, handle, 12, 84);
             assert_eq!(
                 cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
@@ -365,7 +362,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
                     .1)
                     .unwrap(),
-                2
+                0
             );
 
             // Test-only visibility override; same cancellation path as the native observer.
@@ -392,7 +389,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
                     .1)
                     .unwrap(),
-                2
+                0
             );
             println!(
                 "{}",
@@ -497,18 +494,22 @@ fn run_large_motion(cx: &mut HeadlessAppContext) {
     let start = cx
         .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
         .unwrap();
-    assert!(start.1 > 0);
+    assert_eq!(
+        (start.1, start.2),
+        (0, false),
+        "a working row runs no clock"
+    );
     pulse(cx, handle, 12, 84);
     let count = cx.update(|cx| view.read(cx).transcript.read(cx).probe_render_count());
     assert_eq!(
         count, baseline,
-        "large retained history must not re-render on dither ticks"
+        "large retained history must not re-render beside a working row"
     );
     let end = cx
         .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
         .unwrap();
-    assert!((1..=12).contains(&(end.0 - start.0)));
-    assert_eq!(dither_view::probe_atlas_bytes(), 364_416);
+    assert_eq!(end, start, "no clock ticks while nothing changes");
+    assert_eq!(dither_view::probe_atlas_bytes(), 12_480);
     println!(
         "{}",
         json!({"large_history_rows":512,"source_bytes":source_bytes,"transcript_renders_during_ticks":count-baseline,"clock_ticks":end.0-start.0,"members":end.1,"atlas_bytes":dither_view::probe_atlas_bytes()})
