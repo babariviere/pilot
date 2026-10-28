@@ -416,20 +416,28 @@ impl Browser {
             cx,
         ));
         for c in attention.comments.iter().take(SECTION_ROWS) {
-            section = section.child(note_row(
-                format!("mission-needs-comment-{}", c.id),
-                AppIcon::Info,
-                None,
-                &c.text,
-                cx,
-            ));
+            section = section.child(self.needs_comment_row(c, cx));
         }
-        section = section.children(overflow(
-            "mission-needs-comments-more",
-            attention.comments.len(),
-            ["comment", "comments"],
-            cx,
-        ));
+        // The remainder opens Comments on the first comment not listed here.
+        if let Some(next) = attention.comments.get(SECTION_ROWS) {
+            let (generation, id) = (self.generation, next.id.clone());
+            let more = attention.comments.len() - SECTION_ROWS;
+            section = section.child(
+                ui::action(
+                    "mission-needs-comments-more",
+                    SharedString::from(format!(
+                        "{more} more {}",
+                        if more == 1 { "comment" } else { "comments" }
+                    )),
+                    Action::Quiet,
+                )
+                .self_start()
+                .disabled(!self.can_read_comments(generation))
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    v.reveal_comment(Some(id.clone()), generation, w, cx)
+                })),
+            );
+        }
         for p in attention.proposals.iter().take(SECTION_ROWS) {
             section = section.child(self.proposal_row(p, cx));
         }

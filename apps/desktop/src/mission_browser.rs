@@ -219,11 +219,7 @@ impl Summary {
         }
     }
 }
-#[derive(Clone, Debug)]
-pub(crate) struct Comment {
-    pub(crate) id: String,
-    pub(crate) text: String,
-}
+use crate::mission_comments::Comment;
 #[derive(Clone, Debug)]
 pub(crate) struct Proposal {
     pub(crate) id: String,
@@ -248,15 +244,17 @@ pub(crate) struct Attention {
 fn attention(
     v: &Value,
     coordinator: bool,
+    comments: &Result<Option<Vec<Comment>>, &'static str>,
     decisions: &Result<crate::mission_decisions::Snapshot, &'static str>,
 ) -> Result<Attention, &'static str> {
     let decisions = decisions.as_ref().map_err(|e| *e)?;
+    let comments = comments.as_ref().map_err(|e| *e)?;
     let list = |name: &str| match v.get(name) {
         None => Ok(&[][..]),
         Some(v) => v
             .as_array()
             .map(Vec::as_slice)
-            .ok_or("Mission comments or links are malformed."),
+            .ok_or("Mission links are malformed."),
     };
     let mut tickets = Vec::new();
     for r in list("resources")? {
@@ -302,22 +300,14 @@ fn attention(
         ));
     }
     tickets.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.id.cmp(&b.1.id)));
-    let mut comments = Vec::new();
     // With a coordinator, comments addressed to nobody go to it, not the user.
-    if !coordinator {
-        for c in list("comments")? {
-            // The user's own comments are not waiting on the user.
-            if c["resolvedAt"].is_null()
-                && c["targetSessionId"].is_null()
-                && !c["authorSessionId"].is_null()
-            {
-                comments.push(Comment {
-                    id: id(&c["id"])?,
-                    text: text(&c["text"], 2048)?,
-                });
-            }
-        }
-    }
+    // The user's own comments are not waiting on the user.
+    let comments = comments
+        .iter()
+        .flatten()
+        .filter(|c| !coordinator && c.open() && c.target.is_none() && c.author.is_some())
+        .cloned()
+        .collect();
     let current = decisions.decisions.rows.as_deref().unwrap_or_default();
     let proposals = decisions
         .proposals
@@ -351,6 +341,8 @@ fn first_sentence(s: Option<&str>) -> Option<&str> {
 #[derive(Clone, Debug)]
 pub(crate) struct Detail {
     pub(crate) decisions: Result<crate::mission_decisions::Snapshot, &'static str>,
+    /// Every received comment; None when the response omits them.
+    pub(crate) comments: Result<Option<Vec<Comment>>, &'static str>,
     pub(crate) attention: Result<Attention, &'static str>,
     pub(crate) key: Key,
     pub(crate) title: String,
@@ -422,9 +414,11 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         Some(clip_text(&v["brief"]["markdown"], 32768, &mut clipped)?)
     };
     let decisions = crate::mission_decisions::project(v);
+    let comments = crate::mission_comments::project(v);
     let coordinator = optional_id(&m["coordinatorSessionId"])?;
     Ok(Detail {
-        attention: attention(v, coordinator.is_some(), &decisions),
+        attention: attention(v, coordinator.is_some(), &comments, &decisions),
+        comments,
         decisions,
         key: key.clone(),
         title: text(&m["title"], 800)?,

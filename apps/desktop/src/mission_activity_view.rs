@@ -32,7 +32,7 @@ pub(crate) struct Activity {
     update_error: Option<&'static str>,
 }
 impl EventEmitter<Close> for Activity {}
-fn relative_time(at: u64) -> String {
+pub(crate) fn relative_time(at: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

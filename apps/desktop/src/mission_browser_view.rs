@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
+#[path = "mission_comments_view.rs"]
+pub(crate) mod mission_comments_view;
 #[path = "mission_decisions_view.rs"]
 pub(crate) mod mission_decisions_view;
 #[path = "mission_lifecycle_browser.rs"]
@@ -60,6 +62,7 @@ pub(crate) struct Input {
 }
 pub(crate) struct Browser {
     decisions: mission_decisions_view::Disclosure,
+    comments: mission_comments_view::Comments,
     pub(crate) generation: u64,
     pub(crate) route: Option<Route>,
     options: Option<LocalOptions>,
@@ -119,6 +122,7 @@ impl Browser {
         .detach();
         Self {
             decisions: Default::default(),
+            comments: Default::default(),
             tasks_browser,
             generation: 0,
             route: None,
@@ -288,6 +292,7 @@ impl Browser {
                 self.focus.focus(w, cx);
             }
             self.decisions = Default::default();
+            self.comments = Default::default();
             let owned = self
                 .metadata
                 .iter()
@@ -451,6 +456,7 @@ impl Browser {
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
                 self.decisions.reconcile(&d);
+                self.comments.reconcile(&d);
                 self.detail = Some(d);
                 self.members = m;
                 self.error = None;
@@ -809,6 +815,9 @@ impl Render for Browser {
         {
             return div().size_full().child(activity.clone()).into_any_element();
         }
+        if self.comments.open {
+            return self.comments_page(cx);
+        }
         if let Some(brief) = self.brief.as_ref().filter(|b| b.read(cx).visible) {
             return div()
                 .id("missions-page")
@@ -1151,6 +1160,7 @@ impl Render for Browser {
                             })),
                     ),
             );
+            content = content.child(self.comments_line(d, cx));
             if d.clipped {
                 content = content.child(
                     Notice::new(

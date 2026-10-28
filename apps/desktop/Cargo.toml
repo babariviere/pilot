@@ -375,6 +375,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "mission_comments"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "transcript_find"
 harness = false
 required-features = ["native-probes"]
