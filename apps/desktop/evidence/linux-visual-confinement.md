@@ -91,16 +91,45 @@ subprocess checks above are the executed security suite, not that empty gate.
 ## Wayland blocker and remaining qualification
 
 `sway` and `weston` are absent from the authorized host's PATH. Installed
-Cage0.3.1 was briefly tried with an owned headless/pixman `wayland-info` client.
-It advertised `wl_seat`9/seat0 and HEADLESS-1, but also announced built-in
-XWayland support/display. Its client and compositor exited normally; the owned
-socket disappeared. No X11 client, X11 product backend or real display was used.
-**This fixture is excluded from qualification and was not used for a GUI run.**
-Supply an installed, explicitly identified no-Xwayland compositor such as Sway
-with `xwayland disable`, headless backend and pixman support. No system install
-was attempted. The ambient pkg-config search also lacks wayland-client,
-xkbcommon, libudev and vulkan metadata, although versioned system libraries
-exist; the full pinned GPUI native build closure remains unverified here.
+Cage0.3.1 successfully advertises `wl_seat`9/seat0 and HEADLESS-1 using owned
+headless/pixman `wayland-info`. **Compiled XWayland support alone does not
+disqualify a native Wayland fixture.** The earlier log-based exclusion was too
+broad: Cage's "XWayland is running" message is emitted when setting `DISPLAY`,
+not after checking that an X server process started.
+
+The follow-up audit checked installed `cage-0.3.1-1.fc44` help/man/README and the
+matching upstream [v0.3.1 source](https://github.com/cage-kiosk/cage/tree/v0.3.1).
+`cage.c` calls `wlr_xwayland_create(..., true)` for lazy creation and sets DISPLAY
+whenever this succeeds. There is no documented runtime XWayland-off switch.
+`meson_options.txt` contains only `man-pages`; `meson.build` derives
+`CAGE_HAS_XWAYLAND` from wlroots' `have_xwayland`. Do not invent a Cage
+`-Dxwayland=disabled` build option or treat unsetting DISPLAY in a client as
+disabling the compositor's listeners.
+
+An additional owned native-only fixture under `cage-audit` showed the concrete
+distinction: client DISPLAY=:1, WAYLAND_DISPLAY=wayland-0, real wl_seat, and
+**no XWayland process observed**. At inspection time Cage's only child was the
+Python primary client, which had no children after `wayland-info` completed.
+However, Cage's own fd table mapped to listening Unix sockets at both
+`/tmp/.X11-unix/X1` and its abstract counterpart (`00010000` accept-listener
+flags), alongside the owned Wayland socket. Namespace socket records were
+filtered to inode IDs from that exact owned Cage pid, not other apps/processes.
+Thus this stock fixture does not meet the requested no-DISPLAY-listener path,
+even though no X11 client or product X11 fallback was used. Cage/client exited0
+and were reaped; the owned Wayland socket disappeared. No product GUI was run.
+The diagnostic was limited to5CPU seconds,512MiB address space,256MiB file size
+and bounded waits. Product helper limits were untouched.
+
+The prerequisite is **not specifically Sway**: supply either a compositor with
+a supported runtime XWayland disable (such as Sway with `xwayland disable`), or
+a native-only Cage/wlroots build. A fixture-local source build is a valid option,
+not a policy relaxation, but current prerequisites are absent: Meson, Ninja,
+wayland-scanner, wayland-server headers/pkg-config, wlroots0.20 headers/pkg-config
+and xkbcommon headers/pkg-config. Matching runtime libraries alone do not provide
+that build closure. No system installation, arbitrary binary download or
+compositor source patch was attempted. The pinned GPUI native build closure
+also remains unverified; ambient pkg-config lacks wayland-client, xkbcommon,
+libudev and vulkan metadata despite versioned runtime libraries being present.
 
 Then validate the exact-source GPUI fixture on that owned compositor: actual
 seat/toplevel/buffers and native visual rendering, selection/copy, mounted
