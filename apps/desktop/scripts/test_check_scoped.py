@@ -96,6 +96,21 @@ test=false
         manifest.write_text(manifest.read_text() + '\n[[test]]\nname="provider_usage"\nharness=false\nrequired-features=["native-probes"]\n')
         self.assertFalse(scoped.plan(self.args("--test", "provider_usage"), self.root)[3])
 
+    def test_native_menu_scope_is_helper_free_but_other_local_view_tests_are_not(self):
+        for name in ["app_menu", "local_view::menu_routing::tests"]:
+            self.assertFalse(scoped.plan(self.args("--unit", name), self.root)[3])
+        self.assertTrue(scoped.plan(self.args("--unit", "local_view::other_tests"), self.root)[3])
+        (self.root / "tests/native_menus.rs").write_text("fn main() {}\n")
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text() + '''
+[[test]]
+name="native_menus"
+harness=false
+required-features=["native-probes"]
+''')
+        flags, tests, native, worker = scoped.plan(self.args("--test", "native_menus"), self.root)
+        self.assertEqual((tests, native, worker), (["native_menus"], ["native_menus"], False))
+        self.assertIn("native-probes", flags)
     def test_conversation_images_use_static_rasters_not_the_visual_worker(self):
         self.assertFalse(scoped.plan(self.args("--unit", "conversation_images"), self.root)[3])
         (self.root / "tests/conversation_images.rs").write_text("fn main() {}\n")

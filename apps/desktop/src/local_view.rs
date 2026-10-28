@@ -47,6 +47,8 @@ mod jump_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
+#[path = "menu_routing.rs"]
+pub(crate) mod menu_routing;
 #[cfg(feature = "native-probes")]
 #[path = "mission_browser_probe.rs"]
 pub(crate) mod mission_browser_probe;
@@ -184,7 +186,8 @@ gpui_kit::actions!(
         ShowMissions,
         NavigateBack,
         NavigateForward,
-        ToggleJump
+        ToggleJump,
+        NewChat
     ]
 );
 #[derive(Clone, Copy)]
@@ -735,6 +738,7 @@ impl LocalViewer {
                 Some("QueuedMessage"),
             ),
             KeyBinding::new("secondary-k", ToggleJump, None),
+            KeyBinding::new("secondary-n", NewChat, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
             KeyBinding::new("secondary-2", ShowAllChats, None),
@@ -813,6 +817,7 @@ impl LocalViewer {
             }
         }));
         view.listen_writes(write_updates, window, cx);
+        menu_routing::register_quit_owner(window, cx);
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |view, cx| {
@@ -1447,7 +1452,7 @@ impl LocalViewer {
                     view.sync_sending(cx);
                     view.rebuild_nav(window, cx)
                 }
-                EditorEvent::Flushed => cx.quit(),
+                EditorEvent::Flushed => menu_routing::exit(cx),
                 EditorEvent::OpenContinued(chat) => {
                     if view.jump.is_none() && view.page == Page::Chat {
                         view.open((**chat).clone(), window, cx);
@@ -2315,6 +2320,17 @@ impl LocalViewer {
 
 impl Render for LocalViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let menu_ready = self.menu_navigation_ready(window, cx);
+        let menu_jump = self.menu_jump_ready(window, cx);
+        let menu_new_chat = menu_ready && self.editor.read(cx).ready();
+        let menu_back = menu_ready
+            && self
+                .navigation
+                .has_destination(false, |l| self.can_restore(l, cx));
+        let menu_forward = menu_ready
+            && self
+                .navigation
+                .has_destination(true, |l| self.can_restore(l, cx));
         self.transcript.update(cx, |t, cx| {
             t.inline_context(
                 self.usage_options.clone(),
@@ -2377,7 +2393,7 @@ impl Render for LocalViewer {
             )
             .collect::<Vec<_>>()
             .join(" · ");
-        div().id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
+        div().map(menu_routing::window_commands).id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             // Over glass the sidebar and page are separate tints, never stacked.
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
@@ -2404,7 +2420,8 @@ impl Render for LocalViewer {
                 }
             }))
             .capture_any_mouse_down(cx.listener(|v,_,_,cx|{if v.restart_pending {cx.stop_propagation();}}))
-            .on_action(cx.listener(|v,_:&ToggleJump,w,cx|{v.toggle_jump(w,cx);cx.stop_propagation();}))
+            .when(menu_jump, |el| el.on_action(cx.listener(|v,_:&ToggleJump,w,cx|{v.toggle_jump(w,cx);cx.stop_propagation();})))
+            .when(menu_new_chat, |el| el.on_action(cx.listener(|v,_:&NewChat,w,cx|{v.new_chat(w,cx);cx.stop_propagation();})))
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{
@@ -2412,25 +2429,25 @@ impl Render for LocalViewer {
                     view.transcript.update(cx,|v,cx|v.history_scrollbar_released(cx));
                 }
             }))
-            .on_action(cx.listener(|view,_:&crate::transcript_view::Quit,_,cx|{
+            .on_action(cx.listener(|view,_:&crate::transcript_view::Quit,w,cx|{
                 cx.stop_propagation();
-                if !view.settings.update(cx,|owner,cx|owner.request_close(cx)){return;}
-                if view.editor.update(cx,|editor,cx|editor.request_close(cx)){cx.quit();}
+                view.request_menu_quit(w,cx);
             }))
             .on_action(cx.listener(|view,_:&crate::transcript_view::FocusComposer,window,cx|{
                 if view.jump.is_some()||view.mission_open||view.add_project_open{return;}
                 if view.page!=Page::Chat {view.show_chats(window,cx);}
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
-            .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
-            .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
-            .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
-            .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
+            .when(menu_ready, |el| el
+                .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
+                .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
+                .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
+                .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} )))
             .on_action(cx.listener(|v,_:&workspace_changes_view::Toggle,w,cx|{v.toggle_workspace_changes(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&conversation_links_view::Toggle,w,cx|{v.toggle_conversation_links(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
-            .on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx)))
-            .on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx)))
+            .when(menu_back, |el| el.on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx))))
+            .when(menu_forward, |el| el.on_action(cx.listener(|view,_:&NavigateForward,window,cx|view.move_navigation(true,window,cx))))
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|{
                 use gpui_kit::component::WindowExt;
                 if window.has_active_dialog(cx) || window.has_active_sheet(cx) || !view.project_choices_ready(window,cx) { return; }

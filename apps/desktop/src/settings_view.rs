@@ -779,6 +779,7 @@ impl Render for SettingsView {
         let status = self.status(cx);
         div()
             .id("settings-root")
+            .map(crate::local_view::menu_routing::window_commands)
             .test_support()
             .track_focus(&self.focus)
             .key_context("Settings")

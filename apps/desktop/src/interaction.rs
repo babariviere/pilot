@@ -183,6 +183,26 @@ impl Interaction {
             receiver,
         )
     }
+    #[cfg(test)]
+    pub(crate) fn recording_with_close() -> (
+        Self,
+        async_channel::Receiver<WriteCommand>,
+        async_channel::Receiver<()>,
+    ) {
+        let (commands, receiver) = async_channel::bounded(8);
+        let (wake, _) = async_channel::bounded(1);
+        let (close, closed) = async_channel::bounded(4);
+        (
+            Self {
+                commands,
+                edits: Arc::new(Mutex::new(BTreeMap::new())),
+                wake,
+                close,
+            },
+            receiver,
+            closed,
+        )
+    }
     pub(crate) fn start(
         options: LocalOptions,
         path: Result<PathBuf, Failure>,

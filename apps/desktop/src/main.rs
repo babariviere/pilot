@@ -123,6 +123,8 @@ fn main() {
             pilot_desktop::enable_glass(cx);
             TranscriptView::bind_keys(cx);
             LocalViewer::bind_keys(cx);
+            #[cfg(target_os = "macos")]
+            pilot_desktop::app_menu::init(cx);
             // Initial window geometry is a physical platform boundary, not a UI token.
             let (handle, desktop) = gpui_kit::open_window(
                 WindowOptions {

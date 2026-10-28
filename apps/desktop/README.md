@@ -37,6 +37,10 @@ See [bundled Local runtime](docs/bundled-runtime.md) for the exact boundary.
 
 ### Chat actions
 
+macOS has a native application menu bar with standard editing, New Chat,
+navigation, Settings and window commands. See [native menus](docs/native-menus.md)
+for focus ownership, Quit persistence and verification boundaries.
+
 Right-click a Local chat row, including an unselected row, for **Rename…**, **Archive**,
 **Restore** or the existing confirmed **Make a mission…** flow. The row's
 **Chat actions** ellipsis button also works with Tab and Return. Opening or

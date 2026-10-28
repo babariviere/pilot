@@ -109,7 +109,7 @@ impl TranscriptView {
             KeyBinding::new("secondary-q", Quit, None),
             KeyBinding::new("secondary-l", FocusComposer, None),
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| crate::local_view::menu_routing::quit(cx));
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -1142,7 +1142,7 @@ impl Render for TranscriptView {
                 )
                 .into_any_element();
         }
-        div().track_focus(&self.find.focus).v_flex().size_full().min_w_0().bg(cx.theme().background).text_color(cx.theme().foreground)
+        div().map(crate::local_view::menu_routing::window_commands).track_focus(&self.find.focus).v_flex().size_full().min_w_0().bg(cx.theme().background).text_color(cx.theme().foreground)
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
                 if this.readonly { return; }
                 this.composer.update(cx, |state, cx| state.focus(window, cx));

@@ -13,6 +13,11 @@ required-features = ["native-probes"]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[test]]
+name = "native_menus"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "dogfooding_diagnostics"
 harness = false
 required-features = ["native-probes"]

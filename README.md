@@ -159,6 +159,7 @@ unchanged; outstanding accounting memory and release verification is documented 
 
 New releases contain the Rust GPUI desktop, with `Pilot-Next-macos-arm64.zip` for macOS 15+
 and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [Pilot Next](apps/desktop/README.md).
+Pilot Next uses the native macOS menu bar for application, editing and navigation commands.
 The legacy Swift app is no longer built or published by CI. Its source and existing releases remain available.
 
 For the last legacy Swift release, download `Pilot-arm64.zip` from

@@ -353,7 +353,7 @@ impl Render for Usage {
                 page = page.child(details);
             }
         }
-        div()
+        crate::local_view::menu_routing::window_commands(div())
             .id("usage-page")
             .test_support()
             .track_focus(&self.focus)

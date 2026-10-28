@@ -56,6 +56,17 @@ impl History {
             self.index > 0
         }
     }
+    pub(crate) fn has_destination(
+        &self,
+        forward: bool,
+        accepts: impl Fn(&Location) -> bool,
+    ) -> bool {
+        if forward {
+            self.entries[self.index + 1..].iter().any(accepts)
+        } else {
+            self.entries[..self.index].iter().rev().any(accepts)
+        }
+    }
     /// Operate on a candidate clone; a refused transport/IME move must not commit its cursor.
     pub(crate) fn move_to(
         &mut self,

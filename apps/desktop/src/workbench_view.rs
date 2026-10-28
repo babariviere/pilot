@@ -112,17 +112,9 @@ impl LocalViewer {
                 self.settings_window = Some(handle);
                 self.settings_pane = Some(pane.downgrade());
                 self.settings_events = vec![
-                    cx.subscribe(&pane, |view, _, event, cx| match event {
+                    cx.subscribe(&pane, |_, _, event, cx| match event {
                         crate::settings_view::SettingsEvent::Quit => {
-                            if view
-                                .settings
-                                .update(cx, |owner, cx| owner.request_close(cx))
-                                && view
-                                    .editor
-                                    .update(cx, |editor, cx| editor.request_close(cx))
-                            {
-                                cx.quit();
-                            }
+                            super::menu_routing::quit(cx);
                         }
                     }),
                     cx.observe_release_in(&pane, window, |view, _, window, cx| {
