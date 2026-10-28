@@ -2,7 +2,7 @@
 use super::*;
 use crate::queued_message_fixture::Server;
 use gpui_kit::{
-    AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, size,
+    AnyWindowHandle, Bounds, HeadlessAppContext, Pixels, WindowBounds, WindowOptions, size,
     test::TestWindowExt,
 };
 use serde_json::json;
@@ -29,7 +29,16 @@ fn until(cx: &mut HeadlessAppContext, h: AnyWindowHandle, f: impl Fn(&App) -> bo
     settle(cx, h);
 }
 fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
-    cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
+    cx.update_window(h, |_, w, cx| {
+        if let Some(row) = id
+            .strip_prefix("composer-queue-edit-")
+            .or_else(|| id.strip_prefix("composer-queue-delete-"))
+        {
+            w.hover(SharedString::from(format!("composer-queue-row-{row}")), cx);
+        }
+        w.click(id, cx);
+    })
+    .unwrap();
     settle(cx, h);
 }
 fn assert_opaque(
@@ -76,7 +85,202 @@ fn assert_opaque(
         }
     }
 }
+fn painted(image: &image::RgbaImage, bounds: Bounds<Pixels>, width: f32) -> bool {
+    let scale = image.width() as f32 / width;
+    let x0 = (f32::from(bounds.left()) * scale) as u32;
+    let y0 = (f32::from(bounds.top()) * scale) as u32;
+    let background = image.get_pixel(x0, y0);
+    (y0..(f32::from(bounds.bottom()) * scale) as u32).any(|y| {
+        (x0..(f32::from(bounds.right()) * scale) as u32)
+            .any(|x| image.get_pixel(x, y) != background)
+    })
+}
+fn row_action_bounds(cx: &mut HeadlessAppContext, h: AnyWindowHandle) -> [Bounds<Pixels>; 3] {
+    cx.update_window(h, |_, w, _| {
+        [
+            w.find("composer-queue-edit-42").bounds(),
+            w.find("composer-queue-delete-42").bounds(),
+            w.find("composer-queue-edit-43").bounds(),
+        ]
+    })
+    .unwrap()
+}
+fn tray_layout(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    width: f32,
+    dark: bool,
+    captures: Option<&std::path::Path>,
+) {
+    let original = cx.update(|cx| view.read(cx).state.user_queue.clone());
+    let original_rows = cx.update(|cx| view.read(cx).sending_view.queued.clone());
+    let mut empty_height = px(0.);
+    for count in [0, 1, 2, 8] {
+        let items: Vec<_> = (0..count)
+            .map(|i| {
+                json!({
+                    "id":42+i,"mode":if i%2==0 {"followUp"} else {"steer"},
+                    "content":if count == 1 { "Short preview".to_owned() } else { format!("Message {i}: 日本語 👩‍💻 {}", "long preview ".repeat(80)) },
+                    "guardToken":"a".repeat(64)
+                })
+            })
+            .collect();
+        cx.update(|cx| {
+            view.update(cx, |v, cx| {
+                let mut model = crate::local_model::LiveTranscript::default();
+                model.apply(&json!({"type":"queue_update","items":items,"automatic":[]}));
+                v.state.user_queue = model.user_queue.clone();
+                v.with_sending(model.rows(), &model.user_queue, cx);
+                cx.notify();
+            })
+        });
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            let tray = w.find("composer-tray").bounds();
+            let input = w.find("composer-input").bounds();
+            let header = w.find("chat-header").bounds();
+            assert!(
+                view.read(cx)
+                    .transcript
+                    .read(cx)
+                    .rows()
+                    .iter()
+                    .all(|r| crate::local_model::queued_submission(r).is_none())
+            );
+            if count == 0 {
+                assert!(w.try_find("composer-queue").is_none());
+                assert!(w.try_find("queued-message-open").is_none());
+                empty_height = tray.size.height;
+                assert!(
+                    input.top() - tray.top() < px(8.),
+                    "empty queue leaves no spacer"
+                );
+            } else {
+                let queue = w.find("composer-queue").bounds();
+                let list = w.find("composer-queue-rows").bounds();
+                assert!(
+                    w.try_find("queued-message-open").is_none(),
+                    "no Manage queue control"
+                );
+                assert!(tray.contains(&queue.origin) && tray.contains(&queue.bottom_right()));
+                assert!(
+                    queue.bottom() < input.top(),
+                    "queue above editor at {width}/{dark}"
+                );
+                assert!(input.top() - queue.bottom() <= px(8.));
+                let edit = w.find("composer-queue-edit-42").bounds();
+                let delete = w.find("composer-queue-delete-42").bounds();
+                let row = w.find("composer-queue-row-42").bounds();
+                assert!(edit.right() <= delete.left());
+                assert!(row.contains(&delete.center()) && row.contains(&edit.center()));
+                assert!(edit.left() >= row.center().x, "row actions on the right");
+                assert!(!header.intersects(&edit));
+                let mode = w.find(("queue-pending", 42u64)).bounds();
+                let preview = w.find(("queue-preview", 42u64)).bounds();
+                assert!(
+                    mode.left() >= input.left() + px(8.) && mode.left() <= input.left() + px(12.),
+                    "queue icon shares editor text inset: {mode:?}/{input:?}"
+                );
+                assert!(
+                    preview.left() - mode.right() >= px(6.),
+                    "readable icon/text gap"
+                );
+                assert!(
+                    row.top() - tray.top() >= px(8.),
+                    "breathing room above first row"
+                );
+                assert!(
+                    tray.right() - delete.right() >= px(8.),
+                    "actions inset from tray edge"
+                );
+                assert!(list.size.height <= px(140.));
+                assert!(tray.size.height > empty_height);
+                let first = w.find("composer-queue-42").bounds();
+                assert!(list.contains(&first.center()));
+                if count > 1 {
+                    assert!(
+                        w.find("composer-queue-43").bounds().top() < first.top(),
+                        "steering precedes follow-up"
+                    );
+                }
+                if count == 8 {
+                    let last = w.find("composer-queue-48").bounds();
+                    let ids = [43, 45, 47, 49, 42, 44, 46, 48];
+                    for pair in ids.windows(2) {
+                        assert!(
+                            w.find(SharedString::from(format!("composer-queue-{}", pair[0])))
+                                .bounds()
+                                .top()
+                                < w.find(SharedString::from(format!("composer-queue-{}", pair[1])))
+                                    .bounds()
+                                    .top(),
+                            "stable within-mode order"
+                        );
+                    }
+                    assert!(
+                        last.bottom() > list.bottom(),
+                        "extra rows scroll, not disappear"
+                    );
+                }
+                assert!(
+                    view.read(cx).queue_open.is_none(),
+                    "layout must not open an editor"
+                );
+            }
+        })
+        .unwrap();
+        if count == 2 {
+            let bounds = row_action_bounds(cx, h);
+            let hidden = cx.capture_screenshot(h).unwrap();
+            assert!(
+                bounds.iter().all(|b| !painted(&hidden, *b, width)),
+                "row actions hidden at rest"
+            );
+            cx.update_window(h, |_, w, cx| w.hover("composer-queue-row-42", cx))
+                .unwrap();
+            settle(cx, h);
+            let hovered = cx.capture_screenshot(h).unwrap();
+            assert!(
+                painted(&hovered, bounds[0], width) && painted(&hovered, bounds[1], width),
+                "hover reveals both row actions"
+            );
+            assert!(
+                !painted(&hovered, bounds[2], width),
+                "other rows stay quiet"
+            );
+            assert_eq!(row_action_bounds(cx, h), bounds, "hover does not reflow");
+            if let Some(dir) = captures {
+                hovered
+                    .save(dir.join(format!("tray-hover-{width}-{dark}.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.hover("chat-header", cx))
+                .unwrap();
+            settle(cx, h);
+        }
+        if let Some(dir) = captures {
+            cx.capture_screenshot(h)
+                .unwrap()
+                .save(dir.join(format!("tray-{width}-{dark}-{count}.png")))
+                .unwrap();
+        }
+    }
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.state.user_queue = original;
+            v.sending_view.queued = original_rows;
+            cx.notify();
+        })
+    });
+    settle(cx, h);
+}
 pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
+    let reduced_motion = cx.update(|cx| {
+        let previous = cx.reduce_motion();
+        cx.set_reduce_motion(true);
+        previous
+    });
     crate::local_view::submit_visibility_probe::run(cx);
     capacity(cx);
     let captures = std::env::var_os("PILOT_NEXT_QUEUED_MESSAGE_DIR").map(std::path::PathBuf::from);
@@ -103,10 +307,14 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             let mut v=LocalViewer::preview(PreviewState::Conversation,w,cx);v.client=Some(client);v.usage_options=Some(server.options());
             v.editor.update(cx,|e,cx|e.shell_probe_setup(writer,w,cx));
             v.selected=Some("source".into());v.state.chats=Arc::new(vec![crate::local_model::Chat{id:"source".into(),writable:true,..v.state.chats[0].clone()}]);
-            v.state.user_queue=Arc::new(Snapshot::read(&json!([
+            let items = json!([
                 {"id":42,"mode":"followUp","content":"Original 日本語 🦀","guardToken":"a".repeat(64)},
                 {"id":43,"mode":"steer","content":[{"type":"text","text":"With image"},{"type":"image","data":"preserved"}],"guardToken":"b".repeat(64)}
-            ])));
+            ]);
+            let mut model = crate::local_model::LiveTranscript::default();
+            model.apply(&json!({"type":"queue_update","items":items,"automatic":[]}));
+            v.state.user_queue = model.user_queue.clone();
+            v.with_sending(model.rows(), &model.user_queue, cx);
             v.transcript.update(cx, |t, cx| t.replace_readonly(vec![crate::model::Message::live(
                 1, "assistant".into(),
                 "Underlying chat: WWW MMM ### 0123456789 high contrast text. ".repeat(120),
@@ -114,6 +322,7 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             v
         }))).unwrap();
             settle(cx, h);
+            tray_layout(cx, h, &view, width, dark, captures.as_deref());
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {
                 input.update(cx, |i, cx| {
@@ -124,11 +333,13 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            click(cx, h, "queued-message-open");
+            click(cx, h, "composer-queue-edit-42");
             assert!(
                 cx.update(|cx| view.read(cx).queue_open.is_none()),
                 "composer preedit before pointer blur must block entry"
             );
+            click(cx, h, "composer-queue-delete-42");
+            assert!(cx.update(|cx| view.read(cx).queue_open.is_none()));
             cx.update_window(h, |_, w, cx| {
                 let r = input
                     .update(cx, |i, cx| i.marked_text_range(w, cx))
@@ -138,7 +349,55 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             let main = cx.update(|cx| input.read(cx).value().to_string());
-            click(cx, h, "queued-message-open");
+            click(cx, h, "composer-queue-delete-43");
+            cx.advance_clock(Duration::from_millis(300));
+            settle(cx, h);
+            let remove_form = cx.update(|cx| view.read(cx).queue_open.clone().unwrap());
+            assert_eq!(cx.update(|cx| remove_form.read(cx).selected), Some(43));
+            assert!(cx.update(|cx| remove_form.read(cx).drafts[&43].confirm_remove));
+            assert!(
+                server.writes.lock().unwrap().is_empty(),
+                "row Delete only opens confirmation"
+            );
+            click(cx, h, "queued-message-close");
+            click(cx, h, "composer-queue-delete-43");
+            assert!(
+                server.writes.lock().unwrap().is_empty(),
+                "reopening Delete cannot reuse confirmation to dispatch"
+            );
+            click(cx, h, "queued-message-close");
+            // Native Kit row actions remain reachable without the pointer.
+            cx.update_window(h, |_, w, cx| {
+                w.activate_window();
+                w.hover("chat-header", cx);
+            })
+            .unwrap();
+            let mut reached = false;
+            for _ in 0..80 {
+                reached = cx
+                    .update_window(h, |_, w, _| {
+                        w.find("composer-queue-edit-42").focused() == Some(true)
+                    })
+                    .unwrap();
+                if reached {
+                    break;
+                }
+                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+                settle(cx, h);
+            }
+            assert!(reached, "Tab reaches row Edit");
+            let bounds = row_action_bounds(cx, h);
+            let focused = cx.capture_screenshot(h).unwrap();
+            assert!(
+                painted(&focused, bounds[0], width) && painted(&focused, bounds[1], width),
+                "keyboard focus reveals sibling actions"
+            );
+            assert!(
+                !painted(&focused, bounds[2], width),
+                "other rows remain hidden with keyboard focus"
+            );
+            cx.update_window(h, |_, w, cx| w.press("space", cx))
+                .unwrap();
             // Root's real dialog entrance must settle before pointer admission.
             // PNG capture previously happened to provide this drain; keep the
             // interaction proof independent of screenshots.
@@ -154,6 +413,11 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
                 assert!(list.contains(&row.center()));
             })
             .unwrap();
+            assert_eq!(
+                cx.update(|cx| form.read(cx).selected),
+                Some(42),
+                "tray preview selects exact row"
+            );
             click(cx, h, "queued-message-row-42");
             assert!(
                 cx.update(|cx| form.read(cx).drafts.contains_key(&42)),
@@ -196,14 +460,38 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            click(cx, h, "queued-message-copy");
+            cx.update(|cx| {
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "Edited 日本語 🦀"
+                )
+            });
             let snapshot = cx.update(|cx| view.read(cx).state.user_queue.clone());
             cx.update(|cx| {
                 view.update(cx, |v, cx| {
-                    v.state.user_queue = Arc::default();
+                    v.state.user_queue = Arc::new(Snapshot {
+                        rows: v
+                            .state
+                            .user_queue
+                            .rows
+                            .iter()
+                            .filter(|r| r.id == 43)
+                            .cloned()
+                            .collect(),
+                        unavailable: false,
+                    });
                     v.sync_queue(cx);
                 })
             });
             settle(cx, h);
+            // Removing Manage queue must not strand an older draft while another message waits.
+            click(cx, h, "queued-message-row-43");
+            click(cx, h, "queued-message-row-42");
+            assert_eq!(
+                cx.update(|cx| form.read(cx).drafts[&42].input.clone()),
+                edit
+            );
             cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
                 .unwrap();
             settle(cx, h);
@@ -270,7 +558,7 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(input.read(cx).value().as_ref(), main);
             })
             .unwrap();
-            click(cx, h, "queued-message-open");
+            click(cx, h, "composer-queue-edit-42");
             assert_eq!(
                 cx.update(|cx| form.read(cx).drafts[&42].input.read(cx).value().to_string()),
                 "Edited 日本語 🦀"
@@ -283,6 +571,23 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             );
             click(cx, h, "queued-message-row-43");
             assert!(cx.update(|cx| form.read(cx).drafts[&43].row.text().is_none()));
+            assert_eq!(
+                cx.update(|cx| form.read(cx).drafts[&43].input.read(cx).value().to_string()),
+                "With image\n\n[1 image attached]"
+            );
+            click(cx, h, "queued-message-copy");
+            cx.update(|cx| {
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "With image\n\n[1 image attached]"
+                )
+            });
+            click(cx, h, "queued-message-save");
+            assert_eq!(
+                server.writes.lock().unwrap().len(),
+                1,
+                "structured preview stays read-only"
+            );
             // Missing/changed capture retains draft and refuses both operations.
             cx.update(|cx| {
                 view.update(cx, |v, cx| {
@@ -358,6 +663,7 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
         "Retained uncertain edit"
     );
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.update(|cx| cx.set_reduce_motion(reduced_motion));
     println!(
         "queued-message native: 4 actual root layouts/IME/capture/late-ACK cases plus confirmed removal/capability/Unknown passed"
     );

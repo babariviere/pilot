@@ -1339,9 +1339,11 @@ impl LocalViewer {
         editor.update(cx, |editor, cx| editor.enable_paths(path_owner, window, cx));
         let context_entry = context_usage_view::entry(cx);
         let todos_entry = session_todos_tray::entry(window, cx);
+        let queue_entry = queued_message_view::entry(window, cx);
         editor.update(cx, |editor, _| {
             editor.set_context_entry(context_entry.into());
             editor.set_todos_entry(todos_entry.into());
+            editor.set_queue_entry(queue_entry.into());
         });
         let mission =
             cx.new(|cx| crate::mission_view::MissionForm::new(writer.clone(), window, cx));
@@ -1799,6 +1801,7 @@ impl LocalViewer {
         self.state.page_busy = false;
         self.state.chat_status = "Loading chat…".into();
         self.state.queued = 0;
+        self.sending_view.queued.clear();
         self.state.thinking = false;
         self.rebuild_nav(window, cx);
         let fold_scope = self
@@ -1948,6 +1951,7 @@ impl LocalViewer {
         self.state.cursor = None;
         self.state.chat_status.clear();
         self.state.queued = 0;
+        self.sending_view.queued.clear();
         self.state.thinking = false;
         self.transcript
             .update(cx, |v, cx| v.set_history_controls(Default::default(), cx));
@@ -2439,7 +2443,6 @@ impl Render for LocalViewer {
                                 .child(SharedString::from(self.title.clone())).test_support())
                             .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().max_w_full().truncate().text_size(px(crate::ui::TextRole::CAPTION)).line_height(px(crate::ui::TextRole::CAPTION*1.3)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
                         .child(div().h_flex().items_center().gap_0p5().flex_none()
-                            .children(self.queued_message_action(cx))
                             .children(self.conversation_links_action(cx))
                             .children(self.workspace_changes_action(cx))
                             .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child({

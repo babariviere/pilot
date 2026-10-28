@@ -138,31 +138,45 @@ impl Probe {
     /// Rows with this exact text, and their delivery captions.
     fn shown(&self, cx: &mut HeadlessAppContext, text: &str) -> Vec<Option<&'static str>> {
         cx.update(|cx| {
-            self.v
-                .read(cx)
-                .transcript
+            let v = self.v.read(cx);
+            v.transcript
                 .read(cx)
                 .rows()
                 .iter()
+                .chain(v.sending_view.queued.iter())
                 .filter(|r| r.source() == text)
                 .map(|r| r.pending())
                 .collect()
         })
     }
-    /// The rendered caption sits under a right-aligned bubble inside the viewport.
+    /// Queued captions sit above the editor; unresolved sends stay in the transcript.
     fn caption(&self, cx: &mut HeadlessAppContext, status: &str) {
         cx.update_window(self.h, |_, w, cx| {
             w.render_frame(cx);
             let caption = w.find_by_label(status).bounds();
-            let viewport = w.find("viewport").bounds();
+            let viewport = w
+                .find(if status.starts_with("Queued") {
+                    "composer-queue"
+                } else {
+                    "viewport"
+                })
+                .bounds();
             assert!(
                 viewport.contains(&caption.center()),
                 "{status} outside {viewport:?}"
             );
-            assert!(
-                caption.right() > viewport.center().x,
-                "{status} is not with the user's bubble"
-            );
+            if !status.starts_with("Queued") {
+                assert!(
+                    caption.right() > viewport.center().x,
+                    "{status} is not with the user's bubble"
+                );
+            } else {
+                let input = w.find("composer-input").bounds();
+                assert!(
+                    viewport.bottom() <= input.top(),
+                    "queued preview must precede editor"
+                );
+            }
         })
         .unwrap();
     }

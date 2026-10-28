@@ -16,6 +16,8 @@ type Marks = (u64, u64);
 
 #[derive(Default)]
 pub(super) struct SendingView {
+    /// Projected queue rows live above the editor, not in the history scroller.
+    pub(super) queued: Vec<Message>,
     /// What was last projected (before echo checks), for change detection.
     shown: Option<(String, Sending)>,
     /// Marks when this exact send first showed. Only newer rows can be its echo.
@@ -115,7 +117,11 @@ impl LocalViewer {
             self.editor
                 .update(cx, |editor, _| editor.forget_sent(&chat));
         }
-        rows
+        let (queued, history) = rows
+            .into_iter()
+            .partition(|row| crate::local_model::queued_submission(row).is_some());
+        self.sending_view.queued = queued;
+        history
     }
 
     /// Editor changes re-project only when the unresolved send itself changed.
@@ -125,11 +131,15 @@ impl LocalViewer {
         }
         if let Some((rows, reset)) = self.pending_transcript.take() {
             let queue = self.state.user_queue.clone();
+            let mut rows = rows;
+            rows.extend(self.sending_view.queued.iter().cloned());
             let rows = self.with_sending(rows, &queue, cx);
             self.pending_transcript = Some((rows, reset));
         } else if self.page == Page::Chat {
             let rows = self.transcript.read(cx).rows().to_vec();
             let queue = self.state.user_queue.clone();
+            let mut rows = rows;
+            rows.extend(self.sending_view.queued.iter().cloned());
             let rows = self.with_sending(rows, &queue, cx);
             self.transcript
                 .update(cx, |view, cx| view.replace_readonly(rows, false, cx));

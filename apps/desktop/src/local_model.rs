@@ -1125,7 +1125,7 @@ pub(crate) fn queued_submission(row: &Message) -> Option<u64> {
     (row.id() & !(QUEUED_KEY - 1) == QUEUED_KEY && row.reader_key().is_none())
         .then(|| row.id() - QUEUED_KEY)
 }
-fn queued_row(row: &crate::queued_message::Row) -> Message {
+pub(crate) fn queued_row(row: &crate::queued_message::Row) -> Message {
     let images = row.content.as_array().map_or(0, |blocks| {
         blocks.iter().filter(|b| b["type"] == "image").count()
     });

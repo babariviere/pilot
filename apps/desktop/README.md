@@ -307,6 +307,12 @@ Pending deliveries keep their original destination and payload. Empty, unavailab
 changed project choices cannot create a chat. See `docs/project-based-chat-creation.md`.
 Enter or Send steers current work, or starts a turn when idle. Option-Enter explicitly
 queues a follow-up; Shift-Enter inserts a newline. There is no Follow-up toggle.
+Queued messages appear above the editor in the composer tray, steering first and
+follow-ups after, with a delivery-mode icon and first-line preview. Trailing
+Edit/Delete icons appear on row hover or keyboard focus, without moving the text,
+scrolling after five rows. Edit opens the existing guarded form, Delete opens its
+confirmation, and retained queue drafts remain reachable. There is no Manage queue
+control; mode and copy actions remain in the focused form.
 Marked text cannot submit. Sending never stops work or forces the reader down the
 transcript. The named, keyboard-reachable Stop icon appears only
 for a working chat or its queued input; withdrawn text is saved separately, never

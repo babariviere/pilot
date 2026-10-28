@@ -17,6 +17,29 @@ gpui_kit::actions!(queued_message, [CloseQueue, SaveQueue]);
 #[cfg(feature = "native-probes")]
 #[path = "queued_message_probe.rs"]
 pub(crate) mod probe;
+// Match Swift's compact queue rows, with five visible before scrolling.
+const QUEUE_ROW_HEIGHT: f32 = 26.;
+const QUEUE_VISIBLE_ROWS: f32 = 5.;
+
+/// Stable composer slot; LocalViewer retains queue data, dialogs and guarded actions.
+pub(super) struct Entry {
+    viewer: gpui_kit::WeakEntity<LocalViewer>,
+    _subscription: Subscription,
+}
+pub(super) fn entry(w: &mut Window, cx: &mut Context<LocalViewer>) -> Entity<Entry> {
+    let viewer = cx.entity();
+    cx.new(|cx| Entry {
+        viewer: viewer.downgrade(),
+        _subscription: cx.observe_in(&viewer, w, |_, _, _, cx| cx.notify()),
+    })
+}
+impl Render for Entry {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.viewer
+            .update(cx, |v, cx| v.queued_message_tray(w, cx))
+            .unwrap_or_else(|_| div().hidden().into_any_element())
+    }
+}
 pub(super) struct Closed;
 struct Draft {
     row: Row,
@@ -81,7 +104,10 @@ impl Popup {
             return;
         }
         if !self.drafts.contains_key(&row.id) {
-            let text = row.text().unwrap_or("").to_owned();
+            let text = row
+                .text()
+                .map(str::to_owned)
+                .unwrap_or_else(|| crate::local_model::queued_row(&row).source().to_owned());
             let input = cx.new(|cx| {
                 let mut i = TextareaState::new(w, cx).auto_grow(3, 6);
                 i.set_submit_on_enter(false, cx);
@@ -273,8 +299,20 @@ impl Render for Popup {
             .v_flex()
             .max_h(px(136.))
             .overflow_y_scroll();
-        for row in &self.snapshot.rows {
+        let retained = self
+            .drafts
+            .values()
+            .filter(|draft| !self.snapshot.rows.iter().any(|row| row.id == draft.row.id))
+            .map(|draft| &draft.row);
+        let current_rows = self
+            .snapshot
+            .rows
+            .iter()
+            .filter(|r| r.mode == "steer")
+            .chain(self.snapshot.rows.iter().filter(|r| r.mode != "steer"));
+        for row in current_rows.chain(retained) {
             let r = row.clone();
+            let current = self.snapshot.rows.iter().any(|r| r.id == row.id);
             list = list.child(
                 ui::action(
                     SharedString::from(format!("queued-message-row-{}", row.id)),
@@ -283,25 +321,26 @@ impl Render for Popup {
                 )
                 .w_full()
                 .h(px(54.))
+                .flex_shrink_0()
                 .justify_start()
                 .accessibility_label(SharedString::from(format!(
                     "Edit queued message: {}",
                     row.preview()
                 )))
                 .child(
-                    ui::ResourceLabel::new(SharedString::from(row.preview())).detail(
-                        if row.mode == "steer" {
-                            "During current run"
-                        } else {
-                            "After current run"
-                        },
-                    ),
+                    ui::ResourceLabel::new(SharedString::from(row.preview())).detail(if !current {
+                        "Retained draft, no longer queued"
+                    } else if row.mode == "steer" {
+                        "During current run"
+                    } else {
+                        "After current run"
+                    }),
                 )
                 .selected(self.selected == Some(row.id))
                 .on_click(cx.listener(move |v, _, w, cx| v.select(r.clone(), w, cx))),
             );
         }
-        if self.snapshot.rows.is_empty() {
+        if self.snapshot.rows.is_empty() && self.drafts.is_empty() {
             list = list.child(ui::text(
                 Text::Caption,
                 "No user messages are currently queued.",
@@ -317,7 +356,7 @@ impl Render for Popup {
                 root=root.child(Notice::new("This captured message has no safe-edit guard. Draft retained; update Local before editing or removing it.").tone(Tone::Error));
             }
             root = root.child(ui::rule(w, cx));
-            if d.row.text().is_some() {
+            {
                 let bounds = self.bounds.clone();
                 root = root.child(
                     div()
@@ -329,6 +368,7 @@ impl Render for Popup {
                         .child(
                             Textarea::new(&d.input)
                                 .aria_label("Queued message text")
+                                .readonly(d.row.text().is_none())
                                 .disabled(blocked),
                         )
                         .child(
@@ -338,7 +378,8 @@ impl Render for Popup {
                                 .size_full(),
                         ),
                 );
-            } else {
+            }
+            if d.row.text().is_none() {
                 root=root.child(Notice::new("This message contains structured, attachment or oversized content. Text editing is unavailable to avoid losing it. Removal still requires the exact captured version."));
             }
             if !available {
@@ -440,21 +481,27 @@ impl Render for Popup {
                         .disabled(blocked || !available || d.row.token.is_none())
                         .on_click(cx.listener(|v, _, w, cx| v.submit(true, w, cx))),
                     )
-                    .when(d.row.text().is_some(), |row| {
-                        row.child(
-                            ui::action("queued-message-copy", "Copy draft", Action::Quiet)
-                                .on_click(cx.listener(move |v, _, w, cx| {
-                                    if v.marked(w, cx) {
-                                        return;
-                                    }
-                                    if let Some(d) = v.drafts.get(&id) {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            d.input.read(cx).value().to_string(),
-                                        ));
-                                    }
-                                })),
+                    .child(
+                        ui::action(
+                            "queued-message-copy",
+                            if d.row.text().is_some() {
+                                "Copy draft"
+                            } else {
+                                "Copy message"
+                            },
+                            Action::Quiet,
                         )
-                    })
+                        .on_click(cx.listener(move |v, _, w, cx| {
+                            if v.marked(w, cx) {
+                                return;
+                            }
+                            if let Some(d) = v.drafts.get(&id) {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    d.input.read(cx).value().to_string(),
+                                ));
+                            }
+                        })),
+                    )
                     .child(
                         ui::action("queued-message-close", "Close", Action::Quiet)
                             .tooltip("Close and retain the draft (Escape).")
@@ -479,39 +526,189 @@ impl Render for Popup {
     }
 }
 impl LocalViewer {
-    pub(super) fn queued_message_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
-        let count = self.state.user_queue.rows.len();
+    fn queued_message_tray(&self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        let rows = &self.sending_view.queued;
         let retained = self.selected.as_ref().is_some_and(|id| {
             self.queue_forms
                 .iter()
                 .any(|(f, _)| &f.read(cx).source.chat == id)
         });
-        let label = if count == 0 && retained {
-            "Queue drafts".to_owned()
-        } else {
-            format!("Queued ({count})")
-        };
-        (count > 0 || retained).then(|| {
-            div()
-                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                    if !v.project_choices_ready(w, cx) {
-                        cx.stop_propagation();
-                    }
-                }))
-                .child(
-                    ui::action(
-                        "queued-message-open",
-                        SharedString::from(label),
-                        Action::Quiet,
+        if self.page != Page::Chat
+            || self.selected.is_none()
+            || self.artifacts_open
+            || (rows.is_empty() && !retained)
+        {
+            return div().hidden().into_any_element();
+        }
+        let disabled = !self.state.loaded || self.state.generation != self.generation;
+        let mut list = div()
+            .id("composer-queue-rows")
+            .test_support()
+            .v_flex()
+            .min_w_0()
+            .gap_0p5()
+            .max_h(px(QUEUE_VISIBLE_ROWS * (QUEUE_ROW_HEIGHT + 2.)))
+            .overflow_y_scroll();
+        let ordered = rows
+            .iter()
+            .filter(|r| r.pending() == Some("Queued to steer"))
+            .chain(
+                rows.iter()
+                    .filter(|r| r.pending() != Some("Queued to steer")),
+            );
+        for row in ordered {
+            let id = crate::local_model::queued_submission(row).expect("projected queue row");
+            let preview = row
+                .source()
+                .chars()
+                .take(160)
+                .collect::<String>()
+                .replace('\n', " ");
+            let label = format!("{}: {}", row.pending().unwrap_or("Queued"), row.source());
+            let focus = w
+                .use_keyed_state(("queue-row-actions-focus", id), cx, |_, cx| {
+                    cx.focus_handle()
+                })
+                .read(cx)
+                .clone();
+            let keyboard_focused = w.last_input_was_keyboard() && focus.contains_focused(w, cx);
+            list = list.child(
+                div()
+                    .id(SharedString::from(format!("composer-queue-row-{id}")))
+                    .test_support()
+                    .group("queued-message")
+                    .track_focus(&focus)
+                    .h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .h(px(QUEUE_ROW_HEIGHT))
+                    .flex_shrink_0()
+                    .child(
+                        ui::action(
+                            SharedString::from(format!("composer-queue-{id}")),
+                            "",
+                            Action::Quiet,
+                        )
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .justify_start()
+                        .disabled(disabled)
+                        .accessibility_label(SharedString::from(label))
+                        .tooltip(row.pending().unwrap_or("Queued"))
+                        .px_1()
+                        .child(
+                            div()
+                                .h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id(("queue-pending", id))
+                                        .test_support()
+                                        .aria_label(row.pending().unwrap_or("Queued"))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .flex_none()
+                                        .child(
+                                            if row.pending() == Some("Queued to steer") {
+                                                AppIcon::Steer
+                                            } else {
+                                                AppIcon::Queued
+                                            }
+                                            .inline(),
+                                        ),
+                                )
+                                .child(
+                                    ui::text(Text::Body, SharedString::from(preview))
+                                        .id(("queue-preview", id))
+                                        .test_support()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate(),
+                                ),
+                        )
+                        .on_click(
+                            cx.listener(move |v, _, w, cx| v.open_queue_row(id, false, w, cx)),
+                        ),
                     )
-                    .disabled(
-                        !self.state.loaded
-                            || self.state.generation != self.generation
-                            || self.artifacts_open,
+                    .child(
+                        ui::icon_action(
+                            SharedString::from(format!("composer-queue-edit-{id}")),
+                            "Edit queued message",
+                            AppIcon::Edit,
+                            Action::Quiet,
+                        )
+                        .flex_none()
+                        .disabled(disabled)
+                        .when(!keyboard_focused, |b| b.opacity(0.))
+                        .group_hover("queued-message", |b| b.opacity(1.))
+                        .focus_visible(|b| b.opacity(1.))
+                        .on_click(
+                            cx.listener(move |v, _, w, cx| v.open_queue_row(id, false, w, cx)),
+                        ),
                     )
-                    .on_click(cx.listener(|v, _, w, cx| v.open_queue(w, cx))),
+                    .child(
+                        ui::icon_action(
+                            SharedString::from(format!("composer-queue-delete-{id}")),
+                            "Delete queued message…",
+                            AppIcon::Delete,
+                            Action::Quiet,
+                        )
+                        .flex_none()
+                        .disabled(disabled)
+                        .when(!keyboard_focused, |b| b.opacity(0.))
+                        .group_hover("queued-message", |b| b.opacity(1.))
+                        .focus_visible(|b| b.opacity(1.))
+                        .on_click(
+                            cx.listener(move |v, _, w, cx| v.open_queue_row(id, true, w, cx)),
+                        ),
+                    ),
+            );
+        }
+        div()
+            .id("composer-queue")
+            .test_support()
+            .v_flex()
+            .min_w_0()
+            .px_1()
+            .pt_1()
+            .pb_0p5()
+            .gap_0p5()
+            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                if !v.project_choices_ready(w, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .children((!rows.is_empty()).then_some(list))
+            .when(rows.is_empty() && retained, |tray| {
+                tray.child(
+                    ui::action("queued-message-open", "Queue drafts", Action::Quiet)
+                        .disabled(disabled)
+                        .on_click(cx.listener(|v, _, w, cx| v.open_queue(w, cx))),
                 )
-        })
+            })
+            .into_any_element()
+    }
+    fn open_queue_row(&mut self, id: u64, remove: bool, w: &mut Window, cx: &mut Context<Self>) {
+        self.open_queue(w, cx);
+        let Some(form) = self.queue_open.clone() else {
+            return;
+        };
+        form.update(cx, |f, cx| {
+            if let Some(row) = f.snapshot.rows.iter().find(|r| r.id == id).cloned() {
+                f.select(row, w, cx);
+                // This entry only opens the existing confirmation. It never dispatches removal.
+                if f.selected == Some(id)
+                    && f.available(id)
+                    && !f.marked(w, cx)
+                    && let Some(d) = f.drafts.get_mut(&id).filter(|d| !d.state.blocked())
+                {
+                    d.confirm_remove = remove;
+                    cx.notify();
+                }
+            }
+        });
     }
     pub(super) fn sync_queue(&mut self, cx: &mut Context<Self>) {
         let ready = self.page == Page::Chat

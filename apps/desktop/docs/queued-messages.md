@@ -1,11 +1,25 @@
 # Queued user messages
 
-The chat header's contextual **Queued (n)** opens a focused native popup. It
-lists only `queue_update.items`, never automatic input or held-system controls.
+Queued messages sit in compact rows above the editor, inside the opaque composer
+tray, matching Swift's placement. Steering messages come first, then follow-ups,
+with stable order within each group. This only changes presentation, never the
+underlying queue or dispatch order. Five rows fit before scrolling;
+an empty queue adds no spacer. Each row leads with a muted delivery-mode icon and
+first-line preview, with Edit and Delete icons on the right, revealed on row hover
+or while keyboard focus is inside that row. Their reserved slots never reflow. Clicking the preview or
+Edit opens that exact message in the existing focused native popup. Delete opens
+its existing confirmation and never dispatches removal by itself. There is no
+Manage queue control. **Queue drafts** remains available when only retained edits or
+receipts remain. These are native Kit buttons with names, tooltips and keyboard
+access, not hover-only actions. The queue is no longer repeated in the header or history.
+It lists only `queue_update.items`, never automatic input or held-system controls.
 The main composer, transcript, selection and Stop remain mounted. A captured
 message has its own retained native textarea, delivery selection and receipt.
 Save preserves its delivery mode unless the user explicitly selects another.
 Remove requires a second confirmation. Empty text never means Remove or Send.
+Retained drafts remain selectable in the popup even while other messages are queued.
+The popup retains full text preview/copy, including a read-only preview of structured
+messages and their attachment count. Structured content never becomes a text edit.
 
 ## Safety contract
 
@@ -54,9 +68,10 @@ the agent consumes it. Each stage uses the owner that already holds it:
   arrive before the queue update.
   Typing during delivery edits only the composer. Stop, new-chat creation and
   question replies keep their existing composer behavior.
-- **Queued / Queued to steer**: every `queue_update.items` row is shown after
-  history ([local_model.rs](../src/local_model.rs)), keyed by its submission ID, so
-  edits keep the row. Automatic input is not shown here.
+- **Queued / Queued to steer**: the existing projection from
+  [local_model.rs](../src/local_model.rs) is placed above the editor instead of after
+  history, keyed by its submission ID, so edits keep the row. Automatic input is
+  not shown here. Pending ordinary sends stay in the transcript until this echo.
 - **History**: the committed user entry replaces the queued row.
 
 The Local wire has no operation or submission ID on queue rows or history entries,
@@ -71,14 +86,19 @@ again. The queue and history arrive on separate
 streams: a history entry that arrives first hides its
 queued row (exact content, oldest first) until the queue update; a row that leaves
 the queue first stays until its history entry, a run end, or 250 ms. A removed or
-withdrawn row can therefore linger that long. Appending these rows follows the
-existing tail behavior and never moves a reader who scrolled into older history.
+withdrawn row can therefore linger that long. Queue rows are partitioned only after
+send/echo reconciliation, so relocation changes neither that logic nor receipts.
+The transcript retains its own reader position when the queue changes.
 
 Checks: `local_model::queued_rows_tests`, `chat_editor::sending`,
 `submit_visibility` and the `queued_message` native target, which drives real
 Return in the production root through Sending, reservation, queue echo before and
 after the ACK, both stream orders, lost ACK, refusal, older-history reading and
-navigation at 680/1100 light/dark.
+navigation at 680/1100 light/dark. The same target measures zero/one/two/eight
+queue layouts inside the actual tray, stable mode-group order, overflow, unchanged
+empty insets, exact-row opening, text/structured copy and opaque popup surfaces.
+Pixel checks verify hidden-at-rest, row-hover and keyboard-focus action reveal,
+including sibling actions, while other rows stay quiet and bounds remain unchanged.
 
 ## Audit and verification
 

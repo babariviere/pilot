@@ -69,6 +69,7 @@ pub(crate) struct ChatEditor {
     paths: paths::Paths,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
+    queue_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
     models: Option<model_picker::Models>,
     client: Option<Interaction>,
@@ -155,6 +156,7 @@ impl ChatEditor {
             paths: Default::default(),
             context_entry: None,
             todos_entry: None,
+            queue_entry: None,
             questions,
             models: None,
             client,
@@ -187,6 +189,9 @@ impl ChatEditor {
 
     pub(crate) fn set_context_entry(&mut self, entry: gpui_kit::AnyView) {
         self.context_entry = Some(entry);
+    }
+    pub(crate) fn set_queue_entry(&mut self, entry: gpui_kit::AnyView) {
+        self.queue_entry = Some(entry);
     }
     pub(crate) fn set_todos_entry(&mut self, entry: gpui_kit::AnyView) {
         self.todos_entry = Some(entry);
@@ -1376,6 +1381,9 @@ impl Render for ChatEditor {
             #[cfg(any(test, feature = "native-probes"))]
             let indicator = indicator.test_support();
             shell = shell.child(indicator);
+        }
+        if !is_new {
+            footer = footer.children(self.queue_entry.clone());
         }
         if let Some(question) = self.question_panel(cx) {
             footer = footer.child(question);
