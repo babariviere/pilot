@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.85.0](https://github.com/babariviere/pilot/compare/v1.84.0...v1.85.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** add native macOS application menus ([653e85a](https://github.com/babariviere/pilot/commit/653e85a1bf06f8bb058e6eaae52e172fd059f6a8))
+* **desktop:** add privacy-safe tracing diagnostics ([27c1aa8](https://github.com/babariviere/pilot/commit/27c1aa8c40ed612dba6a16318b51ce67d6f883e1))
+* **desktop:** discard unsent chat drafts durably ([b874675](https://github.com/babariviere/pilot/commit/b874675ce5274c5545e8fcb77217219da882e3a1))
+* **desktop:** remove empty new-chat drafts when leaving them ([cb93109](https://github.com/babariviere/pilot/commit/cb9310927e705fccc4af177a2f4493d5fb763e02))
+* **desktop:** show compact Home subscription usage ([c0cf3df](https://github.com/babariviere/pilot/commit/c0cf3df2e0baf8c3de02ce6f45788f56eb815e0b))
+* **desktop:** show mission names and roles in sidebar chats ([8d84b52](https://github.com/babariviere/pilot/commit/8d84b5278fc303f1a23c982455f41d3d62212966))
+* **desktop:** support verified UI-only iteration updates ([152fb44](https://github.com/babariviere/pilot/commit/152fb44e7f01affa5a4b5bada434fae27934fefb))
+
+
+### Bug Fixes
+
+* **deps:** update rust crate tokio to v1.54.1 [security] ([fd92720](https://github.com/babariviere/pilot/commit/fd92720b194c4a4d2a6de6bf983a4374a6c4f937))
+* **desktop:** admit new sidebar chats beyond snapshot limits ([f1eb1f8](https://github.com/babariviere/pilot/commit/f1eb1f850affab46f6fa4b82923243838f92fe3f))
+* **desktop:** allow standard macOS Applications parent ([9b44b89](https://github.com/babariviere/pilot/commit/9b44b89973192a302bec2742565919e72bbae044))
+* **desktop:** compact composer model and thinking selectors ([84a01de](https://github.com/babariviere/pilot/commit/84a01de55981aa948ed80378bd41105ba53e79bf))
+* **desktop:** discover native helpers through SwiftPM ([705fdb6](https://github.com/babariviere/pilot/commit/705fdb662a65887dd444ddb3239eba88a7c0f367))
+* **desktop:** hide routine chat-action success notices ([6b8c24c](https://github.com/babariviere/pilot/commit/6b8c24cc0c41c99ae9ac0a8ee815a3d9545a0c8c))
+* **desktop:** keep pending steering above the composer ([7f5be9e](https://github.com/babariviere/pilot/commit/7f5be9e32ae60af29889b0216c13a96c00475131))
+* **desktop:** offer explicit existing-daemon connection ([5c2d273](https://github.com/babariviere/pilot/commit/5c2d273b6fad37d942a95d7ebf7d0f9f214bfc16))
+* **desktop:** package the shared plane app icon ([0317e59](https://github.com/babariviere/pilot/commit/0317e5931713cd1f5e14cfac4069c43c1c025786))
+* **desktop:** place chat scrollbar at transcript pane edge ([261a3c7](https://github.com/babariviere/pilot/commit/261a3c7c202aca8c51a856789f66fc750d184cfc))
+* **desktop:** restore queue removal and inline editing ([f5824fa](https://github.com/babariviere/pilot/commit/f5824fa869556b371d267df38597d6c3a4d3026b))
+
 ## [1.84.0](https://github.com/babariviere/pilot/compare/v1.83.0...v1.84.0) (2026-10-28)
 
 
