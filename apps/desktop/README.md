@@ -432,7 +432,8 @@ The [bounded chart follow-on](evidence/chart-parity.md) adds signed stacked bars
 explicit bar-domain clipping, positioned x-ticks/numeric scatter domain labels
 and Swift's visual palette. Line, area and scatter values outside an explicit
 y domain are clipped at the plot edges (exact edge crossings; readouts keep the
-published values). It retains unsupported placeholders for stacked areas and
+published values). Stacked areas draw opaque cumulative bands, stacked by sign
+like Swift, with nulls as gaps. It retains an unsupported placeholder for
 duplicate categorical grouping; it is not full artifact parity. Existing
 helper/security/provenance boundaries are unchanged.
 The [native slider follow-on](evidence/slider-interaction.md) adds dragging with

@@ -41,14 +41,28 @@ success/warning follow the Swift visual tokens.
 - Existing strict parent schema/state/events, confined helper, kill/reap/fresh
   recovery, pinned reference provenance and revision caches remain unchanged.
 
-Duplicate categorical grouping and stacked areas remain explicit unsupported
-cases, rather than false approximations. Out-of-domain line/area/scatter values
+Duplicate categorical grouping remains an explicit unsupported case, rather than
+a false approximation. Out-of-domain line/area/scatter values
 were later supported (2026-10-28): each gap-free run is split at its exact edge
 crossings (scaled like the domain, so extreme finite values stay finite), strokes
 draw only inside the domain, area fills hold at the edges, and out-of-domain
 scatter points and hover dots are hidden while readouts keep published values.
 Swift Charts does not clip these marks; the native plot deliberately does. Visual
 case 15 checks actual pixels at 680/1100 light/dark and the pointer readout.
+
+Stacked areas were later supported (2026-10-28). A Swift Charts fixture
+(`AreaMark` stacking `.standard`, rendered offscreen and sampled) showed each
+value stacks on the earlier values of its sign at that x, so bands diverge from
+zero like stacked bars, and lower/upper edges interpolate linearly between x
+positions. Swift drops null points: other series stack as if the value were
+absent, but the series' own band bridges the null and overlaps the bands drawn
+after it. Native keeps the stacking and draws a null as a gap in that series'
+band instead (no overlap), matching native line/area gaps. Each band is one
+closed outline: the clipped top edge, then the clipped bottom edge reversed,
+reusing the same edge-crossing clip; bands are opaque like Swift. Readouts and
+keyboard steps keep published values; hover dots sit on band tops. Visual case
+16 checks band colors by sign, the null gap, top-edge clipping and the readout at
+680/1100 light/dark.
 Native hover/readouts, detailed Y ticks/text metrics and duplicate-series-name
 grouping are not parity claims.
 

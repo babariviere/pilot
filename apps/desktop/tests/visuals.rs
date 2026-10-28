@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..16 {
+            for case in 0..17 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -271,6 +271,61 @@ fn main() {
                     cx.update_window(handle, |_, window, cx| {
                         window.pointer_move(
                             point(b.left() + px(12. + 0.25 * w), b.center().y),
+                            None,
+                            cx,
+                        );
+                        window.render_frame(cx);
+                        let card = window.find("chart-readout").bounds();
+                        assert!(
+                            card.top() >= b.top() && card.right() <= b.right(),
+                            "{card:?}"
+                        );
+                    })
+                    .unwrap();
+                }
+                if case == 16 {
+                    // Domain -4..8. Stacks: Mon 0..2, 2..5, 5..9; Tue 0..3, 3..5, 5..10;
+                    // Wed 0..-2, 0..1, -2..-3; Thu 0..2, gap, 2..4.
+                    let b = cx
+                        .update_window(handle, |_, window, _| window.find("chart-plot").bounds())
+                        .unwrap();
+                    let scale = shot.width() as f32 / width;
+                    let (left, w) = (f32::from(b.left()) + 12., f32::from(b.size.width) - 24.);
+                    let (top, h) = (f32::from(b.top()) + 8., f32::from(b.size.height) - 16.);
+                    let at = |x: f32, value: f32| {
+                        let y = top + (8. - value) / 12. * h;
+                        shot.get_pixel(((left + x * w) * scale) as u32, (y * scale) as u32)
+                            .0
+                    };
+                    let blue = |[r, g, b, _]: [u8; 4]| b as i32 > r as i32 + 40 && b > g;
+                    let amber = |[r, g, b, _]: [u8; 4]| r as i32 > b as i32 + 40 && g > b;
+                    let green = |[r, g, b, _]: [u8; 4]| g as i32 > r as i32 + 30 && g > b;
+                    let plain = |[r, g, b, _]: [u8; 4]| r.max(g).max(b) - r.min(g).min(b) < 24;
+                    // Between Mon and Tue: 0..2.5, 2.5..5, 5..9.5 clipped at the top.
+                    assert!(blue(at(0.125, 1.25)), "{:?}", at(0.125, 1.25));
+                    assert!(amber(at(0.125, 3.75)), "{:?}", at(0.125, 3.75));
+                    assert!(green(at(0.125, 7.)), "{:?}", at(0.125, 7.));
+                    assert!(green(at(0.125, 7.9)), "the top band reaches the edge");
+                    assert!(plain(at(0.125, -1.)), "nothing below zero there");
+                    // Wed: negatives stack down separately from the positive band, which
+                    // ends there (Logs is null on Thu).
+                    assert!(amber(at(0.49, 0.6)), "{:?}", at(0.49, 0.6));
+                    assert!(blue(at(0.5, -1.)), "{:?}", at(0.5, -1.));
+                    assert!(green(at(0.5, -2.5)), "{:?}", at(0.5, -2.5));
+                    assert!(plain(at(0.5, -3.5)), "{:?}", at(0.5, -3.5));
+                    // Thu: Logs is a gap, so Media sits directly on Cache.
+                    assert!(blue(at(0.75, 1.)), "{:?}", at(0.75, 1.));
+                    assert!(green(at(0.75, 3.)), "{:?}", at(0.75, 3.));
+                    assert!(plain(at(0.75, 5.)), "{:?}", at(0.75, 5.));
+                    // Nothing paints above the clipped top band.
+                    for x in [0.06, 0.125, 0.2, 0.95] {
+                        let y = ((top - 4.) * scale) as u32;
+                        let p = shot.get_pixel(((left + x * w) * scale) as u32, y).0;
+                        assert!(!green(p), "{p:?}");
+                    }
+                    cx.update_window(handle, |_, window, cx| {
+                        window.pointer_move(
+                            point(b.left() + px(12. + 0.75 * w), b.center().y),
                             None,
                             cx,
                         );

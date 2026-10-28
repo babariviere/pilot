@@ -480,7 +480,7 @@ mod tests {
             2000
         );
         // Unsupported plans do not consume geometry admission for later siblings.
-        let bad = json!({"type":"chart","kind":"area","height":120,"stacked":true,"x":["a"],"series":[{"name":"s","values":[1]}]});
+        let bad = json!({"type":"chart","kind":"area","height":120,"stacked":true,"x":["a"],"series":[{"name":"s","values":[1e308]},{"name":"t","values":[1e308]}]});
         let good = crate::visual_chart::synthetic_fixture(10).1["root"].clone();
         let scene =
             Scene::parse(json!({"api":1,"root":{"type":"column","children":[bad,good]}})).unwrap();

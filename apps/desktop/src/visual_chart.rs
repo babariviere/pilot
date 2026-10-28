@@ -12,8 +12,10 @@ pub(crate) struct Series {
     pub(crate) bases: Vec<f32>,
     /// Line/area strokes clipped to the y domain. A single point is a run of one value.
     pub(crate) strokes: Vec<Polyline>,
-    /// Area runs held at the domain edges, with edge crossings added, so filling
-    /// each down to the baseline covers exactly the visible area.
+    /// Closed area outlines, one per gap-free run: the clipped top edge, then the
+    /// clipped bottom edge (baseline, or the band below when stacked) reversed.
+    /// Both are held at the domain edges with crossings added, so filling each
+    /// covers exactly the visible area.
     pub(crate) fills: Vec<Polyline>,
     /// Published values, one per x; `None` is a gap. Read by the hover readout.
     pub(crate) values: Vec<Option<f64>>,
@@ -218,9 +220,6 @@ impl Chart {
     pub(crate) fn parse(v: &Value) -> Result<Self, &'static str> {
         let kind = v["kind"].as_str().unwrap_or("line");
         let stacked = v["stacked"] == true;
-        if stacked && kind != "bar" {
-            return Err("Stacked area rendering is not wired yet. Data/source retained.");
-        }
         let x = v["x"].as_array().ok_or("Invalid chart")?;
         let series = v["series"].as_array().ok_or("Invalid chart")?;
         if series.is_empty()
@@ -322,16 +321,22 @@ impl Chart {
                         .map(|p| normal(p.map_or(0., |p| p.0), min, max))
                         .collect();
                 } else if !scatter {
+                    // Like Swift's stacking, each value stacks on the earlier values of
+                    // its sign at that x, and a null adds nothing. Unlike Swift, which
+                    // bridges a null and overlaps the bands above it, a null is a gap.
                     let points = bars
                         .iter()
                         .enumerate()
-                        .map(|(j, p)| p.map(|(_, y)| (position(j), y)))
+                        .map(|(j, p)| p.map(|p| (position(j), p)))
                         .collect::<Vec<_>>();
                     for run in points.split(Option::is_none).filter(|r| !r.is_empty()) {
                         let run = run.iter().flatten().copied().collect::<Vec<_>>();
-                        let (s, fill) = clip(&run, min, max);
+                        let top = run.iter().map(|&(x, (_, y))| (x, y)).collect::<Vec<_>>();
+                        let (s, mut fill) = clip(&top, min, max);
                         strokes.extend(s);
                         if kind == "area" {
+                            let bottom = run.iter().map(|&(x, (y, _))| (x, y)).collect::<Vec<_>>();
+                            fill.extend(clip(&bottom, min, max).1.into_iter().rev());
                             fills.push(fill);
                         }
                     }
@@ -419,12 +424,15 @@ pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
         serde_json::json!({"type":"chart","kind":"scatter","height":220,"x":[100,-5,2],"series":[{"name":"Samples","values":[1,2,3]}],"xLabel":"Numeric domain","yLabel":"Value"})
     } else if index == 15 {
         serde_json::json!({"type":"chart","kind":"area","height":220,"yMin":0,"yMax":10,"unit":"%","x":["Mon","Tue","Wed","Thu","Fri"],"series":[{"name":"Load","values":[4,40,6,-30,5],"color":"chart1"}]})
+    } else if index == 16 {
+        serde_json::json!({"type":"chart","kind":"area","stacked":true,"height":220,"yMin":-4,"yMax":8,"unit":"GB","x":["Mon","Tue","Wed","Thu","Fri"],"series":[{"name":"Cache","values":[2,3,-2,2,3],"color":"chart1"},{"name":"Logs","values":[3,2,1,null,2],"color":"chart2"},{"name":"Media","values":[4,5,-1,2,6],"color":"chart3"}],"xLabel":"Day","yLabel":"Storage"})
     } else {
         serde_json::json!({"type":"chart","kind":"bar","stacked":true,"height":220,"x":["North","South","Zero"],"series":[{"name":"First","values":[2,-2,0],"color":"chart1"},{"name":"Second","values":[3,-4,0],"color":"chart2"},{"name":"Third","values":[-1,1,null],"color":"chart3"}],"xLabel":"Region","yLabel":"Units"})
     };
     let title = match index {
         11 => "Unsorted numeric scatter",
         15 => "Clipped out-of-range area",
+        16 => "Stacked signed area",
         12 => {
             root["yMin"] = serde_json::json!(-3);
             root["yMax"] = serde_json::json!(3);
@@ -535,10 +543,121 @@ mod tests {
     fn unsupported_cases_are_explicit_not_false_geometry() {
         for value in [
             json!({"kind":"bar","stacked":true,"x":["a"],"series":[{"values":[1e308]},{"values":[1e308]}]}),
-            json!({"kind":"area","stacked":true,"x":["a"],"series":[{"values":[1]}]}),
+            json!({"kind":"area","stacked":true,"x":["a"],"series":[{"values":[1e308]},{"values":[1e308]}]}),
             json!({"kind":"bar","x":["a","a"],"series":[{"values":[1,2]}]}),
         ] {
             assert!(Chart::parse(&value).is_err());
+        }
+    }
+    #[test]
+    fn stacked_areas_stack_by_sign_break_at_nulls_and_keep_values() {
+        // Stacks: a 0..2, 2..3, 3..6; b 0..-2, 0..1, 1..4; c 0..2, gap, 2..5.
+        let mut value = json!({"kind":"area","stacked":true,"unit":"GB","x":["a","b","c"],
+            "series":[{"name":"s","values":[2,-2,2]},{"name":"t","values":[1,1,null]},{"name":"u","values":[3,3,3]}]});
+        let c = Chart::parse(&value).unwrap();
+        assert_eq!(c.range, (-2., 6.));
+        let n = |v: f32| (v + 2.) / 8.;
+        // A band whose value changes sign crosses its own base; it is one outline.
+        close(
+            &c.series[0].fills,
+            &[vec![
+                (0., n(2.)),
+                (0.5, n(-2.)),
+                (1., n(2.)),
+                (1., n(0.)),
+                (0.5, n(0.)),
+                (0., n(0.)),
+            ]],
+        );
+        close(
+            &c.series[0].strokes,
+            &[vec![(0., n(2.)), (0.5, n(-2.)), (1., n(2.))]],
+        );
+        // Positive values stack on positives only; the null ends the band and adds
+        // nothing to the stack at c.
+        close(
+            &c.series[1].fills,
+            &[vec![(0., n(3.)), (0.5, n(1.)), (0.5, n(0.)), (0., n(2.))]],
+        );
+        assert_eq!(c.series[1].points[2], None);
+        close(
+            &c.series[2].fills,
+            &[vec![
+                (0., n(6.)),
+                (0.5, n(4.)),
+                (1., n(5.)),
+                (1., n(2.)),
+                (0.5, n(1.)),
+                (0., n(3.)),
+            ]],
+        );
+        // Hover dots sit on each band's top; readouts keep published values.
+        assert_eq!(c.series[2].points[0], Some((0., 1.)));
+        let r = c.readout(1).unwrap();
+        assert_eq!(
+            r.rows.iter().map(|r| r.2.as_str()).collect::<Vec<_>>(),
+            ["-2 GB", "1 GB", "3 GB"]
+        );
+        assert_eq!(c.readout(2).unwrap().rows.len(), 2, "gaps are omitted");
+        assert_eq!(c.step(Some(1), Step::Next), Some(2));
+        assert_eq!(c.nearest(0.9), Some(2));
+
+        // An explicit domain clips bands at its edges with exact crossings.
+        value["yMin"] = json!(-1);
+        value["yMax"] = json!(4);
+        let c = Chart::parse(&value).unwrap();
+        let n = |v: f32| (v + 1.) / 5.;
+        close(
+            &c.series[0].strokes,
+            &[
+                vec![(0., n(2.)), (0.375, 0.)],
+                vec![(0.625, 0.), (1., n(2.))],
+            ],
+        );
+        close(
+            &c.series[0].fills,
+            &[vec![
+                (0., n(2.)),
+                (0.375, 0.),
+                (0.5, 0.),
+                (0.625, 0.),
+                (1., n(2.)),
+                (1., n(0.)),
+                (0.5, n(0.)),
+                (0., n(0.)),
+            ]],
+        );
+        // The top band leaves the domain: its fill holds at the top edge.
+        close(
+            &c.series[2].fills,
+            &[vec![
+                (0., 1.),
+                (0.5, 1.),
+                (1., 1.),
+                (1., n(2.)),
+                (0.5, n(1.)),
+                (0., n(3.)),
+            ]],
+        );
+        assert!(c.series[2].strokes.is_empty());
+        assert_eq!(c.series[2].points[0], None);
+        assert_eq!(c.readout(0).unwrap().rows[2].2, "3 GB");
+
+        // Signed stacks at the widest finite values stay finite and inside the plot.
+        let c = Chart::parse(&json!({"kind":"area","stacked":true,"x":["a","b"],
+            "series":[{"values":[1e308,-1e308]},{"values":[-1e308,1e308]},{"values":[5e-324,null]}]}))
+        .unwrap();
+        assert_eq!(c.range, (-1e308, 1e308));
+        for p in c
+            .series
+            .iter()
+            .flat_map(|s| s.fills.iter().chain(&s.strokes))
+            .flatten()
+        {
+            assert!(
+                (0.0..=1.0).contains(&p.0) && (0.0..=1.0).contains(&p.1),
+                "{p:?}"
+            );
         }
     }
     #[test]
@@ -579,12 +698,22 @@ mod tests {
         value["kind"] = json!("area");
         let area = Chart::parse(&value).unwrap();
         assert_eq!(area.series[0].strokes, line.series[0].strokes);
-        // Fill outlines hold at the edges, so they reach only the plot's edge.
+        // Fill outlines hold at the edges, so they reach only the plot's edge, and
+        // close along the baseline.
         close(
             &area.series[0].fills,
             &[
-                vec![(0., 0.5), (0.125, 1.), (0.25, 1.), (0.375, 1.), (0.5, 0.5)],
-                vec![(1., 1.)],
+                vec![
+                    (0., 0.5),
+                    (0.125, 1.),
+                    (0.25, 1.),
+                    (0.375, 1.),
+                    (0.5, 0.5),
+                    (0.5, 0.),
+                    (0.25, 0.),
+                    (0., 0.),
+                ],
+                vec![(1., 1.), (1., 0.)],
             ],
         );
         assert_eq!(area.baseline, 0.);

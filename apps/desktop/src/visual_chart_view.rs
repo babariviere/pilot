@@ -327,17 +327,20 @@ fn build(
                                         window.paint_quad(q);
                                     }
                                 } else {
-                                    for run in &s.fills {
+                                    for outline in &s.fills {
                                         let mut path = PathBuilder::fill();
-                                        path.move_to(point(p(run[0]).x, zero));
-                                        for pt in run {
+                                        path.move_to(p(outline[0]));
+                                        for pt in &outline[1..] {
                                             path.line_to(p(*pt));
                                         }
-                                        path.line_to(point(p(run[run.len() - 1]).x, zero));
                                         path.close();
                                         if let Ok(path) = path.build() {
+                                            // Stacked bands are opaque, like Swift's
+                                            // stacked AreaMark and stacked bars.
                                             let mut fill = c;
-                                            fill.a *= 0.18;
+                                            if !chart.stacked {
+                                                fill.a *= 0.18;
+                                            }
                                             window.paint_path(path, fill);
                                         }
                                     }
