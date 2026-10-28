@@ -302,7 +302,7 @@ fn build(
                                                 size(px(6.), px(6.)),
                                             )
                                         } else {
-                                            let bw = (w / s.points.len().max(1) as f32 * 0.8
+                                            let bw = (w / chart.categories.max(1) as f32 * 0.8
                                                 / if chart.stacked {
                                                     1.
                                                 } else {

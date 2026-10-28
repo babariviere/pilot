@@ -14,7 +14,9 @@ fn scene() -> crate::visual_scene::Scene {
     crate::visual_scene::Scene::parse(json!({"api":1,"root":{"type":"column","gap":12,"children":[
         {"type":"chart","kind":"bar","height":160,"yLabel":"Units","x":["North","South","West","East"],
          "series":[{"name":"Observed","values":[4,7,null,null]},{"name":"Forecast","values":[6,null,8,null]}]},
-        {"type":"chart","kind":"scatter","height":140,"x":[100,-5,2],"series":[{"name":"Samples","values":[1,2,3]}]}
+        {"type":"chart","kind":"scatter","height":140,"x":[100,-5,2],"series":[{"name":"Samples","values":[1,2,3]}]},
+        {"type":"chart","kind":"bar","stacked":true,"height":120,"x":["North","South","North"],
+         "series":[{"name":"Observed","values":[4,7,-2]},{"name":"Forecast","values":[null,1,3]}]}
     ]}}))
     .unwrap()
 }
@@ -43,6 +45,11 @@ fn readout(cx: &mut HeadlessAppContext, pane: &Entity<ArtifactPane>) -> Option<(
 }
 fn shown(path: &str, label: &str) -> Option<(String, String)> {
     Some((path.into(), label.into()))
+}
+/// The open readout's x label and published values, in series order.
+fn values(cx: &mut HeadlessAppContext, pane: &Entity<ArtifactPane>) -> (String, Vec<String>) {
+    let (_, r) = cx.update(|cx| pane.read(cx).probe_chart_readout()).unwrap();
+    (r.label, r.rows.into_iter().map(|r| r.2).collect())
 }
 fn point_at(cx: &mut HeadlessAppContext, h: AnyWindowHandle, scope: &'static str, at: f32) {
     cx.update_window(h, |_, w, cx| {
@@ -292,6 +299,33 @@ pub fn run_chart_keyboard_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(readout(cx, &pane), shown("0.1", "2"));
                 press(cx, h, "right");
                 assert_eq!(readout(cx, &pane), shown("0.1", "100"));
+                // A repeated category: keys reach each entry in plot order with its own
+                // values; the pointer reads the category's first entry.
+                cx.update_window(h, |_, w, cx| w.focus_next(cx)).unwrap();
+                frame(cx, h);
+                assert!(plot_focused(cx, h, "0.2"));
+                for (key, label, expected) in [
+                    (None, "North", &["4"][..]),
+                    (Some("right"), "North", &["-2", "3"][..]),
+                    (Some("right"), "South", &["7", "1"][..]),
+                    (Some("right"), "South", &["7", "1"][..]),
+                    (Some("left"), "North", &["-2", "3"][..]),
+                    (Some("home"), "North", &["4"][..]),
+                ] {
+                    if let Some(key) = key {
+                        press(cx, h, key);
+                    }
+                    assert_eq!(readout(cx, &pane), shown("0.2", label), "{key:?}");
+                    assert_eq!(values(cx, &pane).1, expected, "{key:?}");
+                    card_visible(cx, h, "0.2", width);
+                }
+                point_at(cx, h, "0.2", 0.75);
+                assert_eq!(
+                    values(cx, &pane),
+                    ("South".into(), vec!["7".into(), "1".into()])
+                );
+                point_at(cx, h, "0.2", 0.2);
+                assert_eq!(values(cx, &pane), ("North".into(), vec!["4".into()]));
                 // Reading charts never dispatches to or changes the visual.
                 let after = cx.update(|cx| pane.read(cx).inline_probe_snapshot());
                 assert_eq!(

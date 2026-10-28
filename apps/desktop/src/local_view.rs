@@ -957,7 +957,7 @@ impl LocalViewer {
             let scene = crate::visual_scene::Scene::parse(tree.clone()).unwrap();
             let mut props = tree["root"].clone();
             props.as_object_mut().unwrap().remove("type");
-            let source = if index == 13 {
+            let source = if tree["root"]["type"] == "column" {
                 let children = props["children"]
                     .as_array()
                     .unwrap()

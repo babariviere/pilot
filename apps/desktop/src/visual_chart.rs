@@ -30,6 +30,9 @@ pub(crate) struct Chart {
     pub(crate) range: (f64, f64),
     pub(crate) labels: Vec<String>,
     pub(crate) label_positions: Vec<f32>,
+    /// Distinct categories, in first-seen order like Swift's categorical domain.
+    /// Entries that repeat a label share its position.
+    pub(crate) categories: usize,
     pub(crate) x_label: String,
     pub(crate) unit: String,
     /// Display label and normalized plot position of every x entry.
@@ -106,6 +109,29 @@ fn clip(run: &[(f32, f64)], min: f64, max: f64) -> (Vec<Polyline>, Polyline) {
         .map(|(x, v)| (x, normal(v, min, max)))
         .collect();
     (strokes, fill)
+}
+/// Splits a run of (x, value) points where its x direction turns or stays put
+/// (a revisited category), so each piece fills as a simple band. Pieces share
+/// their turning points.
+fn monotone<T>(run: &[(f32, T)]) -> Vec<&[(f32, T)]> {
+    if run.len() < 2 {
+        return vec![run];
+    }
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    for k in 1..run.len() {
+        let step = run[k].0 - run[k - 1].0;
+        if step == 0. {
+            pieces.push(&run[start..k]);
+            start = k;
+        } else if k - start >= 2 && (step > 0.) != (run[k - 1].0 > run[k - 2].0) {
+            pieces.push(&run[start..k]);
+            start = k - 1;
+        }
+    }
+    pieces.push(&run[start..]);
+    pieces.retain(|p| p.len() > 1);
+    pieces
 }
 fn display_label(text: &str) -> String {
     let mut chars = text.chars();
@@ -231,30 +257,43 @@ impl Chart {
             );
         }
         let scatter = kind == "scatter";
+        // Each entry's category: labels in first-seen order, like Swift's
+        // categorical domain. Entries sharing a label share its position.
+        let mut category = Vec::with_capacity(x.len());
+        let mut firsts = Vec::new();
         if scatter {
             if x.iter().any(|v| v.as_f64().is_none_or(|n| !n.is_finite())) {
                 return Err("Invalid numeric chart domain");
             }
+            category.extend(0..x.len());
+            firsts.extend(0..x.len());
         } else {
-            let mut unique = std::collections::HashSet::new();
-            for value in x {
+            let mut seen = std::collections::HashMap::new();
+            for (j, value) in x.iter().enumerate() {
                 let label = value.as_str().ok_or("Invalid category")?;
-                if !unique.insert(label) {
-                    return Err(
-                        "Duplicate category grouping is not wired yet. Data/source retained.",
-                    );
-                }
+                category.push(*seen.entry(label).or_insert_with(|| {
+                    firsts.push(j);
+                    firsts.len() - 1
+                }));
             }
         }
+        let categories = firsts.len();
+        // Like Swift Charts, bars sharing a category stack: across series when
+        // stacked, otherwise within each series' own bar.
+        let accumulate = stacked || kind == "bar";
         let mut min = 0f64;
         let mut max = 0f64;
-        let mut positive = vec![0f64; x.len()];
-        let mut negative = vec![0f64; x.len()];
+        let mut positive = vec![0f64; categories];
+        let mut negative = vec![0f64; categories];
         let mut raw = Vec::with_capacity(series.len());
         for s in series {
             let values = s["values"].as_array().ok_or("Invalid chart")?;
             if values.len() != x.len() {
                 return Err("Invalid chart lengths");
+            }
+            if !stacked {
+                positive.fill(0.);
+                negative.fill(0.);
             }
             let mut bars = Vec::with_capacity(values.len());
             for (j, value) in values.iter().enumerate() {
@@ -267,16 +306,16 @@ impl Chart {
                     .filter(|v| v.is_finite())
                     .ok_or("Invalid chart value")?;
                 let stack = if n >= 0. {
-                    &mut positive[j]
+                    &mut positive[category[j]]
                 } else {
-                    &mut negative[j]
+                    &mut negative[category[j]]
                 };
-                let base = if stacked { *stack } else { 0. };
+                let base = if accumulate { *stack } else { 0. };
                 let end = base + n;
                 if !end.is_finite() {
                     return Err("Stacked chart sum exceeds finite geometry. Data/source retained.");
                 }
-                if stacked {
+                if accumulate {
                     *stack = end;
                 }
                 min = min.min(base).min(end);
@@ -302,11 +341,11 @@ impl Chart {
             if scatter {
                 normal(x[j].as_f64().unwrap(), xmin, xmax)
             } else if kind == "bar" {
-                (j as f32 + 0.5) / x.len().max(1) as f32
-            } else if x.len() < 2 {
+                (category[j] as f32 + 0.5) / categories.max(1) as f32
+            } else if categories < 2 {
                 0.5
             } else {
-                j as f32 / (x.len() - 1) as f32
+                category[j] as f32 / (categories - 1) as f32
             }
         };
         let output = series
@@ -324,6 +363,8 @@ impl Chart {
                     // Like Swift's stacking, each value stacks on the earlier values of
                     // its sign at that x, and a null adds nothing. Unlike Swift, which
                     // bridges a null and overlaps the bands above it, a null is a gap.
+                    // A revisited category turns the line back, like Swift's marks in
+                    // data order; the area fills each direction as its own band.
                     let points = bars
                         .iter()
                         .enumerate()
@@ -332,12 +373,17 @@ impl Chart {
                     for run in points.split(Option::is_none).filter(|r| !r.is_empty()) {
                         let run = run.iter().flatten().copied().collect::<Vec<_>>();
                         let top = run.iter().map(|&(x, (_, y))| (x, y)).collect::<Vec<_>>();
-                        let (s, mut fill) = clip(&top, min, max);
-                        strokes.extend(s);
+                        strokes.extend(clip(&top, min, max).0);
                         if kind == "area" {
-                            let bottom = run.iter().map(|&(x, (y, _))| (x, y)).collect::<Vec<_>>();
-                            fill.extend(clip(&bottom, min, max).1.into_iter().rev());
-                            fills.push(fill);
+                            for piece in monotone(&run) {
+                                let edge = |f: fn((f64, f64)) -> f64| {
+                                    let edge = piece.iter().map(|&(x, p)| (x, f(p)));
+                                    clip(&edge.collect::<Vec<_>>(), min, max).1
+                                };
+                                let mut fill = edge(|p| p.1);
+                                fill.extend(edge(|p| p.0).into_iter().rev());
+                                fills.push(fill);
+                            }
                         }
                     }
                 }
@@ -386,10 +432,10 @@ impl Chart {
                 )
             }
         } else {
-            let indices = if x.len() <= 12 {
-                (0..x.len()).collect::<Vec<_>>()
+            let indices = if categories <= 12 {
+                firsts
             } else {
-                vec![0, x.len() - 1]
+                vec![firsts[0], firsts[categories - 1]]
             };
             (
                 indices.iter().map(|&i| label(&x[i])).collect(),
@@ -405,6 +451,7 @@ impl Chart {
             range: (min, max),
             labels,
             label_positions,
+            categories,
             x_label: display_label(v["xLabel"].as_str().unwrap_or("")),
             unit: display_label(
                 v["yLabel"]
@@ -426,6 +473,11 @@ pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
         serde_json::json!({"type":"chart","kind":"area","height":220,"yMin":0,"yMax":10,"unit":"%","x":["Mon","Tue","Wed","Thu","Fri"],"series":[{"name":"Load","values":[4,40,6,-30,5],"color":"chart1"}]})
     } else if index == 16 {
         serde_json::json!({"type":"chart","kind":"area","stacked":true,"height":220,"yMin":-4,"yMax":8,"unit":"GB","x":["Mon","Tue","Wed","Thu","Fri"],"series":[{"name":"Cache","values":[2,3,-2,2,3],"color":"chart1"},{"name":"Logs","values":[3,2,1,null,2],"color":"chart2"},{"name":"Media","values":[4,5,-1,2,6],"color":"chart3"}],"xLabel":"Day","yLabel":"Storage"})
+    } else if index == 17 {
+        serde_json::json!({"type":"column","children":[
+            {"type":"chart","kind":"bar","height":220,"unit":"GB","x":["Mon","Tue","Mon","Wed"],"series":[{"name":"Cache","values":[2,3,1,null],"color":"chart1"},{"name":"Logs","values":[-1,2,-2,4],"color":"chart2"}],"xLabel":"Day","yLabel":"Storage"},
+            {"type":"chart","kind":"line","height":160,"unit":"%","x":["Mon","Tue","Mon"],"series":[{"name":"Load","values":[0,8,4],"color":"chart1"}]}
+        ]})
     } else {
         serde_json::json!({"type":"chart","kind":"bar","stacked":true,"height":220,"x":["North","South","Zero"],"series":[{"name":"First","values":[2,-2,0],"color":"chart1"},{"name":"Second","values":[3,-4,0],"color":"chart2"},{"name":"Third","values":[-1,1,null],"color":"chart3"}],"xLabel":"Region","yLabel":"Units"})
     };
@@ -433,6 +485,7 @@ pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
         11 => "Unsorted numeric scatter",
         15 => "Clipped out-of-range area",
         16 => "Stacked signed area",
+        17 => "Repeated categories",
         12 => {
             root["yMin"] = serde_json::json!(-3);
             root["yMax"] = serde_json::json!(3);
@@ -544,7 +597,7 @@ mod tests {
         for value in [
             json!({"kind":"bar","stacked":true,"x":["a"],"series":[{"values":[1e308]},{"values":[1e308]}]}),
             json!({"kind":"area","stacked":true,"x":["a"],"series":[{"values":[1e308]},{"values":[1e308]}]}),
-            json!({"kind":"bar","x":["a","a"],"series":[{"values":[1,2]}]}),
+            json!({"kind":"bar","x":["a","a"],"series":[{"values":[1e308,1e308]}]}),
         ] {
             assert!(Chart::parse(&value).is_err());
         }
@@ -659,6 +712,147 @@ mod tests {
                 "{p:?}"
             );
         }
+    }
+    #[test]
+    fn duplicate_categories_share_a_position_stack_bars_and_revisit_lines() {
+        // Stacked bars: a repeated label stacks onto the category by sign, in
+        // series then entry order, and keeps one axis label.
+        let c = Chart::parse(&json!({"kind":"bar","stacked":true,"x":["a","b","a"],
+            "series":[{"name":"s","values":[2,1,-1]},{"name":"t","values":[3,null,4]}]}))
+        .unwrap();
+        assert_eq!(c.categories, 2);
+        assert_eq!(c.labels, ["a", "b"]);
+        assert_eq!(c.label_positions, [0.25, 0.75]);
+        assert_eq!(c.positions, [0.25, 0.75, 0.25]);
+        assert_eq!(c.range, (-1., 9.));
+        let n = |v: f32| (v + 1.) / 10.;
+        assert_eq!(c.series[0].points[2], Some((0.25, n(-1.))));
+        assert_eq!(c.series[0].bases[2], n(0.));
+        assert_eq!(c.series[1].bases[0], n(2.));
+        assert_eq!(c.series[1].bases[2], n(5.));
+        assert_eq!(c.series[1].points[2], Some((0.25, n(9.))));
+        // The pointer reads the category's first entry; keys reach every entry in
+        // plot order, and each readout keeps its own published values.
+        assert_eq!(c.nearest(0.2), Some(0));
+        let values = |i: usize| {
+            let r = c.readout(i).unwrap();
+            assert_eq!(r.label, ["a", "b", "a"][i]);
+            r.rows.into_iter().map(|r| r.2).collect::<Vec<_>>()
+        };
+        assert_eq!(values(0), ["2", "3"]);
+        assert_eq!(values(2), ["-1", "4"]);
+        assert_eq!(values(1), ["1"]);
+        assert_eq!(c.step(None, Step::Next), Some(0));
+        assert_eq!(c.step(Some(0), Step::Next), Some(2));
+        assert_eq!(c.step(Some(2), Step::Next), Some(1));
+        assert_eq!(c.step(Some(1), Step::Previous), Some(2));
+        assert_eq!(c.step(Some(1), Step::Last), Some(1));
+
+        // Unstacked bars stack only within their own series' bar.
+        let c =
+            Chart::parse(&json!({"kind":"bar","x":["a","a"],"series":[{"values":[2,3]}]})).unwrap();
+        assert_eq!(c.range, (0., 5.));
+        assert_eq!(c.series[0].bases, [0., 0.4]);
+        assert_eq!(c.series[0].points[1], Some((0.5, 1.)));
+        let c = Chart::parse(&json!({"kind":"bar","x":["a","b","a"],
+            "series":[{"values":[1,1,1]},{"values":[2,2,-2]}]}))
+        .unwrap();
+        assert_eq!(c.range, (-2., 2.));
+        let n = |v: f32| (v + 2.) / 4.;
+        assert_eq!(c.series[0].bases[2], n(1.));
+        assert_eq!(c.series[0].points[2], Some((0.25, n(2.))));
+        assert_eq!(c.series[1].bases[2], n(0.));
+        assert_eq!(c.series[1].points[2], Some((0.25, n(-2.))));
+        // The widest finite values stack finitely (an overflowing sum is refused).
+        let c =
+            Chart::parse(&json!({"kind":"bar","x":["a","a"],"series":[{"values":[1e308,-1e308]}]}))
+                .unwrap();
+        assert_eq!(c.range, (-1e308, 1e308));
+        assert_eq!(c.series[0].bases, [0.5, 0.5]);
+
+        // A line revisits its category in data order; a null still ends the run.
+        let mut value = json!({"kind":"line","x":["a","b","a","c","b"],
+            "series":[{"name":"s","values":[0,4,2,null,4]}]});
+        let line = Chart::parse(&value).unwrap();
+        assert_eq!(line.labels, ["a", "b", "c"]);
+        assert_eq!(line.label_positions, [0., 0.5, 1.]);
+        close(
+            &line.series[0].strokes,
+            &[vec![(0., 0.), (0.5, 1.), (0., 0.5)], vec![(0.5, 1.)]],
+        );
+        assert_eq!(line.series[0].points[2], Some((0., 0.5)));
+        assert_eq!(line.nearest(0.), Some(0));
+        assert_eq!(line.nearest(1.), Some(1), "c has no value; b's first entry");
+        let mut at = None;
+        let order = std::iter::from_fn(|| {
+            let next = line.step(at, Step::Next);
+            (next != at).then(|| {
+                at = next;
+                next.unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+        assert_eq!(order, [0, 2, 1, 4]);
+        // The area fills each direction of the turn as its own band.
+        value["kind"] = json!("area");
+        let area = Chart::parse(&value).unwrap();
+        assert_eq!(area.series[0].strokes, line.series[0].strokes);
+        close(
+            &area.series[0].fills,
+            &[
+                vec![(0., 0.), (0.5, 1.), (0.5, 0.), (0., 0.)],
+                vec![(0.5, 1.), (0., 0.5), (0., 0.), (0.5, 0.)],
+                vec![(0.5, 1.), (0.5, 0.)],
+            ],
+        );
+        // Consecutive entries at one category draw a vertical stroke and no fill.
+        let area = Chart::parse(&json!({"kind":"area","x":["a","a","b"],
+            "series":[{"values":[1,3,2]}]}))
+        .unwrap();
+        let n = |v: f32| v / 3.;
+        close(
+            &area.series[0].strokes,
+            &[vec![(0., n(1.)), (0., n(3.)), (1., n(2.))]],
+        );
+        close(
+            &area.series[0].fills,
+            &[vec![(0., n(3.)), (1., n(2.)), (1., 0.), (0., 0.)]],
+        );
+        // Stacked areas stack a revisited category on its earlier values.
+        let area = Chart::parse(&json!({"kind":"area","stacked":true,"x":["a","b","a"],
+            "series":[{"values":[1,1,1]},{"values":[1,1,1]}]}))
+        .unwrap();
+        assert_eq!(area.range, (0., 4.));
+        let n = |v: f32| v / 4.;
+        close(
+            &area.series[0].fills,
+            &[
+                vec![(0., n(1.)), (1., n(1.)), (1., 0.), (0., 0.)],
+                vec![(1., n(1.)), (0., n(2.)), (0., n(1.)), (1., 0.)],
+            ],
+        );
+        close(
+            &area.series[1].fills,
+            &[
+                vec![(0., n(3.)), (1., n(2.)), (1., n(1.)), (0., n(2.))],
+                vec![(1., n(2.)), (0., n(4.)), (0., n(3.)), (1., n(1.))],
+            ],
+        );
+
+        // Dense axes count distinct categories, not entries.
+        let x = (0..20)
+            .map(|i| json!(format!("c{}", i % 4)))
+            .collect::<Vec<_>>();
+        let c =
+            Chart::parse(&json!({"kind":"line","x":x,"series":[{"values":vec![1;20]}]})).unwrap();
+        assert_eq!(c.labels, ["c0", "c1", "c2", "c3"]);
+        let x = (0..26)
+            .map(|i| json!(format!("c{}", i % 13)))
+            .collect::<Vec<_>>();
+        let c =
+            Chart::parse(&json!({"kind":"bar","x":x,"series":[{"values":vec![1;26]}]})).unwrap();
+        assert_eq!(c.labels, ["c0", "c12"]);
+        assert_eq!(c.label_positions, [0.5 / 13., 12.5 / 13.]);
     }
     #[test]
     fn out_of_domain_lines_areas_and_points_clip_at_the_edges_and_keep_values() {

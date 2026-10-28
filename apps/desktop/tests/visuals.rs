@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..17 {
+            for case in 0..18 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -335,6 +335,75 @@ fn main() {
                             card.top() >= b.top() && card.right() <= b.right(),
                             "{card:?}"
                         );
+                    })
+                    .unwrap();
+                }
+                if case == 17 {
+                    let scale = shot.width() as f32 / width;
+                    let mut plot = |scope: &'static str| {
+                        cx.update_window(handle, |_, window, _| {
+                            window.within(scope).find("chart-plot").bounds()
+                        })
+                        .unwrap()
+                    };
+                    let blue = |[r, g, b, _]: [u8; 4]| b as i32 > r as i32 + 40 && b > g;
+                    let amber = |[r, g, b, _]: [u8; 4]| r as i32 > b as i32 + 40 && g > b;
+                    let plain = |[r, g, b, _]: [u8; 4]| r.max(g).max(b) - r.min(g).min(b) < 24;
+                    // Bars: Mon repeats, so its entries stack in each series' own bar.
+                    // Cache Mon 0..2, 2..3; Logs Mon 0..-1, -1..-3; Wed only Logs 0..4.
+                    // Domain -3..4; three categories, bar slots at center -/+ 1/15.
+                    let b = plot("0.0");
+                    let (left, w) = (f32::from(b.left()) + 12., f32::from(b.size.width) - 24.);
+                    let (top, h) = (f32::from(b.top()) + 8., f32::from(b.size.height) - 16.);
+                    let at = |x: f32, value: f32| {
+                        let y = top + (4. - value) / 7. * h;
+                        shot.get_pixel(((left + x * w) * scale) as u32, (y * scale) as u32)
+                            .0
+                    };
+                    let (cache, logs) = (1. / 6. - 1. / 15., 1. / 6. + 1. / 15.);
+                    assert!(blue(at(cache, 1.)), "{:?}", at(cache, 1.));
+                    assert!(blue(at(cache, 2.5)), "the repeat stacks on Mon");
+                    assert!(plain(at(cache, 3.5)), "{:?}", at(cache, 3.5));
+                    assert!(plain(at(cache, -0.5)), "{:?}", at(cache, -0.5));
+                    assert!(amber(at(logs, -0.5)), "{:?}", at(logs, -0.5));
+                    assert!(amber(at(logs, -2.5)), "negatives stack down");
+                    assert!(plain(at(logs, 0.5)), "{:?}", at(logs, 0.5));
+                    assert!(
+                        amber(at(5. / 6. + 1. / 15., 3.)),
+                        "Wed sits in the third slot"
+                    );
+                    assert!(plain(at(5. / 6. - 1. / 15., 1.)), "Cache is null on Wed");
+                    // Line: Mon 0 -> Tue 8 -> back to Mon at 4. Midway it crosses 4 and
+                    // then 6, and nothing at 2.
+                    let b = plot("0.1");
+                    let (left, w) = (f32::from(b.left()) + 12., f32::from(b.size.width) - 24.);
+                    let (top, h) = (f32::from(b.top()) + 8., f32::from(b.size.height) - 16.);
+                    let stroke = |value: f32| {
+                        let y = top + (8. - value) / 8. * h;
+                        let x = ((left + 0.5 * w) * scale) as u32;
+                        (((y - 3.) * scale) as u32..((y + 3.) * scale) as u32)
+                            .filter(|&y| blue(shot.get_pixel(x, y).0))
+                            .count()
+                    };
+                    assert!(stroke(4.) > 0, "outbound segment");
+                    assert!(stroke(6.) > 0, "the line turns back to Mon");
+                    assert_eq!(stroke(2.), 0);
+                    cx.update_window(handle, |_, window, cx| {
+                        for (scope, x) in [("0.0", 1. / 6.), ("0.1", 0.)] {
+                            let b = window.within(scope).find("chart-plot").bounds();
+                            let w = f32::from(b.size.width) - 24.;
+                            window.pointer_move(
+                                point(b.left() + px(12. + x * w), b.center().y),
+                                None,
+                                cx,
+                            );
+                            window.render_frame(cx);
+                            let card = window.within(scope).find("chart-readout").bounds();
+                            assert!(
+                                card.top() >= b.top() && card.right() <= b.right(),
+                                "{card:?}"
+                            );
+                        }
                     })
                     .unwrap();
                 }

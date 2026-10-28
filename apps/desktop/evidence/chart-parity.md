@@ -41,8 +41,8 @@ success/warning follow the Swift visual tokens.
 - Existing strict parent schema/state/events, confined helper, kill/reap/fresh
   recovery, pinned reference provenance and revision caches remain unchanged.
 
-Duplicate categorical grouping remains an explicit unsupported case, rather than
-a false approximation. Out-of-domain line/area/scatter values
+Duplicate categorical grouping was at first an explicit unsupported case (see
+below for its later support). Out-of-domain line/area/scatter values
 were later supported (2026-10-28): each gap-free run is split at its exact edge
 crossings (scaled like the domain, so extreme finite values stay finite), strokes
 draw only inside the domain, area fills hold at the edges, and out-of-domain
@@ -63,6 +63,26 @@ reusing the same edge-crossing clip; bands are opaque like Swift. Readouts and
 keyboard steps keep published values; hover dots sit on band tops. Visual case
 16 checks band colors by sign, the null gap, top-edge clipping and the readout at
 680/1100 light/dark.
+
+Repeated category labels were later supported (2026-10-28), following Swift's
+source (`VisualChartView`; no Swift fixture was run for this slice). Swift dedups
+the categorical x domain in first-seen order and plots every entry at its label,
+so marks sharing a label meet there. Native does the same: each entry keeps its
+own source values and takes its category's position; axis labels and the dense
+12-label rule count categories, not entries. Bars at one category stack by sign,
+like Swift Charts' default bar stacking: across series when `stacked`, otherwise
+within each series' own grouped bar (single-series charts included). Lines and
+areas follow data order, so a repeated label turns the line back to that
+category, and stacked areas stack the repeat on the category's earlier values.
+Each direction of an area run fills as its own band (split where x turns or
+stays), so even-odd filling never cuts holes where the run folds back. Nulls
+remain gaps. The pointer reads the category's first entry with a value in entry
+order; Swift takes the first point in series-then-entry order, which differs
+only when the first series is null at the first repeat. Arrow keys still visit
+every entry left to right, repeats in entry order. Visual case 17 checks
+grouped-bar stacking by sign, the turning line and pointer readouts at 680/1100
+light/dark; the chart keyboard probe steps through a repeated category's entries
+and their values.
 Native hover/readouts, detailed Y ticks/text metrics and duplicate-series-name
 grouping are not parity claims.
 
