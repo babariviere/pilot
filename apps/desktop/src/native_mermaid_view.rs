@@ -1,6 +1,6 @@
 //! Native presentation only. Plans arrive prepared off the UI thread in Scene.
 use crate::{
-    native_mermaid::{self as model, NODE_H, NODE_W, Prepared, Shape},
+    native_mermaid::{self as model, EDGE_LABEL_W, NODE_H, NODE_W, Prepared, Shape},
     ui,
 };
 use gpui_kit::{
@@ -15,6 +15,14 @@ use gpui_kit::{
     px,
 };
 use std::sync::Arc;
+
+/// The hover-revealed actions sit 4pt inside the top (reader) or bottom
+/// (fence) right corner and are a 21pt small icon button tall. With a 4pt gap
+/// they need a 29pt band; the diagram's own scaled margin covers part of it
+/// and the viewport reserves the rest, so the actions never cover a node.
+pub(crate) fn actions_band(scale: f32) -> f32 {
+    (29. - model::MARGIN * scale).max(0.)
+}
 
 fn arrow_tip(end: [f32; 2], prior: [f32; 2]) -> [[f32; 2]; 3] {
     // f32::signum(0.0) is 1.0, not zero. Axis-aligned links need a
@@ -213,10 +221,7 @@ impl View {
                         .text_center()
                         .child(SelectableText::new(
                             self.key(&format!("text-{}", node.node.id)),
-                            SharedString::from(model::wrapped(
-                                &node.node.label,
-                                if diamond { 8 } else { 15 },
-                            )),
+                            SharedString::from(node.text.clone()),
                         )),
                 );
             content = content.child(box_view);
@@ -225,16 +230,20 @@ impl View {
             if !route.edge.label.is_empty() {
                 content = content.child(
                     div()
+                        .id(self.key(&format!("edge-label-{ix}")))
+                        .test_support()
                         .absolute()
                         .left(px(route.label_at[0] * scale))
                         .top(px(route.label_at[1] * scale))
-                        .w(px(160. * scale))
+                        // Hug the text so its backing covers only the label,
+                        // not route lines crossing the reserved box.
+                        .max_w(px(EDGE_LABEL_W * scale))
                         .text_size(px(12. * scale))
                         .line_height(px(16. * scale))
                         .bg(background)
                         .child(SelectableText::new(
                             self.key(&format!("edge-{ix}")),
-                            SharedString::from(model::wrapped(&route.edge.label, 12)),
+                            SharedString::from(route.text.clone()),
                         )),
                 );
             }
@@ -308,6 +317,7 @@ impl Render for View {
             );
         }
         let height: f32 = if self.expanded { 600. } else { 480. };
+        let band = actions_band(self.scale);
         let mut root = div()
             .id(self.id.clone())
             .test_support()
@@ -327,10 +337,12 @@ impl Render for View {
                 .w_full()
                 .min_w_0()
                 .h(px(if self.reader {
-                    diagram.height * self.scale
+                    diagram.height * self.scale + band
                 } else {
-                    height.min(diagram.height)
+                    height.min(diagram.height + band)
                 }))
+                .when(self.fence, |v| v.pb(px(band)))
+                .when(!self.fence, |v| v.pt(px(band)))
                 .overflow_scroll()
                 .bg(ui::Surface::Page.color(cx))
                 .child(self.diagram(diagram, cx))

@@ -19,6 +19,95 @@ fn scene(source: &str) -> crate::visual_scene::Scene {
     ]}}))
     .unwrap()
 }
+/// Two ranks wide, edge labels, a word-wrapped Unicode label and a diamond.
+pub(crate) fn direction_source(direction: &str) -> String {
+    format!(
+        "graph {direction}\nA[Receive 👩🏽‍💻 request] -->|ok| B{{Is it valid now?}}\nB -->|yes, store it| C(Store)\nA --> D[Reject]"
+    )
+}
+/// The drawing is the plan at this scale. Node boxes (centred on their label
+/// boxes) and the edge labels' reserved boxes lie inside it with at most one
+/// scaled margin past the furthest of them, each rendered edge label fits its
+/// reserved box, and the Source/Copy actions cover no node or label.
+pub(crate) fn check_direction(
+    w: &mut Window,
+    key: &dyn Fn(&str) -> SharedString,
+    plan: &crate::native_mermaid::Diagram,
+    scale: f32,
+    strict: bool,
+    line: &str,
+) {
+    let drawing = w.find(key("drawing")).bounds();
+    let mut drawn = Vec::new();
+    for id in ["A", "B", "C", "D"] {
+        let label = w.find(key(&format!("label-{id}")));
+        let c = label.bounds().center();
+        let half = point(px(120. * scale), px(44. * scale));
+        drawn.push(Bounds::from_corners(c - half, c + half));
+    }
+    let mut content = drawn.clone();
+    let mut fits = true;
+    for ix in [0, 1] {
+        let label = w.find(key(&format!("edge-label-{ix}"))).bounds();
+        let route = &plan.routes[ix];
+        let at = |p: [f32; 2]| drawing.origin + point(px(p[0] * scale), px(p[1] * scale));
+        let reserved = Bounds::from_corners(
+            at(route.label_at),
+            at([
+                route.label_at[0] + route.label_size[0],
+                route.label_at[1] + route.label_size[1],
+            ]),
+        );
+        fits &= label.right() <= reserved.right() + px(0.5)
+            && label.bottom() <= reserved.bottom() + px(0.5);
+        drawn.push(label);
+        content.push(reserved);
+    }
+    let source = w.find(key("source")).bounds();
+    let copy = w.find(key("copy")).bounds();
+    let actions = Bounds::from_corners(source.origin, copy.bottom_right());
+    let right = content
+        .iter()
+        .map(|b| b.right())
+        .fold(px(0.), |a, b| a.max(b));
+    let bottom = content
+        .iter()
+        .map(|b| b.bottom())
+        .fold(px(0.), |a, b| a.max(b));
+    let slack = (
+        f32::from(drawing.right() - right),
+        f32::from(drawing.bottom() - bottom),
+    );
+    let overlap = drawn.iter().any(|b| b.intersects(&actions));
+    println!(
+        "{line}: scale {scale:.3} drawing {:.0}x{:.0} slack {:.0}/{:.0} actions {actions:?} overlap {overlap} fits {fits}",
+        f32::from(drawing.size.width),
+        f32::from(drawing.size.height),
+        slack.0,
+        slack.1,
+    );
+    if !strict {
+        return;
+    }
+    assert!((f32::from(drawing.size.width) - plan.width * scale).abs() < 0.5);
+    assert!((f32::from(drawing.size.height) - plan.height * scale).abs() < 0.5);
+    assert!(fits, "{line}: an edge label outgrew its reserved box");
+    for b in &content {
+        assert!(
+            b.left() >= drawing.left() - px(0.5)
+                && b.top() >= drawing.top() - px(0.5)
+                && b.right() <= drawing.right() + px(0.5)
+                && b.bottom() <= drawing.bottom() + px(0.5),
+            "{line}: {b:?} clipped by {drawing:?}"
+        );
+    }
+    let margin = 24. * scale + 0.5;
+    assert!(
+        slack.0 <= margin && slack.1 <= margin,
+        "{line}: slack {slack:?}"
+    );
+    assert!(!overlap, "{line}: actions {actions:?} cover the diagram");
+}
 pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_IMAGE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
@@ -87,17 +176,60 @@ pub fn run_native_mermaid_probe(cx: &mut HeadlessAppContext) {
                     )))
                     .unwrap();
             }
+            // Every direction: the drawing is the measured extent of its nodes
+            // and edge labels plus one margin, never a fixed empty band, and the
+            // revealed actions stay clear of the diagram.
+            for d in ["LR", "RL", "TB", "BT"] {
+                let source = direction_source(d);
+                let plan = crate::native_mermaid::prepare(&source).unwrap();
+                cx.update_window(h, |_, _, cx| {
+                    let r = pane.read(cx).reference.clone().unwrap();
+                    pane.update(cx, |p, cx| {
+                        p.preview(r, "Direction".into(), scene(&source), cx)
+                    });
+                })
+                .unwrap();
+                frame(cx, h);
+                frame(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    let scale = pane.read(cx).reader_scale();
+                    let line = format!("native Mermaid {width} {} {d}", mode.name());
+                    check_direction(w, &key, &plan, scale, !baseline, &line);
+                })
+                .unwrap();
+                if let Some(dir) = &captures {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(dir.join(format!(
+                            "{}-{}-{d}-{}.png",
+                            width as u32,
+                            mode.name(),
+                            if baseline { "before" } else { "after" }
+                        )))
+                        .unwrap();
+                }
+            }
             if baseline {
                 cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
                 println!("native Mermaid baseline {width} {}", mode.name());
                 continue;
             }
+            cx.update_window(h, |_, _, cx| {
+                let r = pane.read(cx).reference.clone().unwrap();
+                pane.update(cx, |p, cx| {
+                    p.preview(r, "Routing".into(), scene(SOURCE), cx)
+                });
+            })
+            .unwrap();
+            frame(cx, h);
+            frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(cx.theme().mode, mode);
                 let viewport = w.find(key("viewport")).bounds();
                 let drawing = w.find(key("drawing")).bounds();
                 assert!(viewport.size.width > px(400.) && viewport.size.width <= px(width));
-                assert_eq!(drawing.size.height, viewport.size.height);
+                let band = crate::native_mermaid_view::actions_band(pane.read(cx).reader_scale());
+                assert!((drawing.size.height + px(band) - viewport.size.height).abs() < px(0.5));
                 let label = w.find(key("label-A"));
                 assert!(label.visible());
                 assert_eq!(label.label(), Some("Receive request"));

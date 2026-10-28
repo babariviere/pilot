@@ -115,10 +115,112 @@ fn unicode_graphemes_and_exact_source_are_not_normalized_or_executed() {
     assert_eq!(p.source.as_ref(), source);
     let graph = p.diagram.unwrap();
     assert_eq!(graph.nodes[0].node.label, "Café 👩🏽‍💻 中文");
-    assert_eq!(wrapped("é👩🏽‍💻界", 1), "é\n👩🏽‍💻\n界");
+    assert_eq!(wrapped("é👩🏽‍💻界", 1, 3), "é\n👩🏽‍💻\n界");
     assert!(prepare(&format!("graph TD\nA[{}]", "界".repeat(49))).is_err());
     assert!(prepare(&format!("graph TD\nA{{{}}}", "界".repeat(17))).is_err());
     assert!(prepare(&format!("graph TD\nA -->|{}| B", "x".repeat(25))).is_err());
+}
+#[test]
+fn labels_wrap_at_spaces_and_break_only_overlong_words_between_graphemes() {
+    assert_eq!(wrapped("Receive 👩🏽‍💻 request", 15, 4), "Receive 👩🏽‍💻\nrequest");
+    assert_eq!(wrapped("Is it valid now?", 8, 3), "Is it\nvalid\nnow?");
+    assert_eq!(wrapped("yes, store it", 12, 2), "yes, store\nit");
+    assert_eq!(wrapped("short", 15, 4), "short");
+    // Unspaced words, combining marks and ZWJ emoji split between clusters.
+    assert_eq!(
+        wrapped("go supercalifragilisticexpialidocious", 15, 4),
+        "go\nsupercalifragil\nisticexpialidoc\nious"
+    );
+    assert_eq!(
+        wrapped("cafe\u{301}cafe\u{301}", 3, 4),
+        "caf\ne\u{301}ca\nfe\u{301}"
+    );
+    assert_eq!(wrapped("日本語の長い説明", 4, 4), "日本語の\n長い説明");
+    assert_eq!(wrapped("a 👩🏽‍💻👩🏽‍💻👩🏽‍💻", 2, 4), "a\n👩🏽‍💻👩🏽‍💻\n👩🏽‍💻");
+    // A break drops one space; other spacing is kept.
+    assert_eq!(wrapped("ab  cd", 4, 4), "ab \ncd");
+    // When words would need too many lines, lines are filled instead; the
+    // label limits always fit that.
+    let label = "aaaaaaaa bbbbbbbb cccccccc dddddddd eeeeeeee";
+    assert_eq!(
+        wrapped(label, 15, 4),
+        "aaaaaaaa bbbbbb\nbb cccccccc ddd\nddddd eeeeeeee"
+    );
+    for (text, columns, lines) in [
+        ("界".repeat(48), 15, 4),
+        ("ab ".repeat(16).trim().to_string(), 15, 4),
+        ("界 ".repeat(8).trim().to_string(), 8, 3),
+        ("x".repeat(24), 12, 2),
+        ("a ".repeat(12).trim().to_string(), 12, 2),
+    ] {
+        let out = wrapped(&text, columns, lines);
+        assert!(out.lines().count() <= lines, "{out}");
+        assert!(
+            out.lines().all(|l| l.graphemes(true).count() <= columns),
+            "{out}"
+        );
+        assert_eq!(
+            out.replace('\n', "").replace(' ', ""),
+            text.replace(' ', "")
+        );
+    }
+    let plan =
+        prepare("graph TD\nA[Receive 👩🏽‍💻 request] -->|yes, store it| B{Is it valid now?}").unwrap();
+    assert_eq!(plan.nodes[0].node.label, "Receive 👩🏽‍💻 request");
+    assert_eq!(plan.nodes[0].text, "Receive 👩🏽‍💻\nrequest");
+    assert_eq!(plan.nodes[1].text, "Is it\nvalid\nnow?");
+    assert_eq!(plan.routes[0].edge.label, "yes, store it");
+    assert_eq!(plan.routes[0].text, "yes, store\nit");
+    assert_eq!(plan.routes[0].label_size, [10. * 160. / 12., 32.]);
+}
+#[test]
+fn canvas_is_the_measured_extent_plus_one_margin_in_every_direction() {
+    // Two nodes: no empty band beside them, either way round.
+    let lr = prepare("graph LR\nA --> B").unwrap();
+    assert_eq!((lr.width, lr.height), (584., MARGIN + NODE_H + MARGIN));
+    let td = prepare("graph TD\nA --> B").unwrap();
+    assert_eq!((td.width, td.height), (MARGIN + NODE_W + MARGIN, 272.));
+    // A vertical edge label extends past the last column only by its own
+    // reserved width: a short one stays beside its link.
+    let labelled = prepare("graph TD\nA -->|go| B").unwrap();
+    assert_eq!(labelled.width, MARGIN + NODE_W + MARGIN);
+    let wide = prepare("graph TD\nA -->|a long enough label| B").unwrap();
+    assert_eq!(
+        wide.width,
+        MARGIN + NODE_W / 2. + 8. + EDGE_LABEL_W + MARGIN
+    );
+    for d in ["TD", "BT", "LR", "RL"] {
+        let p = prepare(&format!(
+            "graph {d}\nA[Receive 👩🏽‍💻 request] -->|ok| B{{Is it valid now?}}\nB -->|yes, store it| C(Store)\nA --> D[Reject]; A --> C"
+        ))
+        .unwrap();
+        let mut extent = [0f32; 2];
+        let mut start = [f32::MAX; 2];
+        for n in &p.nodes {
+            extent = [extent[0].max(n.x + NODE_W), extent[1].max(n.y + NODE_H)];
+            start = [start[0].min(n.x), start[1].min(n.y)];
+        }
+        for r in &p.routes {
+            assert!(r.label_size[0] <= EDGE_LABEL_W && r.label_size[1] <= EDGE_LABEL_H);
+            for q in &r.points {
+                extent = [extent[0].max(q[0]), extent[1].max(q[1])];
+            }
+            if !r.text.is_empty() {
+                let [x, y] = r.label_at;
+                extent = [
+                    extent[0].max(x + r.label_size[0]),
+                    extent[1].max(y + r.label_size[1]),
+                ];
+                start = [start[0].min(x), start[1].min(y)];
+            }
+        }
+        assert_eq!(
+            [p.width, p.height],
+            [extent[0] + MARGIN, extent[1] + MARGIN],
+            "{d}"
+        );
+        assert_eq!(start, [MARGIN, MARGIN], "{d}");
+    }
 }
 #[test]
 fn source_graph_depth_slots_and_work_are_capped_before_expansion() {

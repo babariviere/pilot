@@ -30,6 +30,16 @@ deadline, cleanup, state/version and exact-revision checks remain unchanged.
 - DAG layout, disconnected nodes, branch/merge and long links with reserved
   empty routing slots. Directions affect layout; arrows remain at their actual
   destination. The generated layout is not mermaid.js geometry.
+- The canvas is the measured extent of its node boxes, routes and reserved
+  edge-label boxes plus one 24pt margin, in every direction; no fixed empty band. An edge
+  label reserves 160/12pt per grapheme of its longest line (full-width text
+  fits) and its backing hugs the text. The viewport adds only what the
+  hover-revealed Source/Copy actions need beyond that scaled margin.
+- Labels wrap at spaces (15 graphemes per line, 8 in diamonds, 12 on edges);
+  only a longer word breaks, between grapheme clusters. If words would need more
+  lines than the box holds (4, 3 in diamonds, 2 on edges), lines are filled
+  grapheme by grapheme instead, which the label limits always fit. Wrapping is
+  presentation only, prepared with the plan off the UI thread.
 
 Every non-comment statement must be consumed completely. Unknown/partial syntax,
 styles, classes, subgraphs, directives, actions, other diagram types and graph

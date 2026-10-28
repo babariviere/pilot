@@ -127,7 +127,12 @@ pub fn run_markdown_mermaid_probe(cx: &mut HeadlessAppContext) {
                 let viewport = w.find(key(1, &one, "viewport")).bounds();
                 let drawing = w.find(key(1, &one, "drawing")).bounds();
                 assert!(viewport.size.width > px(200.) && viewport.right() <= px(width));
-                assert_eq!(drawing.size.height, viewport.size.height, "natural height");
+                let band = px(crate::native_mermaid_view::actions_band(1.));
+                assert_eq!(
+                    drawing.size.height + band,
+                    viewport.size.height,
+                    "natural height"
+                );
                 let label = w.find(key(1, &one, "label-A"));
                 assert!(label.visible());
                 assert_eq!(label.label(), Some("Receive 👩🏽‍💻 request"));
@@ -310,6 +315,46 @@ pub fn run_markdown_mermaid_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.find(key(20, &tail, "label-S")).visible());
             })
             .unwrap();
+            // Every direction at natural size: measured extent, one margin,
+            // and bottom-corner actions clear of the diagram.
+            let strict = std::env::var_os("PILOT_MERMAID_BASELINE").is_none();
+            for d in ["LR", "RL", "TB", "BT"] {
+                let body = crate::artifact_view::mermaid_probe::direction_source(d);
+                let plan = crate::native_mermaid::prepare(&body).unwrap();
+                let text = first(&body);
+                cx.update(|cx| {
+                    t.update(cx, |t, cx| {
+                        t.replace_readonly(vec![row(30, text.clone())], true, cx);
+                        t.restore_reading(
+                            crate::navigation::ReadingMark {
+                                message: Some(crate::model::ReaderKey::model(30, 0, Some(0))),
+                                offset: 0.,
+                                following: false,
+                            },
+                            cx,
+                        );
+                    })
+                });
+                settle(cx, h);
+                cx.update_window(h, |_, w, _| {
+                    let line = format!("Markdown Mermaid fence {width} dark={dark} {d}");
+                    let key = |suffix: &str| key(30, &text, suffix);
+                    crate::artifact_view::mermaid_probe::check_direction(
+                        w, &key, &plan, 1., strict, &line,
+                    );
+                    let viewport = w.find(key("viewport")).bounds();
+                    let drawing = w.find(key("drawing")).bounds();
+                    let band = crate::native_mermaid_view::actions_band(1.);
+                    assert_eq!(viewport.size.height, drawing.size.height + px(band));
+                })
+                .unwrap();
+                if let Some(p) = &captures {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(p.join(format!("fence-{width}-{dark}-{d}.png")))
+                        .unwrap();
+                }
+            }
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             println!(
                 "Markdown Mermaid fence {width} dark={dark}: natural height/unsupported/streaming/copy/selection/keyboard/wheel/revision/preedit/follow"

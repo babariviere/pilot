@@ -78,6 +78,8 @@ pub(crate) struct Graph {
 #[derive(Clone, Debug)]
 pub(crate) struct BoxedNode {
     pub(crate) node: Node,
+    /// Label wrapped for display; `node.label` stays the original.
+    pub(crate) text: String,
     pub(crate) x: f32,
     pub(crate) y: f32,
 }
@@ -86,6 +88,9 @@ pub(crate) struct Route {
     pub(crate) edge: Edge,
     pub(crate) points: Vec<[f32; 2]>,
     pub(crate) label_at: [f32; 2],
+    /// Edge label wrapped for display, and the box reserved for it.
+    pub(crate) text: String,
+    pub(crate) label_size: [f32; 2],
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Diagram {
@@ -96,6 +101,13 @@ pub(crate) struct Diagram {
 }
 pub(crate) const NODE_W: f32 = 240.;
 pub(crate) const NODE_H: f32 = 88.;
+/// Edge label box: two 16pt lines of at most 12 graphemes, each at most
+/// 160/12pt wide at 12pt (full-width CJK fits; most text is narrower).
+pub(crate) const EDGE_LABEL_W: f32 = 160.;
+pub(crate) const EDGE_LABEL_H: f32 = 32.;
+const EDGE_COLUMNS: usize = 12;
+/// Empty space around the measured drawing on every side.
+pub(crate) const MARGIN: f32 = 24.;
 
 /// O(source bytes), bounded slices before any graph allocation; no regex/backtracking.
 fn statements(source: &str) -> Result<Vec<&str>, Bad> {
@@ -495,7 +507,7 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
         NODE_W + 32.
     };
     let primary_size = if graph.horizontal { NODE_W } else { NODE_H };
-    let mut primary = vec![24.; depth];
+    let mut primary = vec![MARGIN; depth];
     let mut lane_step = vec![if graph.horizontal { 32. } else { 24. }; depth];
     let mut gap_lanes = vec![0usize; depth];
     for e in &graph.edges {
@@ -510,14 +522,15 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
         primary[r] =
             primary[r - 1] + primary_size + 24. + gap_lanes[r - 1] as f32 * lane_step[r - 1];
     }
-    let full_primary = primary[depth - 1] + primary_size + 24.;
-    let full_breadth = max_breadth as f32 * breadth_step + 176.;
-    if full_primary > 8192. || full_breadth > 8192. || full_primary * full_breadth > 16_777_216. {
+    let full_primary = primary[depth - 1] + primary_size + MARGIN;
+    // Admission bound only, unchanged; the canvas is the measured extent below.
+    let breadth_bound = max_breadth as f32 * breadth_step + 176.;
+    if full_primary > 8192. || breadth_bound > 8192. || full_primary * breadth_bound > 16_777_216. {
         return Err(Bad::Limit("Diagram exceeds native coordinate/area limits."));
     }
     let mut positions = vec![[0.; 2]; slots];
     for (r, layer) in layers.iter().enumerate() {
-        let inset = (max_breadth - layer.len()) as f32 * breadth_step / 2. + 24.;
+        let inset = (max_breadth - layer.len()) as f32 * breadth_step / 2. + MARGIN;
         for (col, &i) in layer.iter().enumerate() {
             let p = if graph.reverse {
                 full_primary - primary[r] - primary_size
@@ -528,12 +541,19 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
             positions[i] = if graph.horizontal { [p, b] } else { [b, p] };
         }
     }
-    let nodes = graph
+    let nodes: Vec<_> = graph
         .nodes
         .iter()
         .enumerate()
         .map(|(i, node)| BoxedNode {
             node: node.clone(),
+            // 13pt lines of 18pt: four fit the 88pt box, a diamond narrows
+            // past three. Columns keep full-width text inside 208/120pt.
+            text: if node.shape == Shape::Diamond {
+                wrapped(&node.label, 8, 3)
+            } else {
+                wrapped(&node.label, 15, 4)
+            },
             x: positions[i][0],
             y: positions[i][1],
         })
@@ -595,29 +615,77 @@ pub(crate) fn prepare(source: &str) -> Result<Diagram, Bad> {
             }
             points.extend([start, p, q, end]);
         }
+        let text = wrapped(&e.label, EDGE_COLUMNS, 2);
+        let columns = text.lines().map(|l| l.graphemes(true).count()).max();
+        let label_size = [
+            columns.unwrap_or(0) as f32 * EDGE_LABEL_W / EDGE_COLUMNS as f32,
+            text.lines().count() as f32 * EDGE_LABEL_H / 2.,
+        ];
         routes.push(Route {
             edge: e.clone(),
             points,
             label_at,
+            text,
+            label_size,
         });
     }
-    let (width, height) = if graph.horizontal {
-        (full_primary, full_breadth)
-    } else {
-        (full_breadth, full_primary)
-    };
+    // Size to what is drawn: node boxes, routes (a long link may pass through
+    // a slot beyond every node) and reserved edge-label boxes, which may
+    // extend past the last column, plus the margin. No other band is needed.
+    let mut extent = [0f32; 2];
+    for n in &nodes {
+        extent = [extent[0].max(n.x + NODE_W), extent[1].max(n.y + NODE_H)];
+    }
+    for p in routes.iter().flat_map(|r| &r.points) {
+        extent = [extent[0].max(p[0]), extent[1].max(p[1])];
+    }
+    for r in routes.iter().filter(|r| !r.text.is_empty()) {
+        let [x, y] = r.label_at;
+        let [w, h] = r.label_size;
+        extent = [extent[0].max(x + w), extent[1].max(y + h)];
+    }
     Ok(Diagram {
         nodes,
         routes,
-        width,
-        height,
+        width: extent[0] + MARGIN,
+        height: extent[1] + MARGIN,
     })
 }
 
-/// Presentation wrapping preserves grapheme clusters. The original labels and
-/// exact source remain available for copying, rather than claiming wrapped text
-/// is the original Mermaid source.
-pub(crate) fn wrapped(text: &str, columns: usize) -> String {
+/// Presentation wrapping at spaces into lines of at most `columns` grapheme
+/// clusters; a longer word breaks between graphemes. If that needs more than
+/// `lines` lines, lines are filled grapheme by grapheme instead, which the
+/// label limits always fit. The original labels and exact source remain
+/// available for copying, rather than claiming wrapped text is the source.
+pub(crate) fn wrapped(text: &str, columns: usize, lines: usize) -> String {
+    let mut out = Vec::new();
+    let mut line = String::new();
+    let mut len = 0;
+    for word in text.split(' ') {
+        let n = word.graphemes(true).count();
+        if len > 0 && len + 1 + n <= columns {
+            line.push(' ');
+            line.push_str(word);
+            len += 1 + n;
+            continue;
+        }
+        if len > 0 {
+            out.push(std::mem::take(&mut line));
+            len = 0;
+        }
+        for g in word.graphemes(true) {
+            if len == columns {
+                out.push(std::mem::take(&mut line));
+                len = 0;
+            }
+            line.push_str(g);
+            len += 1;
+        }
+    }
+    out.push(line);
+    if out.len() <= lines {
+        return out.join("\n");
+    }
     let mut out = String::new();
     for (i, g) in text.graphemes(true).enumerate() {
         if i > 0 && i % columns == 0 {
