@@ -235,6 +235,17 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.run_ci("updater-mac-tests", expected=42, UPDATER_TEST_LIST=self.updater_listing(),
                     FAIL_MATCH="--lib --features native-macos --test-threads=1")
 
+    def test_missing_local_signed_source_native_test_fails_before_execution(self):
+        name = "local_signed_source_stages_then_normal_release_verification_still_works"
+        listing = self.updater_listing().splitlines()
+        listing.remove(f"owned_tests::{name}: test")
+        # A nearby name must not satisfy the exact required-test registration.
+        listing.append(f"owned_tests::{name}_nearby: test")
+        result = self.run_ci("updater-mac-tests", expected=1, UPDATER_TEST_LIST="\n".join(listing))
+        self.assertIn(f"Missing required macOS updater test: {name}", result.stderr)
+        self.assertEqual(len(self.calls()), 3)  # clippy, helper build, list; no execution
+        self.assertFalse(any(call[0] == "nextest" for call in self.calls()))
+
     def test_mac_specific_tests_are_list_verified_exact_and_not_portable_suite(self):
         selected = SCRIPT.read_text().split("  mac-tests)", 1)[1].split("    )", 1)[0]
         names = re.findall(r'^      ([\w:]+)$', selected, flags=re.M)

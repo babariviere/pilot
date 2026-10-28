@@ -158,6 +158,7 @@ PY
       existing_object_without_extended_acl_is_not_a_missing_path
       retained_transaction_bound_and_unpublished_cleanup_never_erase_ready_state
       actual_security_framework_validates_whole_temporary_bundle_identity_version_and_tampering
+      local_signed_source_stages_then_normal_release_verification_still_works
     )
     cargo test --locked "${updater[@]}" --lib --features native-macos -- --list > target/ci-updater-macos-tests.txt
     for test in "${updater_native_tests[@]}"; do
