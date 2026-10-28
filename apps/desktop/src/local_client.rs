@@ -835,7 +835,7 @@ async fn run(
                     }));
                 }
                 Ok(Command::Reconnect) => {
-                    model.thinking=false;
+                    model.thinking=false; model.stale();
                     view.todos.stale();
                     inbox.epoch+=1; fenced=false;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
@@ -854,7 +854,7 @@ async fn run(
                 Err(_) => break,
                 Ok((epoch,_)) if epoch != inbox.epoch => continue,
                 Ok((_,Incoming::Fatal(text))) => {
-                    model.stop_thinking();
+                    model.stop_thinking(); model.stale();
                     view.todos.stale();
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
@@ -865,7 +865,7 @@ async fn run(
                     if !chat || generation == view.generation { model.thinking=false; }
                     if chat { if generation != view.generation { continue; }
                         view.chat_issue = text!="Connected · Local";
-                        if view.chat_issue{view.artifact_metadata.mark_stale();view.todos.stale();} view.chat_status = text.into(); }
+                        if view.chat_issue{view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
                     else { view.status = text.into(); }
                 }
                 Ok((_, Incoming::Page { generation,before,result })) => {

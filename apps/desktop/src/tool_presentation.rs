@@ -5,6 +5,9 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+#[path = "tool_script.rs"]
+mod script;
+use script::script_label;
 
 pub(crate) const TOOL_CAP: usize = 256;
 pub(crate) const DETAIL_CAP: usize = 2 * 1024 * 1024;
@@ -33,7 +36,7 @@ impl Status {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     Read,
     Edit,
@@ -50,6 +53,9 @@ pub(crate) struct Tool {
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) subject: String,
+    /// Quiet caption after the subject, such as "+2 more" for a script's
+    /// further literal calls. Display only.
+    pub(crate) meta: String,
     paths: Vec<String>,
     pub(crate) kind: Kind,
     pub(crate) status: Status,
@@ -75,6 +81,7 @@ impl Tool {
             name: "tool".into(),
             title: "Used tool".into(),
             subject: String::new(),
+            meta: String::new(),
             paths: Vec::new(),
             kind: Kind::Other,
             status: Status::Pending,
@@ -93,6 +100,7 @@ impl Tool {
             + self.name.len()
             + self.title.len()
             + self.subject.len()
+            + self.meta.len()
             + self.paths.iter().map(String::len).sum::<usize>()
             + self.arguments.len()
             + self.input.as_ref().map_or(0, |(_, source)| source.len())
@@ -101,6 +109,7 @@ impl Tool {
     }
     fn describe(&mut self, name: &str, args: &Value) {
         self.subject.clear();
+        self.meta.clear();
         self.input = None;
         self.paths.clear();
         self.limited |= !args["viewerOmitted"].is_null();
@@ -185,40 +194,13 @@ impl Tool {
                 }
             }
             "codemode" => {
-                let code = string("code");
-                subject.clear();
-                if code.matches("tools.").count() == 1 && code.contains("tools.read(") {
-                    if let Some(path) = js_string(code, "path:") {
-                        subject = path;
-                        ("Read", Kind::Read)
-                    } else {
-                        ("Ran a script", Kind::Script)
-                    }
-                } else if code.matches("tools.").count() == 1 && code.contains("tools.bash(") {
-                    if let Some(command) = js_string(code, "command:") {
-                        subject = command_subject(&command);
-                        ("Ran", Kind::Command)
-                    } else {
-                        ("Ran a script", Kind::Script)
-                    }
-                } else if code.matches("tools.").count() == 1 && code.contains("tools.applyPatch(")
-                {
-                    if let Some(patch) = js_string(code, "patch:") {
-                        self.paths = patch_paths(&patch);
-                        subject = self
-                            .paths
-                            .iter()
-                            .map(|path| path.rsplit('/').next().unwrap_or(path))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        self.diff = Arc::new(patch_diff(&patch));
-                        ("Edited", Kind::Edit)
-                    } else {
-                        ("Ran a script", Kind::Script)
-                    }
-                } else {
-                    ("Ran a script", Kind::Script)
-                }
+                let label = script_label(string("code"));
+                subject = label.subject;
+                self.meta = label.meta;
+                self.paths = label.paths;
+                self.diff = Arc::new(label.diff);
+                self.title = label.verb;
+                (self.title.as_str(), label.kind)
             }
             "subagent" => {
                 subject = format!("{} {}", string("action"), string("name"));
@@ -236,6 +218,7 @@ impl Tool {
                 ("Used", Kind::Other)
             }
         };
+        let verb = verb.to_owned();
         self.kind = kind;
         self.limited |= self.diff.ends_with('…')
             || (matches!(name, "edit" | "write")
@@ -246,12 +229,13 @@ impl Tool {
         if matches!(kind, Kind::Read | Kind::Edit) && self.paths.is_empty() && !subject.is_empty() {
             self.paths.push(cut(&subject, 1024));
         }
-        self.title = if matches!(kind, Kind::Other) && name != "subagent" {
+        self.title = if matches!(kind, Kind::Other) && !matches!(name, "subagent" | "codemode") {
             format!("Used {}", name.replace('_', " "))
         } else {
-            verb.into()
+            verb
         };
-        if matches!(kind, Kind::Read | Kind::Edit) && !subject.contains(", ") {
+        if matches!(kind, Kind::Read | Kind::Edit) && name != "codemode" && !subject.contains(", ")
+        {
             subject = subject.rsplit('/').next().unwrap_or(&subject).into();
         }
         self.subject = cut(&subject, 240);
@@ -297,6 +281,330 @@ impl Work {
             }
         })
     }
+    fn tool(&self, index: usize) -> Option<&Arc<Tool>> {
+        match self.steps.get(index) {
+            Some(Step::Tool(tool)) => Some(tool),
+            _ => None,
+        }
+    }
+    /// A call's presented outcome. Live calls only read as running while the
+    /// group follows a live run; otherwise their status is unknown.
+    pub(crate) fn mark(&self, tool: &Tool) -> Mark {
+        match tool.status {
+            Status::Done => Mark::Done,
+            Status::Error => Mark::Failed,
+            Status::Interrupted => Mark::Unknown,
+            Status::Pending | Status::Running if self.active => Mark::Live,
+            Status::Pending | Status::Running => Mark::Unknown,
+        }
+    }
+    /// Steps counted the way Swift's WorkGroupView does: every thinking, note
+    /// and call, with consecutive successful reads as one step.
+    pub(crate) fn units(&self) -> Vec<Unit> {
+        let read = |index: usize| {
+            self.tool(index)
+                .is_some_and(|tool| tool.kind == Kind::Read && tool.status == Status::Done)
+        };
+        let mut units = Vec::new();
+        for index in 0..self.steps.len() {
+            if read(index) {
+                match units.last_mut() {
+                    Some(Unit::Reads(items)) => {
+                        items.push(index);
+                        continue;
+                    }
+                    Some(Unit::Step(previous)) if read(*previous) => {
+                        let previous = *previous;
+                        *units.last_mut().unwrap() = Unit::Reads(vec![previous, index]);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            units.push(Unit::Step(index));
+        }
+        units
+    }
+    /// One cell per top-level call. Adjacent successful reads or searches
+    /// share a counted cell; failed, unknown and live calls stay distinct.
+    pub(crate) fn cells(&self) -> Vec<Cell> {
+        let mut cells: Vec<Cell> = Vec::new();
+        for (index, step) in self.steps.iter().enumerate() {
+            let Step::Tool(tool) = step else {
+                continue;
+            };
+            let mark = self.mark(tool);
+            if mark == Mark::Done
+                && matches!(tool.kind, Kind::Read | Kind::Search)
+                && let Some(last) = cells.last_mut()
+                && last.mark == Mark::Done
+                && last.kind == tool.kind
+            {
+                last.steps.push(index);
+                continue;
+            }
+            cells.push(Cell {
+                steps: vec![index],
+                kind: tool.kind,
+                mark,
+            });
+        }
+        cells
+    }
+    /// The folded line: what changed, then command outcomes in words, then a
+    /// faint count of reads and searches. While live: Working and the current call.
+    pub(crate) fn line(&self) -> Vec<Segment> {
+        let mut line = Vec::new();
+        let failures = self.failures;
+        if self.active {
+            line.push(Segment::new("Working", Tone::Muted));
+            let current = self
+                .calls()
+                .filter(|tool| tool.status.live())
+                .last()
+                .map(|tool| lower_first(&sentence(tool)))
+                .or_else(|| {
+                    matches!(
+                        self.steps.last(),
+                        Some(Step::Note {
+                            thinking: true,
+                            streaming: true,
+                            ..
+                        })
+                    )
+                    .then(|| "thinking".to_owned())
+                });
+            if let Some(current) = current {
+                line.push(Segment::new(current, Tone::Muted));
+            }
+            if failures > 0 {
+                line.push(Segment::new(format!("{failures} failed"), Tone::Danger));
+            }
+            return line;
+        }
+        let mut edited: Vec<&str> = Vec::new();
+        let (mut edits, mut additions, mut deletions) = (0, 0, 0);
+        let mut reads = BTreeSet::new();
+        let mut counts = [0usize; 7];
+        let mut unknown = 0;
+        for tool in self.calls() {
+            let mark = self.mark(tool);
+            unknown += usize::from(mark == Mark::Unknown);
+            if mark != Mark::Done {
+                continue;
+            }
+            counts[tool.kind as usize] += 1;
+            match tool.kind {
+                Kind::Edit => {
+                    edits += 1;
+                    additions += tool.additions;
+                    deletions += tool.deletions;
+                    for path in &tool.paths {
+                        let name = path.rsplit('/').next().unwrap_or(path);
+                        if !edited.contains(&name) {
+                            edited.push(name);
+                        }
+                    }
+                }
+                Kind::Read => reads.extend(tool.paths.iter()),
+                _ => {}
+            }
+        }
+        if edits > 0 {
+            line.push(Segment::new(
+                match edited.len() {
+                    1 | 2 => format!("Edited {}", edited.join(", ")),
+                    count => plural(count.max(1), "Edited", "file"),
+                },
+                Tone::Strong,
+            ));
+            if additions + deletions > 0 {
+                line.push(Segment::new(
+                    format!("+{additions} −{deletions}"),
+                    Tone::Muted,
+                ));
+            }
+        }
+        // A failed command's own text is never recased ("cargo test failed").
+        let mut literal = false;
+        if failures == 1 {
+            let failed = self.calls().find(|tool| tool.status == Status::Error);
+            literal = line.is_empty()
+                && failed
+                    .is_some_and(|tool| tool.kind == Kind::Command && !tool.subject.is_empty());
+            let what = failed.map_or("call".to_owned(), |tool| match tool.kind {
+                Kind::Command if !tool.subject.is_empty() => tool.subject.clone(),
+                kind => noun(kind).to_owned(),
+            });
+            line.push(Segment::new(format!("{what} failed"), Tone::Danger));
+        } else if failures > 1 {
+            line.push(Segment::new(format!("{failures} failed"), Tone::Danger));
+        }
+        if unknown > 0 {
+            line.push(Segment::new(
+                format!("{unknown} status unknown"),
+                Tone::Muted,
+            ));
+        }
+        let ran: Vec<String> = [
+            (counts[Kind::Command as usize], "command"),
+            (counts[Kind::Script as usize], "script"),
+            (counts[Kind::Other as usize], "tool"),
+        ]
+        .into_iter()
+        .filter(|(count, _)| *count > 0)
+        .map(|(count, noun)| plural(count, "", noun).trim_start().to_owned())
+        .collect();
+        if !ran.is_empty() {
+            line.push(Segment::new(format!("ran {}", ran.join(", ")), Tone::Muted));
+        }
+        let quiet: Vec<String> = [
+            (
+                if counts[Kind::Read as usize] > 0 {
+                    reads.len().max(1)
+                } else {
+                    0
+                },
+                "read",
+                "file",
+            ),
+            (counts[Kind::Search as usize], "made", "search"),
+            (counts[Kind::Fetch as usize], "fetched", "page"),
+        ]
+        .into_iter()
+        .filter(|(count, _, _)| *count > 0)
+        .map(|(count, verb, noun)| plural(count, verb, noun))
+        .collect();
+        if !quiet.is_empty() {
+            line.push(Segment::new(
+                quiet.join(", "),
+                if line.is_empty() {
+                    Tone::Muted
+                } else {
+                    Tone::Faint
+                },
+            ));
+        }
+        if line.is_empty() {
+            line.push(Segment::new(
+                if self.calls().next().is_none() {
+                    "Thought"
+                } else {
+                    "Worked"
+                },
+                Tone::Muted,
+            ));
+        }
+        if let Some(first) = line.first_mut().filter(|_| !literal) {
+            first.text = upper_first(&first.text);
+        }
+        line
+    }
+    /// The first failed call and its first error line, kept visible on the fold.
+    pub(crate) fn first_error(&self) -> Option<(usize, String)> {
+        let index = self
+            .steps
+            .iter()
+            .position(|step| matches!(step, Step::Tool(tool) if tool.status == Status::Error))?;
+        let tool = self.tool(index)?;
+        let lines = || {
+            tool.output
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+        };
+        let text = lines()
+            .find(|line| line.to_lowercase().contains("error"))
+            .or_else(|| lines().next())
+            .map(|line| cut(line, 240))
+            .unwrap_or_else(|| format!("{} failed", sentence(tool)));
+        Some((index, text))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Unit {
+    Step(usize),
+    /// Consecutive successful reads, as one sentence.
+    Reads(Vec<usize>),
+}
+impl Unit {
+    #[cfg(any(test, feature = "native-probes"))]
+    pub(crate) fn steps(&self) -> &[usize] {
+        match self {
+            Self::Step(index) => std::slice::from_ref(index),
+            Self::Reads(items) => items,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mark {
+    Done,
+    Live,
+    Failed,
+    Unknown,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Cell {
+    /// Step indices of the calls this cell represents, in order.
+    pub(crate) steps: Vec<usize>,
+    pub(crate) kind: Kind,
+    pub(crate) mark: Mark,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tone {
+    Strong,
+    Muted,
+    Faint,
+    Danger,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Segment {
+    pub(crate) text: String,
+    pub(crate) tone: Tone,
+}
+impl Segment {
+    fn new(text: impl Into<String>, tone: Tone) -> Self {
+        Self {
+            text: text.into(),
+            tone,
+        }
+    }
+}
+/// "Ran cargo test", "Read a.rs, b.rs": a call's verb and subject.
+pub(crate) fn sentence(tool: &Tool) -> String {
+    if tool.subject.is_empty() {
+        tool.title.clone()
+    } else {
+        format!("{} {}", tool.title, tool.subject)
+    }
+}
+fn noun(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Read => "read",
+        Kind::Edit => "edit",
+        Kind::Command => "command",
+        Kind::Script => "script",
+        Kind::Search => "search",
+        Kind::Fetch => "fetch",
+        Kind::Other => "call",
+    }
+}
+fn plural(count: usize, verb: &str, noun: &str) -> String {
+    format!("{verb} {count} {noun}{}", if count == 1 { "" } else { "s" })
+}
+fn upper_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 #[derive(Default)]
 pub(crate) struct Tools {
@@ -489,7 +797,15 @@ impl Tools {
         });
         self.groups.retain(|id, _| self.items.contains_key(id));
     }
+    /// Presentation fixtures have no run lifecycle: live calls stand in for it.
     pub(crate) fn project(&mut self, raw: Vec<Message>) -> Vec<Message> {
+        let live = self.items.values().any(|tool| tool.status.live());
+        self.project_run(raw, live)
+    }
+    /// Groups work rows. Only the latest group of a live run is Working, and
+    /// only while nothing but a streaming reply or an artifact follows it: a
+    /// committed reply or a new user turn ends it, whatever tool events say.
+    pub(crate) fn project_run(&mut self, raw: Vec<Message>, run_live: bool) -> Vec<Message> {
         let mut rows = Vec::new();
         let mut run = Vec::new();
         let mut seen = BTreeSet::new();
@@ -502,6 +818,16 @@ impl Tools {
             }
         }
         self.flush(&mut run, &mut rows, &mut seen);
+        if run_live
+            && let Some(index) = rows.iter().rposition(|row| row.work_data().is_some())
+            && rows[index + 1..].iter().all(|row| {
+                row.label().starts_with("Assistant · streaming") || row.artifact_data().is_some()
+            })
+        {
+            let mut work = rows[index].work_data().unwrap().as_ref().clone();
+            work.active = true;
+            rows[index] = Message::work(Arc::new(finish(work)));
+        }
         rows
     }
     fn flush(
@@ -553,86 +879,41 @@ impl Tools {
         }
         if !steps.is_empty() {
             let id = anchor.or(first).expect("nonempty work");
-            let active = steps.iter().any(|s| {
-                matches!(s,Step::Tool(t) if t.status.live())
-                    || matches!(
-                        s,
-                        Step::Note {
-                            streaming: true,
-                            ..
-                        }
-                    )
-            });
-            let failures = steps
-                .iter()
-                .filter(|s| matches!(s,Step::Tool(t) if t.status==Status::Error))
-                .count();
-            let mut counts = [0; 7];
-            let mut reads = BTreeSet::new();
-            let mut edits = BTreeSet::new();
-            let uncertain = steps
-                .iter()
-                .filter(|s| matches!(s,Step::Tool(t)if t.status==Status::Interrupted))
-                .count();
             for step in &steps {
                 if let Step::Tool(tool) = step {
-                    counts[tool.kind as usize] += 1;
-                    if tool.kind == Kind::Read {
-                        reads.extend(tool.paths.iter().cloned());
-                    }
-                    if tool.kind == Kind::Edit {
-                        edits.extend(tool.paths.iter().cloned());
-                    }
                     self.groups.insert(tool.id.clone(), id);
                 }
             }
-            let mut parts = Vec::new();
-            if counts[0] > 0 {
-                counts[0] = reads.len().max(1);
-            }
-            if counts[1] > 0 {
-                counts[1] = edits.len().max(1);
-            }
-            for (count, verb, noun) in [
-                (counts[0], "read", "file"),
-                (counts[1], "edited", "file"),
-                (counts[2], "ran", "command"),
-                (counts[3], "ran", "script"),
-                (counts[4], "made", "search"),
-                (counts[5], "fetched", "page"),
-                (counts[6], "used", "tool"),
-            ] {
-                if count > 0 {
-                    parts.push(format!(
-                        "{verb} {count} {noun}{}",
-                        if count == 1 { "" } else { "s" }
-                    ));
-                }
-            }
-            let title = format!(
-                "{}{}{}",
-                if active {
-                    "Working"
-                } else if counts.iter().all(|count| *count == 0) {
-                    "Thought"
-                } else {
-                    "Worked"
-                },
-                if parts.is_empty() { "" } else { " · " },
-                parts.join(", ")
-            );
-            rows.push(Message::work(Arc::new(Work {
+            rows.push(Message::work(Arc::new(finish(Work {
                 readers,
                 id,
                 steps,
-                title,
-                active,
-                failures,
-                uncertain,
-            })));
+                title: String::new(),
+                active: false,
+                failures: 0,
+                uncertain: 0,
+            }))));
         }
         rows.extend(tail);
     }
+}
+/// Derived counts and the line's plain text, which is also its accessible name.
+fn finish(mut work: Work) -> Work {
+    work.failures = work
+        .calls()
+        .filter(|tool| work.mark(tool) == Mark::Failed)
+        .count();
+    work.uncertain = work
+        .calls()
+        .filter(|tool| work.mark(tool) == Mark::Unknown)
+        .count();
+    work.title = work
+        .line()
+        .into_iter()
+        .map(|segment| segment.text)
+        .collect::<Vec<_>>()
+        .join(" · ");
+    work
 }
 pub(crate) fn cut(text: &str, cap: usize) -> String {
     if text.len() <= cap {
@@ -712,13 +993,6 @@ fn command_subject(command: &str) -> String {
         return cut(line, 240);
     }
     cut(&command_label(line), 240)
-}
-fn js_string(code: &str, field: &str) -> Option<String> {
-    let tail = code.split_once(field)?.1.trim_start();
-    serde_json::Deserializer::from_str(tail)
-        .into_iter::<String>()
-        .next()?
-        .ok()
 }
 fn patch_paths(patch: &str) -> Vec<String> {
     patch

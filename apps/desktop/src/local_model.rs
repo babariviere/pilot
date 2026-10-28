@@ -363,6 +363,9 @@ pub(crate) struct LiveTranscript {
     pub(crate) image_owner: Option<(crate::delivery_store::Host, String)>,
     question_pending: crate::question::Pending,
     question_run_active: bool,
+    /// A run is live on a current connection. Work reads as Working only
+    /// while this holds; tool events alone never decide it.
+    run_live: bool,
     entries: BTreeMap<u64, Vec<Message>>,
     aliases: HashMap<(u64, usize), u64>,
     live: Option<Value>,
@@ -450,9 +453,18 @@ impl LiveTranscript {
             row.tool_ids()
                 .is_some_and(|ids| ids.iter().all(|id| !referenced.contains(id)))
         }));
-        let mut rows = self.tools.project(rows);
+        let mut rows = self.tools.project_run(rows, self.run_live);
         rows.extend(self.queued_rows());
         rows
+    }
+
+    /// The connection is stale or gone: no work may keep reading as Working
+    /// until a snapshot reports the run again.
+    pub(crate) fn stale(&mut self) {
+        if self.run_live {
+            self.run_live = false;
+            self.presentation_dirty = true;
+        }
     }
 
     /// The user's admitted input that has not joined a run yet, after history.
@@ -849,8 +861,14 @@ impl LiveTranscript {
             self.failure_run_serial = self.failure_run_serial.saturating_add(1);
         }
         match event["type"].as_str() {
-            Some("run_start") => self.question_run_active = true,
-            Some("run_end" | "run_error" | "error") => self.question_run_active = false,
+            Some("run_start") => {
+                self.question_run_active = true;
+                self.run_live = true;
+            }
+            Some("run_end" | "run_error" | "error") => {
+                self.question_run_active = false;
+                self.run_live = false;
+            }
             _ => {}
         }
         if matches!(event["type"].as_str(), Some("run_start" | "run_end")) {
@@ -897,6 +915,7 @@ impl LiveTranscript {
                 self.question_pending = crate::question::Pending::default();
                 self.question_run_active =
                     event["run"].is_object() || event["generation"].is_object();
+                self.run_live = self.question_run_active;
                 self.saved_history = Some(kept);
                 self.active_head = head;
                 self.limited = false;

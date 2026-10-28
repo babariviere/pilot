@@ -1,7 +1,377 @@
 use super::*;
 use crate::local_model::LiveTranscript;
+use crate::work_view::{Mode, TAIL};
 use gpui_kit::{ScrollDelta, TestAppContext, point, px, test::TestWindowExt};
 use serde_json::json;
+fn end(model: &mut LiveTranscript, id: &str, entry: u64, error: bool, text: &str) {
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"isError":error,"entry":{"id":entry,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":id,"isError":error,"content":[{"type":"text","text":text}]}]}}));
+}
+/// A live run with `calls` commands; every call but the last has finished.
+fn live(calls: u64) -> LiveTranscript {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    for i in 0..calls {
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20+2*i,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":format!("c{i}"),"name":"bash","arguments":{"command":format!("echo step-{i}")}}]}]}}));
+        model.apply(
+            &json!({"type":"tool_execution_start","toolCallId":format!("c{i}"),"toolName":"bash"}),
+        );
+        if i + 1 < calls {
+            end(&mut model, &format!("c{i}"), 21 + 2 * i, false, "done");
+        }
+    }
+    model
+}
+fn shape(
+    cx: &mut TestAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    view: &Entity<TranscriptView>,
+    id: u64,
+) -> (Mode, Vec<Vec<usize>>) {
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        view.read(cx).work_ui.group_shape(id, cx)
+    })
+    .unwrap()
+}
+fn publish(
+    cx: &mut TestAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    view: &Entity<TranscriptView>,
+    model: &mut LiveTranscript,
+) {
+    let rows = model.rows();
+    cx.update_window(handle, |_, _, cx| {
+        view.update(cx, |view, cx| view.replace_readonly(rows, false, cx))
+    })
+    .unwrap();
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn a_live_group_previews_its_latest_five_steps_until_the_user_chooses(cx: &mut TestAppContext) {
+    // Exactly five steps fit; a sixth moves the oldest behind Show earlier.
+    for (calls, hidden) in [(5u64, false), (6, true)] {
+        let rows = live(calls).rows();
+        let id = rows[0].id();
+        let (handle, view) = super::readonly_tests::setup(cx, rows);
+        let last = calls as usize;
+        assert_eq!(
+            shape(cx, handle, &view, id),
+            (Mode::Tail, (last - TAIL..last).map(|i| vec![i]).collect())
+        );
+        cx.update_window(handle, |_, window, _| {
+            assert_eq!(!window.find_all(("work-earlier", id)).is_empty(), hidden);
+        })
+        .unwrap();
+    }
+    let mut model = live(7);
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    assert_eq!(
+        shape(cx, handle, &view, id),
+        (Mode::Tail, (7 - TAIL..7).map(|i| vec![i]).collect())
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !view.read(cx).work_ui.group_open(id, cx),
+            "the passive preview is not an explicit open"
+        );
+        assert!(window.find_all("step-toggle-call:c1").is_empty());
+        assert!(window.find("step-toggle-call:c6").bounds().size.height > px(0.));
+        // The ribbon reaches every call, including the ones above the tail.
+        for i in 0..7 {
+            let cell = window.find(SharedString::from(format!("work-cell-call:c{i}")));
+            assert!(cell.bounds().size.width > px(0.));
+        }
+        let header = window.find(SharedString::from(format!("work-toggle-{id}")));
+        assert!(
+            header
+                .label()
+                .unwrap()
+                .starts_with("Working · ran echo step-6")
+        );
+        assert_eq!(
+            view.read(cx).work_ui.step_info("c6", cx),
+            (false, 0),
+            "no detailed code or output opens on its own"
+        );
+        window.click(("work-earlier", id), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        shape(cx, handle, &view, id),
+        (Mode::List, (0..7).map(|i| vec![i]).collect())
+    );
+    end(&mut model, "c6", 40, false, "done");
+    model.apply(&json!({"type":"run_end"}));
+    publish(cx, handle, &view, &mut model);
+    assert_eq!(
+        shape(cx, handle, &view, id).0,
+        Mode::List,
+        "explicit open outlives the run"
+    );
+}
+
+#[gpui_kit::test]
+fn the_tail_folds_when_the_run_ends_and_the_first_error_stays_visible(cx: &mut TestAppContext) {
+    let mut model = live(3);
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    assert_eq!(
+        shape(cx, handle, &view, id).1.len(),
+        3,
+        "fewer than five: all shown"
+    );
+    end(&mut model, "c2", 40, true, "noise\nError: synthetic exit 1");
+    // Between the result and run_end the run is still working.
+    publish(cx, handle, &view, &mut model);
+    assert_eq!(shape(cx, handle, &view, id).0, Mode::Tail);
+    model.apply(&json!({"type":"run_end"}));
+    publish(cx, handle, &view, &mut model);
+    assert_eq!(shape(cx, handle, &view, id), (Mode::Folded, vec![]));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find_all("step-toggle-call:c0").is_empty());
+        let header = window.find(SharedString::from(format!("work-toggle-{id}")));
+        assert!(
+            header
+                .label()
+                .unwrap()
+                .starts_with("echo step-2 failed · ran 2 commands"),
+            "{:?}",
+            header.label()
+        );
+        let error = window.find(("work-first-error", id));
+        assert!(error.bounds().size.height > px(0.));
+        window.click(("work-first-error", id), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // Just that call opens; the group itself stays folded.
+        assert_eq!(view.read(cx).work_ui.step_info("c2", cx), (true, 2));
+        assert!(window.find("step-toggle-call:c2").bounds().size.height > px(0.));
+        assert!(window.find_all("step-toggle-call:c1").is_empty());
+        assert!(!view.read(cx).work_ui.group_open(id, cx));
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn an_explicit_choice_overrides_the_live_tail_through_activity(cx: &mut TestAppContext) {
+    let mut model = live(2);
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    assert_eq!(shape(cx, handle, &view, id).0, Mode::Tail);
+    let key = SharedString::from(format!("work-toggle-{id}"));
+    cx.update_window(handle, |_, window, cx| window.click(key.clone(), cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(shape(cx, handle, &view, id), (Mode::Folded, vec![]));
+    end(&mut model, "c1", 30, false, "done");
+    model.apply(&json!({"type":"entry_appended","entry":{"id":31,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"bash","arguments":{"command":"echo more"}}]}]}}));
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"c2","toolName":"bash"}));
+    publish(cx, handle, &view, &mut model);
+    assert_eq!(
+        shape(cx, handle, &view, id).0,
+        Mode::Folded,
+        "activity never reopens"
+    );
+    cx.update_window(handle, |_, window, cx| window.click(key.clone(), cx))
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(shape(cx, handle, &view, id).1.len(), 3);
+    // A new user turn ends Working for this group without run_end.
+    model.apply(&json!({"type":"entry_appended","entry":{"id":40,"kind":"pi.user","model":[{"role":"user","content":[{"type":"text","text":"next"}]}]}}));
+    let rows = model.rows();
+    assert!(!rows[0].work_data().unwrap().active);
+}
+
+#[gpui_kit::test]
+fn the_ribbon_is_one_tab_stop_with_arrows_enter_and_escape(cx: &mut TestAppContext) {
+    let mut model = live(3);
+    end(&mut model, "c2", 40, false, "done");
+    model.apply(&json!({"type":"run_end"}));
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    let focus = cx.update(|cx| view.read(cx).work_ui.ribbon_focus(id, cx));
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.focus(&focus, cx);
+        window.press("left", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(view.read(cx).work_ui.step_info("c1", cx).0);
+        assert!(window.find("step-toggle-call:c1").bounds().size.height > px(0.));
+        assert!(
+            window.find_all("step-toggle-call:c2").is_empty(),
+            "only that call"
+        );
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!view.read(cx).work_ui.step_info("c1", cx).0);
+        assert!(window.find_all("step-toggle-call:c1").is_empty());
+        assert!(
+            focus.is_focused(window),
+            "Escape returns focus to the ribbon"
+        );
+        window.press("home", cx);
+        window.press("space", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(view.read(cx).work_ui.step_info("c0", cx).0);
+        // Pointer: the same cell closes it again.
+        window.click("work-cell-call:c0", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!view.read(cx).work_ui.step_info("c0", cx).0);
+        assert!(window.find_all("step-toggle-call:c0").is_empty());
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn script_code_folds_to_five_lines_with_exact_copy_and_merged_reads_open(cx: &mut TestAppContext) {
+    let code = "// Count rows\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nconst e = 5;\nconst f = 6;\nreturn a + b;";
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    let calls = json!([
+        {"type":"toolCall","id":"r1","name":"read","arguments":{"path":"src/a.rs"}},
+        {"type":"toolCall","id":"r2","name":"read","arguments":{"path":"src/b.rs"}},
+        {"type":"toolCall","id":"s","name":"codemode","arguments":{"code":code}}
+    ]);
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+    end(&mut model, "r1", 21, false, "a");
+    end(&mut model, "r2", 22, false, "b");
+    end(&mut model, "s", 23, false, "3");
+    model.apply(&json!({"type":"run_end"}));
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        // Two reads merge into one counted cell; the script has its own.
+        assert!(window.find("work-cell-call:r1").bounds().size.width > px(0.));
+        assert!(window.find_all("work-cell-call:r2").is_empty());
+        window.click("work-cell-call:s", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let step = window.find("step-toggle-call:s");
+        assert!(step.label().unwrap().starts_with("Count rows"));
+        let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
+        let shown = code_state.read(cx).rendered_text().source().to_string();
+        assert!(
+            shown.contains("const d = 4;") && !shown.contains("const e = 5;"),
+            "{shown}"
+        );
+        window.click("copy-call:s-Code", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), code);
+        window.click("copy-call:s-Arguments", cx);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &cx.read_from_clipboard().unwrap().text().unwrap()
+            )
+            .unwrap(),
+            json!({"code":code})
+        );
+        window.click("show-all-call:s-Code", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
+        assert!(
+            code_state
+                .read(cx)
+                .rendered_text()
+                .source()
+                .contains("return a + b;")
+        );
+        assert!(window.find_all("show-all-call:s-Code").is_empty());
+        window.click(SharedString::from(format!("work-toggle-{id}")), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    // The chosen full list keeps every call on its own row.
+    assert_eq!(
+        shape(cx, handle, &view, id).1,
+        vec![vec![0], vec![1], vec![2]]
+    );
+}
+
+#[gpui_kit::test]
+fn the_live_tail_merges_successful_reads_into_one_openable_step(cx: &mut TestAppContext) {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    let calls = json!([
+        {"type":"toolCall","id":"r1","name":"read","arguments":{"path":"src/a.rs"}},
+        {"type":"toolCall","id":"r2","name":"read","arguments":{"path":"src/b.rs"}},
+        {"type":"toolCall","id":"r3","name":"read","arguments":{"path":"src/c.rs"}},
+        {"type":"toolCall","id":"t","name":"bash","arguments":{"command":"cargo test"}}
+    ]);
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+    for (entry, id) in [(21, "r1"), (22, "r2"), (23, "r3")] {
+        end(&mut model, id, entry, false, "contents");
+    }
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"t","toolName":"bash"}));
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    assert_eq!(
+        shape(cx, handle, &view, id),
+        (Mode::Tail, vec![vec![0, 1, 2], vec![3]])
+    );
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        let reads = window.find("reads-toggle-call:r1");
+        assert!(
+            reads
+                .label()
+                .unwrap()
+                .starts_with("Read · a.rs, b.rs · +1 more"),
+            "{:?}",
+            reads.label()
+        );
+        assert!(window.find_all("step-toggle-call:r1").is_empty());
+        window.click("reads-toggle-call:r1", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        for read in ["r1", "r2", "r3"] {
+            let key = SharedString::from(format!("step-toggle-call:{read}"));
+            assert!(window.find(key).bounds().size.height > px(0.));
+        }
+        assert!(!view.read(cx).work_ui.group_open(id, cx));
+    })
+    .unwrap();
+}
 fn model() -> LiveTranscript {
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"entry_appended","entry":{"id":20,"head":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"bash","arguments":{"command":"printf synthetic","timeout":30}}]}]}}));
@@ -26,7 +396,7 @@ fn an_early_failure_is_findable_without_expanding_all_work(cx: &mut TestAppConte
         assert!(!view.read(cx).work_ui.group_open(group, cx));
         assert!(window.find_all("step-toggle-call:task-0").is_empty());
         let header = window.find(group_key.clone());
-        assert!(header.label().unwrap().contains("1 failed"));
+        assert!(header.label().unwrap().starts_with("Read failed"));
         window.click(group_key.clone(), cx);
         window.render_frame(cx);
         let row = window.find("step-toggle-call:task-0").bounds();
@@ -197,14 +567,10 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
                 cx.read_from_clipboard().unwrap().text().unwrap(),
                 "printf synthetic"
             );
-            window.click("arguments-toggle-call:a", cx);
-            window.draw(cx).clear(cx);
-            assert_eq!(
-                view.read(cx).work_ui.step_info("a", cx),
-                (true, 3),
-                "raw arguments get a parser only on their own intentional expansion"
-            );
+            // Executable source leads; its JSON envelope is a secondary copy, never parsed.
             window.click("copy-call:a-Arguments", cx);
+            window.draw(cx).clear(cx);
+            assert_eq!(view.read(cx).work_ui.step_info("a", cx), (true, 2));
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(
                     &cx.read_from_clipboard().unwrap().text().unwrap()
@@ -212,8 +578,6 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
                 .unwrap(),
                 json!({"command":"printf synthetic","timeout":30})
             );
-            window.click("arguments-toggle-call:a", cx);
-            window.draw(cx).clear(cx);
             assert_eq!(
                 view.read(cx).scroller.read(cx).logical_scroll_top().item_ix,
                 0,
@@ -238,7 +602,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         });
         window.render_frame(cx);
         assert_eq!(text.read(cx).rendered_text().source(), prior);
-        assert_eq!(view.read(cx).work_ui.step_info("a", cx), (false, 3));
+        assert_eq!(view.read(cx).work_ui.step_info("a", cx), (false, 2));
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();

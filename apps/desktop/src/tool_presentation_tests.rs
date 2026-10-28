@@ -39,8 +39,8 @@ fn known_unknown_and_codemode_summaries_are_semantic_not_execution() {
             "d",
             "codemode",
             json!({"code":"await tools.read({path: \"a\"}); await tools.bash({command: \"false\"})"}),
-            "Ran a script",
-            "",
+            "Ran",
+            "false",
         ),
         (
             "patch-script",
@@ -62,6 +62,271 @@ fn known_unknown_and_codemode_summaries_are_semantic_not_execution() {
         assert_eq!(tool.title, title);
         assert_eq!(tool.subject, subject);
     }
+    assert_eq!(tools.items["d"].meta, "+1 more");
+}
+fn label(code: &str) -> (String, String, String, Kind) {
+    let mut tools = Tools::default();
+    tools.call("s", 1, "codemode", &json!({ "code": code }));
+    let tool = &tools.items["s"];
+    (
+        tool.title.clone(),
+        tool.subject.clone(),
+        tool.meta.clone(),
+        tool.kind,
+    )
+}
+#[test]
+fn scripts_are_named_from_literal_nested_calls_or_a_leading_comment_only() {
+    let s = |t: &str| t.to_owned();
+    // Same-kind literal calls name the script.
+    assert_eq!(
+        label(
+            "const [a, b] = await Promise.all([tools.read({ path: \"src/a.rs\" }), tools.read({\"path\": 'src/b.rs'})]);"
+        ),
+        (s("Read"), s("a.rs, b.rs"), s(""), Kind::Read)
+    );
+    assert_eq!(
+        label(
+            "await tools.read({path:\"a.rs\"});await tools.read({path:\"b.rs\"});await tools.read({path:\"c.rs\"});"
+        ),
+        (s("Read"), s("a.rs, b.rs"), s("+1 more"), Kind::Read)
+    );
+    assert_eq!(
+        label("await tools.bash({ command: \"rg -n nestedTools src\" })"),
+        (
+            s("Searched code for"),
+            s("nestedTools"),
+            s(""),
+            Kind::Search
+        )
+    );
+    // Mixed kinds use the leading comment, skipping @options; effects lead otherwise.
+    assert_eq!(
+        label(
+            "// @options: {\"timeout_ms\": 60000}\n// Run the probe and show the failure\nconst run = await tools.bash({ command: \"cargo test\" });\nawait tools.read({ path: \"log.txt\" });"
+        ),
+        (
+            s("Run the probe and show the failure"),
+            s(""),
+            s(""),
+            Kind::Command
+        )
+    );
+    assert_eq!(
+        label(
+            "await tools.read({path:\"a.rs\"}); await tools.applyPatch({patch:\"*** Begin Patch\\n*** Update File: src/v.rs\\n@@\\n-a\\n+b\\n*** End Patch\"});"
+        ),
+        (s("Edited"), s("v.rs"), s("+1 more"), Kind::Edit)
+    );
+    // Non-literal or interpolated arguments are never guessed.
+    for code in [
+        "const p = 'x.rs';\nawait tools.read({ path: p });",
+        "await tools.bash({ command: `cargo test ${name}` });",
+    ] {
+        let (title, subject, _, kind) = label(code);
+        assert_eq!(
+            (title.as_str(), kind),
+            ("Ran a script", Kind::Script),
+            "{code}"
+        );
+        assert_eq!(subject, code.lines().next().unwrap().trim(), "{code}");
+    }
+    // Commented-out calls, lookalike receivers and plain code are not calls.
+    assert_eq!(
+        label(
+            "const x = 1;\n// await tools.bash({ command: \"rm -rf /\" })\nawait mytools.read({ path: \"y\" });"
+        ),
+        (s("Ran a script"), s("const x = 1;"), s(""), Kind::Script)
+    );
+    assert_eq!(
+        label("// Summarize the rows\nreturn rows.length;"),
+        (s("Summarize the rows"), s(""), s(""), Kind::Script)
+    );
+    assert_eq!(label(""), (s("Ran a script"), s(""), s(""), Kind::Script));
+}
+#[test]
+fn script_status_is_the_outer_call_only_never_a_nested_one() {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    let code = "await tools.bash({ command: \"cargo test\" });";
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![call("s","codemode",json!({"code":code}))])}));
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"s","toolName":"codemode"}));
+    let work = model.rows()[0].work_data().unwrap().clone();
+    assert_eq!(work.cells()[0].mark, Mark::Live);
+    assert_eq!(work.line()[1].text, "ran cargo test");
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"s","isError":true,"entry":result_entry(2,"s",true,"Error: Tool bash: exit code 101")}));
+    model.apply(&json!({"type":"run_end"}));
+    let work = model.rows()[0].work_data().unwrap().clone();
+    assert_eq!(work.cells()[0].mark, Mark::Failed);
+    assert_eq!(work.title, "cargo test failed");
+    assert_eq!(
+        work.first_error(),
+        Some((0, "Error: Tool bash: exit code 101".into()))
+    );
+}
+fn read_done(model: &mut LiveTranscript, entry: u64, id: &str) {
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(entry,vec![call(id,"read",json!({"path":format!("src/{id}.rs")}))])}));
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"entry":result_entry(entry + 1,id,false,"contents")}));
+}
+#[test]
+fn steps_count_like_swift_with_consecutive_successful_reads_merged() {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    assert!(model.rows().is_empty(), "zero steps: no work row");
+    read_done(&mut model, 1, "r1");
+    let units = |model: &mut LiveTranscript| model.rows()[0].work_data().unwrap().units();
+    assert_eq!(
+        units(&mut model),
+        [Unit::Step(0)],
+        "one read is a single step"
+    );
+    read_done(&mut model, 3, "r2");
+    read_done(&mut model, 5, "r3");
+    assert_eq!(units(&mut model), [Unit::Reads(vec![0, 1, 2])]);
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(7,vec![json!({"type":"text","text":"A note between steps."}),call("b","bash",json!({"command":"cargo test"})),call("r4","read",json!({"path":"src/r4.rs"}))])}));
+    // A failed read never merges; a running read waits until it succeeds.
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"b","isError":true,"entry":result_entry(8,"b",true,"synthetic failure")}));
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"r4","toolName":"read"}));
+    read_done(&mut model, 9, "r5");
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(11,vec![call("r6","read",json!({"path":"src/r6.rs"}))])}));
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"r6","isError":true,"entry":result_entry(12,"r6",true,"missing")}));
+    let rows = model.rows();
+    let work = rows[0].work_data().unwrap();
+    assert_eq!(
+        work.units(),
+        [
+            Unit::Reads(vec![0, 1, 2]),
+            Unit::Step(3),
+            Unit::Step(4),
+            Unit::Step(5),
+            Unit::Step(6),
+            Unit::Step(7),
+        ],
+        "six mixed steps: merged reads, note, failure, live read, read, failed read"
+    );
+    assert!(work.active);
+    // The ribbon has one cell per call: successful adjacent reads share one.
+    let cells = work.cells();
+    assert_eq!(
+        cells
+            .iter()
+            .map(|c| (c.steps.clone(), c.mark))
+            .collect::<Vec<_>>(),
+        [
+            (vec![0, 1, 2], Mark::Done),
+            (vec![4], Mark::Failed),
+            (vec![5], Mark::Live),
+            (vec![6], Mark::Done),
+            (vec![7], Mark::Failed),
+        ]
+    );
+    assert_eq!(work.failures, 2);
+}
+#[test]
+fn working_follows_the_run_not_gaps_and_ends_on_reply_turn_or_staleness() {
+    let active = |model: &mut LiveTranscript| {
+        model
+            .rows()
+            .iter()
+            .find_map(|row| row.work_data().map(|work| work.active))
+            .unwrap()
+    };
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    read_done(&mut model, 1, "a");
+    assert!(
+        active(&mut model),
+        "between tool events the run is still working"
+    );
+    assert!(
+        model.rows()[0]
+            .work_data()
+            .unwrap()
+            .title
+            .starts_with("Working")
+    );
+    model.apply(&json!({"type":"message_start","message":{"timestamp":5,"content":[{"type":"text","text":"Streaming reply"}]}}));
+    assert!(
+        active(&mut model),
+        "a streaming reply does not end the work yet"
+    );
+    model.apply(&json!({"type":"message_end","entry":call_entry(3,vec![json!({"type":"text","text":"Committed reply"})])}));
+    assert!(
+        !active(&mut model),
+        "a committed reply ends Working before run_end"
+    );
+    let title = model.rows()[0].work_data().unwrap().title.clone();
+    assert_eq!(title, "Read 1 file");
+
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    read_done(&mut model, 1, "a");
+    model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pi.user","model":[{"role":"user","content":[{"type":"text","text":"next turn"}]}]}}));
+    assert!(
+        !active(&mut model),
+        "a new user turn ends the earlier group"
+    );
+
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![call("a","bash",json!({"command":"sleep 1"}))])}));
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"a","toolName":"bash"}));
+    assert!(active(&mut model));
+    model.stale();
+    assert!(model.presentation_dirty);
+    let rows = model.rows();
+    let work = rows[0].work_data().unwrap();
+    assert!(!work.active, "a stale connection never keeps Working");
+    assert_eq!(
+        work.cells()[0].mark,
+        Mark::Unknown,
+        "a live call off a live run is unknown"
+    );
+    assert_eq!(work.uncertain, 1);
+    // Reconnect: a snapshot without a run is idle; with a run it works again.
+    let entry = call_entry(1, vec![call("a", "bash", json!({"command":"sleep 1"}))]);
+    model.apply(&json!({"type":"snapshot","entries":[entry.clone()],"tools":[{"callId":"a","name":"bash","status":"running","output":""}]}));
+    assert!(!active(&mut model));
+    model.apply(&json!({"type":"snapshot","run":{},"entries":[entry],"tools":[{"callId":"a","name":"bash","status":"running","output":""}]}));
+    assert!(active(&mut model));
+    model.apply(&json!({"type":"run_end"}));
+    assert!(!active(&mut model));
+}
+#[test]
+fn the_line_leads_with_effects_then_outcomes_then_faint_reads() {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![
+        call("r","read",json!({"path":"src/a.rs"})),
+        call("p","applyPatch",json!({"patch":"*** Begin Patch\n*** Update File: src/work_view.rs\n@@\n-old\n-older\n+new\n*** End Patch"})),
+        call("t","bash",json!({"command":"cargo test --test disclosure"})),
+        call("w","web",json!({"action":"search","query":"gpui"})),
+    ])}));
+    for (entry, id) in [(2, "r"), (3, "p"), (4, "w")] {
+        model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"entry":result_entry(entry,id,false,"ok")}));
+    }
+    model.apply(&json!({"type":"tool_execution_start","toolCallId":"t","toolName":"bash"}));
+    let line = model.rows()[0].work_data().unwrap().line();
+    assert_eq!(
+        line.iter()
+            .map(|s| (s.text.as_str(), s.tone))
+            .collect::<Vec<_>>(),
+        [("Working", Tone::Muted), ("ran cargo test", Tone::Muted)]
+    );
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"t","isError":true,"entry":result_entry(5,"t",true,"assertion failed")}));
+    model.apply(&json!({"type":"run_end"}));
+    let line = model.rows()[0].work_data().unwrap().line();
+    assert_eq!(
+        line.iter()
+            .map(|s| (s.text.as_str(), s.tone))
+            .collect::<Vec<_>>(),
+        [
+            ("Edited work_view.rs", Tone::Strong),
+            ("+1 −2", Tone::Muted),
+            ("cargo test failed", Tone::Danger),
+            ("read 1 file, made 1 search", Tone::Faint),
+        ]
+    );
 }
 #[test]
 fn diffs_are_prepared_from_structured_edits_and_patch_not_from_output_claims() {

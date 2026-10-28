@@ -113,6 +113,7 @@ impl TranscriptView {
             KeyBinding::new("secondary-l", FocusComposer, None),
         ]);
         cx.on_action(|_: &Quit, cx| crate::local_view::menu_routing::quit(cx));
+        crate::work_view::bind_keys(cx);
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -737,6 +738,14 @@ impl TranscriptView {
     #[cfg(feature = "native-probes")]
     pub(crate) fn disclosure_probe_step(&self, id: &str, cx: &App) -> (bool, usize) {
         self.work_ui.step_info(id, cx)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn disclosure_probe_shape(
+        &self,
+        id: u64,
+        cx: &App,
+    ) -> (crate::work_view::Mode, Vec<Vec<usize>>) {
+        self.work_ui.group_shape(id, cx)
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn presentation_probe_counts(&self) -> (usize, usize) {

@@ -1,6 +1,6 @@
 //! Real renderer, production view, no visible window. Not smoothness evidence.
 use gpui_kit::{
-    AppContext, Bounds, HeadlessAppContext, SharedString, WindowBounds, WindowOptions, px, size,
+    AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, px, size,
     test::{TestQueryExt, TestWindowExt},
 };
 use pilot_desktop::{LocalViewer, TranscriptView};
@@ -121,16 +121,8 @@ fn main() {
         .unwrap();
     cx.update_window(viewer, |_, window, cx| {
         window.render_frame(cx);
-        // The synthetic fixture's tool work group starts at 1 << 62.
-        window.click(
-            SharedString::from(format!("work-toggle-{}", 1u64 << 62)),
-            cx,
-        );
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(viewer, |_, window, cx| {
-        window.render_frame(cx);
+        // The synthetic fixture's work is live: its latest steps already show
+        // under the line, so its edit is reachable without opening the group.
         window.click("step-toggle-call:fixture-edit", cx);
     })
     .unwrap();

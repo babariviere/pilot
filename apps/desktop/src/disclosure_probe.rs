@@ -255,8 +255,11 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 {"type":"toolCall","id":"command","name":"bash","arguments":{"command":"set -euo pipefail\ncd synthetic-workspace\ncargo test --locked --test parser","timeout":30}},
                 {"type":"toolCall","id":"patch","name":"applyPatch","arguments":{"patch":"*** Begin Patch\n*** Update File: src/parser.rs\n@@\n-old_line\n+new_line\n*** End Patch"}},
                 {"type":"toolCall","id":"search","name":"web","arguments":{"action":"search","query":"synthetic 日本語 parser behavior"}},
-                {"type":"toolCall","id":"script","name":"codemode","arguments":{"code":"const result = { note: 'synthetic only' };\nreturn result;"}}
+                {"type":"toolCall","id":"script","name":"codemode","arguments":{"code":"const result = { note: 'synthetic only' };\nreturn result;"}},
+                {"type":"toolCall","id":"reads","name":"codemode","arguments":{"code":"const [a, b] = await Promise.all([tools.read({ path: \"src/work_view.rs\" }), tools.read({ path: \"src/tool_presentation.rs\" })]);\nreturn a + b;"}},
+                {"type":"toolCall","id":"probe","name":"codemode","arguments":{"code":"// @options: {\"timeout_ms\": 60000}\n// Run the disclosure probe and show the failure\nconst run = await tools.bash({ command: \"bash scripts/cargo.sh test --test disclosure\" });\nconst log = await tools.read({ path: \"target/probe.log\" });\nreturn run.output;"}}
             ]);
+            model.apply(&json!({"type":"run_start"}));
             model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
             for id in [
                 "failed-early",
@@ -265,12 +268,14 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 "patch",
                 "search",
                 "script",
+                "reads",
+                "probe",
             ] {
                 model.apply(
                     &json!({"type":"tool_execution_start","toolCallId":id,"toolName":"tool"}),
                 );
             }
-            for id in ["read", "patch", "search"] {
+            for id in ["read", "patch", "search", "reads"] {
                 model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"result":{"content":[{"type":"text","text":"Synthetic completed result."}]}}));
             }
             // Match the real event envelope: isError is top-level and the
@@ -323,8 +328,11 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 "stream",
                 "copy",
                 "settled",
+                "cell",
             ] {
                 cx.update_window(handle, |_, window, cx| {
+                    // The live tail shows under an open chevron: closing is explicit.
+                    if phase=="collapsed" { window.click(key.clone(),cx); }
                     if phase=="expanded" { window.click(key.clone(),cx); }
                     if phase=="detail" { window.click("step-toggle-call:command",cx); }
                     if phase=="stream" {
@@ -332,9 +340,13 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                         view.update(cx,|v,cx|v.transcript.update(cx,|v,cx|v.replace_readonly(model.rows(),false,cx)));
                     }
                     if phase=="settled" {
-                        for id in ["command","script"] { model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"result":{"content":[{"type":"text","text":"Synthetic completed result."}]}})); }
+                        for id in ["command","script","probe"] { model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"result":{"content":[{"type":"text","text":"Synthetic completed result."}]}})); }
                         model.apply(&json!({"type":"run_end"}));
                         view.update(cx,|v,cx|v.transcript.update(cx,|v,cx|v.replace_readonly(model.rows(),false,cx)));
+                    }
+                    if phase=="cell" {
+                        window.click(key.clone(),cx);
+                        window.click("work-cell-call:probe",cx);
                     }
                 }).unwrap();
                 cx.run_until_parked();
@@ -344,7 +356,21 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                     assert!(viewport.right()<=px(width) && viewport.size.width>px(0.));
                     let (_,_,_,open,current)=view.read(cx).transcript.read(cx).disclosure_probe_state(group,cx);
                     if let Some(old)=entity { assert_eq!(current,old,"canonical group entity must survive"); } else { entity=Some(current); }
-                    assert_eq!(open,!matches!(phase,"live"|"collapsed"));
+                    assert_eq!(open,!matches!(phase,"live"|"collapsed"|"cell"));
+                    let (shape,units)=view.read(cx).transcript.read(cx).disclosure_probe_shape(group,cx);
+                    if phase=="live" { assert_eq!((shape,units.len()),(crate::work_view::Mode::Tail,crate::work_view::TAIL),"latest five while live"); }
+                    let header=window.find(key.clone()).bounds();
+                    let ribbon=window.find(("work-ribbon",group)).bounds();
+                    assert!(ribbon.left()>=header.right() && ribbon.right()<=viewport.right(),"{phase}: ribbon sits right of the line, inside the column");
+                    for call in ["failed-early","read","command","patch","search","script","reads","probe"] {
+                        let cell=window.find(SharedString::from(format!("work-cell-call:{call}"))).bounds();
+                        assert!(cell.size.width>px(0.) && cell.left()>=ribbon.left() && cell.right()<=ribbon.right(),"{phase}: every call keeps a ribbon cell");
+                    }
+                    if phase=="cell" {
+                        assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("probe",cx).0,"a cell opens just its call");
+                        assert!(window.find("step-toggle-call:probe").label().unwrap().starts_with("Run the disclosure probe and show the failure"));
+                        assert!(window.find_all("step-toggle-call:read").is_empty());
+                    }
                     if matches!(phase,"detail"|"stream"|"copy"|"settled") { assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("command",cx).0); }
                     if phase=="copy" {
                         window.click("copy-call:command-Output",cx);
@@ -480,6 +506,7 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             for choice in ["unopened", "open", "closed"] {
                 let mut model = LiveTranscript::default();
+                model.apply(&json!({"type":"run_start"}));
                 model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"stable-a","name":"bash","arguments":{"command":"printf synthetic 日本語"}}]}]}}));
                 let rows = model.rows();
                 let group = rows[0].id();
@@ -520,13 +547,23 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
                             .3,
                         "unopened Working must start collapsed, not follow activity"
                     );
+                    // A live group shows its passive tail with an open
+                    // chevron, so the first click is an explicit close.
+                    assert_eq!(
+                        view.read(cx)
+                            .transcript
+                            .read(cx)
+                            .disclosure_probe_shape(group, cx)
+                            .0,
+                        crate::work_view::Mode::Tail
+                    );
                     if choice != "unopened" {
                         window.click(key.clone(), cx);
                     }
                 })
                 .unwrap();
                 cx.run_until_parked();
-                if choice == "closed" {
+                if choice == "open" {
                     cx.update_window(handle, |_, window, cx| {
                         window.render_frame(cx);
                         window.click(key.clone(), cx);
@@ -565,9 +602,8 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
                     if phase == "active" {
                         assert!(work.active);
                     }
-                    if phase == "success" {
-                        assert!(!work.active);
-                    }
+                    // The run, not the gap between tool events, decides Working.
+                    assert_eq!(work.active, work_active_label(phase), "{phase}");
                     if matches!(phase, "failure-unknown" | "settled") {
                         assert_eq!((work.failures, work.uncertain), (1, 1));
                     }
@@ -589,12 +625,24 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
                         let bounds = header.bounds();
                         let y = f32::from(bounds.top());
                         if let Some(old) = header_y { assert!((y-old).abs() <= 1., "header anchor moved during {phase}"); } else { header_y = Some(y); }
-                        assert!(header.label().unwrap().contains(if work_active_label(phase) { "Working" } else { "Worked" }));
+                        assert_eq!(header.label().unwrap().starts_with("Working"), work_active_label(phase));
+                        let (shape, units) = view.read(cx).transcript.read(cx).disclosure_probe_shape(group, cx);
+                        assert_eq!(shape, match (choice, work_active_label(phase)) {
+                            ("open", _) => crate::work_view::Mode::List,
+                            ("unopened", true) => crate::work_view::Mode::Tail,
+                            _ => crate::work_view::Mode::Folded,
+                        }, "{choice}/{phase}: passive tail follows the run, explicit choice wins");
+                        assert!(units.len() <= if shape == crate::work_view::Mode::Tail { crate::work_view::TAIL } else { usize::MAX });
                         if matches!(phase, "failure-unknown" | "settled") {
                             let label = header.label().unwrap();
-                            assert!(label.contains("1 failed") && label.contains("1 status unknown"));
+                            assert!(label.contains("Read failed") && label.contains("1 status unknown"), "{label}");
                             let status = window.within(key.clone()).find("disclosure-status").bounds();
                             assert!(status.size.width > px(0.) && status.right() <= bounds.right());
+                            if choice == "unopened" {
+                                let error = window.find(("work-first-error", group)).bounds();
+                                let viewport = window.find("viewport").bounds();
+                                assert!(error.size.height > px(0.) && error.right() <= viewport.right(), "first error stays readable on the fold");
+                            }
                         }
                         assert_eq!(view.read(cx).transcript.read(cx).disclosure_probe_step("stable-a", cx), (false, 0), "group opening must not open/parse child details");
                         println!("{}", json!({"probe":"working-stability", "width":width,"mode":mode.name(),"choice":choice,"phase":phase,"open":open,"following":following,"header_y":y}));
@@ -649,7 +697,7 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
 }
 
 fn work_active_label(phase: &str) -> bool {
-    matches!(phase, "active" | "stream" | "next-tool")
+    matches!(phase, "active" | "stream" | "success" | "next-tool")
 }
 
 // Use the production reader publication path and actual native row bounds. A
