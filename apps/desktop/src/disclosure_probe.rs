@@ -9,6 +9,7 @@ use serde_json::json;
 use std::time::Duration;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    run_final_reply_follow_probe(cx);
     run_working_stability_probe(cx);
     if std::env::var_os("PILOT_NEXT_TOOL_PRESENTATION_DIR").is_some() {
         run_tool_presentation_probe(cx);
@@ -649,4 +650,207 @@ fn run_working_stability_probe(cx: &mut HeadlessAppContext) {
 
 fn work_active_label(phase: &str) -> bool {
     matches!(phase, "active" | "stream" | "next-tool")
+}
+
+// Use the production reader publication path and actual native row bounds. A
+// follow flag alone cannot prove that a reply below a tall work row is visible.
+fn run_final_reply_follow_probe(cx: &mut HeadlessAppContext) {
+    use crate::local_client::LocalClient;
+    fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
+        for _ in 0..12 {
+            cx.advance_clock(Duration::from_millis(16));
+            cx.run_until_parked();
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+        }
+    }
+    for choice in [
+        "expanded-scrollbar",
+        "expanded-output",
+        "expanded-bottom",
+        "expanded-older",
+        "collapsed",
+    ] {
+        let mut model = LiveTranscript::default();
+        let calls: Vec<_> = (0..32).map(|i| json!({"type":"toolCall","id":format!("follow-{i}"),"name":"read","arguments":{"path":format!("file-{i}.rs")}})).collect();
+        model.apply(&json!({"type":"entry_appended","entry":{"id":200,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+        for i in 0..32 {
+            model.apply(&json!({"type":"tool_execution_start","toolCallId":format!("follow-{i}"),"toolName":"read"}));
+        }
+        model.apply(&json!({"type":"tool_execution_update","toolCallId":"follow-31","output":{"set":"Initial output\n".repeat(4)}}));
+        let group = model.rows()[0].id();
+        let (client, commands) = LocalClient::synthetic_commands();
+        let (h, v) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(1100.), px(760.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut v = LocalViewer::synthetic(w, cx);
+                        v.client = Some(client);
+                        v.generation = 10;
+                        v.state.generation = 10;
+                        v.state.cursor = None;
+                        v.state.limited = true;
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        let publish = |cx: &mut HeadlessAppContext, model: &mut LiveTranscript, start| {
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = (start..130)
+                        .map(|id| Message::live(id, "assistant".into(), crate::model::REPLY.into()))
+                        .chain(model.rows())
+                        .collect();
+                    v.accept(state, w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+        };
+        publish(cx, &mut model, 100);
+        if choice != "collapsed" {
+            cx.update_window(h, |_, w, cx| {
+                w.click(SharedString::from(format!("work-toggle-{group}")), cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            // Opening retains the clicked header. The user then genuinely
+            // scrolls to the bottom of all the expanded calls, without Latest.
+            if choice == "expanded-output" {
+                cx.update_window(h, |_, w, cx| {
+                    w.scroll(
+                        "viewport",
+                        ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
+                        cx,
+                    );
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| w.click("step-toggle-call:follow-31", cx))
+                    .unwrap();
+                settle(cx, h);
+            }
+            if matches!(choice, "expanded-scrollbar" | "expanded-output") {
+                cx.update_window(h, |_, w, cx| {
+                    let viewport = w.find("viewport").bounds();
+                    w.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(-1.))), cx);
+                    w.render_frame(cx);
+                    w.drag(
+                        point(viewport.right() - px(6.), viewport.bottom() - px(20.)),
+                        point(viewport.right() - px(6.), viewport.bottom() + px(100.)),
+                        cx,
+                    );
+                })
+                .unwrap();
+                settle(cx, h);
+            } else {
+                for _ in 0..4 {
+                    cx.update_window(h, |_, w, cx| {
+                        w.scroll(
+                            "viewport",
+                            ScrollDelta::Pixels(point(px(0.), px(-100_000.))),
+                            cx,
+                        )
+                    })
+                    .unwrap();
+                    settle(cx, h);
+                }
+            }
+        }
+        if choice == "expanded-older" {
+            cx.update_window(h, |_, w, cx| {
+                w.scroll("viewport", ScrollDelta::Pixels(point(px(0.), px(80.))), cx)
+            })
+            .unwrap();
+            settle(cx, h);
+        }
+        if choice == "expanded-scrollbar" {
+            cx.update_window(h, |_, w, _| {
+                let viewport = w.find("viewport").bounds();
+                let last = w.find("step-toggle-call:follow-31").bounds();
+                println!("scrollbar bottom: last={last:?}, viewport={viewport:?}");
+                assert!(
+                    last.bottom() <= viewport.bottom() + px(1.) && last.bottom() >= viewport.top(),
+                    "the real drag must reach expanded content bottom before completion"
+                );
+            })
+            .unwrap();
+        }
+        let before = cx.update(|cx| v.read(cx).transcript.read(cx).history_probe_anchor(cx));
+        println!("final-follow {choice}/before: {before:?}");
+        let reading = cx.update(|cx| v.read(cx).transcript.read(cx).reading_mark(cx).unwrap());
+        let entity = cx.update(|cx| {
+            v.read(cx)
+                .transcript
+                .read(cx)
+                .disclosure_probe_state(group, cx)
+                .4
+        });
+        let reply = "Final assistant reply must be visible without Latest.";
+        for phase in [
+            "incremental",
+            "complete",
+            "live",
+            "final",
+            "replaced",
+            "settled",
+            "slide",
+        ] {
+            match phase {
+                "incremental" => model.apply(&json!({"type":"tool_execution_update","toolCallId":"follow-31","output":{"set":"incremental synthetic result\n".repeat(80)}})),
+                "complete" => { for i in 0..32 { model.apply(&json!({"type":"tool_execution_end","toolCallId":format!("follow-{i}"),"entry":{"id":201+i,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":format!("follow-{i}"),"content":[{"type":"text","text":"Completed result"}]}]}})); } }
+                "live" => model.apply(&json!({"type":"message_start","message":{"role":"assistant","timestamp":1000,"content":[{"type":"text","text":""}]}})),
+                "final" => model.apply(&json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":reply}]})),
+                "replaced" => model.apply(&json!({"type":"message_end","entry":{"id":300,"kind":"pi.assistant","model":[{"role":"assistant","timestamp":1000,"content":[{"type":"text","text":reply}]}]}})),
+                "settled" => model.apply(&json!({"type":"run_end"})),
+                "slide" => {},
+                _ => unreachable!(),
+            }
+            publish(cx, &mut model, if phase == "slide" { 104 } else { 100 });
+            cx.update_window(h, |_, w, cx| {
+                let t = v.read(cx).transcript.read(cx);
+                let (_, _, following, open, current) = t.disclosure_probe_state(group, cx);
+                assert_eq!(open, choice != "collapsed", "{choice}/{phase}: preserve explicit expansion");
+                assert_eq!(entity, current);
+                assert_eq!(t.disclosure_probe_step("follow-31", cx).0, choice == "expanded-output");
+                println!("final-follow {choice}/{phase}: following={following}, anchor={:?}", t.history_probe_anchor(cx));
+                if choice == "expanded-older" {
+                    assert!(!following, "never follow while intentionally reading older tools");
+                    let after = t.history_probe_anchor(cx);
+                    assert_eq!(after.0, before.0 - usize::from(phase == "slide") * 4);
+                    assert!((after.1 - before.1).abs() <= 1., "retain offset inside expanded tools");
+                    assert_eq!(t.reading_mark(cx).unwrap().message, reading.message, "canonical reading identity survives sliding");
+                } else if matches!(phase, "final" | "replaced" | "settled" | "slide") {
+                    let row = model.rows().last().unwrap().id();
+                    let viewport = w.find("viewport").bounds();
+                    let footer = w.try_find(("message-actions", row)).map(|q| q.bounds());
+                    assert!(footer.is_some_and(|b| b.top() >= viewport.top() && b.bottom() <= viewport.bottom() + px(1.)),
+                        "{choice}/{phase}: actual final reply must be visible without Latest: footer={footer:?}, viewport={viewport:?}, following={following}");
+                    assert!(following);
+                    let body = t.history_probe_row(row);
+                    assert_eq!(body.read(cx).rendered_text().source(), reply);
+                    let bounds = body.read(cx).bounds();
+                    assert!(bounds.top() >= viewport.top() && bounds.bottom() <= viewport.bottom(), "{choice}/{phase}: final reply text itself must be visible: {bounds:?}");
+                }
+            }).unwrap();
+        }
+        assert!(
+            commands.try_recv().is_err(),
+            "no reload loop for a current sliding window"
+        );
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+    }
 }

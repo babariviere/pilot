@@ -180,6 +180,52 @@
       "path": "src/selectable_text.rs",
       "old": "    /// Overrides the selection background, which defaults to the theme's",
       "new": "    /// Styles sorted, non-overlapping byte ranges against the inherited text style at\n    /// layout. Selection and copy still use the plain text.\n    pub fn styled_ranges(\n        mut self,\n        highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,\n        families: Vec<(Range<usize>, SharedString)>,\n    ) -> Self {\n        let styled = StyledText::new(self.text.clone()).with_highlights(highlights);\n        self.styled_text = if families.is_empty() {\n            styled\n        } else {\n            styled.with_font_family_overrides(families)\n        };\n        self\n    }\n\n    /// Overrides the selection background, which defaults to the theme's"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "    max_fps: usize,\n    styles: ScrollbarStyles,",
+      "new": "    max_fps: usize,\n    on_scroll: Option<Rc<dyn Fn(&mut App)>>,\n    styles: ScrollbarStyles,"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "            max_fps: 120,",
+      "new": "            max_fps: 120,\n            on_scroll: None,"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "    /// Set a special scroll size of the content area, default is None.",
+      "new": "    /// Observe event-derived scrollbar input after applying its offset.\n    /// Layout, measurement and external handle changes do not invoke this.\n    pub fn on_scroll(mut self, handler: impl Fn(&mut App) + 'static) -> Self {\n        self.on_scroll = Some(Rc::new(handler));\n        self\n    }\n\n    /// Set a special scroll size of the content area, default is None."
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "let scroll_handle = self.scroll_handle.clone();",
+      "new": "let scroll_handle = self.scroll_handle.clone();\n                        let on_scroll = self.on_scroll.clone();",
+      "count": 5
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "                                if scroll_handle.offset() != state.get().last_scroll_offset {\n                                    state.set",
+      "new": "                                if scroll_handle.offset() != state.get().last_scroll_offset {\n                                    if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                                    state.set"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "                            window.prevent_default();\n                            cx.stop_propagation();",
+      "new": "                            if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                            window.prevent_default();\n                            cx.stop_propagation();"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "                                    cx.notify(view_id);\n                                }\n                            }\n                        });\n                    }\n\n                    window.on_mouse_event({",
+      "new": "                                    if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                                    cx.notify(view_id);\n                                }\n                            }\n                        });\n                    }\n\n                    window.on_mouse_event({"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "                                    scroll_handle.set_offset(offset);\n                                    notify = true;",
+      "new": "                                    scroll_handle.set_offset(offset);\n                                    if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                                    notify = true;"
+    },
+    {
+      "path": "src/scrollbar.rs",
+      "old": "                                scroll_handle.end_drag();\n                                state.set(state.get().with_unset_drag_pos(Instant::now()));\n                                cx.notify(view_id);",
+      "new": "                                scroll_handle.end_drag();\n                                if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                                state.set(state.get().with_unset_drag_pos(Instant::now()));\n                                cx.notify(view_id);"
     }
   ]
 }

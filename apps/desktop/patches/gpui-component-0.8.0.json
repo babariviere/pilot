@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
   "upstream": "https://crates.io/crates/gpui-component/0.8.0",
-  "purpose": "Reader anchor hold, event-derived scroll notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change. Optional per-scroller visibility mode; defaults unchanged.",
+  "purpose": "Reader anchor hold, event-derived list/bounce/scrollbar notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change. Optional per-scroller visibility mode; defaults unchanged.",
   "edits": [
     {
       "path": "src/message_scroller.rs",
@@ -149,6 +149,11 @@
       "path": "src/message_scroller.rs",
       "old": "            .when(self.scrollbar, |this| this.vertical_scrollbar(&list_state))",
       "new": "            .when(self.scrollbar, |this| {\n                if let Some(mode) = self.scrollbar_mode {\n                    this.child(div().absolute().inset_0().child(\n                        crate::scroll::Scrollbar::new(&list_state)\n                            .id((root_id.clone(), \"scrollbar\"))\n                            .axis(crate::scroll::ScrollbarAxis::Vertical)\n                            .mode(mode)\n                            .viewport_from_layout(),\n                    ))\n                } else {\n                    this.vertical_scrollbar(&list_state)\n                }\n            })"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": "                            .axis(crate::scroll::ScrollbarAxis::Vertical)\n                            .mode(mode)",
+      "new": "                            .axis(crate::scroll::ScrollbarAxis::Vertical)\n                            .on_scroll({\n                                let state = self.state.downgrade();\n                                move |cx| {\n                                    let state = state.clone();\n                                    cx.defer(move |cx| {\n                                        let _ = state.update(cx, |state, cx| state.user_scrolled(cx));\n                                    });\n                                }\n                            })\n                            .mode(mode)"
     }
   ]
 }

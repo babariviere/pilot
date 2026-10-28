@@ -118,6 +118,14 @@ emit it. The app uses this event for bounded top-of-history reads, with an
 upward-wheel fallback when content fits and the bounce lets events bubble.
 History paging reuses the explicit anchor hold; no default scroll behavior or
 automatic network operation is added to the component itself.
+The Base scrollbar's opt-in `on_scroll` callback also reports track clicks,
+thumb drags/releases and touch drags. The explicitly-modeled message scrollbar
+routes those events through the same deferred `user_scrolled` handler as wheel
+input. Previously, a scrollbar could reach the physical bottom while disclosure
+hold stayed in Normal mode, hiding the next reply and telling the bounded reader
+to hold older rows. Layout/remeasurement never releases the hold; ordinary older
+reading stays anchored. The native disclosure probe asserts final-reply bounds
+after actual scrollbar input, tool completion and a sliding history window.
 An additional read-only accessor lets the app identify an actual scrollbar drag
 at its measured start on pointer release. It is not a render-time boundary poll.
 Another bounded accessor reports existing unused tail space. The app retains
