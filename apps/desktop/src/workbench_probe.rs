@@ -357,6 +357,9 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
+            if !baseline {
+                sidebar_rows(cx, width, mode, &captures);
+            }
         }
     }
 }
@@ -771,4 +774,239 @@ fn header_alignment(
         })
     });
     settle(cx, h);
+}
+
+/// Pixels in `bounds` that differ from its top-left pixel: zero when nothing
+/// but the row background is painted there.
+fn painted(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f32) -> usize {
+    let (x0, y0) = (
+        (f32::from(bounds.left()) * scale).ceil() as u32,
+        (f32::from(bounds.top()) * scale).ceil() as u32,
+    );
+    let (x1, y1) = (
+        (f32::from(bounds.right()) * scale).floor() as u32,
+        (f32::from(bounds.bottom()) * scale).floor() as u32,
+    );
+    let base = image.get_pixel(x0, y0).0;
+    let mut count = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = image.get_pixel(x, y).0;
+            if (0..3).map(|c| p[c].abs_diff(base[c]) as u32).sum::<u32>() > 48 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Chat rows: one title line, at most one quiet metadata line that never
+/// repeats its section, uniform rhythm, actions revealed on hover or keyboard
+/// selection, and Missions as the sidebar's only mission entry.
+fn sidebar_rows(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+    mode: ThemeMode,
+    captures: &Option<std::path::PathBuf>,
+) {
+    cx.update(|cx| Theme::change(mode, None, cx));
+    let (client, _) = LocalClient::synthetic_commands();
+    let (writer, _writes) = Interaction::recording();
+    let chats = [
+        json!({"id":"synthetic","title":"Current conversation","projectId":"a","state":"working"}),
+        json!({"id":"working2","title":format!("Refactor {}","長いタイトル 👩‍💻 ".repeat(4)),"projectId":"b","state":"working"}),
+        json!({"id":"jobs","title":"Background build","projectId":"a","state":"idle","runningJobs":[{"id":"j"}]}),
+        json!({"id":"stall","title":"Stalled tool","projectId":"b","state":"working","attentionReason":{"kind":"tool_stall"}}),
+        json!({"id":"failed","title":"Check failed build","projectId":"a","state":"failed"}),
+        json!({"id":"coord","title":"Mission coordinator chat","projectId":"a","state":"idle","missionCoordinator":true}),
+        json!({"id":"member","title":"Mission member chat","projectId":"a","state":"idle","missionId":"m1"}),
+        json!({"id":"idle1","title":"Review package","projectId":"b","state":"idle"}),
+        json!({"id":"idle2","title":format!("Résumé {}","naïve café ".repeat(5)),"projectId":"a","state":"idle"}),
+    ]
+    .iter()
+    .map(|x| crate::local_model::chat(x).unwrap())
+    .collect::<Vec<_>>();
+    let (h, v) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(width), px(760.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        v.client = Some(client);
+                        v.writer = Some(writer.clone());
+                        v.editor.update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                        v.state.loaded = true;
+                        v.state.list_loaded = true;
+                        v.state.projects_loaded = true;
+                        v.state.projects = Arc::new(
+                            crate::local_model::projects(&json!([
+                                {"id":"a","name":"Atlas","path":"/synthetic/a"},
+                                {"id":"b","name":format!("Boreal {}","projet très long ".repeat(3)),"path":"/synthetic/b"}
+                            ]))
+                            .unwrap(),
+                        );
+                        v.state.chats = Arc::new(chats);
+                        v.rebuild_nav(w, cx);
+                        v
+                    })
+                },
+            )
+        })
+        .unwrap();
+    cx.update_window(h, |_, w, _| w.activate_window()).unwrap();
+    settle(cx, h);
+    let name = |suffix: &str| format!("{}-{}-rows{suffix}.png", width as u32, mode.name());
+    capture(cx, h, captures, name(""));
+    // Every chat stays listed, including mission chats; the sidebar has no
+    // per-mission rows, only the Missions entry.
+    cx.update_window(h, |_, w, _| {
+        let rows = [
+            "synthetic",
+            "working2",
+            "jobs",
+            "stall",
+            "failed",
+            "coord",
+            "member",
+            "idle1",
+            "idle2",
+        ]
+        .map(|id| w.find(format!("chat-row-{id}")).bounds());
+        for row in &rows[1..] {
+            assert_eq!(row.size.height, rows[0].size.height, "one row rhythm");
+        }
+        for id in ["synthetic", "stall", "idle1"] {
+            let scope = SharedString::from(format!("chat-row-{id}"));
+            let title = w.within(scope.clone()).find("sidebar-chat-title").bounds();
+            let detail = w.within(scope.clone()).find("sidebar-chat-detail").bounds();
+            assert!(
+                detail.top() >= title.bottom() && detail.top() - title.bottom() <= px(3.),
+                "{id}: metadata sits right under its title"
+            );
+        }
+        let stray: Vec<String> = w
+            .within("chat-sidebar")
+            .elements()
+            .iter()
+            .flat_map(|e| {
+                e.path()
+                    .iter()
+                    .map(|id| format!("{id:?}"))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|id| id.to_lowercase().contains("mission") && !id.contains("nav-missions"))
+            .collect();
+        assert!(stray.is_empty(), "no per-mission sidebar rows: {stray:?}");
+        assert!(w.try_find("nav-missions").is_some());
+    })
+    .unwrap();
+    // Row actions: hidden at rest, shown on hover, hidden again after.
+    let menu = |cx: &mut HeadlessAppContext| {
+        let bounds = cx
+            .update_window(h, |_, w, _| w.find("chat-menu-idle1").bounds())
+            .unwrap();
+        let image = cx.capture_screenshot(h).unwrap();
+        painted(&image, bounds, image.width() as f32 / width)
+    };
+    assert_eq!(menu(cx), 0, "row actions hidden at rest");
+    cx.update_window(h, |_, w, cx| w.hover("chat-row-idle1", cx))
+        .unwrap();
+    settle(cx, h);
+    assert!(menu(cx) > 0, "row actions revealed on hover");
+    capture(cx, h, captures, name("-hover"));
+    cx.update_window(h, |_, w, cx| w.hover("nav-home", cx))
+        .unwrap();
+    settle(cx, h);
+    assert_eq!(menu(cx), 0, "row actions hide when the pointer leaves");
+    // Keyboard: arrows through the focused list reveal the selected row's actions.
+    let target = cx.update(|cx| v.read(cx).chats.read(cx).delegate().index("idle1").unwrap());
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| v.chats.update(cx, |l, cx| l.focus(w, cx)));
+        for _ in 0..12 {
+            if v.read(cx).chats.read(cx).delegate().selected == Some(target) {
+                break;
+            }
+            w.press("down", cx);
+        }
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(
+        cx.update(|cx| v.read(cx).chats.read(cx).delegate().selected),
+        Some(target)
+    );
+    assert!(
+        menu(cx) > 0,
+        "row actions revealed for the keyboard selection"
+    );
+    capture(cx, h, captures, name("-keyboard"));
+    // Reduced motion paints the same rows and corners without a clock.
+    cx.update(|cx| cx.set_reduce_motion(true));
+    cx.update_window(h, |_, w, cx| w.hover("nav-home", cx))
+        .unwrap();
+    settle(cx, h);
+    capture(cx, h, captures, name("-reduced"));
+    cx.update(|cx| cx.set_reduce_motion(false));
+    // Missions by Command-3 and by pointer keeps the project scope and the draft.
+    let draft = "Unsent sidebar draft 私 👩‍💻";
+    cx.update_window(h, |_, w, cx| {
+        let input = v.read(cx).editor.read(cx).shell_probe().0;
+        input.update(cx, |i, cx| i.focus(w, cx));
+        w.input(draft, cx);
+        v.update(cx, |v, cx| v.show_project("a".into(), w, cx));
+    })
+    .unwrap();
+    settle(cx, h);
+    for route in ["keyboard", "pointer"] {
+        cx.update_window(h, |_, w, cx| {
+            if route == "keyboard" {
+                w.press("secondary-3", cx);
+            } else {
+                w.click("nav-missions", cx);
+            }
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            let view = v.read(cx);
+            assert_eq!(view.page, Page::Missions, "{route} reaches the browser");
+            assert_eq!(
+                view.project_scope.as_deref(),
+                Some("a"),
+                "{route} keeps scope"
+            );
+            assert_eq!(view.chats.read(cx).delegate().project.as_deref(), Some("a"));
+            assert_eq!(
+                view.editor
+                    .read(cx)
+                    .shell_probe()
+                    .0
+                    .read(cx)
+                    .value()
+                    .as_ref(),
+                draft,
+                "{route} keeps the draft"
+            );
+            w.press("secondary-[", cx);
+        })
+        .unwrap();
+        settle(cx, h);
+        assert!(cx.update(|cx| matches!(&v.read(cx).page, Page::Project(id) if id == "a")));
+    }
+    println!(
+        "{}",
+        json!({"width":width,"mode":mode.name(),"sidebar_rows":true,"uniform_rows":true,"no_mission_enumeration":true,"hover_and_keyboard_reveal":true,"missions_keyboard_and_pointer_keep_scope_and_draft":true})
+    );
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
 }

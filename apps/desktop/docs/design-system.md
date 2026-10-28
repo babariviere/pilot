@@ -213,6 +213,18 @@ leading resource column. Compose, filters and chat menus share a trailing action
 column and 28pt targets. Long names truncate without shrinking body text; actual
 owners retain full accessible names. Search, filters, archive, navigation history,
 Usage, Settings and connection/recovery state keep their existing owners.
+
+A chat row is its title, then at most one quiet caption line right under it:
+the project (across all projects) and the state reason, never repeating the
+row's section heading (no "Working" under Working, "Archived" under Archived).
+The accessible name keeps the full state. Every row has the same height. The
+row's … menu overhangs a text-height slot, so it never pushes the caption away,
+and shows only on hover or on the keyboard-selected row while the list has
+keyboard focus; the right-click menu always reaches the same actions. The open
+row keeps its faint neutral fill. Missions is the sidebar's only mission entry
+(Command-3 opens the same browser); mission and member chats stay ordinary rows.
+`examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden
+native window with production dispatchers, cold (first traversal) against warm.
 The sidebar chat and project lists hide Kit's scrollbar in every scrollbar mode
 (`List::scrollbar_visible(false)`); wheel, keyboard selection and retained offsets
 still scroll them. Other panes keep their scrollbars.

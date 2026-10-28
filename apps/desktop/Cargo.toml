@@ -20,6 +20,10 @@ required-features = ["native-probes"]
 name = "image_scroll_native"
 required-features = ["native-probes"]
 
+[[example]]
+name = "sidebar_scroll_native"
+required-features = ["native-probes"]
+
 [[test]]
 name = "path_completion"
 harness = false

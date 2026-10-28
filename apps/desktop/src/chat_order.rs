@@ -216,6 +216,23 @@ impl Section {
     }
 }
 
+/// A sidebar row's state words: what the row shows, and the complete state for
+/// its accessible name. The shown words never repeat the row's section heading
+/// ("Working" under Working); quiet chats say nothing.
+pub(crate) fn row_state(chat: &Chat, section: Section) -> (String, String) {
+    let full: Vec<&str> = chat
+        .row_reason()
+        .into_iter()
+        .chain(chat.archived.then_some("Archived"))
+        .collect();
+    let shown: Vec<&str> = full
+        .iter()
+        .copied()
+        .filter(|s| *s != section.title())
+        .collect();
+    (shown.join(" · "), full.join(" · "))
+}
+
 /// Indices of `chats` (already in list order) per section, keeping only `keep`.
 pub(crate) fn sections(chats: &[Chat], keep: impl Fn(&Chat) -> bool) -> [Vec<usize>; 7] {
     let mut out: [Vec<usize>; 7] = Default::default();

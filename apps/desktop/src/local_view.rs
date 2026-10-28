@@ -101,6 +101,9 @@ pub(crate) mod settings_probe;
 #[path = "shell_probe.rs"]
 pub(crate) mod shell_probe;
 #[cfg(feature = "native-probes")]
+#[path = "sidebar_scroll_native.rs"]
+pub(crate) mod sidebar_scroll_native;
+#[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
@@ -193,6 +196,8 @@ struct ChatList {
     project: Option<String>,
     projects: Arc<Vec<crate::local_model::Project>>,
     corners: HashMap<String, Entity<CornerView>>,
+    /// The list's keyboard focus (its search field), for revealing row actions.
+    focus: Option<gpui_kit::FocusHandle>,
 }
 impl ChatList {
     fn filter(&mut self) {
@@ -277,6 +282,7 @@ impl ListDelegate for ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
         let chat = self.at(ix)?.clone();
+        let section = SECTIONS[ix.section];
         let spec = Spec::row(chat.signal, chat.background_work);
         let corner = self
             .corners
@@ -286,7 +292,8 @@ impl ListDelegate for ChatList {
         corner.update(cx, |view, cx| view.configure(spec, cx));
         let has_corner = corner.read(cx).has_corner(cx);
         // RowLine: project (only across all projects), then the state reason.
-        // Quiet chats say nothing rather than a raw "idle".
+        // Quiet chats say nothing rather than a raw "idle", and a row never
+        // repeats its section heading ("Working" under Working).
         let project = self
             .project
             .is_none()
@@ -294,19 +301,25 @@ impl ListDelegate for ChatList {
             .flatten()
             .and_then(|id| self.projects.iter().find(|p| &p.id == id))
             .map(|p| p.name.clone());
-        let reason = chat.row_reason().map(str::to_owned);
-        let state = reason
-            .into_iter()
-            .chain(chat.archived.then(|| "Archived".to_owned()))
-            .collect::<Vec<_>>()
-            .join(" · ");
+        let (state, full_state) = chat_order::row_state(&chat, section);
         let detail = project
             .iter()
             .cloned()
             .chain((!state.is_empty()).then(|| state.clone()))
             .collect::<Vec<_>>()
             .join(" · ");
-        let menu_shown = self.selected == Some(ix) || self.opened.as_ref() == Some(&chat.id);
+        // The accessible name keeps the complete state.
+        let spoken = project
+            .iter()
+            .cloned()
+            .chain((!full_state.is_empty()).then_some(full_state))
+            .collect::<Vec<_>>()
+            .join(" · ");
+        // Row actions appear on hover, or on the keyboard-selected row while
+        // the list has keyboard focus. The right-click menu reaches them always.
+        let menu_shown = self.selected == Some(ix)
+            && window.last_input_was_keyboard()
+            && self.focus.as_ref().is_some_and(|f| f.is_focused(window));
         let owner = self.action_owner.clone();
         let menu_owner = owner.clone();
         let button_owner = owner.clone();
@@ -318,10 +331,10 @@ impl ListDelegate for ChatList {
                 .pr_0()
                 .py_0()
                 .rounded(px(appearance::Radius::ROW))
-                .accessibility_label(SharedString::from(if detail.is_empty() {
+                .accessibility_label(SharedString::from(if spoken.is_empty() {
                     chat.title.clone()
                 } else {
-                    format!("{} · {detail}", chat.title)
+                    format!("{} · {spoken}", chat.title)
                 }))
                 .hover_fill(!has_corner)
                 .confirmed(self.opened.as_ref() == Some(&chat.id))
@@ -355,7 +368,7 @@ impl ListDelegate for ChatList {
                         )
                         .min_w_0()
                         .w_full()
-                        .gap_1()
+                        .gap_0p5()
                         .child(crate::dither_view::layer(corner))
                         .child(
                             div()
@@ -373,10 +386,15 @@ impl ListDelegate for ChatList {
                                         .child(SharedString::from(chat.title.clone())),
                                 )
                                 .child(
-                                    // Revealed on hover, keyboard selection or the open row; the
+                                    // Revealed on hover or keyboard selection; the
                                     // right-click menu and Tab reach it regardless.
+                                    // A text-height slot: the 2rem target overhangs it rather
+                                    // than pushing the metadata line away from the title.
                                     div()
                                         .flex_none()
+                                        .h(px(appearance::TextRole::BODY))
+                                        .flex()
+                                        .items_center()
                                         .opacity(if menu_shown { 1. } else { 0. })
                                         .group_hover("chat-row", |s| s.opacity(1.))
                                         .child(
@@ -1155,11 +1173,15 @@ impl LocalViewer {
                     project: None,
                     projects: Arc::new(Vec::new()),
                     corners: HashMap::new(),
+                    focus: None,
                 },
                 window,
                 cx,
             )
             .searchable(true)
+        });
+        chats.update(cx, |list, cx| {
+            list.delegate_mut().focus = Some(gpui_kit::Focusable::focus_handle(list, cx))
         });
         let subscription = cx.subscribe_in(&chats, window, |view, list, event, window, cx| {
             if let ListEvent::Confirm(ix) = event {

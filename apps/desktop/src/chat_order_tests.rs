@@ -203,3 +203,29 @@ fn recent_orders_by_activity_and_keeps_list_order_for_ties() {
     chats.sort_by(recent);
     assert_eq!(ids(&chats), ["b", "a", "pinned"]);
 }
+
+#[test]
+fn row_state_never_repeats_its_section_heading() {
+    let state = |v: Value| {
+        let chat = c(v);
+        row_state(&chat, Section::of(&chat))
+    };
+    let s = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+    assert_eq!(state(json!({"id":"w","state":"working"})), s("", "Working"));
+    assert_eq!(state(json!({"id":"q","state":"idle"})), s("", ""));
+    assert_eq!(
+        state(json!({"id":"a","state":"idle","archivedAt":1})),
+        s("", "Archived")
+    );
+    // Specific reasons stay visible, including under Needs you.
+    let (shown, full) = state(json!({"id":"f","state":"failed"}));
+    assert!(!shown.is_empty() && shown == full && shown != "Needs you");
+    let (shown, _) =
+        state(json!({"id":"s","state":"working","attentionReason":{"kind":"tool_stall"}}));
+    assert!(!shown.is_empty() && shown != "Working");
+    // Outside its own section, a state still shows (pinned working chat).
+    assert_eq!(
+        state(json!({"id":"p","state":"working","pinned":true})),
+        s("Working", "Working")
+    );
+}
