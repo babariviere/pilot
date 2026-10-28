@@ -266,6 +266,7 @@ mod attention;
 mod dither;
 mod dither_view;
 mod inbox;
+mod markdown_mermaid;
 mod native_mermaid;
 mod native_mermaid_view;
 mod visual_canvas_plan;
@@ -331,6 +332,8 @@ mod tool_diff_preview;
 pub use local_view::tool_diff_preview_probe::run_tool_diff_preview_probe;
 
 mod message_fold;
+#[cfg(feature = "native-probes")]
+pub use local_view::markdown_mermaid_probe::run_markdown_mermaid_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::message_fold_probe::run_message_fold_probe;
 

@@ -35,6 +35,7 @@ pub(crate) struct Element {
     epoch: u64,
     scale: f32,
     reader: bool,
+    fence: bool,
 }
 impl Element {
     pub(crate) fn new(id: String, prepared: Arc<Prepared>) -> Self {
@@ -44,6 +45,7 @@ impl Element {
             epoch: 0,
             scale: 1.,
             reader: false,
+            fence: false,
         }
     }
     pub(crate) fn scale(mut self, scale: f32) -> Self {
@@ -55,6 +57,14 @@ impl Element {
         self.epoch = epoch;
         self
     }
+    /// A Markdown fence inside a message: natural height for diagram and
+    /// source alike (the conversation scrolls), with its actions at the
+    /// bottom corner, clear of the message's own top-corner Copy source.
+    pub(crate) fn fence(mut self) -> Self {
+        self.reader = true;
+        self.fence = true;
+        self
+    }
 }
 impl RenderOnce for Element {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
@@ -64,6 +74,7 @@ impl RenderOnce for Element {
             format!("{}:{}:{}", self.id, self.epoch, self.prepared.source).into();
         let scale = self.scale;
         let reader = self.reader;
+        let fence = self.fence;
         let view = window.use_keyed_state(key, cx, |_, cx| View {
             id: self.id,
             prepared: self.prepared,
@@ -72,6 +83,7 @@ impl RenderOnce for Element {
             focus: cx.focus_handle(),
             scale,
             reader,
+            fence,
         });
         view.update(cx, |v, cx| {
             if v.scale != scale || v.reader != reader {
@@ -91,6 +103,7 @@ struct View {
     focus: FocusHandle,
     scale: f32,
     reader: bool,
+    fence: bool,
 }
 impl View {
     fn key(&self, suffix: &str) -> SharedString {
@@ -230,15 +243,19 @@ impl View {
     }
 }
 impl Render for View {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The reader toolbar already names the artifact. This diagram's own
         // source toggle and copy are quiet icons, revealed on hover, while its
-        // source is shown, or when the diagram failed to render.
+        // source is shown, while keyboard focus is inside it, or when the
+        // diagram failed to render.
         let group = SharedString::from(format!("{}-group", self.id));
-        let pinned = self.source || self.prepared.diagram.is_err();
+        let pinned = self.source
+            || self.prepared.diagram.is_err()
+            || self.focus.contains_focused(window, cx);
         let mut header = div()
             .absolute()
-            .top_1()
+            .when(self.fence, |h| h.bottom_1())
+            .when(!self.fence, |h| h.top_1())
             .right_1()
             .h_flex()
             .items_center()
@@ -324,7 +341,8 @@ impl Render for View {
                 .overflow_scroll()
                 .min_w_0()
                 .w_full()
-                .h(px(height))
+                .when(!self.fence, |v| v.h(px(height)))
+                .when(self.fence, |v| v.pb_8())
                 .bg(ui::Surface::Code.color(cx))
                 .p_3()
                 .font_family(cx.theme().mono_font_family.clone())
@@ -347,7 +365,7 @@ impl Render for View {
                     .id(self.key("error"))
                     .test_support()
                     .aria_label(reason.heading())
-                    .pr(px(72.))
+                    .when(!self.fence, |e| e.pr(px(72.)))
                     .child(ui::Notice::new(reason.heading()).tone(tone).detail(
                         SharedString::from(format!(
                             "{} Its source is shown below.",

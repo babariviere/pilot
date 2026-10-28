@@ -35,8 +35,28 @@ Every non-comment statement must be consumed completely. Unknown/partial syntax,
 styles, classes, subgraphs, directives, actions, other diagram types and graph
 complexity beyond limits show the exact source with a local native-only reason.
 They never render a deceptively incomplete diagram or disable sibling controls.
-Markdown Mermaid fences are **not integrated in this slice**. The parser/plan and
-native element are reusable for a later separately scoped fence hook.
+
+## Markdown fences
+
+Ordinary Markdown message rows render closed ```mermaid (or ~~~mermaid,
+language token in any case) fences through the same parser, plan and native
+element, via the Kit Markdown block-parser hook in `src/markdown_mermaid.rs`.
+Preparation runs inside the existing Markdown parse: on its background parser
+for streamed appends and replacements above 4 KiB, and synchronously only for
+the Kit's already bounded small replacements. Rendering only paints the prepared
+plan. An unclosed fence (a message still streaming) stays an ordinary code
+block with its exact source until its closing fence arrives. Rows with no fence
+marker do not install the hook, so prose never reparses for it.
+
+A fence diagram and its source both take their natural height; the conversation
+scrolls, with no inner vertical cap. Wide diagrams scroll horizontally. Its
+Source/Copy actions are hover/focus revealed at the bottom corner, clear of the
+message's own Copy source. The fence is one atomic selection block: message
+selection copies its exact Mermaid source, and message Copy source still copies
+the whole message. Unsupported/invalid/limit fences show the same explicit
+reason and exact source. Element state is keyed by owner row, fence offset and
+exact source, so a revised fence starts fresh and unmounting retires it. Find
+keeps matching message source; it does not highlight inside diagram labels.
 
 ## Limits and ownership
 

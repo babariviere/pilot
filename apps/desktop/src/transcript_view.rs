@@ -798,15 +798,19 @@ impl TranscriptView {
             })
             .when(!user, |b| b.w_full())
             .child(match &self.text_states[ix] {
-                Some(state) => crate::typography::rich(
-                    TextView::new(state),
-                    crate::typography::current(cx),
-                    if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
-                        crate::typography::Content::PlainChat
-                    } else {
-                        crate::typography::Content::Chat
-                    },
-                    cx,
+                Some(state) => crate::markdown_mermaid::install(
+                    crate::typography::rich(
+                        TextView::new(state),
+                        crate::typography::current(cx),
+                        if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
+                            crate::typography::Content::PlainChat
+                        } else {
+                            crate::typography::Content::Chat
+                        },
+                        cx,
+                    ),
+                    row.id(),
+                    row.source(),
                 )
                 .selectable(true)
                 .scrollable(false)

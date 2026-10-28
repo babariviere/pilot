@@ -14,5 +14,6 @@ fn main() {
     pilot_desktop::run_native_mermaid_probe(&mut cx);
     if std::env::var_os("PILOT_MERMAID_BASELINE").is_none() {
         pilot_desktop::run_native_mermaid_root_probe(&mut cx);
+        pilot_desktop::run_markdown_mermaid_probe(&mut cx);
     }
 }

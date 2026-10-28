@@ -2723,5 +2723,9 @@ pub(crate) mod tool_diff_preview_probe;
 pub(crate) mod message_fold_probe;
 
 #[cfg(feature = "native-probes")]
+#[path = "markdown_mermaid_probe.rs"]
+pub(crate) mod markdown_mermaid_probe;
+
+#[cfg(feature = "native-probes")]
 #[path = "new_chat_view_probe.rs"]
 pub(crate) mod new_chat_view_probe;
