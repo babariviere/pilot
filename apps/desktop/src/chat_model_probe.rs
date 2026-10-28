@@ -248,7 +248,13 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                         .unwrap();
                 }
                 cx.update_window(h, |_, w, cx| {
-                    assert!(w.find("chat-model-restriction").bounds().size.height > px(0.));
+                    // A held chat is explained by its subscription row, which owns its recovery.
+                    let reason = if extra == Some("subscriptionPause") {
+                        "subscription-limit"
+                    } else {
+                        "chat-model-restriction"
+                    };
+                    assert!(w.find(reason).bounds().size.height > px(0.));
                     w.click("chat-model", cx);
                 })
                 .unwrap();

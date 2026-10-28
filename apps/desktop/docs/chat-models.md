@@ -42,8 +42,8 @@ opt-in passive endpoint/capability, without changing healthy legacy callers.
   idle/no-queued-work guard remains authoritative. The existing endpoint has no CAS;
   preflight is not misrepresented as an atomic model-version condition.
 - Continued, archived, diagnostic, Control, unsupported failed, paused, running/queued, private-write
-  fenced, pending-delivery and marked-input contexts do not admit a selection. Subscription
-  continuation is unavailable here: no continue-model, replacement chat or message/start.
+  fenced, pending-delivery and marked-input contexts do not admit a selection. A pick while
+  held at a usage limit opens the explicit [continuation](subscription-limit.md) instead.
 - A successful, matching SessionSummary acknowledges the model change. Lost, malformed
   or rejected responses after attempted delivery retain the exact immutable choice in a
   bounded Unknown journal. No automatic retry, restart replay or GET-as-receipt inference.

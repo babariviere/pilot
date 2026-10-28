@@ -247,6 +247,7 @@ fn checked_model_is_noop_new_model_omits_old_thinking_and_old_widget_cannot_chan
                         updated_at: 2,
                         allowed: true,
                         blocked: None,
+                        ..Default::default()
                     }),
                 });
                 e.accept_model_action(w, cx);

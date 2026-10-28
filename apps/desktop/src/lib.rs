@@ -17,6 +17,7 @@ mod path_completion_reader;
 pub use local_view::path_completion_probe::run_path_completion_probe;
 mod session_todos;
 mod session_todos_view;
+mod subscription_pause;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_todos_probe::run_session_todos_probe;
 mod conversation_links;
@@ -171,6 +172,8 @@ mod settings_view;
 mod settings_worker;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_model_probe::run_chat_model_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
 #[cfg(feature = "native-probes")]

@@ -298,3 +298,177 @@ async fn catalog_cwd_is_exact_encoded_and_response_allocation_and_fixture_teardo
         );
     }
 }
+#[test]
+fn forced_pause_permits_ordinary_change_and_only_an_unforced_pause_continues() {
+    let s = Server::start(Mode::Paused);
+    let mut seen = s.seen.lock().unwrap();
+    let held = SessionModel::read(&seen.session());
+    assert!(!held.allowed && held.blocked == Some(PAUSED));
+    assert!(held.continuable && !held.pause.as_ref().unwrap().forced);
+    seen.forced = true;
+    let forced = SessionModel::read(&seen.session());
+    assert!(forced.allowed && !forced.continuable && forced.pause.unwrap().forced);
+    seen.forced = false;
+    for (key, value) in [
+        ("state", serde_json::json!("failed")),
+        ("archivedAt", serde_json::json!(1)),
+        ("continuationPending", serde_json::json!(true)),
+        ("sleepPaused", serde_json::json!(true)),
+        ("control", serde_json::json!(true)),
+    ] {
+        let mut v = seen.session();
+        v[key] = value;
+        assert!(!SessionModel::read(&v).continuable, "{key}");
+    }
+}
+fn force(value: bool) -> Action {
+    Action::Force {
+        target: attempt().target,
+        force: value,
+    }
+}
+#[tokio::test]
+async fn force_posts_once_per_change_and_never_resends_a_lost_reply() {
+    let s = Server::start(Mode::Paused);
+    let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+    let c = client();
+    let Outcome::Acknowledged(next) =
+        execute(&c, &s.options, &mut store, force(true), |_| {}).await
+    else {
+        panic!("Force work acknowledged");
+    };
+    assert!(next.pause.unwrap().forced && next.allowed);
+    assert_eq!(s.posts(), 1);
+    // Already forced: a fresh read observes it and nothing is posted.
+    assert!(matches!(
+        execute(&c, &s.options, &mut store, force(true), |_| {}).await,
+        Outcome::Observed(_)
+    ));
+    assert_eq!(s.posts(), 1);
+    let Outcome::Acknowledged(next) =
+        execute(&c, &s.options, &mut store, force(false), |_| {}).await
+    else {
+        panic!("Pause at limit acknowledged");
+    };
+    assert!(!next.pause.unwrap().forced);
+    {
+        let seen = s.seen.lock().unwrap();
+        let posts: Vec<_> = seen
+            .requests
+            .iter()
+            .filter(|(m, _, _)| m == "POST")
+            .collect();
+        assert_eq!(posts.len(), 2);
+        assert!(
+            posts
+                .iter()
+                .all(|(_, p, _)| p == "/api/sessions/source/subscription-force")
+        );
+        assert_eq!(posts[0].2, serde_json::json!({"force": true}));
+        assert_eq!(posts[1].2, serde_json::json!({"force": false}));
+    }
+    assert!(
+        store.book.model_changes.is_empty(),
+        "Force never fences Send"
+    );
+    for (mode, posts) in [
+        (Mode::Accept, 0),
+        (Mode::PausedRefused, 1),
+        (Mode::PausedLost, 1),
+    ] {
+        let s = Server::start(mode);
+        let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+        let r = execute(&c, &s.options, &mut store, force(true), |_| {}).await;
+        match mode {
+            Mode::Accept => assert!(
+                matches!(r, Outcome::Observed(_)),
+                "no pause, nothing to force"
+            ),
+            Mode::PausedRefused => assert!(matches!(r, Outcome::Refused(_))),
+            _ => assert!(matches!(r, Outcome::Unknown(_))),
+        }
+        assert_eq!(s.posts(), posts, "{mode:?}");
+    }
+}
+fn continuation(model: &str) -> Action {
+    let mut a = attempt();
+    a.id = format!("continue-{}", model.replace('/', "-"));
+    a.choice.model = model.into();
+    Action::Continue(a)
+}
+#[tokio::test]
+async fn continue_model_keeps_the_chat_or_opens_the_replacement_once() {
+    let c = client();
+    // Same provider: this chat switches model in place, still held.
+    let s = Server::start(Mode::Paused);
+    let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+    let r = execute(&c, &s.options, &mut store, continuation("p/b"), |store| {
+        assert!(store.book.model_changes.contains_key("source"))
+    })
+    .await;
+    let Outcome::Acknowledged(next) = r else {
+        panic!("same-chat continuation acknowledged");
+    };
+    assert_eq!(next.model.as_deref(), Some("p/b"));
+    assert!(next.pause.is_some());
+    assert!(store.book.model_changes.is_empty());
+    {
+        let seen = s.seen.lock().unwrap();
+        let (_, path, body) = seen.requests.iter().find(|(m, _, _)| m == "POST").unwrap();
+        assert_eq!(path, "/api/sessions/source/continue-model");
+        assert_eq!(body, &serde_json::json!({"model": "p/b"}));
+    }
+    assert_eq!(s.posts(), 1);
+    // Another provider: the replacement chat is returned to open.
+    let s = Server::start(Mode::Paused);
+    let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+    let Outcome::Continued(next) =
+        execute(&c, &s.options, &mut store, continuation("q/c"), |_| {}).await
+    else {
+        panic!("replacement chat");
+    };
+    assert_eq!(next.id, "next");
+    assert!(store.book.model_changes.is_empty());
+    assert_eq!(s.posts(), 1);
+    assert_eq!(
+        s.seen.lock().unwrap().model,
+        "p/a",
+        "the source keeps its model"
+    );
+    // Refused settles; a lost reply stays retained across restart, never resent.
+    for mode in [Mode::PausedRefused, Mode::PausedLost] {
+        let s = Server::start(mode);
+        let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+        let r = execute(&c, &s.options, &mut store, continuation("q/c"), |_| {}).await;
+        assert_eq!(s.posts(), 1);
+        if matches!(mode, Mode::PausedRefused) {
+            assert!(matches!(r, Outcome::Refused(_)));
+            assert!(store.book.model_changes.is_empty());
+        } else {
+            assert!(matches!(r, Outcome::Unknown(_)));
+            drop(store);
+            let store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+            assert_eq!(store.book.model_changes["source"].choice.model, "q/c");
+        }
+    }
+    // Not paused, forced, or out of scope: refused before any POST.
+    for (mode, forced, model) in [
+        (Mode::Accept, false, "p/b"),
+        (Mode::Paused, true, "p/b"),
+        (Mode::Paused, false, "z/unknown"),
+    ] {
+        let s = Server::start(mode);
+        s.seen.lock().unwrap().forced = forced;
+        let mut store = Store::open(s.home.join("state"), s.options.host()).unwrap();
+        let r = execute(&c, &s.options, &mut store, continuation(model), |_| {
+            panic!("must not admit {mode:?}")
+        })
+        .await;
+        assert!(
+            matches!(r, Outcome::Refused(_)),
+            "{mode:?} {forced} {model}"
+        );
+        assert_eq!(s.posts(), 0);
+        assert!(store.book.model_changes.is_empty());
+    }
+}

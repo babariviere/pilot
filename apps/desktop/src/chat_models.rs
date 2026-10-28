@@ -1,4 +1,5 @@
-//! Scoped Local catalog and explicit idle-only selection. Never continue/spawn/send.
+//! Scoped Local catalog and explicit idle-only selection, plus the explicit
+//! subscription-limit Force work and continue-model actions. Never spawn/send.
 use crate::{
     LocalOptions,
     delivery_store::{Failure, Store, token},
@@ -148,12 +149,28 @@ pub(crate) struct SessionModel {
     pub(crate) failed_source: Option<FailedSource>,
     pub(crate) allowed: bool,
     pub(crate) blocked: Option<&'static str>,
+    /// pilotd's subscription hold (or forced work past it), as reported.
+    pub(crate) pause: Option<crate::subscription_pause::Pause>,
+    /// pilotd accepts continue-model: an interactive, healthy chat under an unforced pause.
+    pub(crate) continuable: bool,
 }
+/// A held chat changes model only through the explicit continuation.
+pub(crate) const PAUSED: &str =
+    "This chat is paused at a subscription limit. Continue with another model or force work.";
 impl SessionModel {
     pub(crate) fn read(v: &Value) -> Self {
         let next = &v["nextAttemptModel"];
         let choice = if next.is_object() { next } else { v };
+        let pause = crate::subscription_pause::Pause::read(v);
+        let failed = v["state"] == "failed" || v["outcome"] == "failed" || !v["failure"].is_null();
         Self {
+            continuable: pause.as_ref().is_some_and(|p| !p.forced)
+                && crate::local_model::interactive_local(v)
+                && v["continuationPending"] != true
+                && !failed
+                && v["sleepPaused"] != true
+                && v["offlinePaused"] != true,
+            pause,
             failed_source: failure_source(v),
             model: choice["model"]
                 .as_str()
@@ -180,10 +197,9 @@ impl SessionModel {
             Some(
                 "This failure does not support a safe next-attempt model save. It has not been retried.",
             )
-        } else if !v["subscriptionPause"].is_null() {
-            Some(
-                "This chat is paused at a subscription limit. A model change here will not continue it or create another chat.",
-            )
+        } else if !v["subscriptionPause"].is_null() && v["subscriptionPause"]["forced"] != true {
+            // Forced work is not held, so the ordinary idle-only change applies.
+            Some(PAUSED)
         } else if v["sleepPaused"] == true || v["offlinePaused"] == true {
             Some(
                 "Model changes are unavailable while this chat is paused for sleep or connectivity.",
@@ -253,7 +269,17 @@ impl Attempt {
 pub(crate) enum Action {
     Submit(Attempt),
     Inspect(Target),
-    Acknowledge { session: String, id: String },
+    Acknowledge {
+        session: String,
+        id: String,
+    },
+    /// POST subscription-force: Force work past the limit, or Pause at limit again.
+    Force {
+        target: Target,
+        force: bool,
+    },
+    /// POST continue-model. Retained like a model switch until acknowledged.
+    Continue(Attempt),
 }
 #[derive(Clone)]
 pub(crate) enum Outcome {
@@ -263,6 +289,8 @@ pub(crate) enum Outcome {
     Acknowledged(SessionModel),
     Observed(SessionModel),
     Dismissed(SessionModel),
+    /// Work moved to another provider's new chat. The source chat is now read-only.
+    Continued(Box<crate::local_model::Chat>),
 }
 #[derive(Clone)]
 pub(crate) struct Reply {
@@ -288,6 +316,122 @@ async fn body(mut response: reqwest::Response) -> Result<Value, Failure> {
         bytes.extend_from_slice(&c);
     }
     serde_json::from_slice(&bytes).map_err(|_| "Model response is malformed.")
+}
+async fn post(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    session: &str,
+    route: &str,
+    payload: &Value,
+) -> Result<reqwest::Response, ()> {
+    let bytes = serde_json::to_vec(payload).map_err(|_| ())?;
+    client
+        .post(format!(
+            "{}/api/sessions/{session}/{route}",
+            options.loopback()
+        ))
+        .header("Content-Type", "application/json")
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|_| ())
+}
+/// One subscription-force POST after a fresh identity read. Setting the same value
+/// again is harmless, so a lost reply is reported, never resent.
+async fn force(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    target: &Target,
+    value: bool,
+) -> Outcome {
+    let current = match session(client, options, target).await {
+        Ok(s) => s,
+        Err(e) => return Outcome::Refused(e),
+    };
+    if current.pause.as_ref().is_none_or(|p| p.forced == value) {
+        return Outcome::Observed(current);
+    }
+    let response = post(
+        client,
+        options,
+        &target.session,
+        "subscription-force",
+        &serde_json::json!({ "force": value }),
+    )
+    .await;
+    match response {
+        Ok(r) if r.status() == reqwest::StatusCode::OK => match body(r).await {
+            Ok(v) if v["id"] == target.session && v["cwd"] == target.cwd => {
+                Outcome::Acknowledged(SessionModel::read(&v))
+            }
+            _ => Outcome::Unknown(
+                "Couldn't confirm the change. Nothing was resent; this chat updates when Local reports it.",
+            ),
+        },
+        Ok(r) if r.status().is_client_error() => Outcome::Refused(
+            "Local refused the change. This chat may be archived, continued or changing its model.",
+        ),
+        _ => Outcome::Unknown(
+            "Couldn't confirm the change. Nothing was resent; this chat updates when Local reports it.",
+        ),
+    }
+}
+/// One continue-model POST, retained like a model switch so a lost reply fences
+/// Send until it is inspected. A refusal (4xx) changed nothing and settles it.
+async fn continue_model(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    store: &mut Store,
+    attempt: Attempt,
+    prepared: impl FnOnce(&Store),
+) -> Outcome {
+    let target = &attempt.target;
+    let pre = async {
+        attempt.validate(&target.session)?;
+        let current = session(client, options, target).await?;
+        if !current.continuable || current.model != target.model {
+            return Err("This chat is no longer held at a usage limit, or its model changed. Nothing was continued.");
+        }
+        if !catalog(client, options, &target.cwd).await?.admits(&attempt.choice) {
+            return Err("This model is no longer in this chat's scope. Refresh models.");
+        }
+        store.prepare_model_change(attempt.clone())
+    }
+    .await;
+    if let Err(e) = pre {
+        return Outcome::Refused(e);
+    }
+    prepared(store);
+    let payload = serde_json::to_value(&attempt.choice).expect("serializable choice");
+    let lost = "Couldn't confirm the continuation. Nothing was resent; inspect this chat before acting again.";
+    let value = match post(client, options, &target.session, "continue-model", &payload).await {
+        Ok(r) if r.status() == reqwest::StatusCode::OK => match body(r).await {
+            Ok(v) => v,
+            Err(_) => return Outcome::Unknown(lost),
+        },
+        Ok(r) if r.status().is_client_error() => {
+            let _ = store.finish_model_change(&target.session, &attempt.id);
+            return Outcome::Refused(
+                "Local couldn't continue this chat now. It may be busy, running jobs or no longer paused. Nothing changed.",
+            );
+        }
+        _ => return Outcome::Unknown(lost),
+    };
+    if value["id"] == target.session {
+        let actual = SessionModel::read(&value);
+        if value["cwd"] != target.cwd || actual.model.as_deref() != Some(&attempt.choice.model) {
+            return Outcome::Unknown(lost);
+        }
+        let _ = store.finish_model_change(&target.session, &attempt.id);
+        return Outcome::Acknowledged(actual);
+    }
+    match crate::local_model::chat(&value) {
+        Some(next) => {
+            let _ = store.finish_model_change(&target.session, &attempt.id);
+            Outcome::Continued(Box::new(next))
+        }
+        None => Outcome::Unknown(lost),
+    }
 }
 pub(crate) async fn catalog(
     client: &reqwest::Client,
@@ -348,6 +492,13 @@ pub(crate) async fn execute(
     prepared: impl FnOnce(&Store),
 ) -> Outcome {
     match action {
+        Action::Force {
+            target,
+            force: value,
+        } => force(client, options, &target, value).await,
+        Action::Continue(attempt) => {
+            continue_model(client, options, store, attempt, prepared).await
+        }
         Action::Inspect(target) => match session(client, options, &target).await {
             Ok(s) => Outcome::Observed(s),
             Err(e) => Outcome::Refused(e),

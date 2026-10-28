@@ -14,6 +14,8 @@ use gpui_kit::{
     prelude::FluentBuilder,
 };
 use std::sync::Arc;
+#[path = "chat_subscription.rs"]
+mod subscription;
 #[cfg(test)]
 #[path = "chat_model_picker_tests.rs"]
 mod tests;
@@ -67,7 +69,8 @@ pub(super) struct Picker {
     loading: bool,
     models: Entity<SelectState<SearchableVec<Item>>>,
     thinking: Entity<SelectState<SearchableVec<Item>>>,
-    synced: Option<(Option<ModelChoice>, bool, bool, bool)>,
+    /// Choice, new draft, editable, failed, continuable: the inputs items were built from.
+    synced: Option<(Option<ModelChoice>, bool, bool, bool, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 pub(super) struct Models {
@@ -83,6 +86,7 @@ pub(super) struct Models {
     error: Option<&'static str>,
     confirm_ack: bool,
     inspection: Option<String>,
+    continuation: Option<subscription::Continuation>,
 }
 impl ChatEditor {
     #[cfg(feature = "native-probes")]
@@ -135,6 +139,7 @@ impl ChatEditor {
             error: None,
             confirm_ack: false,
             inspection: None,
+            continuation: None,
         });
         self.sync_models(w, cx);
     }
@@ -163,11 +168,20 @@ impl ChatEditor {
                     .picker
                     .as_ref()
                     .and_then(|p| p.synced.as_ref())
-                    .is_some_and(|(_, _, old_editable, _)| *old_editable == editable)
+                    .is_some_and(|(_, _, old_editable, _, _)| *old_editable == editable)
             {
                 return;
             }
             models.current = next;
+            // A continuation belongs to one held chat; it closes once that changes.
+            if models.continuation.as_ref().is_some_and(|c| {
+                models
+                    .current
+                    .as_ref()
+                    .is_none_or(|(id, _, s)| !s.continuable || !c.is_for(id))
+            }) {
+                models.continuation = None;
+            }
         }
         self.sync_models(w, cx);
         cx.notify();
@@ -228,15 +242,16 @@ impl ChatEditor {
         }
     }
     pub(super) fn model_query_marked(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.models
-            .as_ref()
-            .and_then(|m| m.picker.as_ref())
-            .is_some_and(|p| {
-                [&p.models, &p.thinking].into_iter().any(|s| {
-                    s.read(cx)
-                        .query_input(cx)
-                        .update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
-                })
+        let picker = self.models.as_ref().and_then(|m| m.picker.as_ref());
+        let continuation = self.models.as_ref().and_then(|m| m.continuation.as_ref());
+        picker
+            .into_iter()
+            .flat_map(|p| [&p.models, &p.thinking])
+            .chain(continuation.map(|c| c.select()))
+            .any(|s| {
+                s.read(cx)
+                    .query_input(cx)
+                    .update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
             })
     }
     fn model_query_busy(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -469,6 +484,7 @@ impl ChatEditor {
             return;
         }
         let editable = self.can_choose_model();
+        let continuable = self.can_continue();
         let failed = self
             .model_target()
             .is_some_and(|t| t.failed_source.is_some());
@@ -483,7 +499,7 @@ impl ChatEditor {
         let Some(c) = &p.catalog else {
             return;
         };
-        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable, failed)) {
+        if p.synced.as_ref() == Some(&(choice.clone(), is_new, editable, failed, continuable)) {
             return;
         }
         let mut items: Vec<_> = c
@@ -493,7 +509,8 @@ impl ChatEditor {
                 id: m.id.clone(),
                 title: m.name.clone().into(),
                 detail: m.id.clone().into(),
-                disabled: !editable,
+                // While held at a limit, a pick opens the continuation instead.
+                disabled: !editable && !continuable,
                 search: if m.search_key.is_empty() {
                     format!("{} {}", m.name, m.id).to_lowercase().into()
                 } else {
@@ -577,7 +594,7 @@ impl ChatEditor {
             s.set_items(SearchableVec::new(levels), w, cx);
             s.set_selected_value(&selected, w, cx);
         });
-        p.synced = Some((choice, is_new, editable, failed));
+        p.synced = Some((choice, is_new, editable, failed, continuable));
     }
     fn model_uncertain(&self) -> Option<&chat_models::Attempt> {
         let id = self.selected.as_deref()?.strip_prefix("chat:")?;
@@ -681,6 +698,27 @@ impl ChatEditor {
                 self.refresh_models(w, cx);
                 self.sync_model_inputs(w, cx);
             }
+            return;
+        }
+        if thinking.is_none()
+            && !source.key.starts_with("new:")
+            && self.model_choice().is_none_or(|c| c.model != id)
+            && self.can_continue()
+        {
+            if self.model_scope().as_ref() == Some(source)
+                && self
+                    .models
+                    .as_ref()
+                    .and_then(|m| m.picker.as_ref())
+                    .is_some_and(|p| p.epoch == epoch)
+            {
+                self.begin_continuation(Some(id.to_string()), w, cx);
+            }
+            // The chip keeps showing the actual model until the continuation is confirmed.
+            if let Some(p) = self.models.as_mut().and_then(|m| m.picker.as_mut()) {
+                p.synced = None;
+            }
+            self.sync_model_inputs(w, cx);
             return;
         }
         if !self.can_choose_model() {
@@ -832,15 +870,27 @@ impl ChatEditor {
         }
         match reply.outcome {
             chat_models::Outcome::Pending => return,
-            chat_models::Outcome::Unknown(e) | chat_models::Outcome::Refused(e) => {
+            chat_models::Outcome::Refused(e) => {
                 m.busy = false;
                 m.error = Some(e);
+            }
+            chat_models::Outcome::Unknown(e) => {
+                m.busy = false;
+                m.error = Some(e);
+                m.continuation = None;
+            }
+            chat_models::Outcome::Continued(next) => {
+                m.busy = false;
+                m.error = None;
+                m.continuation = None;
+                cx.emit(EditorEvent::OpenContinued(next));
             }
             chat_models::Outcome::Acknowledged(next)
             | chat_models::Outcome::Observed(next)
             | chat_models::Outcome::Dismissed(next) => {
                 m.busy = false;
                 m.error = None;
+                m.continuation = None;
                 m.inspection = Some(reply.session.clone());
                 if let Some((id, _, old)) = &mut m.current
                     && *id == reply.session
@@ -978,7 +1028,9 @@ impl ChatEditor {
         {
             return None;
         }
+        // The subscription row explains a held chat and offers its actions.
         self.model_restriction()
+            .filter(|reason| *reason != chat_models::PAUSED)
     }
     pub(super) fn has_model_notice(&self) -> bool {
         self.model_target()

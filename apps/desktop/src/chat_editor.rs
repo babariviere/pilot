@@ -59,6 +59,8 @@ pub(crate) enum EditorEvent {
     StopRequested {
         key: String,
     },
+    /// Continue with another model moved this chat's work to a new chat.
+    OpenContinued(Box<crate::local_model::Chat>),
 }
 
 pub(crate) struct ChatEditor {
@@ -1212,6 +1214,9 @@ impl Render for ChatEditor {
         // its tray. Keep every existing notice/Unknown guard and action owner.
         let mut recovery = Vec::new();
         recovery.extend(self.question_recovery(cx));
+        if !is_new {
+            recovery.extend(self.subscription_row(cx));
+        }
         if self.models.is_some() && self.has_model_notice() {
             recovery.push(self.model_notices(cx).into_any_element());
         }

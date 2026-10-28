@@ -27,6 +27,8 @@ pub(crate) enum Mode {
     Busy,
     Queued,
     Paused,
+    PausedLost,
+    PausedRefused,
     Stale,
     ScopeChanged,
     Empty,
@@ -42,6 +44,10 @@ pub(crate) struct Seen {
     pub(crate) clock: u64,
     pub(crate) next: Option<Value>,
     pub(crate) requests: Vec<(String, String, Value)>,
+    /// Subscription Force work state while paused.
+    pub(crate) forced: bool,
+    /// continue-model moved the work to the "next" chat.
+    pub(crate) continued: bool,
 }
 pub(crate) struct Server {
     pub(crate) options: LocalOptions,
@@ -60,7 +66,10 @@ pub(crate) fn catalog() -> Value {
 }
 impl Seen {
     pub(crate) fn session(&self) -> Value {
-        let mut v = json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if matches!(self.mode,Mode::Paused){json!({"forced":false})}else{Value::Null}});
+        let mut v = json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if self.paused(){json!({"forced":self.forced,"windows":[{"provider":"anthropic","label":"5h","usedPercent":97,"resetsAt":"2099-01-01T18:00:00Z"}]})}else{Value::Null}});
+        if self.continued {
+            v["continuedTo"] = json!("next");
+        }
         if matches!(
             self.mode,
             Mode::FailedPassive
@@ -80,6 +89,16 @@ impl Seen {
             }
         }
         v
+    }
+    pub(crate) fn paused(&self) -> bool {
+        matches!(
+            self.mode,
+            Mode::Paused | Mode::PausedLost | Mode::PausedRefused
+        ) && !self.continued
+    }
+    /// The replacement chat another provider's continuation starts.
+    pub(crate) fn continued_chat(&self, model: &str) -> Value {
+        json!({"id":"next","cwd":"/synthetic/project","mode":"ask","state":"starting","working":true,"title":"Continued 日本語","model":model,"updatedAt":self.clock})
     }
 }
 impl Server {
@@ -104,6 +123,8 @@ impl Server {
             clock: 1,
             next: None,
             requests: vec![],
+            forced: false,
+            continued: false,
         }));
         let record = seen.clone();
         let stop = Arc::new(AtomicBool::new(false));
@@ -222,6 +243,49 @@ impl Server {
                             ack["operationId"] = json!("foreign-operation");
                         }
                         (200, ack.to_string(), false)
+                    } else if method == "POST" && path == "/api/sessions/source/subscription-force"
+                    {
+                        assert_eq!(payload.as_object().unwrap().len(), 1);
+                        let force = payload["force"].as_bool().unwrap();
+                        if matches!(s.mode, Mode::PausedRefused) {
+                            (409, "{}".into(), false)
+                        } else {
+                            s.forced = force;
+                            if matches!(s.mode, Mode::PausedLost) {
+                                continue;
+                            }
+                            (200, s.session().to_string(), false)
+                        }
+                    } else if method == "POST" && path == "/api/sessions/source/continue-model" {
+                        assert!(
+                            payload
+                                .as_object()
+                                .unwrap()
+                                .keys()
+                                .all(|k| k == "model" || k == "thinking")
+                        );
+                        if matches!(s.mode, Mode::PausedRefused) || !s.paused() || s.forced {
+                            (409, "{}".into(), false)
+                        } else {
+                            let target = payload["model"].as_str().unwrap().to_string();
+                            let same = target.split('/').next() == s.model.split('/').next();
+                            s.clock += 1;
+                            if same {
+                                s.model = target.clone();
+                                s.thinking = "low".into();
+                            } else {
+                                s.continued = true;
+                            }
+                            if matches!(s.mode, Mode::PausedLost) {
+                                continue;
+                            }
+                            let reply = if same {
+                                s.session()
+                            } else {
+                                s.continued_chat(&target)
+                            };
+                            (200, reply.to_string(), false)
+                        }
                     } else if method == "POST" && path == "/api/sessions/source/model" {
                         assert!(payload["model"].is_string());
                         assert!(

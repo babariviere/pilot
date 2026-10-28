@@ -99,6 +99,9 @@ pub(crate) mod shell_probe;
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 #[cfg(feature = "native-probes")]
+#[path = "subscription_limit_probe.rs"]
+pub(crate) mod subscription_limit_probe;
+#[cfg(feature = "native-probes")]
 #[path = "transcript_find_probe.rs"]
 pub(crate) mod transcript_find_probe;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1317,6 +1320,11 @@ impl LocalViewer {
                 EditorEvent::AddProject => view.open_add_project(window, cx),
                 EditorEvent::DraftsChanged => view.rebuild_nav(window, cx),
                 EditorEvent::Flushed => cx.quit(),
+                EditorEvent::OpenContinued(chat) => {
+                    if view.jump.is_none() && view.page == Page::Chat {
+                        view.open((**chat).clone(), window, cx);
+                    }
+                }
                 EditorEvent::UpdateCheckpoint => {
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     view.advance_update_restart(window, cx);
