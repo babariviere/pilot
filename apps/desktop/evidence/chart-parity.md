@@ -41,8 +41,14 @@ success/warning follow the Swift visual tokens.
 - Existing strict parent schema/state/events, confined helper, kill/reap/fresh
   recovery, pinned reference provenance and revision caches remain unchanged.
 
-Duplicate categorical grouping, stacked areas and out-of-domain line/area/scatter
-clipping remain explicit unsupported cases, rather than false approximations.
+Duplicate categorical grouping and stacked areas remain explicit unsupported
+cases, rather than false approximations. Out-of-domain line/area/scatter values
+were later supported (2026-10-28): each gap-free run is split at its exact edge
+crossings (scaled like the domain, so extreme finite values stay finite), strokes
+draw only inside the domain, area fills hold at the edges, and out-of-domain
+scatter points and hover dots are hidden while readouts keep published values.
+Swift Charts does not clip these marks; the native plot deliberately does. Visual
+case 15 checks actual pixels at 680/1100 light/dark and the pointer readout.
 Native hover/readouts, detailed Y ticks/text metrics and duplicate-series-name
 grouping are not parity claims.
 

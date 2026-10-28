@@ -1,11 +1,20 @@
 //! Bounded finite normalized geometry prepared off UI. No JS/GPU shader execution.
 use serde_json::Value;
+/// Normalized plot points joined by straight segments.
+pub(crate) type Polyline = Vec<(f32, f32)>;
 #[derive(Debug)]
 pub(crate) struct Series {
     pub(crate) name: String,
     pub(crate) color: String,
+    /// Bar ends, or in-domain line/area/scatter points; `None` is a gap or a
+    /// point outside the y domain.
     pub(crate) points: Vec<Option<(f32, f32)>>,
     pub(crate) bases: Vec<f32>,
+    /// Line/area strokes clipped to the y domain. A single point is a run of one value.
+    pub(crate) strokes: Vec<Polyline>,
+    /// Area runs held at the domain edges, with edge crossings added, so filling
+    /// each down to the baseline covers exactly the visible area.
+    pub(crate) fills: Vec<Polyline>,
     /// Published values, one per x; `None` is a gap. Read by the hover readout.
     pub(crate) values: Vec<Option<f64>>,
 }
@@ -53,6 +62,48 @@ fn normal(value: f64, min: f64, max: f64) -> f32 {
         return 0.5;
     }
     ((value.clamp(min, max) / scale - min / scale) / span).clamp(0., 1.) as f32
+}
+/// Where the segment from `a` to `b` crosses `edge`, as a fraction of its
+/// length. Scaled like `normal`, so extreme finite values stay finite.
+fn crossing(a: f64, b: f64, edge: f64) -> f32 {
+    let scale = a.abs().max(b.abs()).max(edge.abs());
+    ((edge / scale - a / scale) / (b / scale - a / scale)).clamp(0., 1.) as f32
+}
+/// Clips one gap-free run of (x, value) points to the y domain, returning its
+/// visible strokes and its fill outline.
+fn clip(run: &[(f32, f64)], min: f64, max: f64) -> (Vec<Polyline>, Polyline) {
+    let mut vertices = Vec::with_capacity(run.len());
+    for (k, &(x, v)) in run.iter().enumerate() {
+        if let Some(&(px, pv)) = k.checked_sub(1).map(|k| &run[k]) {
+            let mut cuts = [min, max]
+                .into_iter()
+                .filter(|&edge| (pv < edge && v > edge) || (pv > edge && v < edge))
+                .map(|edge| (crossing(pv, v, edge), edge))
+                .collect::<Vec<_>>();
+            cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+            vertices.extend(cuts.into_iter().map(|(s, edge)| (px + (x - px) * s, edge)));
+        }
+        vertices.push((x, v));
+    }
+    // Crossings split every segment at the edges, so a piece is visible exactly
+    // when both of its ends are inside the domain.
+    let mut strokes = Vec::new();
+    let mut piece = Vec::new();
+    for &(x, v) in &vertices {
+        if (min..=max).contains(&v) {
+            piece.push((x, normal(v, min, max)));
+        } else if !piece.is_empty() {
+            strokes.push(std::mem::take(&mut piece));
+        }
+    }
+    strokes.push(piece);
+    // A line that only touches an edge has no visible length; a lone value does.
+    strokes.retain(|p| p.len() > 1 || (run.len() == 1 && p.len() == 1));
+    let fill = vertices
+        .into_iter()
+        .map(|(x, v)| (x, normal(v, min, max)))
+        .collect();
+    (strokes, fill)
 }
 fn display_label(text: &str) -> String {
     let mut chars = text.chars();
@@ -240,17 +291,6 @@ impl Chart {
         if !min.is_finite() || !max.is_finite() || min > max {
             return Err("Chart range is not supported");
         }
-        if kind != "bar"
-            && raw
-                .iter()
-                .flatten()
-                .flatten()
-                .any(|(_, n)| *n < min || *n > max)
-        {
-            return Err(
-                "Out-of-range line/area/scatter clipping is not wired yet. Data/source retained.",
-            );
-        }
         let xmin = x
             .iter()
             .filter_map(Value::as_f64)
@@ -275,17 +315,34 @@ impl Chart {
             .zip(raw)
             .enumerate()
             .map(|(i, (s, bars))| {
-                let bases = if kind == "bar" {
-                    bars.iter()
+                let (mut bases, mut strokes, mut fills) = (Vec::new(), Vec::new(), Vec::new());
+                if kind == "bar" {
+                    bases = bars
+                        .iter()
                         .map(|p| normal(p.map_or(0., |p| p.0), min, max))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                        .collect();
+                } else if !scatter {
+                    let points = bars
+                        .iter()
+                        .enumerate()
+                        .map(|(j, p)| p.map(|(_, y)| (position(j), y)))
+                        .collect::<Vec<_>>();
+                    for run in points.split(Option::is_none).filter(|r| !r.is_empty()) {
+                        let run = run.iter().flatten().copied().collect::<Vec<_>>();
+                        let (s, fill) = clip(&run, min, max);
+                        strokes.extend(s);
+                        if kind == "area" {
+                            fills.push(fill);
+                        }
+                    }
+                }
                 let points = bars
                     .into_iter()
                     .enumerate()
-                    .map(|(j, p)| p.map(|(_, y)| (position(j), normal(y, min, max))))
+                    .map(|(j, p)| {
+                        p.filter(|&(_, y)| kind == "bar" || (min..=max).contains(&y))
+                            .map(|(_, y)| (position(j), normal(y, min, max)))
+                    })
                     .collect();
                 Series {
                     name: display_label(s["name"].as_str().unwrap_or("")),
@@ -295,6 +352,8 @@ impl Chart {
                         .unwrap_or_else(|| format!("chart{}", i % 6 + 1)),
                     points,
                     bases,
+                    strokes,
+                    fills,
                     values: s["values"]
                         .as_array()
                         .into_iter()
@@ -358,11 +417,14 @@ impl Chart {
 pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
     let mut root = if index == 11 {
         serde_json::json!({"type":"chart","kind":"scatter","height":220,"x":[100,-5,2],"series":[{"name":"Samples","values":[1,2,3]}],"xLabel":"Numeric domain","yLabel":"Value"})
+    } else if index == 15 {
+        serde_json::json!({"type":"chart","kind":"area","height":220,"yMin":0,"yMax":10,"unit":"%","x":["Mon","Tue","Wed","Thu","Fri"],"series":[{"name":"Load","values":[4,40,6,-30,5],"color":"chart1"}]})
     } else {
         serde_json::json!({"type":"chart","kind":"bar","stacked":true,"height":220,"x":["North","South","Zero"],"series":[{"name":"First","values":[2,-2,0],"color":"chart1"},{"name":"Second","values":[3,-4,0],"color":"chart2"},{"name":"Third","values":[-1,1,null],"color":"chart3"}],"xLabel":"Region","yLabel":"Units"})
     };
     let title = match index {
         11 => "Unsorted numeric scatter",
+        15 => "Clipped out-of-range area",
         12 => {
             root["yMin"] = serde_json::json!(-3);
             root["yMax"] = serde_json::json!(3);
@@ -386,6 +448,17 @@ pub(crate) fn synthetic_fixture(index: usize) -> (&'static str, Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+    fn close(actual: &[Vec<(f32, f32)>], expected: &[Vec<(f32, f32)>]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for (a, e) in actual.iter().flatten().zip(expected.iter().flatten()) {
+            assert!(
+                (a.0 - e.0).abs() < 1e-6 && (a.1 - e.1).abs() < 1e-6,
+                "{actual:?}"
+            );
+        }
+        let lengths = |v: &[Vec<(f32, f32)>]| v.iter().map(Vec::len).collect::<Vec<_>>();
+        assert_eq!(lengths(actual), lengths(expected));
+    }
     #[test]
     fn scale_ticks_are_readable_and_finite_for_signed_constant_and_extreme_domains() {
         for (low, high) in [(-6., 10.), (3., 3.), (-1e308, 1e308), (5e-324, 1e-323)] {
@@ -464,9 +537,103 @@ mod tests {
             json!({"kind":"bar","stacked":true,"x":["a"],"series":[{"values":[1e308]},{"values":[1e308]}]}),
             json!({"kind":"area","stacked":true,"x":["a"],"series":[{"values":[1]}]}),
             json!({"kind":"bar","x":["a","a"],"series":[{"values":[1,2]}]}),
-            json!({"kind":"line","yMax":1,"x":["a","b"],"series":[{"values":[1,2]}]}),
         ] {
             assert!(Chart::parse(&value).is_err());
+        }
+    }
+    #[test]
+    fn out_of_domain_lines_areas_and_points_clip_at_the_edges_and_keep_values() {
+        // x at 0, 0.25, 0.5, 0.75, 1; domain [0, 10].
+        let value = json!({"kind":"line","yMin":0,"yMax":10,"x":["a","b","c","d","e"],
+            "series":[{"name":"s","values":[5,15,5,null,20]},{"name":"t","values":[-10,20,-10,8,8]}]});
+        let line = Chart::parse(&value).unwrap();
+        let s = &line.series[0];
+        // 5 -> 15 leaves at 10 halfway; 15 -> 5 returns halfway. A lone out-of-range
+        // value after the gap draws nothing.
+        close(
+            &s.strokes,
+            &[vec![(0., 0.5), (0.125, 1.)], vec![(0.375, 1.), (0.5, 0.5)]],
+        );
+        assert!(s.fills.is_empty(), "lines have no fill");
+        assert_eq!(s.points[1], None, "no hover dot outside the plot");
+        assert_eq!(s.points[2], Some((0.5, 0.5)));
+        assert_eq!(s.values[1], Some(15.), "source values stay");
+        assert_eq!(s.values[4], Some(20.));
+        // A segment crossing the whole domain draws edge to edge, both ways; the
+        // in-range tail continues. Every stroke stays inside the plot.
+        let t = &line.series[1];
+        close(
+            &t.strokes,
+            &[
+                vec![(1. / 12., 0.), (1. / 6., 1.)],
+                vec![(1. / 3., 1.), (5. / 12., 0.)],
+                vec![(0.5 + 0.25 * 10. / 18., 0.), (0.75, 0.8), (1., 0.8)],
+            ],
+        );
+        let r = line.readout(4).unwrap();
+        assert_eq!(r.rows[0].2, "20");
+        assert_eq!(line.nearest(1.), Some(4), "out-of-range values still read");
+        assert_eq!(line.step(Some(3), Step::Next), Some(4));
+
+        let mut value = value;
+        value["kind"] = json!("area");
+        let area = Chart::parse(&value).unwrap();
+        assert_eq!(area.series[0].strokes, line.series[0].strokes);
+        // Fill outlines hold at the edges, so they reach only the plot's edge.
+        close(
+            &area.series[0].fills,
+            &[
+                vec![(0., 0.5), (0.125, 1.), (0.25, 1.), (0.375, 1.), (0.5, 0.5)],
+                vec![(1., 1.)],
+            ],
+        );
+        assert_eq!(area.baseline, 0.);
+        for p in area
+            .series
+            .iter()
+            .flat_map(|s| s.fills.iter().chain(&s.strokes))
+            .flatten()
+        {
+            assert!(
+                (0.0..=1.0).contains(&p.0) && (0.0..=1.0).contains(&p.1),
+                "{p:?}"
+            );
+        }
+
+        value["kind"] = json!("scatter");
+        value["x"] = json!([3, 1, 2, 5, 4]);
+        let scatter = Chart::parse(&value).unwrap();
+        assert_eq!(scatter.series[0].points[1], None);
+        assert_eq!(scatter.series[0].points[0], Some((0.5, 0.5)));
+        assert!(scatter.series[0].strokes.is_empty());
+        assert_eq!(scatter.readout(1).unwrap().rows[0].2, "15");
+    }
+    #[test]
+    fn clipping_touching_extreme_and_lone_points_stays_finite() {
+        // Touching an edge from outside has no visible length; a lone in-range
+        // value is a dot.
+        let c = Chart::parse(&json!({"kind":"line","yMax":10,"x":["a","b","c","d","e"],
+            "series":[{"values":[20,10,20,null,4]}]}))
+        .unwrap();
+        close(&c.series[0].strokes, &[vec![(1., 0.4)]]);
+        assert_eq!(c.series[0].points[1], Some((0.25, 1.)));
+        // The widest finite values crossing a subnormal domain keep finite crossings.
+        for (min, max) in [(5e-324, 1e-323), (-1e308, 1e308), (-1., 1.)] {
+            let c = Chart::parse(
+                &json!({"kind":"area","yMin":min,"yMax":max,"x":["a","b","c"],
+                "series":[{"values":[-1.7e308,1.7e308,-1.7e308]}]}),
+            )
+            .unwrap();
+            let s = &c.series[0];
+            assert_eq!(s.strokes.len(), 2);
+            for p in s.fills.iter().chain(&s.strokes).flatten() {
+                assert!(
+                    (0.0..=1.0).contains(&p.0) && (0.0..=1.0).contains(&p.1),
+                    "{p:?}"
+                );
+            }
+            assert!(s.strokes[0][0].0 <= s.strokes[0][1].0);
+            assert!(s.strokes[0][0].0 > 0. && s.strokes[1][1].0 < 1.);
         }
     }
     #[test]

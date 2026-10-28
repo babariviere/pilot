@@ -327,29 +327,23 @@ fn build(
                                         window.paint_quad(q);
                                     }
                                 } else {
-                                    for run in
-                                        s.points.split(Option::is_none).filter(|r| !r.is_empty())
-                                    {
-                                        let points = run
-                                            .iter()
-                                            .flatten()
-                                            .copied()
-                                            .map(p)
-                                            .collect::<Vec<_>>();
-                                        if chart.kind == "area" {
-                                            let mut path = PathBuilder::fill();
-                                            path.move_to(point(points[0].x, zero));
-                                            for pt in &points {
-                                                path.line_to(*pt);
-                                            }
-                                            path.line_to(point(points.last().unwrap().x, zero));
-                                            path.close();
-                                            if let Ok(path) = path.build() {
-                                                let mut fill = c;
-                                                fill.a *= 0.18;
-                                                window.paint_path(path, fill);
-                                            }
+                                    for run in &s.fills {
+                                        let mut path = PathBuilder::fill();
+                                        path.move_to(point(p(run[0]).x, zero));
+                                        for pt in run {
+                                            path.line_to(p(*pt));
                                         }
+                                        path.line_to(point(p(run[run.len() - 1]).x, zero));
+                                        path.close();
+                                        if let Ok(path) = path.build() {
+                                            let mut fill = c;
+                                            fill.a *= 0.18;
+                                            window.paint_path(path, fill);
+                                        }
+                                    }
+                                    for stroke in &s.strokes {
+                                        let points =
+                                            stroke.iter().copied().map(p).collect::<Vec<_>>();
                                         if points.len() == 1 {
                                             let mut dot = fill(
                                                 Bounds::new(

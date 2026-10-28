@@ -3,7 +3,7 @@ use gpui_kit::{
     AppContext, Bounds, HeadlessAppContext, ScrollDelta, SharedString, WindowBounds, WindowOptions,
     component::{ActiveTheme, Theme, ThemeMode},
     point, px, size,
-    test::TestWindowExt,
+    test::{TestEventExt, TestWindowExt},
 };
 use pilot_desktop::{ChromeAssets, LocalViewer, TranscriptView};
 use std::sync::Arc;
@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..15 {
+            for case in 0..16 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -234,6 +234,54 @@ fn main() {
                 if let Some(dir) = &directory {
                     shot.save(dir.join(format!("{}-{}-{case}.png", width as u32, mode.name())))
                         .unwrap();
+                }
+                if case == 15 {
+                    // Values 4, 40, 6, -30, 5 in a 0..10 domain: the stroke leaves the
+                    // plot's top and bottom edges instead of running along them.
+                    let b = cx
+                        .update_window(handle, |_, window, _| window.find("chart-plot").bounds())
+                        .unwrap();
+                    let scale = shot.width() as f32 / width;
+                    let (left, w) = (f32::from(b.left()) + 12., f32::from(b.size.width) - 24.);
+                    let (top, h) = (f32::from(b.top()) + 8., f32::from(b.size.height) - 16.);
+                    let strokes = |x0: f32, x1: f32, y0: f32, y1: f32| {
+                        let mut count = 0;
+                        for y in ((top + y0) * scale) as u32..((top + y1) * scale) as u32 {
+                            for x in
+                                ((left + x0 * w) * scale) as u32..((left + x1 * w) * scale) as u32
+                            {
+                                let [r, g, b, _] = shot.get_pixel(x, y).0;
+                                count += usize::from(b as i32 > r as i32 + 60 && b > g);
+                            }
+                        }
+                        count
+                    };
+                    assert_eq!(
+                        strokes(0.1, 0.4, -8., 3.),
+                        0,
+                        "no stroke along or above the top edge"
+                    );
+                    assert_eq!(
+                        strokes(0.6, 0.9, h - 3., h + 8.),
+                        0,
+                        "none along or below the bottom"
+                    );
+                    assert!(strokes(0.48, 0.52, 0., h) > 0, "the in-range stroke paints");
+                    assert!(strokes(0.02, 0.06, -1., 3.) > 0, "it reaches the top edge");
+                    cx.update_window(handle, |_, window, cx| {
+                        window.pointer_move(
+                            point(b.left() + px(12. + 0.25 * w), b.center().y),
+                            None,
+                            cx,
+                        );
+                        window.render_frame(cx);
+                        let card = window.find("chart-readout").bounds();
+                        assert!(
+                            card.top() >= b.top() && card.right() <= b.right(),
+                            "{card:?}"
+                        );
+                    })
+                    .unwrap();
                 }
                 if width == 1100. && mode == ThemeMode::Light && case == 1 {
                     cx.update_window(handle, |_, window, cx| {

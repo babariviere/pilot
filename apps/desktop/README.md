@@ -430,9 +430,11 @@ an admitted painted native preview or explicit Open, never history hydration.
 See [exact boundaries, checks and remaining work](evidence/native-visuals.md).
 The [bounded chart follow-on](evidence/chart-parity.md) adds signed stacked bars,
 explicit bar-domain clipping, positioned x-ticks/numeric scatter domain labels
-and Swift's visual palette. It retains unsupported placeholders for stacked
-areas, duplicate categorical grouping and non-bar clipping; it is not full
-artifact parity. Existing helper/security/provenance boundaries are unchanged.
+and Swift's visual palette. Line, area and scatter values outside an explicit
+y domain are clipped at the plot edges (exact edge crossings; readouts keep the
+published values). It retains unsupported placeholders for stacked areas and
+duplicate categorical grouping; it is not full artifact parity. Existing
+helper/security/provenance boundaries are unchanged.
 The [native slider follow-on](evidence/slider-interaction.md) adds dragging with
 one in-flight isolated callback and one latest pending value, new-version
 revalidation, failure rollback and lifetime fences. Precise steppers remain;
