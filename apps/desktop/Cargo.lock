@@ -5077,6 +5077,7 @@ dependencies = [
  "image",
  "libc",
  "pilot-desktop-updater",
+ "raw-window-handle",
  "reqwest",
  "serde",
  "serde_json",

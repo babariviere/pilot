@@ -100,6 +100,72 @@ pub fn window_background(cx: &App) -> gpui_kit::WindowBackgroundAppearance {
     }
 }
 
+/// Window-server blur radius behind macOS glass windows. GPUI's material blur is fixed and
+/// light; this heavier window-server blur diffuses the desktop into frost.
+#[cfg(target_os = "macos")]
+const MAC_BLUR_RADIUS: i64 = 100;
+
+/// Swaps a glass window's material blur for the stronger window-server blur, keeping the
+/// material when the window server refuses.
+fn blur_window(window: &mut Window, cx: &App) {
+    #[cfg(target_os = "macos")]
+    if glass(cx) && mac_blur::set(window, MAC_BLUR_RADIUS) {
+        window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Transparent);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, cx);
+}
+
+#[cfg(target_os = "macos")]
+mod mac_blur {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use std::ffi::{c_char, c_void};
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        // Private but long-standing; Terminal.app uses it.
+        fn CGSMainConnectionID() -> *mut c_void;
+        fn CGSSetWindowBackgroundBlurRadius(
+            connection: *mut c_void,
+            window: isize,
+            radius: i64,
+        ) -> i32;
+    }
+
+    pub(super) fn set(window: &gpui_kit::Window, radius: i64) -> bool {
+        let Ok(handle) = HasWindowHandle::window_handle(window) else {
+            return false;
+        };
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            return false;
+        };
+        // SAFETY: objc_msgSend is called through the exact signatures of -[NSView window]
+        // and -[NSWindow windowNumber] on a live view owned by this window.
+        unsafe {
+            let send = objc_msgSend as unsafe extern "C" fn();
+            let object: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+                std::mem::transmute(send);
+            let integer: unsafe extern "C" fn(*mut c_void, *const c_void) -> isize =
+                std::mem::transmute(send);
+            let ns_window = object(
+                handle.ns_view.as_ptr(),
+                sel_registerName(c"window".as_ptr()),
+            );
+            if ns_window.is_null() {
+                return false;
+            }
+            let number = integer(ns_window, sel_registerName(c"windowNumber".as_ptr()));
+            number > 0
+                && CGSSetWindowBackgroundBlurRadius(CGSMainConnectionID(), number, radius) == 0
+        }
+    }
+}
+
 fn follows_system(cx: &App) -> bool {
     cx.try_global::<CommittedAppearance>()
         .is_none_or(|policy| policy.0 == AppearancePreference::System)
@@ -226,9 +292,9 @@ fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
     } = palette(dark);
     let error = if dark { "#f87171" } else { "#dc2626" };
     let s = |value: &'static str| Some(SharedString::from(value));
-    // Over the window blur the page stays a mostly solid reading surface and the
-    // sidebar lets more of the frosted desktop through. Opaque without glass.
-    let (page_alpha, sidebar_alpha) = if dark { ("d9", "b3") } else { ("d1", "a6") };
+    // Frost: a milky wash over the heavy blur. The page stays mostly solid for reading and
+    // the sidebar lets more of the diffused desktop glow through. Opaque without glass.
+    let (page_alpha, sidebar_alpha) = if dark { ("d1", "a3") } else { ("c7", "94") };
     let glassy = |hex: &str, alpha: &str| {
         Some(SharedString::from(if glass {
             format!("{hex}{alpha}")
@@ -339,6 +405,7 @@ fn install_configs(cx: &mut App) {
 }
 /// Subscription belongs to this window; a committed manual choice ignores OS changes.
 pub fn follow_appearance(window: &mut Window, cx: &mut App) {
+    blur_window(window, cx);
     if follows_system(cx) {
         Theme::sync_system_appearance(Some(window), cx);
     }

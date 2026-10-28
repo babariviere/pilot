@@ -172,7 +172,8 @@ buttons, progress bars and cards never carry it; the working line covers live wo
 
 Glass: `appearance::enable_glass` (called by the app before its windows open) makes
 the window background blur what is behind it on macOS, KWin and Hyprland, and turns
-the page, sidebar and list into translucent tints. Cards, the composer tray/editor,
+the page, sidebar and list into a frosted, milky wash (macOS uses the heavier
+window-server blur, falling back to GPUI's material). Cards, the composer tray/editor,
 popovers, buttons and code stay opaque. Never stack the page tint under the sidebar.
 Elsewhere, and in offscreen probes, every surface stays solid.
 

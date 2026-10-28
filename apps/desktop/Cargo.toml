@@ -94,6 +94,7 @@ pilot-desktop-updater = { path = "updater", features = ["native-linux"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 pilot-desktop-updater = { path = "updater", features = ["native-macos"] }
+raw-window-handle = "=0.6.2"
 
 [profile.dev]
 debug = 0
