@@ -6,6 +6,35 @@ The existing chat-to-mission confirmation remains separate. There is no new
 creation wizard, task/coordinator management, join/move, archive/read-status write,
 agent start or permission promotion.
 
+## Overview at a glance
+
+The overview follows Swift's Overview tab within the existing reading column:
+goal, one meta line (status, project name, "N of M done · K working now"), a
+progress bar and legend, then **Needs you** and **Working now** when they have
+rows, followed by Chats, Tasks and Brief. Raw mission and project IDs stay out
+of the visible text.
+
+- Progress counts every received task (up to 256), not only the displayed rows,
+  by Swift's work status: the stored status when phase gating projects Blocked.
+  Dropped tasks are excluded; legend order is done, in review, in progress,
+  blocked, to do, delegated, zeros omitted.
+- Needs you lists member chats whose Local row needs attention or failed (exact
+  member ID and project, not archived), then blocked tasks. Working now lists in
+  progress then in review tasks, with the owner chat as a trailing link. Each
+  section shows five rows and offers Show all.
+- Chat links (Needs you rows, owners, member rows) use the same exact-ID
+  `can_link` guard and `open` path; the guard covers every received member ID,
+  while the Chats list still displays 16. Member rows add the chat's live Local
+  state.
+- A task row reveals that exact task ID in the existing Tasks pane: it opens and
+  reads with its own generation, selects the task once a snapshot contains it
+  (otherwise nothing is selected), focuses its details and scrolls the page to
+  Tasks. All tasks and Show all open the list only. No task is changed.
+
+Data comes from the same detail, member and Local chat snapshots; nothing new is
+fetched or polled. `missions` exercises it natively at 680/1100 in light and dark,
+including keyboard reveal and the exact owner link.
+
 ## Audited contracts
 
 The implementation follows the current Swift logical mission catalog/navigation

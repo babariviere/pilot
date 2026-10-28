@@ -30,6 +30,9 @@ pub(crate) struct Rows {
     snapshot: Arc<Snapshot>,
     generation: u64,
 }
+/// A reveal settled: the list (and any exact task) is now shown.
+pub(crate) struct Revealed;
+impl gpui_kit::EventEmitter<Revealed> for Pane {}
 impl ListDelegate for Rows {
     type Item = ListItem;
     // Kit ListState owns the keyboard index; description selection is separate.
@@ -97,6 +100,8 @@ pub(crate) struct Pane {
     subscription: Option<Subscription>,
     trigger: FocusHandle,
     detail_focus: FocusHandle,
+    /// A reveal awaiting its snapshot; the exact task to select, if any.
+    reveal: Option<Option<String>>,
     pub(crate) creation: Option<Entity<crate::mission_task_create_view::Form>>,
     creations: Vec<(Entity<crate::mission_task_create_view::Form>, Subscription)>,
     create_error: Option<&'static str>,
@@ -131,6 +136,7 @@ impl Pane {
             subscription: None,
             trigger: cx.focus_handle(),
             detail_focus: cx.focus_handle(),
+            reveal: None,
             creation: None,
             creations: Vec::new(),
             create_error: None,
@@ -183,6 +189,7 @@ impl Pane {
             }
             self.create_error = None;
             self.opened = false;
+            self.reveal = None;
             self.reader = None;
             self.updates = None;
             self.list = None;
@@ -198,6 +205,54 @@ impl Pane {
                 .creation
                 .as_ref()
                 .is_some_and(|f| f.update(cx, |f, cx| f.marked(w, cx)))
+    }
+    /// Open the list and, given an exact task ID, select it once a current
+    /// snapshot contains it. A missing ID or failed read selects nothing.
+    pub(crate) fn reveal(&mut self, id: Option<String>, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.key.is_none() || self.marked(w, cx) {
+            return;
+        }
+        let current = !self.state.busy && self.state.error.is_none();
+        let shown = match &id {
+            Some(id) => self
+                .state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.task(id).is_some()),
+            None => self.list.is_some(),
+        };
+        self.reveal = Some(id);
+        if self.opened && current && shown {
+            self.settle_reveal(w, cx);
+            return;
+        }
+        // Open, or refresh a snapshot that may predate the task; an in-flight
+        // read settles it instead.
+        self.opened = true;
+        self.read(w, cx);
+        if !self.state.busy {
+            // Nothing was requested: never select on a later, unrelated read.
+            self.reveal = None;
+        }
+    }
+    fn settle_reveal(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.reveal.take() else {
+            return;
+        };
+        match target {
+            Some(id)
+                if self.state.error.is_none()
+                    && self
+                        .state
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.task(&id).is_some()) =>
+            {
+                self.select(&id, self.state.generation, w, cx)
+            }
+            _ => self.back(w, cx),
+        }
+        cx.emit(Revealed);
     }
     fn new_task(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.marked(w, cx) {
@@ -370,7 +425,7 @@ impl Pane {
                     self.reader = Some(reader);
                     self.updates=Some(cx.spawn_in(w, async move |view,cx| {
                         while let Ok(r)=output.recv().await {
-                            if view.update_in(cx, |v,w,cx| { if v.opened && v.state.accept(r.generation, &r.route.0, r.result) { v.rebuild(w,cx); cx.notify(); } }).is_err() { return; }
+                            if view.update_in(cx, |v,w,cx| { if v.opened && v.state.accept(r.generation, &r.route.0, r.result) { v.rebuild(w,cx); v.settle_reveal(w,cx); cx.notify(); } }).is_err() { return; }
                         }
                         let _=view.update(cx,|v,cx| { if v.lane==lane { v.reader=None; v.state.busy=false; if v.opened { v.state.error.get_or_insert("Couldn't load tasks. What's shown may be out of date; refresh to try again."); } cx.notify(); } });
                     }));
@@ -484,6 +539,7 @@ impl Pane {
         }
         self.trigger.focus(w, cx);
         self.opened = false;
+        self.reveal = None;
         self.state.generation = self.state.generation.saturating_add(1);
         self.state.busy = false;
         self.reader = None;

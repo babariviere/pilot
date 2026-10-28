@@ -98,4 +98,53 @@ fn context_row_caps_do_not_invent_task_counts_or_replace_membership() {
     let m = members(&d, &json!(values)).unwrap();
     assert_eq!(m.total, MEMBER_CAP);
     assert_eq!(m.rows.len(), DISPLAY_MEMBERS);
+    // Exact links reach every received member, not only the displayed rows.
+    assert_eq!(m.ids.len(), MEMBER_CAP);
+    assert!(m.ids.contains(&format!("chat-{}", MEMBER_CAP - 1)));
+}
+#[test]
+fn overview_summary_covers_every_received_task_by_work_status() {
+    let key = f::key("mission-A");
+    let mut v = f::detail(&key.id);
+    let task = |i: usize, status: &str, order: usize| json!({"id":format!("task-{i}"),"number":i+1,"title":format!("Task {i}"),"status":status,"order":order});
+    let mut tasks: Vec<_> = (0..40).map(|i| task(i, "done", i)).collect();
+    tasks.push(task(40, "in_review", 0));
+    tasks.push(task(41, "in_progress", 50));
+    tasks.push(task(42, "in_progress", 1));
+    tasks.push(task(43, "blocked", 2));
+    tasks.push(task(44, "dropped", 3));
+    tasks.push(task(45, "todo", 4));
+    // Phase gating projects Blocked; the task's own status counts.
+    let mut gated = task(46, "blocked", 5);
+    gated["storedStatus"] = json!("todo");
+    gated["sessionId"] = json!("chat-A");
+    tasks.push(gated);
+    v["tasks"] = json!(tasks);
+    let d = detail(&key, &v).unwrap();
+    assert_eq!(d.tasks.len(), DISPLAY_TASKS);
+    let s = &d.summary;
+    assert_eq!(
+        s.counts,
+        vec![
+            ("done", 40),
+            ("in_review", 1),
+            ("in_progress", 2),
+            ("blocked", 1),
+            ("todo", 2)
+        ]
+    );
+    assert_eq!((s.done(), s.total()), (40, 46));
+    let ids = |t: &[Task]| t.iter().map(|t| t.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&s.working), ["task-42", "task-41", "task-40"]);
+    assert_eq!(ids(&s.blocked), ["task-43"]);
+    let gated = d.tasks.iter().find(|t| t.id == "task-46").unwrap();
+    assert_eq!(
+        (gated.status.as_str(), gated.work_status.as_str()),
+        ("blocked", "todo")
+    );
+    assert_eq!(gated.owner.as_deref(), Some("chat-A"));
+    let mut v = f::detail(&key.id);
+    v["tasks"] = json!([]);
+    let d = detail(&key, &v).unwrap();
+    assert!(d.summary.counts.is_empty() && d.summary.total() == 0);
 }

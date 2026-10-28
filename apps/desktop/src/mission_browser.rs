@@ -168,8 +168,58 @@ pub(crate) struct Task {
     pub(crate) number: u64,
     pub(crate) title: String,
     pub(crate) status: String,
+    /// Swift's workStatus: the stored status when phase gating projects Blocked.
+    pub(crate) work_status: String,
     pub(crate) owner: Option<String>,
     pub(crate) order: f64,
+}
+/// Progress bar order: finished work first, then review, active, blocked and waiting.
+pub(crate) const BAR_ORDER: [&str; 6] = [
+    "done",
+    "in_review",
+    "in_progress",
+    "blocked",
+    "todo",
+    "delegated",
+];
+/// Overview summary over every received task, not only the displayed rows.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Summary {
+    /// Work-status counts in bar order, zeros omitted, dropped excluded.
+    pub(crate) counts: Vec<(&'static str, usize)>,
+    /// In progress, then in review, each in task order.
+    pub(crate) working: Vec<Task>,
+    /// Blocked by their own status (phase gating is planned waiting).
+    pub(crate) blocked: Vec<Task>,
+}
+impl Summary {
+    pub(crate) fn total(&self) -> usize {
+        self.counts.iter().map(|c| c.1).sum()
+    }
+    pub(crate) fn done(&self) -> usize {
+        self.counts
+            .iter()
+            .find(|c| c.0 == "done")
+            .map_or(0, |c| c.1)
+    }
+    fn new(tasks: &[Task]) -> Self {
+        let counts = BAR_ORDER
+            .iter()
+            .map(|s| (*s, tasks.iter().filter(|t| t.work_status == *s).count()))
+            .filter(|c| c.1 > 0)
+            .collect();
+        let with = |status: &'static str| {
+            tasks
+                .iter()
+                .filter(move |t| t.work_status == status)
+                .cloned()
+        };
+        Self {
+            counts,
+            working: with("in_progress").chain(with("in_review")).collect(),
+            blocked: with("blocked").collect(),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Detail {
@@ -185,6 +235,7 @@ pub(crate) struct Detail {
     pub(crate) tasks: Vec<Task>,
     pub(crate) task_count: usize,
     pub(crate) counts: Option<(u64, u64)>,
+    pub(crate) summary: Summary,
 }
 pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     let m = &v["mission"];
@@ -212,11 +263,17 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
             .as_f64()
             .filter(|n| n.is_finite())
             .ok_or("Invalid task order.")?;
+        let status = text(&t["status"], 40)?;
         tasks.push(Task {
             id,
             number,
             title: text(&t["title"], 512)?,
-            status: text(&t["status"], 40)?,
+            work_status: if t["storedStatus"].is_null() {
+                status.clone()
+            } else {
+                text(&t["storedStatus"], 40)?
+            },
+            status,
             owner: optional_id(&t["sessionId"])?,
             order,
         });
@@ -227,6 +284,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
             .then(a.number.cmp(&b.number))
             .then(a.id.cmp(&b.id))
     });
+    let summary = Summary::new(&tasks);
     let mut clipped = false;
     let goal = clip_text(&m["goal"], 8192, &mut clipped)?;
     let brief = if v["brief"].is_null() {
@@ -250,6 +308,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         task_count: tasks.len(),
         tasks: tasks.into_iter().take(DISPLAY_TASKS).collect(),
         counts: counts(m)?,
+        summary,
     })
 }
 #[derive(Clone, Debug)]
@@ -262,6 +321,8 @@ pub(crate) struct Member {
 pub(crate) struct Members {
     pub(crate) rows: Vec<Member>,
     pub(crate) total: usize,
+    /// Every received member ID, for exact links beyond the displayed rows.
+    pub(crate) ids: HashSet<String>,
 }
 pub(crate) fn members(d: &Detail, v: &Value) -> Result<Members, &'static str> {
     let raw = v.as_array().ok_or("Member chats are unavailable.")?;
@@ -294,8 +355,9 @@ pub(crate) fn members(d: &Detail, v: &Value) -> Result<Members, &'static str> {
             ))
     });
     let total = rows.len();
+    let ids = rows.iter().map(|m| m.id.clone()).collect();
     rows.truncate(DISPLAY_MEMBERS);
-    Ok(Members { rows, total })
+    Ok(Members { rows, total, ids })
 }
 fn id(v: &Value) -> Result<String, &'static str> {
     v.as_str()

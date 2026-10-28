@@ -73,6 +73,10 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let server = Server::start();
+            server.reply(
+                "/api/missions/mission-A",
+                Reply::json(200, overview_detail()),
+            );
             let private = Private(
                 std::env::temp_dir()
                     .canonicalize()
@@ -92,7 +96,9 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             v.missions.update(cx,|b,_|b.options(server.options.clone()));
             v.state.projects=Arc::new(crate::local_model::projects(&json!([{"id":"project-A","name":"Same project","path":"/synthetic/A"},{"id":"project-B","name":"Same project","path":"/synthetic/B"}])).unwrap());
             v.state.projects_loaded=true;v.state.list_loaded=true;v.state.loaded=true;v.state.status="Synthetic Local fixture".into();
-            v.state.chats=Arc::new(["chat-A","chat-B"].iter().map(|id|crate::local_model::chat(&json!({"id":id,"title":"Same chat title","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap()).collect());
+            let mut chats:Vec<_>=["chat-A","chat-B"].iter().map(|id|crate::local_model::chat(&json!({"id":id,"title":"Same chat title","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap()).collect();
+            chats[1].signal=Some(crate::dither::Signal::NeedsYou);
+            v.state.chats=Arc::new(chats);
             v.selected=Some("chat-A".into());v.title="Same chat title".into();v.generation=1;v.state.generation=1;
             v.transcript.update(cx,|t,cx|t.replace_readonly(rows.clone(),true,cx));v.editor.update(cx,|e,cx|e.select("chat:chat-A".into(),true,false,w,cx));
             v.rebuild_nav(w,cx);v.listen_writes(updates,w,cx);v
@@ -423,10 +429,32 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, &view, |v, cx| {
                 matches!(v.page, Page::Mission(_)) && !v.missions.read(cx).busy
             });
+            overview_at_a_glance(cx, h, &view, &dir, width, mode);
             cx.update_window(h, |_, w, cx| w.click("mission-chat-chat-B", cx))
                 .unwrap();
             settle(cx, h);
             assert!(matches!(commands.try_recv().unwrap(),Command::Open{id,..} if id=="chat-B"));
+            assert!(commands.try_recv().is_err());
+            // The Working now owner is the same exact-ID guarded chat link.
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| {
+                matches!(v.page, Page::Mission(_)) && !v.missions.read(cx).busy
+            });
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    w.find("mission-owner-working-task-task-D").disabled(),
+                    Some(true)
+                );
+                w.click("mission-owner-working-task-task-C", cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            // chat-B is already open, so this returns to it without a new Open.
+            cx.update(|cx| {
+                assert_eq!(view.read(cx).page, Page::Chat);
+                assert_eq!(view.read(cx).selected.as_deref(), Some("chat-B"));
+            });
             assert!(commands.try_recv().is_err());
             assert!(server.all_gets());
             cx.update_window(h, |_, w, cx| {
@@ -465,4 +493,131 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             );
         }
     }
+}
+
+/// mission-A with one task per status and exact-ID owners: chat-B (loaded,
+/// needs you), not-loaded (received member outside the Local list).
+fn overview_detail() -> serde_json::Value {
+    let mut v = f::detail("mission-A");
+    v["tasks"] = json!([
+        {"id":"task-A","number":1,"title":"Keep the draft","status":"done","order":1,"sessionId":"chat-A"},
+        {"id":"task-B","number":2,"title":"Preserve the reader","status":"todo","order":2},
+        {"id":"task-C","number":3,"title":"Wire the overview 日本語 with a long title that has to truncate in narrow windows 👩‍💻","status":"in_progress","order":3,"sessionId":"chat-B"},
+        {"id":"task-D","number":4,"title":"Review exact links","status":"in_review","order":4,"sessionId":"not-loaded"},
+        {"id":"task-E","number":5,"title":"Waiting on a decision","status":"blocked","order":5},
+    ]);
+    v
+}
+fn overview_at_a_glance(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    dir: &Option<PathBuf>,
+    width: f32,
+    mode: ThemeMode,
+) {
+    cx.update(|cx| {
+        let b = view.read(cx).missions.read(cx);
+        let d = b.detail.as_ref().unwrap();
+        assert_eq!(
+            b.meta_line(d),
+            "Active · Same project · 1 of 5 done · 2 working now",
+            "one meta line, no raw IDs"
+        );
+    });
+    cx.update_window(h, |_, w, _| {
+        let page = w.find("missions-page").bounds();
+        assert!(w.find("mission-progress").visible());
+        assert!(w.try_find("mission-needs-chat-chat-A").is_none());
+        assert_ne!(w.find("mission-needs-chat-chat-B").disabled(), Some(true));
+        assert_ne!(w.find("mission-needs-task-task-E").disabled(), Some(true));
+        assert!(w.try_find("mission-working-task-task-B").is_none());
+        assert!(w.try_find("mission-working-task-task-E").is_none());
+        assert_ne!(
+            w.find("mission-owner-working-task-task-C").disabled(),
+            Some(true)
+        );
+        assert_eq!(
+            w.find("mission-owner-working-task-task-D").disabled(),
+            Some(true)
+        );
+        // The owner link sits beside its row, inside the reading column.
+        let row = w.find("mission-working-task-task-C").bounds();
+        let owner = w.find("mission-owner-working-task-task-C").bounds();
+        assert!(owner.left() >= row.right() - px(1.), "{row:?} {owner:?}");
+        assert!(owner.right() <= page.right() && row.left() >= page.left());
+        assert!((owner.center().y - row.center().y).abs() < px(2.));
+    })
+    .unwrap();
+    capture(
+        cx,
+        h,
+        dir,
+        format!("{}-{}-overview-glance.png", width as u32, mode.name()),
+    );
+    // Keyboard: reach the exact Working now row and reveal its task.
+    cx.update_window(h, |_, w, cx| {
+        let row = "mission-working-task-task-C";
+        for _ in 0..80 {
+            w.press("tab", cx);
+            if w.find(row).focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(w.find(row).focused(), Some(true));
+        w.press("enter", cx);
+    })
+    .unwrap();
+    until(cx, h, view, |v, cx| {
+        let p = v.missions.read(cx).tasks_browser.read(cx);
+        p.state.selected.as_deref() == Some("task-C") && !p.state.busy
+    });
+    cx.update_window(h, |_, w, _| {
+        let page = w.find("missions-page").bounds();
+        // Tasks scroll toward the top, as far as the page allows, so the
+        // heading and the revealed details are both in view.
+        let heading = w.find("mission-tasks-heading").bounds();
+        let detail = w.find("mission-tasks-detail").bounds();
+        assert!(
+            heading.top() >= page.top() - px(1.) && detail.bottom() <= page.bottom() + px(1.),
+            "Tasks scrolled into view: {heading:?} {detail:?} in {page:?}"
+        );
+        assert!(
+            heading.top() < page.top() + px(80.)
+                || w.find("mission-brief-heading").bounds().bottom() <= page.bottom(),
+            "scrolled to Tasks or to the end of the page"
+        );
+        assert_eq!(w.find("mission-tasks-detail").focused(), Some(true));
+    })
+    .unwrap();
+    capture(
+        cx,
+        h,
+        dir,
+        format!("{}-{}-overview-reveal.png", width as u32, mode.name()),
+    );
+    // A blocked task in Needs you reveals its own exact ID in the open list.
+    // Wheel over page content outside the inner task list.
+    let to_top = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, cx| {
+            w.scroll(
+                "mission-chats-heading",
+                ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                cx,
+            );
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    to_top(cx);
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.find("mission-needs-task-task-E").bounds().top() >= px(0.));
+        w.click("mission-needs-task-task-E", cx)
+    })
+    .unwrap();
+    until(cx, h, view, |v, cx| {
+        let p = v.missions.read(cx).tasks_browser.read(cx);
+        p.state.selected.as_deref() == Some("task-E") && !p.state.busy
+    });
+    to_top(cx);
 }

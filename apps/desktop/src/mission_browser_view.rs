@@ -8,6 +8,8 @@ pub(crate) mod mission_decisions_view;
 mod mission_lifecycle_browser;
 #[path = "mission_metadata_browser.rs"]
 mod mission_metadata_browser;
+#[path = "mission_overview_view.rs"]
+mod mission_overview_view;
 #[cfg(test)]
 #[path = "mission_browser_view_tests.rs"]
 mod tests;
@@ -78,6 +80,8 @@ pub(crate) struct Browser {
     focus: FocusHandle,
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
+    /// Unscrolled top of the Tasks section in detail_scroll, from the last paint.
+    tasks_top: std::rc::Rc<std::cell::Cell<gpui_kit::Pixels>>,
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
     pub(crate) activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
     activity_open: bool,
@@ -99,9 +103,23 @@ impl Browser {
             && self.tasks_browser.read(cx).restart_safe()
     }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        let detail_scroll = gpui_kit::ScrollHandle::default();
+        let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
+        // Bring Tasks to the top once the reveal settles; the next layout
+        // clamps the offset against the newly loaded list.
+        cx.subscribe(
+            &tasks_browser,
+            |v, _, _: &crate::mission_tasks_view::Revealed, cx| {
+                let handle = &v.detail_scroll;
+                let y = (handle.bounds().top() - v.tasks_top.get()).min(px(0.));
+                handle.set_offset(gpui_kit::point(handle.offset().x, y));
+                cx.notify();
+            },
+        )
+        .detach();
         Self {
             decisions: Default::default(),
-            tasks_browser: cx.new(crate::mission_tasks_view::Pane::new),
+            tasks_browser,
             generation: 0,
             route: None,
             options: None,
@@ -121,7 +139,8 @@ impl Browser {
             filter: None,
             focus: cx.focus_handle(),
             catalog_scroll: gpui_kit::ScrollHandle::default(),
-            detail_scroll: gpui_kit::ScrollHandle::default(),
+            tasks_top: Default::default(),
+            detail_scroll,
             activity_browser: None,
             activity_open: false,
             brief: None,
@@ -204,10 +223,7 @@ impl Browser {
             && self.route == Some(Route::Detail(key.clone()))
             && self.detail.as_ref().is_some_and(|d| {
                 &d.key == key
-                    && self
-                        .members
-                        .as_ref()
-                        .is_ok_and(|m| m.rows.iter().any(|r| r.id == id))
+                    && self.members.as_ref().is_ok_and(|m| m.ids.contains(id))
                     && self.chats.iter().any(|c| {
                         c.id == id && !c.local_draft && c.project_id.as_deref() == Some(&d.project)
                     })
@@ -393,20 +409,28 @@ impl Browser {
         cx.notify();
     }
     fn link_availability_changed(&self, chats: &[Chat]) -> bool {
-        self.detail.as_ref().is_some_and(|d| {
-            self.members.as_ref().is_ok_and(|m| {
-                m.rows.iter().any(|m| {
-                    let eligible = |rows: &[Chat]| {
-                        rows.iter().any(|c| {
-                            c.id == m.id
-                                && !c.local_draft
-                                && c.project_id.as_deref() == Some(d.project.as_str())
-                        })
-                    };
-                    eligible(&self.chats) != eligible(chats)
+        let (Some(d), Ok(m)) = (&self.detail, &self.members) else {
+            return false;
+        };
+        // Link eligibility and live state (member rows, Needs you) of members only.
+        fn view<'a>(
+            rows: &'a [Chat],
+            ids: &std::collections::HashSet<String>,
+            project: &str,
+        ) -> Vec<(&'a str, bool, Option<&'a str>, bool)> {
+            rows.iter()
+                .filter(|c| ids.contains(&c.id))
+                .map(|c| {
+                    (
+                        c.id.as_str(),
+                        !c.local_draft && c.project_id.as_deref() == Some(project),
+                        c.row_reason(),
+                        c.archived,
+                    )
                 })
-            })
-        })
+                .collect()
+        }
+        view(&self.chats, &m.ids, &d.project) != view(chats, &m.ids, &d.project)
     }
     pub(crate) fn accept(&mut self, response: mission_reader::Response, cx: &mut Context<Self>) {
         if response.generation != self.generation || self.route.as_ref() != Some(&response.route) {
@@ -976,26 +1000,35 @@ impl Render for Browser {
             .as_ref()
             .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
         {
+            // Goal, one meta line and progress, then what needs the user and
+            // what is working. Edit, Activity, Archive/Reopen and Copy goal
+            // live in the title's … menu.
             content = content.child(
-                ui::text(
-                    Text::Caption,
-                    SharedString::from(format!(
-                        "{} · {}",
-                        capitalized(&d.status),
-                        self.project_name(&d.project)
-                    )),
-                )
-                .text_color(cx.theme().muted_foreground),
+                div()
+                    .v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap(px(Space::CONTROL))
+                    .child(self.plain(
+                        "mission-goal",
+                        if d.goal.is_empty() {
+                            "No goal saved.".into()
+                        } else {
+                            d.goal.clone()
+                        },
+                    ))
+                    .child(
+                        ui::text(Text::Caption, SharedString::from(self.meta_line(d)))
+                            .id("mission-meta")
+                            .test_support()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .children(self.summary_view(&d.summary, cx)),
             );
-            // Edit, Activity, Archive/Reopen and Copy goal live in the title's … menu.
-            content = content.child(self.decisions_view(cx)).child(self.plain(
-                "mission-goal",
-                if d.goal.is_empty() {
-                    "No goal saved.".into()
-                } else {
-                    d.goal.clone()
-                },
-            ));
+            content = content
+                .child(self.decisions_view(cx))
+                .children(self.needs_you_view(d, cx))
+                .children(self.working_view(&d.summary, cx));
             content = content.child(ui::heading(
                 "mission-chats-heading",
                 "Chats",
@@ -1027,8 +1060,16 @@ impl Render for Browser {
                         } else {
                             "Member"
                         };
+                        // Live Local state, as on the chat's sidebar row.
+                        let state = self
+                            .chats
+                            .iter()
+                            .find(|c| c.id == id && !c.local_draft)
+                            .and_then(|c| c.row_reason())
+                            .map(|r| format!(" · {}", capitalized(r)))
+                            .unwrap_or_default();
                         let label = format!(
-                            "{role}{}{}",
+                            "{role}{}{state}{}",
                             if member.archived { " · Archived" } else { "" },
                             if enabled {
                                 ""
@@ -1066,7 +1107,23 @@ impl Render for Browser {
                     }
                 }
             }
-            content = content.child(self.tasks_browser.clone());
+            let (top, handle) = (self.tasks_top.clone(), self.detail_scroll.clone());
+            content = content.child(
+                div()
+                    .id("mission-tasks-anchor")
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        gpui_kit::canvas(
+                            move |b, _, _| top.set(b.top() - handle.offset().y),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_0(),
+                    )
+                    .child(self.tasks_browser.clone()),
+            );
             // The brief stays collapsed: its workspace renders and edits it in full.
             content = content.child(
                 div()
