@@ -188,6 +188,8 @@ pub(crate) struct Chat {
     pub(crate) state: String,
     pub(crate) archived: bool,
     pub(crate) local_draft: bool,
+    /// Daemon-reported session folder; never derived (`session_clipboard`).
+    pub(crate) session_path: Option<String>,
     pub(crate) writable: bool,
     pub(crate) busy: bool,
     pub(crate) signal: Option<crate::dither::Signal>,
@@ -253,6 +255,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         state: bounded(value["state"].as_str().unwrap_or("unknown"), 40),
         archived: value["archivedAt"].is_number(),
         local_draft: false,
+        session_path: crate::session_clipboard::path(value),
         writable: interactive_local(value),
         busy: value["working"] == true
             || matches!(value["state"].as_str(), Some("working" | "starting")),

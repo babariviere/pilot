@@ -77,6 +77,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                     state: title.into(),
                                     archived: false,
                                     local_draft: false,
+                                    session_path: None,
                                     writable: false,
                                     busy: signal == Some(Signal::Working),
                                     signal,

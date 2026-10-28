@@ -48,6 +48,7 @@ mod chat_links_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_links_probe::run_chat_links_probe;
 mod conversation_links;
+mod session_clipboard;
 mod session_failure;
 mod session_file_view;
 mod session_file_view_reader;

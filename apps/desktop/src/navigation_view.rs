@@ -268,6 +268,7 @@ impl LocalViewer {
                     state: "Draft".into(),
                     archived: false,
                     local_draft: true,
+                    session_path: None,
                     writable: false,
                     busy: false,
                     signal: None,

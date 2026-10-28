@@ -14,7 +14,8 @@ commands remain reachable without a permanent row of text buttons.
   a conversation. Scope/search restoration remains owned by the existing cache.
 - The header's More (…) menu replaces the permanent Earlier/Latest and Make a
   mission… buttons. It exposes Load earlier messages (including explicit retry),
-  Return to latest and Make a mission… (also in the chat row menu).
+  Return to latest and Make a mission… (also in the chat row menu), then Copy
+  session path and Copy session link (see [chat actions](chat-actions.md)).
   Native arrow/Enter selection and Escape dismissal remain available.
 - A single contextual Latest action appears inside the transcript when reading
   away, refreshing a bounded window, or recovering an unavailable reader mark.

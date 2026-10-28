@@ -33,6 +33,15 @@ row/header conversion entries remain unavailable until that exact request
 finishes. A late matching completion is processed even while closed, without
 changing text or focus; a different target/request cannot clear the busy owner.
 
+**Copy session path** and **Copy session link** follow Swift's
+`SessionClipboardActions` in the row menu and the header's More (…) menu, which
+names the selected chat. They only write the clipboard, from the received
+summary, without waiting for the action check. The path is the daemon-reported
+absolute `sessionPath`, never derived from cwd, project or title. The link is
+`pilot://chat/<id>` for canonical lowercase UUID IDs only, so the copied ID is
+exact. A missing value shows the item disabled as *(Unavailable)*. Drafts are not
+sessions and get neither.
+
 ## Archive contract and truthful outcomes
 
 Audited source:

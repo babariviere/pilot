@@ -71,6 +71,12 @@ impl LocalViewer {
             && self.earlier_request.is_none();
         // Make a mission… lives here (and in the chat row menu), not as a permanent button.
         let can_mission = self.can_make_mission(cx);
+        // The header always names the selected chat; copy only its cached summary.
+        let copy = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            .cloned();
         let mission_label = if self
             .selected
             .as_ref()
@@ -132,6 +138,7 @@ impl LocalViewer {
                                 let _ = c.update(cx, |v, cx| v.open_mission(w, cx));
                             }),
                     )
+                    .map(|menu| crate::session_clipboard::items(menu, copy.as_ref()))
                 }),
             )
     }
@@ -303,6 +310,9 @@ pub(super) fn probe_menu_choice(
 #[cfg(test)]
 #[path = "history_latest_tests.rs"]
 mod history_latest_tests;
+#[cfg(test)]
+#[path = "session_clipboard_view_tests.rs"]
+mod session_clipboard_view_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

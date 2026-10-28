@@ -87,15 +87,19 @@ impl LocalViewer {
             .unwrap_or(Err("The source window is unavailable."));
         let (rx, known_ack) = match admission {
             Ok(rx) => rx,
-            Err(e) => return menu.item(PopupMenuItem::new(e).disabled(true)),
+            Err(e) => {
+                let menu = menu.item(PopupMenuItem::new(e).disabled(true));
+                return crate::session_clipboard::items(menu, Some(&chat));
+            }
         };
+        let copy = chat.clone();
         cx.spawn_in(w, async move |popup, cx| {
             let result = rx
                 .recv()
                 .await
                 .unwrap_or(Err("Chat actions aren't available right now."));
             let _ = popup.update_in(cx, |popup, w, cx| {
-                popup.rebuild(w, cx, |menu, _, cx| match result {
+                let inspected = |menu: PopupMenu, cx: &mut Context<PopupMenu>| match result {
                     Err(error) => menu.item(PopupMenuItem::new(error).disabled(true)),
                     Ok(evidence) => {
                         let _ = owner.update(cx, |v, cx| {
@@ -185,11 +189,16 @@ impl LocalViewer {
                                     }),
                             )
                     }
+                };
+                // Cached metadata only, so copying never waits on the inspection.
+                popup.rebuild(w, cx, |menu, _, cx| {
+                    crate::session_clipboard::items(inspected(menu, cx), Some(&copy))
                 });
             });
         })
         .detach();
-        menu.item(PopupMenuItem::new("Checking chat actions…").disabled(true))
+        let menu = menu.item(PopupMenuItem::new("Checking chat actions…").disabled(true));
+        crate::session_clipboard::items(menu, Some(&chat))
     }
     fn chat_row_action(
         &mut self,
