@@ -114,6 +114,9 @@ fn open(visible: bool, cx: &mut App) -> (gpui_kit::AnyWindowHandle, Entity<Local
 pub fn run(cx: &mut App) {
     let dir = std::env::var_os("PILOT_NEXT_SIDEBAR_SCROLL_DIR").map(std::path::PathBuf::from);
     let (h, view) = open(false, cx);
+    // Hidden windows skip state corners; paint them as a shown window would.
+    cx.update_window(h, |_, w, cx| crate::dither_view::probe_visible(true, w, cx))
+        .unwrap();
     let executor = cx.background_executor().clone();
     cx.spawn(async move |cx| {
         // Like an app that opened and then sat idle: one draw, the background
