@@ -822,6 +822,7 @@ impl LocalViewer {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 owner.update_location = options.update_location();
+                owner.update_connection = options.external_update_connection();
             }
             owner.load(cx);
         });
@@ -838,7 +839,12 @@ impl LocalViewer {
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
                 if view
-                    .update_in(cx, |view, window, cx| view.accept(update, window, cx))
+                    .update_in(cx, |view, window, cx| {
+                        view.accept(update, window, cx);
+                        // Projects and chats may finish loading after drafts.
+                        #[cfg(any(target_os = "macos", target_os = "linux"))]
+                        view.restore_update_navigation(window, cx);
+                    })
                     .is_err()
                 {
                     break;
@@ -917,6 +923,8 @@ impl LocalViewer {
                             .update(cx, |editor, cx| editor.accept(state, window, cx));
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         view.acknowledge_update_startup(cx);
+                        #[cfg(any(target_os = "macos", target_os = "linux"))]
+                        view.restore_update_navigation(window, cx);
                         #[cfg(feature = "native-probes")]
                         view.advance_update_restart(window, cx);
                     })

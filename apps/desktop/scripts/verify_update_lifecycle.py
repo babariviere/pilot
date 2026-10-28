@@ -23,7 +23,7 @@ def hashes():
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
 
 
-def inside(output):
+def inside(output, app_only=False):
     output = Path(output).resolve(strict=True)
     temporary = Path(tempfile.gettempdir()).resolve(strict=True)
     if not output.is_relative_to(temporary) or output.stat().st_uid != os.getuid() or output.stat().st_mode & 0o077:
@@ -58,7 +58,8 @@ def inside(output):
         node = subprocess.check_output(["node", "-p", "process.execPath"], text=True, timeout=5).strip()
         fixtures = output / "relocated GUI fixtures"
         fixtures.mkdir(mode=0o700)
-        for mode in ("--verify", "--verify-cancel", "--verify-expired", "--verify-interrupted", "--verify-startup-fails"):
+        modes = ("--verify-external", "--verify-ui-only") if app_only else ("--verify", "--verify-cancel", "--verify-expired", "--verify-interrupted", "--verify-startup-fails", "--verify-external", "--verify-ui-only")
+        for mode in modes:
             fixture = fixtures / mode.removeprefix("--")
             fixture.mkdir(mode=0o700)
             subprocess.run([str(inputs / "old/lifecycle-fixture"), mode, str(fixture), str(inputs), node],
@@ -76,10 +77,10 @@ def inside(output):
 def main():
     if (sys.platform, platform.machine()) not in (("darwin", "arm64"), ("linux", "x86_64")):
         raise SystemExit("Native arm64 macOS or x86_64 Linux fixture required")
-    if len(sys.argv) != 1:
+    if sys.argv[1:] not in ([], ["--app-only"]):
         raise SystemExit("No application path, credential, feed or signing-key arguments are accepted")
     output = tempfile.mkdtemp(prefix="next-owned-update-")
-    inside(output)
+    inside(output, app_only=sys.argv[1:] == ["--app-only"])
 
 
 if __name__ == "__main__":

@@ -63,6 +63,8 @@ pub fn captured_policy() -> Result<std::collections::BTreeMap<String, String>, E
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Guard {
+    #[serde(default)]
+    ui_only: bool,
     location: Location,
     boot: String,
     capsule: PathBuf,
@@ -75,7 +77,7 @@ pub struct Guard {
     policy_hash: String,
     configuration: String,
 }
-fn private_json(path: &Path, cap: u64) -> Result<Value, Error> {
+pub(crate) fn private_json(path: &Path, cap: u64) -> Result<Value, Error> {
     let mut file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -470,6 +472,25 @@ impl Guard {
         target_build: &str,
         trust: &Trust,
     ) -> Result<Self, Error> {
+        Self::prepare_mode(location, candidate, transaction, target_build, trust, false)
+    }
+    pub fn prepare_ui(
+        location: Location,
+        candidate: &Path,
+        transaction: &Path,
+        target_build: &str,
+        trust: &Trust,
+    ) -> Result<Self, Error> {
+        Self::prepare_mode(location, candidate, transaction, target_build, trust, true)
+    }
+    fn prepare_mode(
+        location: Location,
+        candidate: &Path,
+        transaction: &Path,
+        target_build: &str,
+        trust: &Trust,
+        ui_only: bool,
+    ) -> Result<Self, Error> {
         let record = record(&location)?;
         let runtime_root = record["runtimeRoot"]
             .as_str()
@@ -492,6 +513,7 @@ impl Guard {
             return Err(Error::Identity);
         }
         let mut guard = Self {
+            ui_only,
             location,
             boot: record["boot"].as_str().ok_or(Error::Identity)?.into(),
             capsule,
@@ -505,7 +527,11 @@ impl Guard {
             configuration: configuration(trust),
         };
         guard.verify_process(&record)?;
-        guard.receipt = guard.request("prepare")?;
+        if ui_only {
+            guard.request("inspect")?;
+        } else {
+            guard.receipt = guard.request("prepare")?;
+        }
         Ok(guard)
     }
     fn verify_process(&self, r: &Value) -> Result<(), Error> {
@@ -605,13 +631,18 @@ impl Guard {
         Ok(value["receipt"].clone())
     }
     pub fn verify(&self) -> Result<(), Error> {
+        if self.ui_only {
+            return self.request("inspect").map(|_| ());
+        }
         if self.request("verify")? != self.receipt {
             return Err(Error::Identity);
         }
         Ok(())
     }
     pub fn cancel(&self) {
-        let _ = self.request("cancel");
+        if !self.ui_only {
+            let _ = self.request("cancel");
+        }
     }
     pub fn save(&self) -> Result<(), Error> {
         if installer::recovery_phase(&self.transaction)? != installer::Phase::Ready {
@@ -710,9 +741,18 @@ impl Guard {
         target: &Path,
         trust: &Trust,
     ) -> Result<(PathBuf, Location), Error> {
+        Self::startup_connection(transaction, target, trust)
+            .map(|(root, location, _)| (root, location))
+    }
+    /// A UI-only receipt is a reconnect contract, never permission to launch a daemon.
+    pub fn startup_connection(
+        transaction: &Path,
+        target: &Path,
+        trust: &Trust,
+    ) -> Result<(PathBuf, Location, bool), Error> {
         NativePlatform.verify(target, trust, &trust.current_build, None)?;
         let guard = Self::load_checked(transaction, target, &trust.current_build, trust, false)?;
-        Ok((guard.capsule, guard.location))
+        Ok((guard.capsule, guard.location, guard.ui_only))
     }
 }
 fn random_hex() -> Result<String, Error> {
@@ -723,7 +763,7 @@ fn random_hex() -> Result<String, Error> {
         .map_err(|_| Error::Native)?;
     Ok(crate::transport::hex(&b))
 }
-fn configuration(trust: &Trust) -> String {
+pub(crate) fn configuration(trust: &Trust) -> String {
     use sha2::{Digest, Sha256};
     // Struct field order is stable even when the GUI enables serde_json's
     // preserve_order feature and the standalone helper does not.

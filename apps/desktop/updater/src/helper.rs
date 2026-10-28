@@ -504,7 +504,7 @@ pub fn run_native(
     if crate::fixture::enabled() {
         eprintln!("fixture-helper-stage-reopened");
     }
-    let _guard = crate::coordination::Guard::load(
+    let _guard = crate::app_update::ExitGuard::load(
         &root,
         &root.join("payload").join(&trust.bundle_name),
         staged.build(),
@@ -540,7 +540,7 @@ pub fn run_native(
         // Successful verification after OS-observed parent exit proves the same
         // reservation remained uninterrupted through exit. Expiry/owner death
         // refuses installation even if COMMIT had already been acknowledged.
-        crate::coordination::Guard::load(&root, candidate, staged.build(), &trust).map(|_| ())
+        crate::app_update::ExitGuard::load(&root, candidate, staged.build(), &trust).map(|_| ())
     })
 }
 

@@ -17,7 +17,15 @@ use std::{
 enum Job {
     Check(u64, Option<Access>, Cancellation),
     Download(u64, Candidate, Option<Access>, Cancellation),
-    Prepare(u64, Safety, Option<crate::coordination::Location>),
+    Local(u64, PathBuf, Cancellation),
+    Prepare(
+        u64,
+        Safety,
+        Option<crate::coordination::Location>,
+        Option<crate::app_update::Connection>,
+        bool,
+        serde_json::Value,
+    ),
     Commit(u64, Safety),
     Abort(u64),
     HelperStopped(u64, Error),
@@ -26,7 +34,8 @@ enum Job {
 impl Job {
     fn operation(&self) -> u64 {
         match self {
-            Self::Check(id, ..)
+            Self::Local(id, ..)
+            | Self::Check(id, ..)
             | Self::Download(id, ..)
             | Self::Prepare(id, ..)
             | Self::Commit(id, ..) => *id,
@@ -45,6 +54,9 @@ pub struct Worker {
     cancellation: Option<(u64, Cancellation)>,
     stopped: Arc<AtomicBool>,
     runtime: Option<crate::coordination::Location>,
+    external: Option<crate::app_update::Connection>,
+    ui_only: bool,
+    navigation: serde_json::Value,
     recovery: Option<Receiver<Recovery>>,
 }
 impl Worker {
@@ -77,7 +89,7 @@ impl Worker {
                 let mut staged = None;
                 let mut prepared = None;
                 let mut helper_operation = None;
-                let mut runtime_guard: Option<crate::coordination::Guard> = None;
+                let mut runtime_guard: Option<crate::app_update::ExitGuard> = None;
                 let mut commit_attempted = false;
                 while let Ok(job) = jobs.recv() {
                     if shutdown.load(Ordering::Acquire) || matches!(job, Job::Shutdown) {
@@ -142,7 +154,21 @@ impl Worker {
                             }
                             Ok(Outcome::Staged(candidate))
                         }
-                        Job::Prepare(id, safety, runtime) => {
+                        Job::Local(_, directory, cancel) => {
+                            let stage = crate::iteration::stage(
+                                &directory,
+                                &target,
+                                &trust,
+                                &NativePlatform,
+                                &cancel,
+                            )?;
+                            let candidate = Candidate {
+                                version: stage.build().into(),
+                            };
+                            staged = Some(stage);
+                            Ok(Outcome::Staged(candidate))
+                        }
+                        Job::Prepare(id, safety, runtime, external, ui_only, navigation) => {
                             safety.validate_client()?;
                             if prepared.is_some() {
                                 return Err(Error::Busy);
@@ -153,14 +179,43 @@ impl Worker {
                             if let Some(old) = runtime_guard.take() {
                                 old.cancel();
                             }
-                            let guard = crate::coordination::Guard::prepare(
-                                runtime.ok_or(Error::RuntimeUnverified)?,
-                                &stage.root.join("payload").join(&trust.bundle_name),
-                                &stage.root,
-                                stage.build(),
-                                &trust,
-                            )?;
-                            guard.save()?;
+                            let guard = if let Some(connection) = external {
+                                crate::app_update::ExitGuard::prepare_external(
+                                    connection,
+                                    &target,
+                                    &stage.root,
+                                    stage.build(),
+                                    &trust,
+                                )?
+                            } else {
+                                let location = runtime.ok_or(Error::RuntimeUnverified)?;
+                                let candidate = stage.root.join("payload").join(&trust.bundle_name);
+                                let guard = if ui_only {
+                                    crate::coordination::Guard::prepare_ui(
+                                        location,
+                                        &candidate,
+                                        &stage.root,
+                                        stage.build(),
+                                        &trust,
+                                    )?
+                                } else {
+                                    crate::coordination::Guard::prepare(
+                                        location,
+                                        &candidate,
+                                        &stage.root,
+                                        stage.build(),
+                                        &trust,
+                                    )?
+                                };
+                                guard.save()?;
+                                crate::app_update::ExitGuard::Retained(guard)
+                            };
+                            if let Err(error) =
+                                crate::app_update::save_navigation(&stage.root, &navigation)
+                            {
+                                guard.cancel();
+                                return Err(error);
+                            }
                             runtime_guard = Some(guard);
                             let sender = event_sender.clone();
                             let stopped = shutdown.clone();
@@ -227,6 +282,9 @@ impl Worker {
             cancellation: None,
             stopped,
             runtime: None,
+            external: None,
+            ui_only: false,
+            navigation: serde_json::Value::Null,
             recovery: Some(recovery_receive),
         })
     }
@@ -238,6 +296,21 @@ impl Worker {
     }
     pub(crate) fn abort_exit(&mut self, operation: u64) -> Result<(), Error> {
         self.send(Job::Abort(operation))
+    }
+    pub fn supply_external(&mut self, connection: crate::app_update::Connection) {
+        self.external = Some(connection);
+        self.runtime = None;
+    }
+    pub fn supply_navigation(&mut self, navigation: serde_json::Value) {
+        self.navigation = navigation;
+    }
+    pub fn ui_only(&mut self, value: bool) {
+        self.ui_only = value;
+    }
+    pub(crate) fn stage_local(&mut self, operation: u64, directory: PathBuf) -> Result<(), Error> {
+        let cancel = Cancellation::default();
+        self.cancellation = Some((operation, cancel.clone()));
+        self.send(Job::Local(operation, directory, cancel))
     }
     pub fn supply_runtime(&mut self, runtime: crate::coordination::Location) {
         self.runtime = Some(runtime);
@@ -272,7 +345,14 @@ impl Backend for Worker {
         self.send(Job::Download(operation, candidate.clone(), access, cancel))
     }
     fn prepare_exit(&mut self, operation: u64, safety: Safety) -> Result<(), Error> {
-        self.send(Job::Prepare(operation, safety, self.runtime.clone()))
+        self.send(Job::Prepare(
+            operation,
+            safety,
+            self.runtime.clone(),
+            self.external.clone(),
+            self.ui_only,
+            self.navigation.clone(),
+        ))
     }
     fn commit_exit(&mut self, operation: u64, safety: Safety) -> Result<(), Error> {
         self.send(Job::Commit(operation, safety))

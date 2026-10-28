@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 #[cfg(target_os = "macos")]
 use pilot_desktop_updater::runtime;
 use pilot_desktop_updater::{
+    app_update::{Connection, ExitGuard},
     coordination::{Guard, Location},
     helper,
     installer::{self, NativePlatform, Platform},
@@ -43,8 +44,10 @@ await writeFile(join(home,'storage-lineage'),lineageId,{mode:0o600});
 let frozen=false;
 const clock=()=>existsSync(join(home,'../expire-reservation'))?Number.MAX_SAFE_INTEGER:performance.now();
 const gate=new UpdateReservation({freezeAdmissions(){if(frozen)throw Error('busy');frozen=true;return()=>{frozen=false;};},async blockers(){return [];}},clock);
-owner.updates(async(action,receipt)=>{if(action==='inspect')return receipt;if(action==='prepare')return gate.prepare(receipt.operationId);if(action==='cancel'){gate.cancel(receipt);return receipt;}return gate.verify(receipt);});
-owner.ready({daemonId,lineageId,daemonVersion:build.version,protocolVersion:1,minimumClientProtocolVersion:1,platform:build.platform,arch:build.arch,capabilities:{independentExecution:true}});
+owner.updates(async(action,receipt)=>{if(action==='inspect')return receipt;if(existsSync(join(home,'../no-management')))throw Error('management forbidden during UI-only reload');if(action==='prepare')return gate.prepare(receipt.operationId);if(action==='cancel'){gate.cancel(receipt);return receipt;}return gate.verify(receipt);});
+const hello={daemonId,lineageId,daemonVersion:build.version,protocolVersion:1,minimumClientProtocolVersion:1,platform:build.platform,arch:build.arch,capabilities:{independentExecution:true}};
+owner.install((req,res)=>{if(req.method==='GET'&&req.url==='/api/hello'){res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(hello));}else{res.writeHead(403).end();}});
+owner.ready(hello);
 console.log('READY');
 "#;
 
@@ -113,7 +116,7 @@ fn run(args: Vec<String>) -> Result<()> {
         if root.join("fail-startup").exists() {
             return Err("owned startup failure injection".into());
         }
-        Guard::acknowledge_startup(&transaction, &target, &trust).map_err(err)?;
+        ExitGuard::acknowledge_startup(&transaction, &target, &trust).map_err(err)?;
         fs::write(
             root.join("startup-acknowledged"),
             b"actual native startup acknowledgement",
@@ -146,15 +149,32 @@ fn run(args: Vec<String>) -> Result<()> {
             &Cancellation::default(),
         )
         .map_err(err)?;
-        let guard = Guard::prepare(
-            location,
-            &stage.join(format!("payload/{}", trust.bundle_name)),
-            &stage,
-            staged.build(),
-            &trust,
-        )
-        .map_err(err)?;
-        guard.save().map_err(err)?;
+        let guard = if args[2] == "external" {
+            let daemon = fs::read_to_string(location.home.join("daemon-id"))?
+                .trim()
+                .to_owned();
+            let lineage = fs::read_to_string(location.home.join("storage-lineage"))?
+                .trim()
+                .to_owned();
+            ExitGuard::prepare_external(
+                Connection::new(location, daemon, lineage),
+                &target,
+                &stage,
+                staged.build(),
+                &trust,
+            )
+            .map_err(err)?
+        } else {
+            let candidate = stage.join(format!("payload/{}", trust.bundle_name));
+            let guard = if args[2] == "ui-only" {
+                Guard::prepare_ui(location, &candidate, &stage, staged.build(), &trust)
+            } else {
+                Guard::prepare(location, &candidate, &stage, staged.build(), &trust)
+            }
+            .map_err(err)?;
+            guard.save().map_err(err)?;
+            ExitGuard::Retained(guard)
+        };
         fs::write(
             root.join("transaction"),
             stage.as_os_str().as_encoded_bytes(),
@@ -189,6 +209,8 @@ fn run(args: Vec<String>) -> Result<()> {
         || !matches!(
             args[0].as_str(),
             "--verify"
+                | "--verify-external"
+                | "--verify-ui-only"
                 | "--verify-cancel"
                 | "--verify-expired"
                 | "--verify-interrupted"
@@ -199,6 +221,8 @@ fn run(args: Vec<String>) -> Result<()> {
         return Err("Use --verify TEMP_ROOT INPUTS NODE with synthetic old-build trust".into());
     }
     let mode = match args[0].as_str() {
+        "--verify-external" => "external",
+        "--verify-ui-only" => "ui-only",
         "--verify-cancel" => "cancel",
         "--verify-expired" => "expired",
         "--verify-interrupted" => "interrupt",
@@ -291,6 +315,22 @@ fn run(args: Vec<String>) -> Result<()> {
     if rx.recv_timeout(Duration::from_secs(10))? != "READY\n" {
         return Err("owned daemon did not become ready".into());
     }
+    if matches!(mode, "external" | "ui-only") {
+        fs::write(
+            root.join("no-management"),
+            b"UI-only restart must not acquire daemon authority",
+        )?;
+    }
+    if mode == "external" {
+        let path = location.home.join(".daemon-owner.json");
+        let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+        record["build"] = serde_json::Value::Null;
+        record
+            .as_object_mut()
+            .ok_or("owner record")?
+            .remove("runtimeRoot");
+        fs::write(path, serde_json::to_vec(&record)?)?;
+    }
     let original = fs::read(location.home.join(".daemon-owner.json"))?;
     let mut parent = Owned(
         Command::new(old.join(pilot_desktop_updater::layout::GUI))
@@ -319,7 +359,7 @@ fn run(args: Vec<String>) -> Result<()> {
     } else {
         wait_exit(&mut parent.0, Duration::from_secs(90))?;
     }
-    if mode != "success" {
+    if !matches!(mode, "success" | "external" | "ui-only") {
         let transaction = PathBuf::from(String::from_utf8(fs::read(root.join("transaction"))?)?);
         if mode == "launch-fails" {
             let deadline = Instant::now() + Duration::from_secs(90);

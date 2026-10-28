@@ -1,5 +1,10 @@
 //! App-owned updater. Signed metadata, controlled transport, explicit staged restart.
 use std::time::Duration;
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
+pub mod app_update;
 pub mod archive;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
@@ -10,6 +15,11 @@ pub mod coordination;
 pub mod fixture;
 pub mod helper;
 pub mod installer;
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
+mod iteration;
 pub mod layout;
 #[cfg(any(test, target_os = "linux"))]
 pub mod linux;
@@ -433,6 +443,35 @@ impl<B: Backend> Updater<B> {
     all(target_os = "linux", feature = "native-linux")
 ))]
 impl Updater<worker::Worker> {
+    /// User-selected local build, authenticated with the unchanged compiled key.
+    pub fn stage_local(
+        &mut self,
+        directory: std::path::PathBuf,
+        now: Duration,
+    ) -> Result<(), Error> {
+        if !matches!(
+            self.state,
+            State::Idle
+                | State::Current
+                | State::Failed(_)
+                | State::Cancelled
+                | State::Available(_)
+        ) {
+            return Err(Error::Busy);
+        }
+        let operation = self.start(Work::Downloading)?;
+        if let Err(error) = self.backend.stage_local(operation, directory) {
+            self.complete(
+                Completion {
+                    operation,
+                    outcome: Outcome::Failed(error),
+                },
+                now,
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
     /// Client receipts do not assert Runtime::Independent. The concrete native
     /// worker must obtain and verify the retained-root reservation before READY.
     pub fn prepare_retained(&mut self, safety: Safety, now: Duration) -> Result<(), Error> {

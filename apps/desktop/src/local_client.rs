@@ -41,6 +41,33 @@ impl LocalOptions {
         })
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn external_update_connection(
+        &self,
+    ) -> Option<pilot_desktop_updater::app_update::Connection> {
+        if !self.externally_managed {
+            return None;
+        }
+        Some(pilot_desktop_updater::app_update::Connection::new(
+            pilot_desktop_updater::coordination::Location {
+                home: self.native_home.clone()?,
+                port: self.port,
+                policy: self.update_policy.clone(),
+            },
+            self.daemon_id.clone(),
+            self.lineage_id.clone(),
+        ))
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn from_update_connection(
+        connection: pilot_desktop_updater::app_update::Connection,
+    ) -> Result<Self, Failure> {
+        let options = Self::discover_at(connection.location().clone())?;
+        if options.daemon_id != connection.daemon() || options.lineage_id != connection.lineage() {
+            return Err("Update Local identity changed. No replacement daemon was started.");
+        }
+        options.verify_existing()
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn discover_at(
         location: pilot_desktop_updater::coordination::Location,
     ) -> Result<Self, &'static str> {
@@ -113,8 +140,14 @@ impl LocalOptions {
     }
 
     /// Explicit existing-daemon connection. No launcher, capsule publication or profile writes.
-    pub(crate) fn connect_existing() -> Result<Self, Failure> {
+    pub fn connect_existing() -> Result<Self, Failure> {
         Self::discover()?.verify_existing()
+    }
+    pub(crate) fn verify_running(self) -> Result<Self, Failure> {
+        let external = self.externally_managed;
+        let mut options = self.verify_existing()?;
+        options.externally_managed = external;
+        Ok(options)
     }
     fn verify_existing(mut self) -> Result<Self, Failure> {
         let runtime = tokio::runtime::Builder::new_current_thread()

@@ -216,7 +216,7 @@ impl LocalViewer {
             Target::Empty => true,
         }
     }
-    fn restore_location(
+    pub(super) fn restore_location(
         &mut self,
         location: &Location,
         window: &mut Window,

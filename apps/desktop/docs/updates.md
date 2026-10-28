@@ -5,6 +5,13 @@ an explicitly saved automatic-check preference (off by default), authenticated
 download, and an explicit **Install and restart…** action. A check or download
 never arms installation. Ordinary Quit never installs an update.
 
+**Load local build…** stages an explicitly selected, source-pinned signed complete
+package. **Reload UI** checkpoints drafts/preferences and restores supported view
+selection without pausing or replacing the daemon. Externally managed connections
+can also install ordinary verified app-only updates, then reconnect to the same
+pinned Local identity without daemon-management authority. See the exact
+[UI iteration workflow](ui-iteration.md), requirements and limits.
+
 Development inputs are deliberately unconfigured. No feed, public trust key,
 Developer ID policy, credentials or Swift updater configuration is inferred.
 The unconfigured panel says so and disables network/install actions. A compiled,
@@ -65,9 +72,11 @@ authentication for the ordinary loopback API.
 
 ## Explicit install protocol
 
-0. Pause agents first, as the Swift app does: renew `POST /api/update/pause` off the
+0. For a conventional managed-runtime install, pause agents first: renew `POST /api/update/pause` off the
    UI thread until every agent has paused after its current tool call. Input stays
    usable while waiting; Cancel stops renewal and agents resume within 30 seconds.
+   UI-only reloads and external app-only updates skip this entire daemon-management
+   step. Their daemon remains active throughout the app swap.
 1. Fence UI admissions and reject preedit, unsaved secondary forms, unresolved
    deliveries/model changes/mission outcomes, active or unreaped visual helpers,
    and pending preference operations. Nothing is discarded to obtain readiness.
@@ -78,16 +87,20 @@ authentication for the ordinary loopback API.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
    same-volume transaction and start the matching helper, which waits for COMMIT.
-4. Revalidate fresh exact checkpoint receipts and the reservation before COMMIT.
+   Bundled UI-only reloads inspect the retained proof without reserving the daemon.
+   External app-only updates record only their exact Local profile/port/hello pin.
+4. Revalidate fresh exact checkpoint receipts and the applicable reservation,
+   retained proof or external identity pin before app-helper COMMIT.
    Only acknowledged `ExitAuthorized` requests a clean GUI quit. Uncertain COMMIT
    stays recovery-required and fenced; it is not an undo or permission to edit.
-5. The helper observes actual OS parent exit, verifies the same reservation again,
+5. The helper observes actual OS parent exit, verifies the same guard again,
    then swaps the complete GUI bundle. Expiry/revocation before exit refuses the
    swap even after COMMIT. The existing daemon and its capsule remain untouched.
 6. Relaunch carries a durable receipt. The new GUI restores the receipt-bound
    profile/port/denial-policy instead of trusting Launch Services environment,
    loads durable state, and explicitly acknowledges startup. `open` success alone
-   is not startup success.
+   is not startup success. UI-only/external receipts reconnect without invoking a
+   daemon launcher; ordinary update checks keep the same release configuration.
 
 ## Recovery and evidence boundaries
 

@@ -42,6 +42,45 @@ pub struct Staged {
     pub(crate) lock: File,
 }
 
+fn verify_source(bundle: &Path, manifest: &crate::manifest::Manifest) -> Result<(), Error> {
+    let Some(source) = manifest.source.as_deref() else {
+        return Ok(());
+    };
+    if cfg!(target_os = "linux") {
+        return Ok(());
+    } // Linux platform verifies its signed full inventory.
+    if source.len() != 40
+        || !source
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(Error::Identity);
+    }
+    for name in [
+        "rust-inputs.json",
+        "native-inputs.json",
+        "updater-inputs.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_slice(&read_small(
+            &bundle.join("Contents/Resources").join(name),
+            128 * 1024,
+        )?)
+        .map_err(|_| Error::Identity)?;
+        if value["source"] != source {
+            return Err(Error::Identity);
+        }
+    }
+    let value: serde_json::Value = serde_json::from_slice(&read_small(
+        &bundle.join("Contents/Resources/bundled-runtime.json"),
+        8 * 1024 * 1024,
+    )?)
+    .map_err(|_| Error::Identity)?;
+    if value["build"]["source"] != source {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
+
 pub trait Platform {
     fn verify(
         &self,
@@ -61,7 +100,8 @@ pub trait Platform {
             trust,
             &manifest.build,
             Some(&manifest.short_version),
-        )
+        )?;
+        verify_source(bundle, manifest)
     }
     fn swap(&self, parent: &File, staged_relative: &Path, target_name: &Path) -> Result<(), Error>;
     fn relaunch(&self, app: &Path, transaction: &Path) -> Result<(), Error>;

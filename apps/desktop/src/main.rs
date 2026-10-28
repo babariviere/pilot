@@ -62,7 +62,7 @@ fn main() {
         }),
     );
     let options = if local {
-        Some(LocalOptions::discover().unwrap_or_else(|error| {
+        Some(LocalOptions::connect_existing().unwrap_or_else(|error| {
             eprintln!("{error}");
             std::process::exit(1);
         }))

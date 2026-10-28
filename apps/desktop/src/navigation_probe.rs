@@ -60,6 +60,8 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
         canonical_reader_navigation(cx);
         return;
     }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    super::update_lifecycle::probe_update_navigation(cx);
     let captures = std::env::var_os("PILOT_NEXT_NAVIGATION_DIR").map(std::path::PathBuf::from);
     if let Some(d) = &captures {
         std::fs::create_dir_all(d).unwrap();

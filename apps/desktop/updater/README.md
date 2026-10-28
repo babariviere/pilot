@@ -54,6 +54,11 @@ helper. No default points at the Swift application, its feed, credentials or key
   helper-status watcher only while a helper exists, no idle polling, no
   network/file/signature work in render/UI handlers. Completion callback only schedules
   a foreground wakeup; the host drains results and reschedules one monotonic deadline.
+- `src/app_update.rs`, `src/iteration.rs`: separate external app-only pins from
+  managed runtime reservations, and import explicitly selected source-pinned local
+  signed full packages through the same staging/helper/native installer. UI-only
+  retained reloads inspect the capsule without pausing agents. See
+  [UI iteration](../docs/ui-iteration.md) for commands and retained-backup limits.
 
 GPUI Kit's [auto-update guide](https://gpui-kit.com/docs/auto-update/) is guidance,
 not an installer. The inspected gpui-updater Sparkle adapter still installs on ordinary

@@ -46,7 +46,7 @@ fn arbitrary_group_writable_parent_is_still_refused() {
     fs::set_permissions(&temp.0, fs::Permissions::from_mode(0o700)).unwrap();
     installer::validate_parents(&temp.0).unwrap();
 }
-fn trust() -> manifest::Trust {
+pub(crate) fn trust() -> manifest::Trust {
     manifest::Trust {
         repository: "owner/private-repo".into(),
         application_id: "com.example.synthetic.next".into(),
@@ -1567,4 +1567,123 @@ fn actual_security_framework_validates_whole_temporary_bundle_identity_version_a
         installer::MacPlatform.verify(&app, &trust(), "101.1", Some("0.1.1")),
         Err(Error::Signature)
     );
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn local_signed_source_stages_then_normal_release_verification_still_works() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    let input = temp.0.join("local-build");
+    fs::create_dir(&input).unwrap();
+    let source = "a".repeat(40);
+    let receipt = serde_json::to_vec(&serde_json::json!({"source":source})).unwrap();
+    let inventory = serde_json::to_vec(&serde_json::json!({"build":{"source":source}})).unwrap();
+    let bytes = zip_files(&[
+        ("Pilot Next.app/Contents/build", b"101.1"),
+        (
+            "Pilot Next.app/Contents/id",
+            trust().application_id.as_bytes(),
+        ),
+        (
+            "Pilot Next.app/Contents/Resources/rust-inputs.json",
+            &receipt,
+        ),
+        (
+            "Pilot Next.app/Contents/Resources/native-inputs.json",
+            &receipt,
+        ),
+        (
+            "Pilot Next.app/Contents/Resources/updater-inputs.json",
+            &receipt,
+        ),
+        (
+            "Pilot Next.app/Contents/Resources/bundled-runtime.json",
+            &inventory,
+        ),
+    ]);
+    let mut meta = metadata(&bytes);
+    meta.source = Some(source.clone());
+    fs::write(input.join(manifest::MANIFEST_ASSET), envelope(&meta)).unwrap();
+    fs::write(input.join(manifest::ARCHIVE_ASSET), &bytes).unwrap();
+    fs::write(
+        input.join("iteration.json"),
+        serde_json::to_vec(&serde_json::json!({"schema":1,"source":source,"archive_asset_id":12}))
+            .unwrap(),
+    )
+    .unwrap();
+    let stage = iteration::stage(
+        &input,
+        &target,
+        &trust(),
+        &FakePlatform::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        installer::recovery_phase(stage.root()).unwrap(),
+        installer::Phase::Ready
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "100.1",
+        "staging never installs"
+    );
+    // The local source is not a feed override or an alternate trust key. A subsequent
+    // ordinary release discovery uses the same publisher and numeric build ordering.
+    let mut updated_trust = trust();
+    updated_trust.current_build = "101.1".into();
+    let mut next = metadata(&archive());
+    next.build = "102.1".into();
+    let (transport, _) = network(vec![
+        reply(200, None, release()),
+        reply(200, None, envelope(&next)),
+    ]);
+    assert_eq!(
+        transport
+            .discover(&updated_trust, None, &Default::default())
+            .unwrap()
+            .unwrap()
+            .manifest()
+            .build,
+        "102.1"
+    );
+    drop(stage);
+    // Source mismatch refuses before creating any transaction.
+    fs::write(
+        input.join("iteration.json"),
+        serde_json::to_vec(
+            &serde_json::json!({"schema":1,"source":"b".repeat(40),"archive_asset_id":12}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(matches!(
+        iteration::stage(
+            &input,
+            &target,
+            &trust(),
+            &FakePlatform::default(),
+            &Default::default()
+        ),
+        Err(Error::Identity)
+    ));
+    // Correct pins cannot authorize altered archive bytes.
+    fs::write(
+        input.join("iteration.json"),
+        serde_json::to_vec(&serde_json::json!({"schema":1,"source":source,"archive_asset_id":12}))
+            .unwrap(),
+    )
+    .unwrap();
+    fs::write(input.join(manifest::ARCHIVE_ASSET), vec![b'x'; bytes.len()]).unwrap();
+    assert!(matches!(
+        iteration::stage(
+            &input,
+            &target,
+            &trust(),
+            &FakePlatform::default(),
+            &Default::default()
+        ),
+        Err(Error::Signature)
+    ));
 }

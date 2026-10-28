@@ -82,10 +82,14 @@ Current `--local` already supports user-driven chat actions, including create,
 Send and Stop, with its existing identity/delivery guards. The new choice uses
 that same client, not a read-only viewer and not a new mutation permission.
 `--local-check` remains read-only. The window and Updates identify the new
-connection as externally managed. Daemon upgrade/pause and app installation are
-unavailable in this session; update checks/downloads do not install. Update
-receipt recovery cannot switch to this path. Bundled exact-capsule validation
-and all other startup refusals remain unchanged.
+connection as externally managed. App-only installation is independent of daemon
+management: normal verified updates and explicit local UI reloads may replace the
+app, then reconnect through the receipt-bound profile/port/identity flow. They
+never pause, prepare, reserve, upgrade or replace that daemon. A changed identity
+or incompatible hello refuses relaunch without starting a replacement. Update
+receipts select this path only when explicitly prepared for an external connection;
+managed retained receipts never silently fall back. Bundled exact-capsule validation
+and all other startup refusals remain unchanged. See [UI iteration](ui-iteration.md).
 
 There is no standalone GPUI daemon-restart command. Settings' **Install and
 restart…** installs/relaunches the GUI using the retained-runtime update contract;

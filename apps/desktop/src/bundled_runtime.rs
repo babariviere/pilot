@@ -44,6 +44,14 @@ pub(crate) fn update_receipt() -> Option<PathBuf> {
     UPDATE_RECEIPT.get().cloned()
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+static UPDATE_NAVIGATION: std::sync::OnceLock<std::sync::Mutex<Option<serde_json::Value>>> =
+    std::sync::OnceLock::new();
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn take_update_navigation() -> Option<serde_json::Value> {
+    UPDATE_NAVIGATION.get()?.lock().ok()?.take()
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg(any(not(target_os = "linux"), test))]
@@ -404,21 +412,40 @@ fn start_runtime(
     #[cfg(not(target_os = "linux"))]
     validate(root, &cancel, deadline)?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    if let Some(receipt) = update_receipt().filter(|_| pin_update) {
+        let trust = pilot_desktop_updater::helper::compiled_trust()
+            .map_err(|_| "Update startup trust is unconfigured.")?;
+        let target = root
+            .canonicalize()
+            .map_err(|_| "Cannot resolve app bundle.")?;
+        let navigation = pilot_desktop_updater::app_update::navigation(&receipt)
+            .map_err(|_| "Update navigation checkpoint is unreadable. Nothing was replayed.")?;
+        let _ = UPDATE_NAVIGATION.set(std::sync::Mutex::new(Some(navigation)));
+        if let Some(connection) = pilot_desktop_updater::app_update::ExitGuard::external_startup(&receipt, &target, &trust)
+            .map_err(|_| "Update external connection identity failed. No daemon was started or update acknowledged.")? {
+            return crate::LocalOptions::from_update_connection(connection);
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let pinned = if let Some(receipt) = update_receipt().filter(|_| pin_update) {
         let trust = pilot_desktop_updater::helper::compiled_trust()
             .map_err(|_| "Update startup trust is unconfigured.")?;
-        Some(pilot_desktop_updater::coordination::Guard::startup_runtime(&receipt,&root.canonicalize().map_err(|_|"Cannot resolve app bundle.")?,&trust)
+        Some(pilot_desktop_updater::coordination::Guard::startup_connection(&receipt,&root.canonicalize().map_err(|_|"Cannot resolve app bundle.")?,&trust)
             .map_err(|_|"Update startup configuration/retained-runtime proof failed. No daemon was started or update acknowledged.")?)
     } else {
         None
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    if let Some((_, location)) = &pinned {
+    if let Some((_, location, ui_only)) = &pinned {
         let _ = PROFILE.set(location.clone());
+        if *ui_only {
+            // UI-only reconnects; invoking a launcher could start a daemon after owner death.
+            return crate::LocalOptions::discover_at(location.clone())?.verify_running();
+        }
     }
     let runtime_root = root.to_path_buf();
     #[cfg(target_os = "macos")]
-    let runtime_root = if let Some((root, _)) = &pinned {
+    let runtime_root = if let Some((root, _, _)) = &pinned {
         root.clone()
     } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
         let capsule = own_capsule(root, &trust, &cancel, deadline)?;
@@ -429,7 +456,7 @@ fn start_runtime(
         runtime_root
     };
     #[cfg(target_os = "linux")]
-    let runtime_root = if let Some((root, _)) = &pinned {
+    let runtime_root = if let Some((root, _, _)) = &pinned {
         root.clone()
     } else {
         let capsule = own_capsule(&runtime_root, &cancel, deadline)?;

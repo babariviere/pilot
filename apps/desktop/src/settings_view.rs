@@ -30,6 +30,8 @@ pub(crate) struct SettingsPreferences {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) updater: Option<Entity<crate::updates_view::Updates>>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) update_connection: Option<pilot_desktop_updater::app_update::Connection>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) update_location: Option<pilot_desktop_updater::coordination::Location>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     update_events: Vec<Subscription>,
@@ -52,6 +54,8 @@ impl SettingsPreferences {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_location: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
+            update_connection: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_events: Vec::new(),
             restart_locked: false,
             models: None,
@@ -71,7 +75,8 @@ impl SettingsPreferences {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.updater.is_none() {
             let location = self.update_location.clone();
-            let updater = cx.new(|cx| crate::updates_view::Updates::new(location, cx));
+            let connection = self.update_connection.clone();
+            let updater = cx.new(|cx| crate::updates_view::Updates::new(location, connection, cx));
             self.update_events
                 .push(cx.subscribe(&updater, |_, _, event, cx| cx.emit(*event)));
             self.updater = Some(updater);
@@ -224,7 +229,7 @@ impl SettingsPreferences {
         if self
             .updater
             .as_ref()
-            .is_some_and(|u| u.read(cx).unsaved_access(cx))
+            .is_some_and(|u| u.read(cx).unsaved_access(cx) || u.read(cx).choosing_local())
         {
             self.close_notice = true;
             cx.notify();
