@@ -25,6 +25,7 @@ enum Scenario {
     Refused,
     Thinking,
     ContextUsage,
+    ProviderUsage,
     Todos,
     ListAdmission,
     ListSnapshot,
@@ -217,6 +218,17 @@ impl Mock {
                                     socket.send(Frame::Text(json!({"type":"session","session":{"id":"old-0","title":"After new events","state":"idle","projectId":"p-a"}}).to_string().into())).await.unwrap();
                                 } else {
                                 socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working","projectId":"p-a"},{"id":"b","title":"Synthetic B","state":"idle","projectId":"p-b"}]}).to_string().into())).await.unwrap();
+                                }
+                                if matches!(scenario, Scenario::ProviderUsage) {
+                                    for usage in [
+                                        json!({"subscription":{"provider":"anthropic","fetchedAt":1000,"windows":[{"label":"5h","usedPercent":96}]}}),
+                                        json!({"subscription":{"provider":"anthropic","fetchedAt":2000,"windows":[{"label":"5h","usedPercent":0},{"label":"Week","usedPercent":30}]}}),
+                                        json!({"subscription":{"provider":"anthropic","fetchedAt":3000,"windows":[],"error":"private provider response"}}),
+                                        json!({}),
+                                    ] {
+                                        if steps.recv().await.is_err() { return; }
+                                        socket.send(Frame::Text(json!({"type":"session","session":{"id":"a","title":"Synthetic A","usage":usage}}).to_string().into())).await.unwrap();
+                                    }
                                 }
                                 if matches!(scenario, Scenario::ContextUsage) {
                                     for usage in [json!({"context":{"tokens":42,"contextWindow":100}}), json!({"context":{"tokens":80,"contextWindow":100}}), json!({})] {
@@ -464,6 +476,9 @@ async fn final_close_does_not_automatically_reopen() {
         1
     );
 }
+
+#[path = "provider_usage_reader_tests.rs"]
+mod provider_usage_reader_tests;
 
 #[path = "context_usage_reader_tests.rs"]
 mod context_usage_reader_tests;

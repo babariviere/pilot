@@ -100,6 +100,7 @@ pub(crate) struct Chat {
     pub(crate) pull_requests: Vec<crate::jump::PullRequest>,
     pub(crate) failure: Option<crate::session_failure::Failure>,
     pub(crate) context_usage: crate::context_usage::Usage,
+    pub(crate) subscription_usage: Option<crate::provider_usage::Snapshot>,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
     pub(crate) attention: Option<crate::attention::Attention>,
     pub(crate) id: String,
@@ -160,6 +161,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         pull_requests: crate::jump::pull_requests(value),
         failure: crate::session_failure::read(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),
+        subscription_usage: crate::provider_usage::Snapshot::read(&value["usage"]["subscription"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),
         attention: crate::attention::project(value, signal),
         id: id.into(),
@@ -257,7 +259,7 @@ pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
 }
 
-fn bounded(text: &str, cap: usize) -> String {
+pub(crate) fn bounded(text: &str, cap: usize) -> String {
     if text.len() <= cap {
         return text.into();
     }

@@ -69,6 +69,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                     failure: None,
                                     pull_requests: Vec::new(),
                                     context_usage: Default::default(),
+                                    subscription_usage: None,
                                     id: id.into(),
                                     title: title.into(),
                                     state: title.into(),

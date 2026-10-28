@@ -247,6 +247,7 @@ impl LocalViewer {
                     failure: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
+                    subscription_usage: None,
                     id: key.clone(),
                     title: "New chat".into(),
                     state: "Draft".into(),

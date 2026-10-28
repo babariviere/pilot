@@ -89,6 +89,13 @@ test=false
             self.assertTrue(scoped.plan(self.args(*values), self.root)[3])
         self.assertFalse(scoped.plan(self.args("--test", "settings_state"), self.root)[3])
 
+    def test_provider_usage_uses_only_cached_summary_projections(self):
+        self.assertFalse(scoped.plan(self.args("--unit", "provider_usage"), self.root)[3])
+        (self.root / "tests/provider_usage.rs").write_text("fn main() {}\n")
+        manifest = self.root / "Cargo.toml"
+        manifest.write_text(manifest.read_text() + '\n[[test]]\nname="provider_usage"\nharness=false\nrequired-features=["native-probes"]\n')
+        self.assertFalse(scoped.plan(self.args("--test", "provider_usage"), self.root)[3])
+
     def test_conversation_images_use_static_rasters_not_the_visual_worker(self):
         self.assertFalse(scoped.plan(self.args("--unit", "conversation_images"), self.root)[3])
         (self.root / "tests/conversation_images.rs").write_text("fn main() {}\n")

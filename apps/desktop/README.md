@@ -89,6 +89,15 @@ evidence is never shown as zero. Refresh is manual. No remote hosts, resets,
 reconciliation writes or budget enforcement. The separate native page preserves
 the mounted conversation and draft. See [usage-overview.md](docs/usage-overview.md).
 
+Home shows compact Claude/Codex subscription rows below its summary, using the
+newest cached snapshots forwarded with loaded Local chat summaries. Each row
+keeps the reported windows and extra usage; its keyboard-accessible disclosure
+shows report times, resets and provenance. Missing,
+old, unknown-time and failed readings are explicit, never synthetic zero usage.
+These are not live measurements, billing totals or complete account coverage.
+Home reuses the existing Local summary watch, with no provider refresh action,
+new credentials, remote fanout or changes to pause/force-work policy.
+
 ### Add a Local project
 
 Open the sidebar project selector for **Add project…** (Tab to the action, then

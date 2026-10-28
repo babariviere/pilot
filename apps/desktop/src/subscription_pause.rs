@@ -212,7 +212,7 @@ pub(crate) fn now() -> i64 {
 }
 
 /// RFC 3339 with Z or an offset and an optional fraction, as seconds since the epoch.
-fn parse_iso(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 20
         || b[4] != b'-'

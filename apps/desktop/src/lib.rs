@@ -20,11 +20,17 @@ mod path_completion_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::path_completion_probe::run_path_completion_probe;
 mod message_time;
+mod provider_usage;
+#[cfg(feature = "native-probes")]
+mod provider_usage_probe;
+mod provider_usage_view;
 mod session_todos;
 mod session_todos_view;
 mod subscription_pause;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_todos_probe::run_session_todos_probe;
+#[cfg(feature = "native-probes")]
+pub use provider_usage_probe::run_provider_usage_probe;
 mod chat_links;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_links_fixture;

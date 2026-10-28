@@ -199,6 +199,9 @@ pub(crate) struct Overview {
     project_rows: Vec<usize>,
     working: Vec<usize>,
     visible: Vec<usize>,
+    subscriptions: Vec<crate::provider_usage::Snapshot>,
+    /// Providers whose Home subscription details are expanded, by stable provider key.
+    subscription_details: Vec<&'static str>,
     sky: std::rc::Rc<std::cell::RefCell<crate::home_sky::Sky>>,
     #[cfg(feature = "native-probes")]
     pub(crate) renders: u64,
@@ -243,6 +246,8 @@ impl Overview {
             working: Vec::new(),
             visible: Vec::new(),
             sky: Default::default(),
+            subscriptions: Vec::new(),
+            subscription_details: Vec::new(),
             #[cfg(feature = "native-probes")]
             renders: 0,
         }
@@ -266,6 +271,22 @@ impl Overview {
             return;
         }
         self.projects = projects;
+        let mut subscriptions = crate::provider_usage::newest(&chats);
+        // A failed, empty update keeps the last usable windows beside its error, with their own report time.
+        for s in subscriptions
+            .iter_mut()
+            .filter(|s| s.update_error && s.windows.is_empty())
+        {
+            if let Some(prior) = self
+                .subscriptions
+                .iter()
+                .find(|p| p.provider == s.provider && !p.windows.is_empty())
+            {
+                s.windows = prior.windows.clone();
+                s.fetched_at = prior.fetched_at;
+            }
+        }
+        self.subscriptions = subscriptions;
         self.chats = chats;
         self.project = project;
         self.projects_loaded = projects_loaded;
@@ -556,6 +577,29 @@ impl Render for Overview {
                     .text_color(cx.theme().danger)
                     .child(error),
             );
+        }
+        // Swift parity: compact subscription bars sit under Home's summary, never on a project.
+        if self.project.is_none() {
+            let toggle = |provider: &'static str| -> crate::provider_usage_view::Toggle {
+                Box::new(
+                    cx.listener(move |v: &mut Self, _: &gpui_kit::ClickEvent, _, cx| {
+                        if let Some(ix) = v.subscription_details.iter().position(|p| *p == provider)
+                        {
+                            v.subscription_details.remove(ix);
+                        } else {
+                            v.subscription_details.push(provider);
+                        }
+                        cx.notify();
+                    }),
+                )
+            };
+            header = header.children(crate::provider_usage_view::section(
+                &self.subscriptions,
+                &self.subscription_details,
+                crate::usage_overview::now(),
+                toggle,
+                cx,
+            ));
         }
         let mut body = crate::ui::page().child(header);
         if self.project.is_some() && project.is_none() {

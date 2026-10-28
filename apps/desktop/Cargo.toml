@@ -73,6 +73,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "provider_usage"
+path = "tests/provider_usage.rs"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "usage_overview"
 path = "tests/usage_overview.rs"
 harness = false
