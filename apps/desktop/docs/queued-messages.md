@@ -49,6 +49,9 @@ the agent consumes it. Each stage uses the owner that already holds it:
   returns the exact text to the composer. An unknown outcome stays in the
   conversation as **Not confirmed**, with the composer's existing Resolve actions;
   a known acknowledgment whose receipt was not saved reads Sent/Sending/Not sent.
+  An accepted send keeps its row as **Sent** (exact text held in memory by the
+  composer) until the conversation replaces it, because the acknowledgment can
+  arrive before the queue update.
   Typing during delivery edits only the composer. Stop, new-chat creation and
   question replies keep their existing composer behavior.
 - **Queued / Queued to steer**: every `queue_update.items` row is shown after
@@ -59,8 +62,13 @@ the agent consumes it. Each stage uses the owner that already holds it:
 The Local wire has no operation or submission ID on queue rows or history entries,
 so reconciliation is presentation only and never settles a delivery. The sending
 row hides once a queue row or user entry newer than when it first showed has the
-same exact text ([submit_visibility.rs](../src/submit_visibility.rs)). The queue and
-history arrive on separate streams: a history entry that arrives first hides its
+same exact text ([submit_visibility.rs](../src/submit_visibility.rs)). A **Sent** row
+also hides at the next queue update: Local commits the admission before it
+acknowledges, so that update normally contains the message (or its consumption).
+A queue update produced by an earlier change but delivered after the
+acknowledgment could still drop it briefly. Once replaced, a send never shows
+again. The queue and history arrive on separate
+streams: a history entry that arrives first hides its
 queued row (exact content, oldest first) until the queue update; a row that leaves
 the queue first stays until its history entry, a run end, or 250 ms. A removed or
 withdrawn row can therefore linger that long. Appending these rows follows the

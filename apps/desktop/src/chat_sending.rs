@@ -76,6 +76,20 @@ impl ChatEditor {
                 status,
             });
         }
+        // Accepted, but its queue row may not have arrived yet.
+        if let Some((id, revision, text)) = self.delivered.get(&key)
+            && draft.pending.is_none()
+            && draft
+                .last
+                .as_ref()
+                .is_some_and(|last| &last.id == id && last.state == "accepted")
+        {
+            return Some(Sending {
+                key: SENDING_KEY | (revision & (SENDING_KEY - 1)),
+                text: text.clone(),
+                status: "Sent",
+            });
+        }
         // Before Local reserves the operation: the captured, unedited revision.
         (self.sending.get(&key) == Some(&draft.revision) && draft.pending.is_none()).then(|| {
             Sending {
@@ -84,6 +98,43 @@ impl ChatEditor {
                 status: "Sending…",
             }
         })
+    }
+
+    /// Sends the conversation shows now, captured before a new write state.
+    pub(super) fn visible_sends(&self) -> Vec<(String, Sending)> {
+        self.cache
+            .keys()
+            .filter_map(|key| {
+                let chat = key.strip_prefix("chat:")?;
+                Some((key.clone(), self.sending(chat)?))
+            })
+            .collect()
+    }
+
+    /// Keeps an accepted send's exact text until the conversation replaces it.
+    pub(super) fn note_delivered(&mut self, before: Vec<(String, Sending)>) {
+        let Some(book) = self.state.book.clone() else {
+            return;
+        };
+        for (key, sending) in before {
+            let revision = sending.key & (SENDING_KEY - 1);
+            if let Some(draft) = book.drafts.get(&key)
+                && draft.pending.is_none()
+                && let Some(last) = &draft.last
+                && last.state == "accepted"
+                && last.kind == "chat-send"
+                && last.answer.is_none()
+                && last.revision == revision
+            {
+                self.delivered
+                    .insert(key, (last.id.clone(), revision, sending.text));
+            }
+        }
+    }
+
+    /// The conversation now shows this chat's accepted send from Local.
+    pub(crate) fn forget_sent(&mut self, chat: &str) {
+        self.delivered.remove(&format!("chat:{chat}"));
     }
 }
 

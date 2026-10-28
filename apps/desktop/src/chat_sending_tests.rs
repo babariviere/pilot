@@ -114,11 +114,15 @@ fn accepted_send_leaves_the_composer_empty(cx: &mut TestAppContext) {
         .unwrap();
     accept(cx, &sent, true);
     assert_eq!(shown(cx, &sent.view), "");
-    assert_eq!(
-        sending(cx, &sent.view),
-        None,
-        "its queue row or history now shows it"
-    );
+    // Accepted keeps the same row, with the exact text, until the conversation
+    // shows it from Local.
+    let accepted = sending(cx, &sent.view).unwrap();
+    assert_eq!((accepted.text.as_str(), accepted.status), (TEXT, "Sent"));
+    // Unrelated write states keep it; only the conversation forgets it.
+    accept(cx, &sent, true);
+    assert_eq!(sending(cx, &sent.view), Some(accepted));
+    cx.update(|cx| sent.view.update(cx, |e, _| e.forget_sent("a")));
+    assert_eq!(sending(cx, &sent.view), None);
     assert_eq!(
         cx.update(|cx| sent.view.read(cx).cache["chat:a"].text.clone()),
         ""
@@ -133,11 +137,73 @@ fn rejected_send_returns_its_exact_text_to_the_composer(cx: &mut TestAppContext)
         .unwrap();
     accept(cx, &sent, true);
     assert_eq!(shown(cx, &sent.view), TEXT);
-    assert_eq!(sending(cx, &sent.view), None);
+    assert_eq!(
+        sending(cx, &sent.view),
+        None,
+        "a rejected send is never Sent"
+    );
+    assert_rejected_status(cx, &sent);
+}
+
+#[gpui_kit::test]
+fn accepted_send_stays_even_when_its_reservation_was_never_shown(cx: &mut TestAppContext) {
+    // The worker coalesces write states, so the reserved state can be skipped.
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        w.render_frame(cx);
+        w.input(TEXT, cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let WriteCommand::Submit { draft, request, .. } = commands.try_recv().unwrap() else {
+        panic!("expected submit");
+    };
+    let root = std::env::temp_dir().join(format!("chat-sending-{}", uuid::Uuid::new_v4()));
+    let host = cx.update(|cx| view.read(cx).state.book.as_ref().unwrap().host.clone());
+    let mut store = Store::open(root, host).unwrap();
+    let intent = store.prepare("chat:a", &draft, false, false).unwrap().id;
+    store.finish(&intent, "accepted", None).unwrap();
+    let mut state = WriteState {
+        book: Some(Arc::new(store.book.clone())),
+        ..Default::default()
+    };
+    state.handled.insert("chat:a".into(), request);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| e.accept(state, w, cx))
+    })
+    .unwrap();
+    assert_eq!(
+        sending(cx, &view).map(|s| (s.text, s.status)),
+        Some((TEXT.to_owned(), "Sent"))
+    );
+    assert_eq!(shown(cx, &view), "");
+}
+
+fn assert_rejected_status(cx: &mut TestAppContext, sent: &Sent) {
     assert_eq!(
         recovery_status(cx, sent.handle).as_deref(),
         Some("This message wasn't sent. Edit it and send again.")
     );
+}
+
+#[gpui_kit::test]
+fn rejected_send_keeps_recovery_after_navigation(cx: &mut TestAppContext) {
+    let mut sent = send(cx);
+    sent.store
+        .finish(&sent.intent.clone(), "rejected", None)
+        .unwrap();
+    accept(cx, &sent, true);
+    cx.update_window(sent.handle, |_, w, cx| {
+        sent.view.update(cx, |e, cx| {
+            e.select("chat:b".into(), true, false, w, cx);
+            e.select("chat:a".into(), true, false, w, cx);
+        })
+    })
+    .unwrap();
+    assert_eq!(shown(cx, &sent.view), TEXT);
+    assert_eq!(sending(cx, &sent.view), None);
+    assert_rejected_status(cx, &sent);
 }
 
 #[gpui_kit::test]

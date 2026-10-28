@@ -47,6 +47,7 @@ impl Probe {
     fn publish(&mut self, cx: &mut HeadlessAppContext, event: Value) {
         self.model.apply(&event);
         let rows = self.model.rows();
+        let queue = self.model.user_queue.clone();
         let v = self.v.clone();
         cx.update_window(self.h, |_, w, cx| {
             v.update(cx, |v, cx| {
@@ -57,6 +58,8 @@ impl Probe {
                         loaded: true,
                         rows,
                         chats: v.state.chats.clone(),
+                        // As the Local reader: one snapshot per queue update.
+                        user_queue: queue,
                         ..Default::default()
                     },
                     w,
@@ -269,6 +272,43 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     p.publish(cx, json!({"type":"message_end","entry":user(25, FIRST)}));
     assert_eq!(p.shown(cx, FIRST), [None]);
 
+    // 1b. The ACK can beat the queue update: the message stays visible as Sent
+    // (the queue event is held back here) until its queue row replaces it.
+    let early = "ACK before queue";
+    let (draft, request) = p.send(cx, early);
+    let intent = p
+        .store
+        .prepare("chat:synthetic", &draft, false, false)
+        .unwrap()
+        .id;
+    p.write(cx, None);
+    p.store.finish(&intent, "accepted", None).unwrap();
+    p.write(cx, Some(request));
+    assert_eq!(
+        p.shown(cx, early),
+        [Some("Sent")],
+        "accepted send vanished before its queue row"
+    );
+    p.caption(cx, "Sent");
+    assert_eq!(p.composer(cx), "");
+    // Unrelated republication (same queue) keeps it; the held queue update replaces it.
+    p.publish(cx, json!({"type":"jobs_update","jobs":[]}));
+    assert_eq!(p.shown(cx, early), [Some("Sent")]);
+    p.publish(cx, json!({"type":"queue_update","items":[{"id":45,"mode":"steer","content":early,"guardToken":"d".repeat(64)}]}));
+    assert_eq!(p.shown(cx, early), [Some("Queued to steer")]);
+    p.publish(cx, json!({"type":"message_end","entry":user(30, early)}));
+    p.publish(cx, json!({"type":"queue_update","items":[]}));
+    assert_eq!(p.shown(cx, early), [None]);
+    // Once replaced it never returns, even after the row leaves the conversation.
+    let mut compacted = entries.clone();
+    compacted.push(user(31, "Compacted"));
+    p.publish(
+        cx,
+        json!({"type":"snapshot","entries":compacted,"run":{"startedAt":2}}),
+    );
+    p.publish(cx, json!({"type":"queue_update","items":[]}));
+    assert_eq!(p.shown(cx, early), Vec::<Option<&str>>::new());
+
     // 2. Lost acknowledgment: uncertain, not Sent, and never duplicated by its echo.
     let second = "Also check the logs";
     let (draft, request) = p.send(cx, second);
@@ -310,6 +350,42 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     settle(cx, h);
 
     // 4. Reading older history: a new queued row never moves the reader.
+    // 3b. Stop is not a message: typed text stays in the composer, nothing is added.
+    let kept = "Typed, then Stop";
+    let before = cx.update(|cx| p.v.read(cx).transcript.read(cx).rows().len());
+    cx.update_window(h, |_, w, cx| {
+        let input = p.v.read(cx).editor.read(cx).shell_probe().0;
+        input.update(cx, |i, cx| i.replace_text_in_range(None, kept, w, cx));
+        w.render_frame(cx);
+        w.click("local-stop", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    let mut command = p.writes.try_recv();
+    while matches!(command, Ok(WriteCommand::RetireEmpty { .. })) {
+        command = p.writes.try_recv();
+    }
+    let Ok(WriteCommand::Submit {
+        stop: true,
+        request,
+        ..
+    }) = command
+    else {
+        panic!("Stop must submit Stop only");
+    };
+    assert_eq!(p.composer(cx), kept);
+    assert_eq!(
+        cx.update(|cx| p.v.read(cx).transcript.read(cx).rows().len()),
+        before
+    );
+    p.write(cx, Some(request));
+    cx.update_window(h, |_, w, cx| {
+        let input = p.v.read(cx).editor.read(cx).shell_probe().0;
+        input.update(cx, |i, cx| i.set_value("", w, cx));
+    })
+    .unwrap();
+    settle(cx, h);
+
     cx.update_window(h, |_, w, cx| {
         w.scroll(
             "viewport",

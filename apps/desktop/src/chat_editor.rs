@@ -86,6 +86,8 @@ pub(crate) struct ChatEditor {
     pending: BTreeMap<String, u64>,
     /// Ordinary chat sends in flight, by captured draft revision.
     sending: BTreeMap<String, u64>,
+    /// Accepted sends (operation, revision, text) until the conversation shows them.
+    delivered: BTreeMap<String, (String, u64, String)>,
     unsaved_local: BTreeSet<String>,
     retiring: BTreeMap<String, u64>,
     next_request: u64,
@@ -169,6 +171,7 @@ impl ChatEditor {
             background_work: false,
             pending: BTreeMap::new(),
             sending: BTreeMap::new(),
+            delivered: BTreeMap::new(),
             unsaved_local: BTreeSet::new(),
             retiring: BTreeMap::new(),
             next_request: 0,
@@ -556,6 +559,7 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) {
         self.changed(cx);
+        let shown = self.visible_sends();
         let marked = self.marked(window, cx);
         if let Some(book) = &state.book {
             for (key, saved) in &book.drafts {
@@ -592,6 +596,7 @@ impl ChatEditor {
         });
         self.sending.retain(|key, _| self.pending.contains_key(key));
         self.state = state;
+        self.note_delivered(shown);
         if self.update_checkpoint.is_some() {
             cx.emit(EditorEvent::UpdateCheckpoint);
             cx.notify();
@@ -763,6 +768,7 @@ impl ChatEditor {
             if !stop && key.starts_with("chat:") {
                 // The message moves to the conversation; the draft keeps it until accepted.
                 self.sending.insert(key.clone(), draft_revision);
+                self.delivered.remove(&key);
                 self.load_input(window, cx);
                 cx.emit(EditorEvent::DraftsChanged);
             }

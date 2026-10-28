@@ -1786,7 +1786,7 @@ impl LocalViewer {
             // A coalesced publication from before the request is not completion.
             state.page_busy |= self.earlier_request.is_some();
             let rows = std::mem::take(&mut state.rows);
-            let rows = self.with_sending(rows, cx);
+            let rows = self.with_sending(rows, &state.user_queue, cx);
             let reset = self.refreshing;
             self.refreshing = false;
             if self.page == Page::Chat {
