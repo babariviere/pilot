@@ -164,16 +164,17 @@ impl ChatEditor {
             .update(cx, |s, cx| s.marked_text_range(window, cx).is_some())
     }
     fn question_previous(&self) -> bool {
-        self.draft()
-            .and_then(|d| d.answer.as_ref())
-            .is_some_and(|a| {
+        self.draft().is_some_and(|d| {
+            d.answer.as_ref().is_some_and(|a| {
                 a.has_content()
+                    && !crate::delivery_store::reply_accepted(d, &a.identity)
                     && self
                         .questions
                         .current
                         .as_ref()
                         .is_none_or(|q| a.identity.question != q.identity)
             })
+        })
     }
     fn question_accepted(&self) -> bool {
         self.questions.current.as_ref().is_some_and(|q| {
@@ -447,7 +448,7 @@ impl ChatEditor {
         cx.notify();
     }
     pub(super) fn retire_settled_question(&mut self, cx: &mut Context<Self>) {
-        if !self.questions.confirmed || self.waiting() {
+        if self.waiting() {
             return;
         }
         let Some(draft) = self.draft() else {
@@ -461,10 +462,10 @@ impl ChatEditor {
             .current
             .as_ref()
             .is_some_and(|q| q.identity == answer.identity.question);
-        let accepted = draft.last.as_ref().is_some_and(|last| {
-            last.state == "accepted" && last.answer.as_ref() == Some(&answer.identity)
-        });
-        if !same && (accepted || !answer.has_content()) {
+        let accepted = crate::delivery_store::reply_accepted(draft, &answer.identity);
+        // An exactly acknowledged reply is in the conversation: it settles as
+        // soon as its question leaves, even while the run hides projections.
+        if !same && (accepted || (self.questions.confirmed && !answer.has_content())) {
             self.retire_question(!accepted, cx);
         }
     }

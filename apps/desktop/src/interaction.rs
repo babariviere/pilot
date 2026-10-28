@@ -650,7 +650,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             recover,
                         }) => store
                             .retire_answer(&key, revision, &identity, recover)
-                            .map(|_| "Question reply retained or settled privately."),
+                            // Settling an accepted reply is routine and silent.
+                            .map(|_| {
+                                if recover {
+                                    "Question reply kept in recovery."
+                                } else {
+                                    ""
+                                }
+                            }),
                         #[cfg(any(test, target_os = "macos", target_os = "linux"))]
                         Some(WriteCommand::Checkpoint(generation)) => {
                             if store.is_faulted() {

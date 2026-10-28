@@ -454,6 +454,67 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 commands.try_recv().is_err(),
                 "Cleared holds never repeat an Unknown reply"
             );
+            // The exact receipt arrives later: the run hides the question and
+            // the accepted reply settles silently, never as recovered text.
+            store.finish(&intent.id, "accepted", None).unwrap();
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.accept(
+                        WriteState {
+                            book: Some(Arc::new(store.book.clone())),
+                            ..Default::default()
+                        },
+                        w,
+                        cx,
+                    );
+                    e.permission(true, true, cx);
+                    e.question_context(Some("a"), Projection::Unavailable, false, w, cx)
+                })
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("keep-question-reply").is_none());
+                assert!(w.try_find("composer-recovery").is_none());
+            })
+            .unwrap();
+            match commands.try_recv().unwrap() {
+                WriteCommand::RetireAnswer {
+                    key,
+                    revision,
+                    identity,
+                    recover,
+                } => {
+                    assert!(!recover, "An accepted reply never enters recovery");
+                    assert_eq!(&identity, intent.answer.as_ref().unwrap());
+                    store
+                        .retire_answer(&key, revision, &identity, recover)
+                        .unwrap();
+                }
+                _ => panic!("Only private settlement of the accepted reply"),
+            }
+            assert!(commands.try_recv().is_err(), "Nothing is resent");
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    e.accept(
+                        WriteState {
+                            book: Some(Arc::new(store.book.clone())),
+                            ..Default::default()
+                        },
+                        w,
+                        cx,
+                    )
+                })
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("composer-recovery").is_none());
+                let saved = &editor.read(cx).cache["chat:a"];
+                assert!(saved.recovered.is_empty() && saved.answer.is_none());
+                assert_eq!(saved.text, initial.text);
+            })
+            .unwrap();
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             drop(store);

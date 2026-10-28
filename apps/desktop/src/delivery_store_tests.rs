@@ -152,6 +152,63 @@ fn question_capture(question: &crate::question::Question, revision: u64, text: &
     ordinary
 }
 #[test]
+fn accepted_question_reply_never_becomes_recovered_text() {
+    let q = question_fixture(4);
+    let next = question_fixture(8);
+    for state in ["accepted", "rejected"] {
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), host()).unwrap();
+        let mut first = question_capture(&q, 2, "sent reply");
+        first.recovered = Arc::new(vec!["older unrelated recovery".into()]);
+        save(&mut store, "chat:a", first.clone());
+        let intent = store
+            .prepare_answer("chat:a", &first, &q, first.answer.as_ref().unwrap())
+            .unwrap();
+        store.finish(&intent.id, state, None).unwrap();
+        let identity = first.answer.as_ref().unwrap().identity.clone();
+        // A newer question's capture replaces the previous reply.
+        let mut replaced = store.book.drafts["chat:a"].clone();
+        replaced.revision += 1;
+        replaced.answer = Some(
+            crate::question::AnswerDraft::capture(
+                &next,
+                replaced.revision,
+                std::collections::BTreeSet::new(),
+                "next".into(),
+            )
+            .unwrap(),
+        );
+        let explicit = Temp::new();
+        let mut kept = Store::open(explicit.0.clone(), host()).unwrap();
+        save(&mut kept, "chat:a", first.clone());
+        let kept_intent = kept
+            .prepare_answer("chat:a", &first, &q, first.answer.as_ref().unwrap())
+            .unwrap();
+        kept.finish(&kept_intent.id, state, None).unwrap();
+        save(&mut store, "chat:a", replaced);
+        // Explicit Keep reply in recovery on the same receipt.
+        kept.retire_answer("chat:a", 2, &identity, true).unwrap();
+        let expected: &[String] = if state == "accepted" {
+            &["older unrelated recovery".to_string()]
+        } else {
+            &[
+                "older unrelated recovery".to_string(),
+                "Tests\n\nsent reply".to_string(),
+            ]
+        };
+        for saved in [&store.book.drafts["chat:a"], &kept.book.drafts["chat:a"]] {
+            assert_eq!(saved.recovered.as_ref(), expected, "{state}");
+            assert_eq!(saved.text, first.text, "{state}: ordinary draft kept");
+        }
+        assert_eq!(
+            store.book.drafts["chat:a"].answer.as_ref().unwrap().text,
+            "next"
+        );
+        assert!(kept.book.drafts["chat:a"].answer.is_none());
+    }
+}
+
+#[test]
 fn question_answer_acceptance_keeps_ordinary_draft_and_its_send_revision() {
     let temp = Temp::new();
     let mut store = Store::open(temp.0.clone(), host()).unwrap();

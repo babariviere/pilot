@@ -134,6 +134,7 @@ fn retain_answer_draft(old: &Draft, next: &mut Draft) -> Result<(), Failure> {
     }
     if let (Some(before), Some(after)) = (&old.answer, &next.answer)
         && before.identity.question != after.identity.question
+        && !reply_accepted(old, &before.identity)
     {
         let text = before.recovery();
         if !text.is_empty() {
@@ -145,6 +146,15 @@ fn retain_answer_draft(old: &Draft, next: &mut Draft) -> Result<(), Failure> {
         }
     }
     Ok(())
+}
+
+/// The exact reply has Local's accepted receipt, so it is in the conversation
+/// and never becomes recovered text.
+pub(crate) fn reply_accepted(draft: &Draft, identity: &crate::question::ReplyIdentity) -> bool {
+    draft
+        .last
+        .as_ref()
+        .is_some_and(|last| last.state == "accepted" && last.answer.as_ref() == Some(identity))
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1068,13 +1078,11 @@ impl Store {
             {
                 return Err("Question reply changed; original input retained");
             }
-            let accepted = draft.last.as_ref().is_some_and(|last| {
-                last.state == "accepted" && last.answer.as_ref() == Some(identity)
-            });
+            let accepted = reply_accepted(draft, identity);
             if !recover && !accepted {
                 return Err("Only a confirmed accepted reply may be cleared automatically");
             }
-            if recover {
+            if recover && !accepted {
                 let text = draft.answer.as_ref().unwrap().recovery();
                 if !text.is_empty() {
                     if draft.recovered.len() >= 8 {

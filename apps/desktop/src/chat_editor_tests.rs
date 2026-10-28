@@ -1004,3 +1004,234 @@ fn browsing_empty_chats_and_repeated_blank_new_chat_do_not_exhaust_drafts(cx: &m
     })
     .unwrap();
 }
+
+/// Drives the exact reply admission against a real private store and returns
+/// the store after the given receipt outcome, with the captured reply identity.
+fn question_reply_outcome(
+    cx: &mut TestAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    view: &Entity<ChatEditor>,
+    commands: &async_channel::Receiver<WriteCommand>,
+    state: &str,
+) -> (Store, std::path::PathBuf, crate::question::ReplyIdentity) {
+    let q = question_composer_fixture(4);
+    let root = std::env::temp_dir().join(format!("answer-recovery-{}", uuid::Uuid::new_v4()));
+    let mut store = Store::open(root.clone(), book().host.clone()).unwrap();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text.update(cx, |s, cx| {
+                s.set_value("unrelated ordinary draft 👩‍💻", w, cx)
+            });
+            e.changed(cx);
+            e.permission(true, false, cx);
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(q.clone()),
+                true,
+                w,
+                cx,
+            );
+            e.questions
+                .input
+                .update(cx, |s, cx| s.set_value("my exact reply 日本語", w, cx));
+            e.changed(cx);
+        });
+        w.render_frame(cx);
+        w.click("answer-question", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let (draft, request) = match commands.try_recv().unwrap() {
+        WriteCommand::Answer { draft, request, .. } => (draft, request),
+        _ => panic!("Expected the explicit reply"),
+    };
+    let identity = draft.answer.as_ref().unwrap().identity.clone();
+    let intent = store
+        .prepare_answer("chat:a", &draft, &q, draft.answer.as_ref().unwrap())
+        .unwrap();
+    // Unknown: the receipt never arrived, so the intent stays pending.
+    if state != "unknown" {
+        store.finish(&intent.id, state, None).unwrap();
+    }
+    let book = std::sync::Arc::new(store.book.clone());
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.accept(
+                WriteState {
+                    book: Some(book),
+                    handled: BTreeMap::from([("chat:a".into(), request)]),
+                    ..Default::default()
+                },
+                w,
+                cx,
+            )
+        });
+        w.render_frame(cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    (store, root, identity)
+}
+
+#[gpui_kit::test]
+fn accepted_question_reply_retires_without_recovery_and_keeps_ordinary_draft(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, commands) = setup_width(cx, 680.);
+    let (mut store, root, identity) =
+        question_reply_outcome(cx, handle, &view, &commands, "accepted");
+    assert!(
+        commands.try_recv().is_err(),
+        "The same question is still shown; nothing retires yet"
+    );
+    // The agent run starts: the projection is unavailable, then empty, never fresh.
+    for (projection, fresh) in [
+        (crate::question::Projection::Unavailable, false),
+        (crate::question::Projection::None, false),
+    ] {
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |e, cx| {
+                e.question_context(Some("a"), projection, fresh, w, cx)
+            });
+            w.render_frame(cx);
+            assert!(
+                w.try_find("keep-question-reply").is_none(),
+                "An accepted reply is not offered as recovery"
+            );
+        })
+        .unwrap();
+    }
+    cx.run_until_parked();
+    let (revision, recover) = match commands.try_recv().unwrap() {
+        WriteCommand::RetireAnswer {
+            key,
+            revision,
+            identity: retired,
+            recover,
+        } => {
+            assert_eq!(key, "chat:a");
+            assert_eq!(retired, identity, "Exact acknowledged identity");
+            (revision, recover)
+        }
+        _ => panic!("Expected private settlement of the accepted reply"),
+    };
+    assert!(!recover, "An accepted reply never enters recovery");
+    assert!(commands.try_recv().is_err(), "Retired once, nothing sent");
+    store
+        .retire_answer("chat:a", revision, &identity, recover)
+        .unwrap();
+    let saved = &store.book.drafts["chat:a"];
+    assert!(saved.recovered.is_empty());
+    assert!(saved.answer.is_none());
+    assert_eq!(saved.text, "unrelated ordinary draft 👩‍💻");
+    let book = std::sync::Arc::new(store.book.clone());
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.accept(
+                WriteState {
+                    book: Some(book),
+                    ..Default::default()
+                },
+                w,
+                cx,
+            )
+        });
+        w.render_frame(cx);
+        assert!(w.try_find("composer-recovery").is_none());
+        assert!(w.try_find("keep-question-reply").is_none());
+        let e = view.read(cx);
+        assert_eq!(
+            e.text.read(cx).value().as_ref(),
+            "unrelated ordinary draft 👩‍💻"
+        );
+        assert!(e.cache["chat:a"].recovered.is_empty());
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(commands.try_recv().is_err());
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui_kit::test]
+fn accepted_question_reply_never_blocks_the_next_question(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup_width(cx, 680.);
+    let (store, root, identity) = question_reply_outcome(cx, handle, &view, &commands, "accepted");
+    let next = question_composer_fixture(8);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(next.clone()),
+                true,
+                w,
+                cx,
+            )
+        });
+        w.render_frame(cx);
+        assert!(w.try_find("keep-question-reply").is_none());
+        assert_eq!(view.read(cx).questions.input.read(cx).value().as_ref(), "");
+        view.update(cx, |e, cx| {
+            e.questions
+                .input
+                .update(cx, |s, cx| s.set_value("next words", w, cx));
+            e.changed(cx);
+        });
+        let answer = view.read(cx).cache["chat:a"].answer.clone().unwrap();
+        assert_eq!(
+            answer.identity.question, next.identity,
+            "The next question is answerable"
+        );
+        assert_eq!(answer.text, "next words");
+        assert!(view.read(cx).cache["chat:a"].recovered.is_empty());
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::RetireAnswer { recover: false, identity: retired, .. } if retired == identity
+    ));
+    assert!(commands.try_recv().is_err(), "Nothing is sent");
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui_kit::test]
+fn rejected_or_unknown_question_reply_keeps_its_evidence(cx: &mut TestAppContext) {
+    for state in ["rejected", "unknown"] {
+        let (handle, view, commands) = setup_width(cx, 680.);
+        let (store, root, _) = question_reply_outcome(cx, handle, &view, &commands, state);
+        let next = question_composer_fixture(8);
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |e, cx| {
+                e.question_context(Some("a"), crate::question::Projection::None, true, w, cx);
+                e.question_context(
+                    Some("a"),
+                    crate::question::Projection::Pending(next.clone()),
+                    true,
+                    w,
+                    cx,
+                )
+            });
+            w.render_frame(cx);
+            assert!(
+                w.try_find("keep-question-reply").is_some(),
+                "{state}: an unconfirmed reply stays explicitly recoverable"
+            );
+            let saved = &view.read(cx).cache["chat:a"];
+            assert_eq!(saved.answer.as_ref().unwrap().text, "my exact reply 日本語");
+            assert!(
+                saved.recovered.is_empty(),
+                "{state}: nothing moved automatically"
+            );
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(
+            commands.try_recv().is_err(),
+            "{state}: never retired or resent automatically"
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
