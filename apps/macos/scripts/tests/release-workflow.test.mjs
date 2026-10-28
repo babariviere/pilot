@@ -193,7 +193,6 @@ test("PRs skip Swift only when the app is untouched, and smoke-test the test bui
 		["push", "packages/daemon/src/a.ts", "1", "true"],
 		["pull_request", "packages/daemon/src/a.ts\ndocs/testing.md", "1", "false"],
 		["pull_request", "packages/protocol/src/a.ts\napps/macos/Sources/PilotCore/A.swift", "1", "true"],
-		["pull_request", "scripts/verification-slot.py", "1", "true"],
 		// The visual service runs the shared runtime against the kernel's conformance fixtures.
 		["pull_request", "packages/artifacts/src/visual/runtime.js", "1", "true"],
 		["pull_request", "packages/protocol/fixtures/visual/conformance.json", "1", "true"],

@@ -49,7 +49,7 @@ if [[ "${1:-}" == --blaze ]]; then
   fi
   python3 scripts/prepare-patches.py
   export MBX_BLAZE=1
-  # No verification-slot queue. This lease covers both Blaze and nested Cargo.
+  # This lease covers both Blaze and nested Cargo.
   # mbx1.28 migrates incremental metadata. Keep it away from pinned1.26 state,
   # but acquire the existing shared scheduler before entering its shared store.
   exec .tools/blaze/bin/mbx reserve --cpus 2 --memory 4GiB -- \

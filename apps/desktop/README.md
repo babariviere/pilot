@@ -667,8 +667,7 @@ trying them. Large user pastes are not optimized or production-size hardened.
 ## Pins, cache and resource ownership
 
 The optional [Blaze development path](docs/blaze-dev.md) has separate tool pins,
-target files and a private local compiler daemon. It does not enter the shared
-verification-slot queue. Ordinary commands, scoped checks and CI retain the pins
+target files and a private local compiler daemon. Ordinary commands, scoped checks and CI retain the pins
 below; Blaze output is not authoritative verification.
 
 - `rust-toolchain.toml`: Rust **1.98.1**, edition 2024, minimal + rustfmt/clippy.

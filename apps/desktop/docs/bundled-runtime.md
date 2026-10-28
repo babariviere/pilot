@@ -142,7 +142,6 @@ python3 -m unittest discover -s apps/desktop/scripts -p test_bundle_runtime.py -
 PILOT_DESKTOP_BUNDLE_NATIVE_TEST=1 python3 -m unittest discover -s apps/desktop/scripts -p test_bundle_runtime.py -v
 # Actual startup view, injected result lane and memory-only Local fixture:
 PILOT_NEXT_RUNTIME_DIR=/tmp/startup-captures bash apps/desktop/scripts/cargo.sh run --locked --features native-probes --example bundled_runtime_probe
-# Rust/native commands run under scripts/verification-slot.py swift admission.
 ```
 
 Fixtures use fresh temporary profiles and owned faux processes only. They cover

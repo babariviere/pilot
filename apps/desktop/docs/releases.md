@@ -21,8 +21,8 @@ The relocated native dependency/minOS closure, resource inventory, code seal and
 offline Node/runtime smoke are checked before ZIP creation. No C stand-ins are
 accepted as qualification. Linux builds real optimized GPUI/visual/updater
 executables and the existing production runtime in the pinned manylinux ABI
-toolchain, then assembles the full relocatable GUI layout. CPU2/4GiB bounds,
-private targets and verification slots are retained.
+toolchain, then assembles the full relocatable GUI layout. CPU2/4GiB bounds
+and private targets are retained.
 
 The Rust updater discovers the same stable `v<version>` release, selects only its
 own exact archive/envelope names and matches the signed short version to the tag.

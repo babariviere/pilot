@@ -73,17 +73,6 @@ test=false
             with self.assertRaises(ValueError):
                 scoped.plan(self.args("--unit", "scope", "--timeout", timeout), self.root)
 
-    def test_admission_never_nested_queues_beneath_an_inherited_holder(self):
-        with patch.dict(os.environ, PILOT_VERIFICATION_SWIFT_PID=""):
-            command = scoped.admission_command(["--unit", "chosen"])
-            self.assertIn("swift", command)
-            self.assertIn("--unit", command)
-            self.assertIn("--_queued-at", command)
-        with patch.dict(os.environ, PILOT_VERIFICATION_SWIFT_PID=str(os.getpid())):
-            self.assertIsNone(scoped.admission_command([]))
-        with patch.dict(os.environ, PILOT_VERIFICATION_SWIFT_PID="different-holder"), self.assertRaises(ValueError):
-            scoped.admission_command([])
-
     def test_mixed_native_is_single_stable_feature_selection(self):
         flags, tests, native, worker = scoped.plan(self.args("--unit", "chat_models", "--test", "project_creation", "--test", "project_creation"), self.root)
         self.assertEqual(tests, ["project_creation"])

@@ -39,7 +39,6 @@ def parser():
     result.add_argument("--lint", action="store_true", help="lint only the selected production lib/native targets")
     result.add_argument("--report", type=Path, help="fresh JSON observation file, never overwritten")
     result.add_argument("--timeout", type=float, default=1200, help="per-command deadline, at most1200s")
-    result.add_argument("--_queued-at", type=float, help=argparse.SUPPRESS)
     return result
 
 
@@ -219,8 +218,7 @@ def execute(args, root=ROOT):
                                          if key.startswith("CARGO_PROFILE_") or key in {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "RUSTC_WRAPPER"}},
                   unit=args.unit, tests=tests,
                   native=native, worker=worker, platform=platform.platform(), arch=platform.machine(),
-                  cpu_count=os.cpu_count(), cargo_lock_sha256=hashlib.sha256((root / "Cargo.lock").read_bytes()).hexdigest(),
-                  queue_and_startup_seconds=None if args._queued_at is None else time.monotonic() - args._queued_at)
+                  cpu_count=os.cpu_count(), cargo_lock_sha256=hashlib.sha256((root / "Cargo.lock").read_bytes()).hexdigest())
     handle = args.report.open("x") if args.report else None
     cargo = ["bash", "scripts/cargo.sh"]
     try:
@@ -250,23 +248,9 @@ def interrupted(number, _frame):
     raise SystemExit(128 + number)
 
 
-def admission_command(argv):
-    holder = os.environ.get("PILOT_VERIFICATION_SWIFT_PID")
-    if holder == str(os.getpid()):
-        return None
-    if holder:
-        raise ValueError("Inherited verification holder: run directly or exec inside the held wrapper; refusing a nested queue")
-    runner = ROOT.parents[1] / "scripts/verification-slot.py"
-    return [sys.executable, str(runner), "swift", "--", sys.executable,
-            str(Path(__file__).resolve()), *argv, "--_queued-at", str(time.monotonic())]
-
-
 def main():
     args = parser().parse_args()
-    plan(args)  # Reject typos/empty selection before queueing or preparing/building.
-    command = admission_command(sys.argv[1:])
-    if command is not None:
-        os.execv(sys.executable, command)
+    plan(args)  # Reject typos/empty selection before preparing/building.
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGINT, interrupted)
     execute(args)

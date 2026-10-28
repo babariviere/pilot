@@ -187,8 +187,7 @@ credentials or live actions were used.
 
 ## Reproduce bounded checks
 
-Use the repository's verification-slot wrapper (node for Node, shared serial
-native slot for Rust), not a second build alongside an existing frozen check.
+Do not start a second build alongside an existing frozen check.
 `scripts/cargo.sh` owns the bounded mbx/cache setup. Relevant commands:
 
 ```sh

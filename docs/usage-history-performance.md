@@ -78,10 +78,10 @@ the unchanged gate; the short 1,500-page result must not be used as a memory bou
 ## Reproduction
 
 ```sh
-python3 scripts/verification-slot.py node -- node packages/daemon/src/usage-history.bench.ts
+node packages/daemon/src/usage-history.bench.ts
 # Longer bounded sustained-query check, still disposable and offline:
 USAGE_BENCH_CASES=serialized_queries USAGE_BENCH_BATCHES=6 USAGE_BENCH_BATCH_SIZE=1000 \
-  python3 scripts/verification-slot.py node -- node packages/daemon/src/usage-history.bench.ts
+  node packages/daemon/src/usage-history.bench.ts
 ```
 
 `USAGE_BENCH_TRIALS` defaults to 3, capped at 5. Cases are `none`, `bare`, `empty`, `populated`, `queries`,
@@ -89,7 +89,7 @@ USAGE_BENCH_CASES=serialized_queries USAGE_BENCH_BATCHES=6 USAGE_BENCH_BATCH_SIZ
 For before/after comparison, freeze the four store modules (`usage-history.ts`, `usage-history-disk.ts`,
 `usage-history-validation.ts`, `usage-history-worker.ts`) from the baseline and current revision in separate
 temporary directories. Copy the **same current benchmark file** to both. Run them serially in alternating order
-under one verification slot. Never edit either frozen graph during a run. The probe creates and removes its own
+with no competing heavy checks. Never edit either frozen graph during a run. The probe creates and removes its own
 seed/working databases; it does not open the application's data directory.
 
 ## Remaining gate

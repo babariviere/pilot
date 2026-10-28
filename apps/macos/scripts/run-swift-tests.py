@@ -2,7 +2,6 @@
 """Bound one SwiftPM invocation, excluding compilation from the test deadline.
 
 On timeout, sample only processes in our private session, then kill its groups.
-The parent shell keeps its verification slot until cleanup completes.
 """
 
 import argparse
@@ -54,7 +53,7 @@ def diagnose(session):
 
 
 def cleanup_session(process):
-    # Even if the driver exited, a descendant may still hold stdout or the slot.
+    # Even if the driver exited, a descendant may still hold stdout.
     groups = set()
     try:
         # killpg(0) targets *our* group, not a child. Reject special groups and

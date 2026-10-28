@@ -379,11 +379,10 @@ def snapshot_rust(expected_source, output, production=None):
         # not necessarily Cargo's cache. Materialize the immutable snapshot too.
         subprocess.run([sys.executable, str(desktop / "scripts/prepare-patches.py"), "--fetch"], env=env, check=True, timeout=120)
         subprocess.run([sys.executable, str(desktop / "scripts/prepare-visual-worker.py")], env=env, check=True, timeout=120)
-        slot = str(ROOT / "scripts/verification-slot.py")
         cargo = str(desktop / "scripts/cargo.sh")
         for command in (["build", "--locked", "-p", "pilot-desktop", "-p", "pilot-visual-worker"],
                         ["build", "--manifest-path", "updater/Cargo.toml", "--locked", "--features", "native-macos", "--bin", "pilot-desktop-update-helper"]):
-            subprocess.run([sys.executable, slot, "swift", "--", "/bin/bash", cargo, *command, *(["--release"] if production else [])], cwd=checkout, env=env, check=True, timeout=2400)
+            subprocess.run(["/bin/bash", cargo, *command, *(["--release"] if production else [])], cwd=checkout, env=env, check=True, timeout=2400)
         paths = [desktop / ("target/dev/release" if production else "target/dev/debug") / name for name in
                  ("pilot-desktop", "pilot-visual-worker", "pilot-desktop-update-helper")]
         for path in paths:

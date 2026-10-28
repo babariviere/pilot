@@ -86,7 +86,7 @@ example is opt-in and is not added to CI's native correctness registry. From
 
 ```sh
 PILOT_NEXT_ARTIFACT_SCROLL_DIR=/tmp/fresh-artifact-scroll \
-python3 ../../scripts/verification-slot.py swift -- bash -c '
+bash -c '
   set -eu
   python3 scripts/prepare-visual-worker.py
   bash scripts/cargo.sh build --locked -p pilot-visual-worker

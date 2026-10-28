@@ -237,9 +237,6 @@ class TestOutputTests(unittest.TestCase):
             root = Path(directory)
             scripts = root / "apps/macos/scripts"
             scripts.mkdir(parents=True)
-            (root / "scripts").mkdir()
-            shutil.copy2(SCRIPTS.parents[2] / "scripts/verification-slot.py",
-                         root / "scripts/verification-slot.py")
             for name in [wrapper, "check-test-output.py", "check-font-roles.py", "font-literals.txt", "run-swift-tests.py"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             # Record the real guard's argv, not a replacement guard or fake assertion.
@@ -280,7 +277,7 @@ class TestOutputTests(unittest.TestCase):
                    "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
                    "COUNTER": str(root / "swift-calls"), "GUARD_ARGUMENTS": str(root / "guard-arguments"),
-                   "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0", **extra_env}
+                   "BUNDLE_RUNTIME": "0", **extra_env}
             for index, (text, code) in enumerate(outputs, start=1):
                 env[f"OUTPUT_{index}"] = text
                 env[f"STATUS_{index}"] = str(code)
@@ -337,7 +334,6 @@ class TestOutputTests(unittest.TestCase):
         self.assertEqual(calls[-1][-4:], ["--filter", "PilotUITests", "--skip", BROAD_EXCLUSIONS])
         for call in calls[-2:]:
             self.assertIn("--skip-build", call)
-        self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
         timing_lines = re.findall(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", result.stdout, re.MULTILINE)
         self.assertEqual(len(timing_lines), len(calls))
         output = re.sub(r"^\[swift-watchdog\] invocation finished in [0-9.]+s\n", "", result.stdout, flags=re.MULTILINE)
@@ -434,13 +430,12 @@ class TestOutputTests(unittest.TestCase):
             self.assertNotIn("--jobs", call)
             self.assertEqual(call.count("--skip-build"), 1)
 
-    def test_all_swift_entrypoints_hold_a_slot_before_package_preparation(self):
+    def test_all_swift_entrypoints_stop_when_package_preparation_fails(self):
         for wrapper in ["build.sh", "test.sh", "bundle.sh"]:
             with self.subTest(wrapper=wrapper):
                 result, continued, _ = self.run_wrapper("", wrapper=wrapper, prepare_status=42)
                 self.assertEqual(result.returncode, 42, result.stderr)
                 self.assertFalse(continued)
-                self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
 
     def test_build_preserves_arguments_and_handles_empty_default_jobs_on_bash_3(self):
         result, continued, arguments = self.run_wrapper("", wrapper="build.sh", args=("--jobs=1", "--version"))
@@ -551,8 +546,7 @@ import Testing
             plugins = str(Path(swift).parent / "../lib/swift/host/plugins/testing")
             for fail in ["1", "0"]:
                 result = subprocess.run(
-                    [sys.executable, str(SCRIPTS.parents[2] / "scripts/verification-slot.py"), "swift", "--",
-                     "swift", "test", "--package-path", str(root), "--build-system", "native", "--jobs", "2",
+                    ["swift", "test", "--package-path", str(root), "--build-system", "native", "--jobs", "2",
                      "-Xswiftc", "-plugin-path", "-Xswiftc", plugins],
                     env={**os.environ, "FAIL_TARGET": fail}, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, timeout=120)

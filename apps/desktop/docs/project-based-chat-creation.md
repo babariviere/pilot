@@ -117,7 +117,7 @@ and executed alongside project creation. No failures were hidden by reducing the
 CI inventory or removing assertions. Initial compile failures were retained as
 failed receipts; they are not passing native results.
 
-Run the relevant checks under the real shared verification slot:
+Run the relevant checks:
 
 ```sh
 cd apps/desktop

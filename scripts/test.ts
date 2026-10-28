@@ -43,12 +43,8 @@ if (list) {
 	console.log(files.join("\n"));
 } else {
 	const child = spawn(
-		"python3",
+		process.execPath,
 		[
-			fileURLToPath(new URL("./verification-slot.py", import.meta.url)),
-			"node",
-			"--",
-			process.execPath,
 			...(tsx ? ["--import", "tsx"] : []),
 			"--test",
 			"--test-force-exit",

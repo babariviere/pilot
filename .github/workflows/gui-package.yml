@@ -91,8 +91,8 @@ jobs:
           RELEASE_SOURCE: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          python3 scripts/verification-slot.py node -- bash apps/desktop/scripts/cargo.sh build --release --locked --workspace --bins
-          python3 scripts/verification-slot.py node -- bash apps/desktop/scripts/cargo.sh build --release --locked --manifest-path updater/Cargo.toml --features native-linux --bin pilot-desktop-update-helper
+          bash apps/desktop/scripts/cargo.sh build --release --locked --workspace --bins
+          bash apps/desktop/scripts/cargo.sh build --release --locked --manifest-path updater/Cargo.toml --features native-linux --bin pilot-desktop-update-helper
           python3 apps/desktop/scripts/linux_gui_package_native.py --source "$RELEASE_SOURCE" --binaries apps/desktop/target/dev/release --output "$RUNNER_TEMP/linux-native.json"
           python3 - "$RELEASE_SOURCE" "$RUNNER_TEMP/linux-rust" <<'PY'
           import hashlib, json, pathlib, shutil, sys
@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/linux-runtime-input"
           # Reuse the existing ABI toolchain; the headless archive stays a private intermediate.
-          python3 scripts/verification-slot.py node -- docker run --rm --cpus=2 --memory=4g --pids-limit=512 --cap-drop=ALL --security-opt=no-new-privileges \
+          docker run --rm --cpus=2 --memory=4g --pids-limit=512 --cap-drop=ALL --security-opt=no-new-privileges \
             --user "$(id -u):$(id -g)" -v "$PWD:/source:ro" -v "$RUNNER_TEMP/linux-runtime-input:/output" \
             -e RELEASE_SOURCE="$RELEASE_SOURCE" \
             quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \

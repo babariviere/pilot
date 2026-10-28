@@ -86,7 +86,7 @@ jobs:
           # Main pushes always verify the app. PRs skip Swift when nothing it reads changed.
           swift=true
           if [ "$EVENT_NAME" = pull_request ] && files="$(git diff --name-only HEAD^1 HEAD)"; then
-            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|packages/artifacts/src/visual/runtime\.js$|packages/protocol/fixtures/visual/|scripts/verification-slot\.py$|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
+            if ! printf '%s\n' "$files" | grep -Eq '^(apps/macos/|packages/artifacts/src/visual/runtime\.js$|packages/protocol/fixtures/visual/|\.github/workflows/(pr|tests)\.yaml$|package\.json$)'; then
               swift=false
             fi
           fi

@@ -340,13 +340,12 @@ test("Build prompts define completion; Ask prompts do not", () => {
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
 });
 
-test("Build verification guidance prefers focused iteration and shared slots, never Ask", () => {
+test("Build verification guidance prefers focused iteration, never Ask", () => {
 	const prompt = pilotPrompt({});
 	assert.match(prompt, /Run focused tests while iterating/);
 	assert.match(prompt, /full suites once before publishing/);
-	assert.match(prompt, /shared heavy-check slots/);
-	assert.match(prompt, /do not bypass a queue or start duplicate full suites/);
-	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /focused tests|heavy-check slots/);
+	assert.match(prompt, /project's verification wrappers/);
+	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /focused tests/);
 });
 
 test("Build agents leave remote CI monitoring to Pilot, not background jobs", () => {

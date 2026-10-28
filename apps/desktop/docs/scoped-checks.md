@@ -13,8 +13,7 @@ python3 scripts/check-scoped.py --unit chat_models --test project_creation --lin
 python3 scripts/check-scoped.py --unit chat_models --native-probes
 ```
 
-The command enters the existing shared verification slot. Cargo still goes
-through `scripts/cargo.sh`, including checksum verification, the pinned toolchain,
+Cargo goes through `scripts/cargo.sh`, including checksum verification, the pinned toolchain,
 two build jobs, mbx CPU2/4GiB admission and this worktree's private target and
 incremental files. No cache is cleaned or shared target installed. Development
 and test already default to opt-level0 with debug0; this command does not claim

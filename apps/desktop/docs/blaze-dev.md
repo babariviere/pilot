@@ -25,7 +25,6 @@ binary under the local name `shim/cargo`, the shim dispatch upstream supports.
 The shim invokes **`ra-jit cargo`**, not Bazel or a guessed mbx flag. The existing
 shared mbx store and CPU2/4GiB scheduler remain; `mbx reserve` covers the external
 Blaze command and nested cached Cargo work without nested admission deadlock.
-There is **no shared verification-slot queue** for this local edit loop.
 Admission remains an estimate, not an OS CPU/RSS limit.
 
 After acquiring that existing scheduler, the child uses a separate shared store,

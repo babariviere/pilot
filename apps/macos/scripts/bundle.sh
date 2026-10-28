@@ -5,10 +5,6 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
-if [ "${PILOT_VERIFICATION_SWIFT_PID:-}" != "$$" ]; then
-	exec python3 "$here/../../scripts/verification-slot.py" swift -- "$BASH" "$0" "$@"
-fi
-unset PILOT_VERIFICATION_SWIFT_PID
 repo="$(cd "$here/../.." && pwd)"
 configuration="${CONFIGURATION:-release}"
 app="$here/build/Pilot.app"

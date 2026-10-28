@@ -62,7 +62,7 @@ It is cleared with the next GPUI frame; there is no polling/global input service
 
 ## Verification
 
-Use the normal bounded verification slot and scoped wrapper:
+Use the scoped wrapper:
 
 ```sh
 cd apps/desktop

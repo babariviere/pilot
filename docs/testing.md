@@ -62,10 +62,10 @@ The wrapper uses SwiftLint 0.65.1. It reuses an installed matching version, or d
 portable binary into a temporary directory and verifies its pinned SHA-256 before extracting it.
 Set `SWIFTLINT_BIN` to an absolute path to reuse a local binary; a version mismatch fails rather than
 changing the rules.
-The check needs no Swift build or package resolution, so it does not take the Swift verification slot.
+The check needs no Swift build or package resolution.
 Formatting (`swift format`) and unused-code analysis (Periphery) remain separate, optional tools.
 
-### Shared heavy-verification slots
+### Heavy verification
 
 On CI, the Swift output guard captures one live stack if an already-started test runner emits no
 output for 60 seconds. Compilation silence does not arm it. Discovery is scoped to that wrapper's
@@ -80,44 +80,15 @@ no supported runner is found, the log includes at most 32 owned descendant comma
 arguments or unrelated processes, so a missing runner match is diagnosable instead of silently empty.
 
 Iterate with affected test files. Run the relevant full suites once before publishing, not after each
-edit. Use background jobs for long checks, and never bypass the queue or launch duplicate suites while
-waiting. `pnpm test` (also `npm test`) and all `test:*` suite commands use the Node pool;
-`--list` only lists files and needs no slot. Direct, focused `node --test …` stays lightweight and unqueued.
+edit. Use background jobs for long checks. Builds and suites run directly, without a machine-wide queue,
+so checks from several checkouts can run in parallel.
 
-`apps/macos/scripts/{build,test,bundle}.sh` share the Swift pool, including package preparation and all
-build/test subprocesses. Use these wrappers rather than raw `swift build` / `swift test`. Existing
-per-command limits (`PILOT_SWIFT_JOBS`, `PILOT_TEST_CONCURRENCY`) still apply inside each slot.
+Use `apps/macos/scripts/{build,test,bundle}.sh` rather than raw `swift build` / `swift test`.
+Per-command limits (`PILOT_SWIFT_JOBS`, `PILOT_TEST_CONCURRENCY`) bound each run.
 
 Every first-party Swift target treats compiler warnings as errors in all configurations, including
 tests and helper executables. This policy is set in `apps/macos/Package.swift`, so local builds and CI
 enforce the same gate without promoting warnings from third-party packages to errors.
-
-The Python 3 stdlib runner, `scripts/verification-slot.py`, uses local OS file locks under
-`$PILOT_HOME/verification` (default `$XDG_DATA_HOME/pilot/verification`, or
-`~/.local/share/pilot/verification`). All checkouts using that home share **1 Swift slot and 2 Node
-slots**, even outside the app. Set the same absolute `PILOT_HOME` in every session/shell; separate homes
-intentionally have separate pools. No daemon, npm package or lock service is required.
-
-To configure the machine-wide capacities, create `$PILOT_HOME/verification/limits.json`:
-
-```json
-{"swift": 1, "node": 2}
-```
-
-Omitted keys keep their defaults; values must be integers from 1 to 64. Invalid configuration fails
-visibly rather than running without a limit. Change limits while checks are idle, since each queued
-invocation reads the configuration once. Raising these limits can overload the machine.
-
-Waiting reports each holder's PID, executable, workspace and elapsed holding time immediately, then
-every 15 seconds. It waits indefinitely until admitted or explicitly interrupted; a quiet job log is
-never a queue timeout. Exit codes/signals and command arguments pass through unchanged. Only the
-executable name, not its arguments, is stored in holder metadata.
-
-Locks are inherited across `exec`, and the OS releases them when the holder exits, including SIGKILL.
-Stale JSON left by a crash is ignored once the kernel lock is free. Never delete a lock file to clear
-a queue: a live process could still hold its old inode. Stop the actual holder instead. Long-lived
-children that inherit the descriptor keep the slot until they exit as well. This is a local-filesystem
-semaphore, not a distributed lock or strict FIFO scheduler.
 
 ### Local measurements
 
@@ -567,7 +538,7 @@ On CI, `run-swift-tests.py` supervises each SwiftPM invocation with a ten-minute
 budget and a separate three-minute budget starting at each native test runner's start marker.
 Output activity does not extend that deadline. On timeout it prints bounded stack samples of its
 own native runners, terminates the private session's process groups (including helper groups), and
-fails with status 124. Cancellation also cleans up those groups before releasing the verification slot.
+fails with status 124. Cancellation also cleans up those groups.
 The outer step deadline remains a last resort for the entire chain. This diagnoses/bounds hangs;
 it does not make a hung test pass or replace its existing assertions and deadlines.
 
@@ -602,7 +573,7 @@ layer. A fixture window can supply explicit visibility so locked/headless deskto
 and occlusion shutdown without changing production visibility policy.
 
 A full native test run executes the WebKit content-measurement matrix in a separate test process after
-the other tests, reusing the same build and verification slot. This prevents unrelated MainActor/AppKit
+the other tests, reusing the same build. This prevents unrelated MainActor/AppKit
 fixtures from consuming its one-minute budget. All clipping, resize, visible-overflow and Mermaid assertions
 remain enabled. The output guard requires that the isolated test actually starts, so a stale filter cannot
 silently drop coverage. Explicit `--filter`, `--skip` and listing requests remain a single scoped invocation.
@@ -632,7 +603,7 @@ the journey. On CI both journeys must start.
 
 CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
 macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, `pr.yaml`,
-`tests.yaml`, `package.json` or the verification-slot script. PRs that run Swift package the debug binaries from
+`tests.yaml` or `package.json`. PRs that run Swift package the debug binaries from
 the test build (`BUNDLE_PREBUILT=1 CONFIGURATION=debug bundle.sh`) and smoke-test that app, instead of
 compiling an optimized build. Only `release.yaml` builds the optimized app, so release-only compiler problems
 surface when a release is built.

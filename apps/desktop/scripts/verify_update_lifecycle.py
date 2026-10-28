@@ -76,15 +76,10 @@ def inside(output):
 def main():
     if (sys.platform, platform.machine()) not in (("darwin", "arm64"), ("linux", "x86_64")):
         raise SystemExit("Native arm64 macOS or x86_64 Linux fixture required")
-    if len(sys.argv) == 3 and sys.argv[1] == "--inside":
-        inside(sys.argv[2])
-        return
     if len(sys.argv) != 1:
         raise SystemExit("No application path, credential, feed or signing-key arguments are accepted")
     output = tempfile.mkdtemp(prefix="next-owned-update-")
-    # Same shared heavy admission as native Rust checks, never a visible GUI benchmark.
-    subprocess.run([sys.executable, str(ROOT / "scripts/verification-slot.py"), "swift", "--",
-                    sys.executable, str(Path(__file__).resolve()), "--inside", output], check=True)
+    inside(output)
 
 
 if __name__ == "__main__":
