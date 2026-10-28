@@ -1,0 +1,48 @@
+--- a/src/core/mod.rs
++++ b/src/core/mod.rs
+@@ -6389,6 +6389,7 @@
+         anchor += list.take_splice_anchor();
+         // Inverted lists keep their distance from the end instead;
+         // `maintainVisibleContentPosition` follows the end near it.
++        list.rebase_follow_end(anchor);
+         anchor += list.anchor_end();
+         // The last scroll command's target moves as its cells are
+         // measured: the list follows it.
+--- a/src/core/list.rs
++++ b/src/core/list.rs
+@@ -1154,6 +1154,14 @@
+     /// when the end moves away while they are within the threshold of it
+     /// (a growing last item, a shrinking viewport); scrolled further up,
+     /// they keep what is visible (content grows below it).
++    // Compare the old end with the old offset, not one already shifted by
++    // a prepend or measurement above the viewport.
++    pub(super) fn rebase_follow_end(&mut self, delta: f32) {
++        if !self.inverted {
++            self.anchored_end += delta;
++        }
++    }
++
+     pub(super) fn anchor_end(&mut self) -> f32 {
+         if self.viewport <= 0.0 {
+             return 0.0;
+@@ -1639,6 +1647,20 @@
+         assert_eq!(indices.last(), Some(&56));
+         // Slots were reused, not grown without bound.
+         assert!(l.slots.len() <= 25 + 17, "{}", l.slots.len());
++    }
++
++    #[test]
++    fn follow_end_prepend_does_not_capture_a_held_reader() {
++        let mut l = list(100, 50.0, 400.0);
++        l.set_follow_end(Some(24.0));
++        l.anchor_end();
++        l.jump(l.content_len() - 1000.0);
++        let before = l.offset;
++        l.splice(0, 0, 100);
++        let delta = l.take_splice_anchor();
++        l.rebase_follow_end(delta);
++        assert_eq!(l.anchor_end(), 0.0);
++        assert_eq!(l.offset, before + delta);
+     }
+ 
+     #[test]

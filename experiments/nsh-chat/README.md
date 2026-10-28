@@ -20,15 +20,27 @@ bash experiments/nsh-chat/run.sh gpui
 # Hidden native interaction diagnostics and captures. No desktop activation.
 bash experiments/nsh-chat/run.sh nsh --checks
 
-# Hidden replay diagnostics, one warmup plus five recorded responses each.
+# Strict, isolated functional regressions. No benchmark or shown window.
+bash experiments/nsh-chat/run.sh nsh --checks --undo-only
+bash experiments/nsh-chat/run.sh nsh --checks --anchors-only
+
+# Strict simulated marked-text blocker repro, expected nonzero currently.
+bash experiments/nsh-chat/run.sh nsh --checks --marked-only
+
+# Historical replay commands, not a fair comparison. Functional gates must pass first.
 bash experiments/nsh-chat/run.sh nsh --bench
 bash experiments/nsh-chat/run.sh gpui --probe
 python3 experiments/nsh-chat/summarize.py
 
 # Focused source checks. Tests are sequential because the optional probe bus
 # belongs to one standalone fixture window per process.
+python3 experiments/nsh-chat/prepare-patches.py
 cargo test --locked --manifest-path experiments/nsh-chat/Cargo.toml -- --test-threads=1
 cargo clippy --locked --manifest-path experiments/nsh-chat/Cargo.toml --all-targets -- -D warnings
+
+# The patched list implementation and focused anchor regression.
+(cd experiments/nsh-chat && CARGO_TARGET_DIR="$PWD/target" cargo test --offline \
+  --manifest-path output/patched/nsh-core/Cargo.toml --lib core::list::tests -j 4)
 ```
 
 `--probe` combines interaction checks and replay; `--checks` omits the six
@@ -41,7 +53,9 @@ Builds, app wrappers, logs, images and JSON diagnostics stay under ignored
 `target/`, `gpui/target/` and `output/`. No global CLI is needed. The installed
 `nsh 0.1.1` CLI was inspected, not changed or used as the runtime. The GPUI
 runner uses the project's existing bootstrap/mbx and generated Kit patches,
-with a separate target directory. There is no vendored upstream source tree.
+with a separate target directory. `prepare-patches.py` stages the source-pinned
+dependency patches under ignored `output/patched/`, never in Cargo's shared
+checkout. See `patches/` and FINDINGS for their scope and qualification.
 
 ## What is implemented
 
@@ -76,13 +90,21 @@ turning unsupported behavior into a passing benchmark. Exit zero means the
 diagnostic completed, **not** that every interaction gate passed. Inspect its
 `checks`, not only its exit code. See [findings](FINDINGS.md).
 
-`--checks --undo-repro` is an **intentionally unsafe, opt-in reproducer** for
-the observed upstream AppKit undo range exception after draft restoration.
-It may terminate only this synthetic process. Do not use it as a routine
-smoke test, and do not assume ordinary undo/draft restoration is qualified.
+`--undo-only` checks exact native/Rust draft agreement after navigation, undo,
+redo, authoritative restoration, Unicode paste/undo/redo and Send. It exits
+nonzero on failure. `--anchors-only` independently checks the one-point
+prepend/held-growth gates and also exits nonzero. The older `--undo-repro`
+flag remains accepted with `--checks`; undo now runs in ordinary diagnostics.
+Hidden undo probes drive the real native manager directly. They do not qualify
+the active application's Edit menu. `--responder-undo` separately attempts
+native responder routing, which a hidden window may not deliver to this editor.
+
+`NSH_CHAT_BASELINE=1` stages unpatched pinned sources for attribution only.
+It can terminate this synthetic process on a native exception. Run separately
+from every other build/probe, then restore default staging before verification.
 
 The native probes use actual AppKit views, NSTextInputClient marked-text
-calls, native insertion/paste, posted synthetic mouse events and native
+calls, native insertion/paste, synthetic responder mouse events and native
 document copy. They do not switch OS input sources, generate hardware input,
 or prove active-app menu routing. Captures use the actual view tree, not a
 mockup, but are static/offscreen and cannot prove smooth presentation.

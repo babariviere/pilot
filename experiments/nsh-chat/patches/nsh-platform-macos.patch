@@ -1,0 +1,104 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -35,7 +35,7 @@
+ objc2-core-foundation.workspace = true
+ objc2-core-graphics.workspace = true
+ objc2-core-text.workspace = true
+-objc2-foundation.workspace = true
++objc2-foundation = { workspace = true, features = ["NSUndoManager"] }
+ objc2-image-io.workspace = true
+ objc2-io-kit.workspace = true
+ objc2-quartz-core.workspace = true
+--- a/src/text_input.rs
++++ b/src/text_input.rs
+@@ -71,7 +71,7 @@
+ use objc2_core_foundation::{CGFloat, CGSize};
+ use objc2_foundation::{
+     NSAttributedString, NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange,
+-    NSString,
++    NSString, NSUndoManager,
+ };
+ 
+ use crate::{
+@@ -304,6 +304,7 @@
+ /// What the editors' callbacks need, without keeping anything alive.
+ #[derive(Clone)]
+ struct Ctx {
++    undo: Retained<NSUndoManager>,
+     surface: Weak<Surface>,
+     view: objc2::rc::Weak<NSView>,
+     input: Weak<InputState>,
+@@ -1331,6 +1332,17 @@
+     unsafe impl NSObjectProtocol for InputDelegate {}
+ 
+     impl InputDelegate {
++        #[unsafe(method(undoDidChange:))]
++        fn undo_did_change(&self, _notification: &NSNotification) {
++            // NSTextStorage undo can change text without textDidChange:.
++            // Avoid a duplicate edit if AppKit already reported the change.
++            if let Some((_, _, input)) = self.ivars().get()
++                && input.editor.borrow().text() != *input.known.borrow()
++            {
++                self.ivars().changed();
++            }
++        }
++
+         /// A text view's clip view scrolled.
+         #[unsafe(method(clipBoundsChanged:))]
+         fn clip_bounds_changed(&self, _notification: &NSNotification) {
+@@ -1373,6 +1385,12 @@
+     }
+ 
+     unsafe impl NSTextViewDelegate for InputDelegate {
++        // AppKit observes this input's own manager for Undo/Redo notifications.
++        #[unsafe(method_id(undoManagerForTextView:))]
++        fn undo_manager(&self, _view: &NSTextView) -> Option<Retained<NSUndoManager>> {
++            Some(self.ivars().undo.clone())
++        }
++
+         #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+         fn should_change(
+             &self,
+@@ -1413,6 +1431,12 @@
+         let old_len = editor.ns_text().length() as u32;
+         let caret = editor.selection().map(|(_, end)| end);
+         self.applying.set(true);
++        if let Some(view) = editor.editing().and_then(|v| v.downcast::<NSTextView>().ok()) {
++            view.breakUndoCoalescing();
++        }
++        // Authoritative replacements invalidate ranges in previous undo edits.
++        // Unchanged user-edit echoes never reach replace_text (apply_value).
++        self.cx.undo.removeAllActions();
+         editor.set_text(text);
+         if let Some(caret) = caret {
+             let len = utf16_len(text) as u32;
+@@ -1483,6 +1507,7 @@
+     let mtm = surface.mtm;
+     let input = Rc::new_cyclic(|weak| {
+         let cx = Ctx {
++            undo: NSUndoManager::new(mtm),
+             surface: Rc::downgrade(surface),
+             view: objc2::rc::Weak::new(view.ns()),
+             input: weak.clone(),
+@@ -1490,6 +1515,21 @@
+         let delegate = InputDelegate::alloc(mtm).set_ivars(cx.clone());
+         // SAFETY: NSObject's initializer.
+         let delegate: Retained<InputDelegate> = unsafe { msg_send![super(delegate), init] };
++        // SAFETY: selector-based observers disappear with the delegate.
++        unsafe {
++            for name in [
++                objc2_foundation::NSUndoManagerDidUndoChangeNotification,
++                objc2_foundation::NSUndoManagerDidRedoChangeNotification,
++            ] {
++                objc2_foundation::NSNotificationCenter::defaultCenter()
++                    .addObserver_selector_name_object(
++                        &*delegate,
++                        sel!(undoDidChange:),
++                        Some(name),
++                        Some(&*cx.undo),
++                    );
++            }
++        }
+         let placeholder = NSTextField::labelWithString(&NSString::new(), mtm);
+         placeholder.setHidden(true);
+         placeholder.setSelectable(false);

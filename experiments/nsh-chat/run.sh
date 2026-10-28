@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 backend="${1:-nsh}"
 [[ $# == 0 ]] || shift
 case "$backend" in
-  nsh) cargo build --locked -j 4; binary="$PWD/target/debug/nsh-chat-prototype" ;;
+  nsh) python3 prepare-patches.py; cargo build --locked -j 4; binary="$PWD/target/debug/nsh-chat-prototype" ;;
   gpui)
     root="$(cd ../.. && pwd)"
     [[ -x "$root/apps/desktop/.tools/bin/mbx" ]] || bash "$root/apps/desktop/scripts/bootstrap.sh"

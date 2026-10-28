@@ -6,6 +6,10 @@ publish = false
 
 [workspace]
 
+[patch."https://github.com/longbridge/nsh"]
+nsh-core = { path = "output/patched/nsh-core" }
+nsh-platform-macos = { path = "output/patched/nsh-platform-macos" }
+
 [dependencies]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "c7b249970c2f9a15e20c5a461a7324ea9227c08f" }
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "c7b249970c2f9a15e20c5a461a7324ea9227c08f" }

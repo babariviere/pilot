@@ -144,6 +144,30 @@ impl Ui {
                 }
             }
             "latest" => p.list.scroll_to_end(false),
+            "restore" => {
+                let value = "Restored 日本語 👩🏽‍💻".to_owned();
+                p.draft.set(value.clone());
+                self.fixture.update(|f| f.chats[p.id].draft = value);
+            }
+            "selection-fixture" => {
+                self.fixture.update(|f| {
+                    let messages = &mut f.chats[p.id].messages;
+                    let end = messages.len();
+                    for (row, text) in messages[end - 2..].iter_mut().zip([
+                        "Selection alpha 日本語 👩🏽‍💻 e\u{301}",
+                        "Selection beta العربية 한국어",
+                    ]) {
+                        row.text = text.into();
+                        row.visual = false;
+                        row.image = false;
+                    }
+                });
+                p.rows.set(
+                    self.fixture
+                        .with_untracked(|f| f.chats[p.id].visible().to_vec()),
+                );
+                p.list.scroll_to_end(false);
+            }
             "hold" => p.list.scroll_to_index(
                 p.rows.with_untracked(|r| r.len().saturating_sub(10)) as u32,
                 Percentage(0.),

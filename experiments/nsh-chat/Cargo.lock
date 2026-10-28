@@ -1343,7 +1343,6 @@ dependencies = [
 [[package]]
 name = "nsh-core"
 version = "0.3.0"
-source = "git+https://github.com/longbridge/nsh?rev=c7b249970c2f9a15e20c5a461a7324ea9227c08f#c7b249970c2f9a15e20c5a461a7324ea9227c08f"
 dependencies = [
  "cap-std",
  "crc32fast",
@@ -1404,7 +1403,6 @@ dependencies = [
 [[package]]
 name = "nsh-platform-macos"
 version = "0.3.0"
-source = "git+https://github.com/longbridge/nsh?rev=c7b249970c2f9a15e20c5a461a7324ea9227c08f#c7b249970c2f9a15e20c5a461a7324ea9227c08f"
 dependencies = [
  "block2",
  "crossbeam-channel",

@@ -49,11 +49,55 @@ fn insert(w: &NSWindow, value: &str) {
     }
 }
 
+fn undo(w: &NSWindow, redo: bool) {
+    let e = composer(w);
+    e.breakUndoCoalescing();
+    // SAFETY: ask the responder chain to perform the standard Undo/Redo action.
+    unsafe {
+        if !std::env::args().any(|a| a == "--responder-undo") {
+            let manager: Retained<objc2::runtime::AnyObject> = msg_send![&*e, undoManager];
+            if redo {
+                let _: () = msg_send![&*manager, redo];
+            } else {
+                let _: () = msg_send![&*manager, undo];
+            }
+            return;
+        }
+        let action = if redo {
+            objc2::sel!(redo:)
+        } else {
+            objc2::sel!(undo:)
+        };
+        assert!(
+            e.tryToPerform_with(action, None),
+            "native Undo/Redo responder must be available"
+        );
+    }
+}
+
 fn mouse(w: &NSWindow, kind: NSEventType, x: f64, y: f64) {
+    let root = w.contentView().unwrap();
+    let point = NSPoint::new(
+        x,
+        if root.isFlipped() {
+            y
+        } else {
+            root.bounds().size.height - y
+        },
+    );
+    let location = root.convertPoint_toView(point, None);
     let event = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
-        kind, NSPoint::new(x, w.contentView().unwrap().bounds().size.height - y), NSEventModifierFlags::empty(),
+        kind, location, NSEventModifierFlags::empty(),
         NSProcessInfo::processInfo().systemUptime(), w.windowNumber(), None, 0, 1, 1.0).unwrap();
-    NSApplication::sharedApplication(MainThreadMarker::from(w)).postEvent_atStart(&event, false);
+    // Deliver to the real NSH responder without the active-app event queue.
+    // This is synthetic responder input, not OS mouse/menu qualification.
+    let target = surface_root(w);
+    match kind {
+        NSEventType::LeftMouseDown => target.mouseDown(&event),
+        NSEventType::LeftMouseDragged => target.mouseDragged(&event),
+        NSEventType::LeftMouseUp => target.mouseUp(&event),
+        _ => unreachable!("selection probe only"),
+    }
 }
 
 fn screenshot(w: &NSWindow, path: PathBuf) {
@@ -95,20 +139,43 @@ fn row_frame(w: &NSWindow, id: Option<&str>) -> Option<(String, f64)> {
             // NSH scrolls with layer transforms before committing NSView bounds.
             let layer = v.layer()?;
             let rect = layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref());
-            let y = root.bounds().size.height - rect.origin.y - rect.size.height;
+            let y = if root.isFlipped() {
+                rect.origin.y
+            } else {
+                root.bounds().size.height - rect.origin.y - rect.size.height
+            };
             (id.is_some() || (y + rect.size.height > 65. && y < 600.)).then_some((name, y))
         })
-        .min_by(|a, b| a.1.total_cmp(&b.1))
+        // Recycled, parked cells can retain a label at a far-offscreen frame.
+        // Prefer the mounted instance nearest the viewport, not the smallest y.
+        .min_by(|a, b| {
+            let distance = |y: f64| (65. - y).max(0.) + (y - 600.).max(0.);
+            distance(a.1)
+                .total_cmp(&distance(b.1))
+                .then_with(|| a.1.total_cmp(&b.1))
+        })
 }
 
-fn copy_transcript(w: &NSWindow) -> String {
-    let document = descendants(&w.contentView().unwrap())
+fn transcript(w: &NSWindow) -> Retained<NSView> {
+    descendants(&w.contentView().unwrap())
         .into_iter()
         .find(|v| {
             NSAccessibility::accessibilityIdentifier(&**v)
                 .is_some_and(|id| id.to_string() == "transcript-selection")
         })
-        .unwrap();
+        .unwrap()
+}
+
+fn surface_root(w: &NSWindow) -> Retained<NSView> {
+    let root = w.contentView().unwrap();
+    std::iter::once(root.clone())
+        .chain(descendants(&root))
+        .find(|v| v.class().name() == c"NshView")
+        .expect("NSH surface root owns native input and selection dispatch")
+}
+
+fn copy_transcript(w: &NSWindow) -> String {
+    let document = surface_root(w);
     // Exercise the NSH native document's copy implementation directly. A hidden
     // app cannot qualify the active application's menu/key-equivalent routing.
     unsafe {
@@ -212,6 +279,153 @@ fn exercise(
     };
     std::thread::sleep(Duration::from_secs(2));
     let mut checks = vec![];
+    if std::env::args().any(|a| a == "--marked-only") {
+        main_thread(|w| {
+            let e = composer(w);
+            w.makeFirstResponder(Some(&e));
+            unsafe {
+                e.setMarkedText_selectedRange_replacementRange(
+                    &NSString::from_str("中文"),
+                    NSRange::new(2, 0),
+                    NSRange::new(usize::MAX, 0),
+                );
+                NSTextInputClient::doCommandBySelector(&*e, objc2::sel!(cancelOperation:));
+            }
+        });
+        pause();
+        let model = state();
+        let native = main_thread(|w| {
+            (
+                composer(w).string().to_string(),
+                composer(w).hasMarkedText(),
+            )
+        });
+        let pass =
+            model["draft"] == native.0 && model["composing"] == native.1 && model["rows"] == 1000;
+        let result = json!({"pass":pass,"input":"simulated NSTextInputClient, not OS IME","native":native,"state":model});
+        std::fs::write(
+            output.join("marked-only.json"),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(pass, "native/model marked-text consistency: {result}");
+        return;
+    }
+    if std::env::args().any(|a| a == "--anchors-only") {
+        action("hold");
+        pause();
+        let before = main_thread(|w| row_frame(w, None)).expect("visible held row");
+        action("older");
+        pause();
+        let key = before.0.clone();
+        let prepended = main_thread(move |w| row_frame(w, Some(&key)));
+        action("replay");
+        std::thread::sleep(Duration::from_secs(4));
+        let key = before.0.clone();
+        let grown = main_thread(move |w| row_frame(w, Some(&key)));
+        let pass = prepended
+            .as_ref()
+            .zip(grown.as_ref())
+            .is_some_and(|(p, g)| {
+                p.0 == before.0
+                    && g.0 == before.0
+                    && (p.1 - before.1).abs() <= 1.
+                    && (g.1 - before.1).abs() <= 1.
+            });
+        let result = json!({"pass":pass,"before":before,"prepended":prepended,"grown":grown,"state":state()});
+        std::fs::write(
+            output.join("anchors-only.json"),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(pass, "one-point native logical anchors: {result}");
+        return;
+    }
+    if std::env::args().any(|a| a == "--undo-only") {
+        main_thread(|w| insert(w, "Original draft 日本語 👩🏽‍💻"));
+        pause();
+        action("chat1");
+        pause();
+        main_thread(|w| insert(w, "Second draft"));
+        pause();
+        action("chat0");
+        pause();
+        let restored = state();
+        main_thread(|w| {
+            let e = composer(w);
+            e.breakUndoCoalescing();
+            insert(w, " undo me");
+        });
+        pause();
+        let edited = state();
+        eprintln!("minimal undo: restored={restored}, edited={edited}");
+        main_thread(|w| undo(w, false));
+        pause();
+        let after = state();
+        let native = main_thread(|w| composer(w).string().to_string());
+        let pass = after["draft"] == restored["draft"] && after["draft"] == native;
+        let result =
+            json!({"pass":pass,"restored":restored,"edited":edited,"after":after,"native":native});
+        std::fs::write(
+            output.join("undo-only.json"),
+            serde_json::to_vec_pretty(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            pass,
+            "native undo must restore both editor and Rust draft: {result}"
+        );
+        main_thread(|w| undo(w, true));
+        pause();
+        assert_eq!(
+            state()["draft"],
+            edited["draft"],
+            "native redo reaches Rust"
+        );
+        action("restore");
+        pause();
+        let restored = state()["draft"].clone();
+        main_thread(|w| {
+            let pb = NSPasteboard::generalPasteboard();
+            pb.clearContents();
+            unsafe {
+                pb.setString_forType(
+                    &NSString::from_str(" pasted e\u{301} 👩🏽‍💻 日本語"),
+                    NSPasteboardTypeString,
+                );
+                composer(w).paste(None);
+            }
+        });
+        pause();
+        let pasted = state()["draft"].clone();
+        let expected_paste = format!("{} pasted e\u{301} 👩🏽‍💻 日本語", restored.as_str().unwrap());
+        assert_eq!(
+            pasted, expected_paste,
+            "exact Unicode paste into restored draft"
+        );
+        assert_eq!(
+            main_thread(|w| composer(w).string().to_string()),
+            expected_paste
+        );
+        main_thread(|w| undo(w, false));
+        pause();
+        assert_eq!(
+            state()["draft"],
+            restored,
+            "paste undo after authoritative restoration"
+        );
+        main_thread(|w| undo(w, true));
+        pause();
+        assert_eq!(state()["draft"], pasted, "Unicode paste redo");
+        action("send");
+        pause();
+        main_thread(|w| insert(w, "After send"));
+        pause();
+        main_thread(|w| undo(w, false));
+        pause();
+        assert_eq!(state()["draft"], "", "undo never resurrects a sent draft");
+        return;
+    }
     if !std::env::args().any(|a| a == "--bench") {
         let first = state();
         checks.push(json!({"check":"initial virtual window", "pass":first["rows"]==1000}));
@@ -242,7 +456,13 @@ fn exercise(
         });
         pause();
         let after_return = state();
-        checks.push(json!({"check":"marked Return does not send", "pass":after_return["rows"]==1000 && after_return["draft"].as_str().is_some_and(|s|s.contains("にほん"))}));
+        let native_after_return = main_thread(|w| {
+            (
+                composer(w).hasMarkedText(),
+                composer(w).string().to_string(),
+            )
+        });
+        checks.push(json!({"check":"simulated marked Return commits without sending", "pass":after_return["rows"]==1000 && after_return["draft"].as_str().is_some_and(|s|s.contains("にほん")) && !native_after_return.0 && after_return["draft"]==native_after_return.1,"native":native_after_return}));
         main_thread(|w| {
             let e = composer(w);
             unsafe {
@@ -257,15 +477,37 @@ fn exercise(
             }
         });
         pause();
-        checks.push(json!({"check":"marked Escape does not send", "pass":state()["rows"]==1000}));
+        let after_escape = state();
+        let native_after_escape = main_thread(|w| {
+            (
+                composer(w).hasMarkedText(),
+                composer(w).string().to_string(),
+            )
+        });
+        checks.push(json!({"check":"simulated marked Escape retains consistent draft/composition", "pass":after_escape["rows"]==1000 && after_escape["draft"]==native_after_escape.1 && after_escape["composing"]==native_after_escape.0,"native":native_after_escape,"state":after_escape}));
         action("chat1");
         pause();
         action("chat0");
         pause();
-        // The upstream AppKit editor's shared undo stack can throw an
-        // NSRangeException after programmatic draft restoration. Keep the
-        // destructive reproducer opt-in; a completed probe is not acceptance.
-        if std::env::args().any(|a| a == "--undo-repro") {
+        // This also retains the original --undo-repro sequence. The local
+        // source patch must keep undo enabled and propagate its text change.
+        // Isolate undo from the earlier composition diagnostic's outcome.
+        main_thread(|w| {
+            let e = composer(w);
+            e.unmarkText();
+            unsafe {
+                e.selectAll(None);
+                e.insertText_replacementRange(
+                    &NSString::from_str("Undo baseline 日本語 👩🏽‍💻"),
+                    NSRange::new(usize::MAX, 0),
+                );
+            }
+        });
+        pause();
+        action("restore");
+        pause();
+        let expected_undo = state()["draft"].clone();
+        {
             main_thread(|w| {
                 let e = composer(w);
                 e.unmarkText();
@@ -283,24 +525,19 @@ fn exercise(
             let native_undo = main_thread(|w| {
                 let e = composer(w);
                 let before = e.string().to_string();
-                unsafe {
-                    let manager: Option<Retained<objc2::runtime::AnyObject>> =
-                        msg_send![&*e, undoManager];
-                    if let Some(manager) = manager {
-                        let _: () = msg_send![&*manager, undo];
-                    }
-                }
+                undo(w, false);
                 (before, e.string().to_string())
             });
             pause();
             checks.push(
-            json!({"check":"native undo changes draft", "pass":state()["draft"]!=before_undo,"native":native_undo,"before_draft":before_undo,"after_draft":state()["draft"]}),
+            json!({"check":"native undo restores exact draft", "pass":state()["draft"]==expected_undo && state()["draft"]==native_undo.1,"native":native_undo,"before_draft":before_undo,"after_draft":state()["draft"]}),
         );
-        } else {
-            checks.push(json!({"check":"post-navigation native undo", "pass":false,"blocked":"NSRangeException observed; reproduce with --checks --undo-repro. Not qualified."}));
         }
         let large = "Unicode 👩🏽‍💻 日本語 e\u{301}\n".repeat(3000);
+        let expected_large = format!("{}{}", state()["draft"].as_str().unwrap(), large);
         main_thread(move |w| {
+            let e = composer(w);
+            e.setSelectedRange(NSRange::new(e.string().length(), 0));
             let pb = NSPasteboard::generalPasteboard();
             pb.clearContents();
             unsafe {
@@ -311,7 +548,8 @@ fn exercise(
             }
         });
         pause();
-        checks.push(json!({"check":"native large Unicode paste", "pass":state()["draft"].as_str().is_some_and(|s| s.len()>100000)}));
+        let native_large = main_thread(|w| composer(w).string().to_string());
+        checks.push(json!({"check":"native large Unicode paste is exact", "pass":state()["draft"]==expected_large && native_large==expected_large,"bytes":native_large.len()}));
         // Keep screenshots useful rather than photographing the stress-paste.
         main_thread(|w| {
             let e = composer(w);
@@ -332,6 +570,8 @@ fn exercise(
         main_thread(move |w| screenshot(w, path));
         action("close");
         pause();
+        action("selection-fixture");
+        pause();
         action("latest");
         pause();
         main_thread(|_| {
@@ -345,6 +585,13 @@ fn exercise(
             }
         });
         let (start, end) = main_thread(|w| {
+            eprintln!(
+                "selection geometry: flipped={}, first={:?}, last={:?}, document={:?}",
+                w.contentView().unwrap().isFlipped(),
+                row_frame(w, Some("message-0:9998")),
+                row_frame(w, Some("message-0:9999")),
+                transcript(w).frame()
+            );
             (
                 row_frame(w, Some("message-0:9998"))
                     .map(|p| p.1 + 12.)
@@ -365,8 +612,29 @@ fn exercise(
         main_thread(move |w| screenshot(w, path));
         let selected = main_thread(copy_transcript);
         let selected_ok =
-            selected.contains("Keep the reader") && selected.contains("synthetic replay");
-        checks.push(json!({"check":"cross-message native mouse selection and targeted copy", "pass":selected_ok, "available":std::env::args().any(|a|a=="--visible"),"copied":selected.chars().take(600).collect::<String>(),"note":"Hidden AppKit windows may not receive posted mouse events; no active-app Copy qualification."}));
+            selected.contains("Selection alpha") && selected.contains("Selection beta");
+        checks.push(json!({"check":"cross-message synthetic responder selection and native copy", "pass":selected_ok,"coordinates":[start,end],"copied":selected.chars().take(600).collect::<String>(),"note":"Direct responder events, not active-app mouse/menu routing."}));
+        main_thread(|w| unsafe {
+            let root = surface_root(w);
+            eprintln!(
+                "surface frame={:?}, bounds={:?}, flipped={}",
+                root.frame(),
+                root.bounds(),
+                root.isFlipped()
+            );
+            let _: () = msg_send![&*root, selectAll: None::<&objc2::runtime::AnyObject>];
+        });
+        pause();
+        let all_selected = main_thread(copy_transcript);
+        let all_ok =
+            all_selected.contains("Selection alpha") && all_selected.contains("Selection beta");
+        let ordered_once = all_ok
+            && all_selected.matches("Selection alpha").count() == 1
+            && all_selected.matches("Selection beta").count() == 1
+            && all_selected.find("Selection alpha") < all_selected.find("Selection beta");
+        checks.push(json!({"check":"native Select All copies messages once in order", "pass":ordered_once,"selection_established":all_ok,"copied":all_selected.chars().take(600).collect::<String>()}));
+        let selected = all_selected;
+        let selected_ok = all_ok;
         action("hold");
         pause();
         let anchor = main_thread(|w| row_frame(w, None));
@@ -389,8 +657,15 @@ fn exercise(
         let after = main_thread(move |w| row_frame(w, key.as_deref()));
         checks.push(json!({"check":"held logical anchor across tail/image growth", "pass":prepended.as_ref().zip(after.as_ref()).is_some_and(|(a,b)|a.0==b.0&&(a.1-b.1).abs()<=1.),"before":prepended,"after":after,"raw_offsets":[held["offset"].clone(),grown["offset"].clone()]}));
         action("latest");
-        pause();
-        checks.push(json!({"check":"Latest reaches tail", "pass":state()["endGap"].as_f64().is_some_and(|gap|gap.abs()<=1.)}));
+        let mut latest = state();
+        for _ in 0..10 {
+            pause();
+            latest = state();
+            if latest["endGap"].as_f64().is_some_and(|gap| gap.abs() <= 1.) {
+                break;
+            }
+        }
+        checks.push(json!({"check":"Latest reaches tail after settling", "pass":latest["endGap"].as_f64().is_some_and(|gap|gap.abs()<=1.),"endGap":latest["endGap"]}));
         main_thread(|w| w.setContentSize(NSSize::new(860., 720.)));
         pause();
         main_thread(|w| w.setContentSize(NSSize::new(1180., 820.)));

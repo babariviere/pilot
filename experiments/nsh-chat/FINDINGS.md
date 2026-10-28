@@ -4,7 +4,88 @@
 do not migrate the transcript on this evidence.** The screen is runnable and
 pleasant, but the correctness and presentation gates are not all met.
 
-## What changed after the first prototype
+## Follow-up qualification
+
+This follow-up remains an isolated Rust experiment. No production GPUI source,
+live daemon, account, installation or release was touched. All new native runs
+were hidden. **Functional acceptance is incomplete, so no new paired performance
+comparison or speed ranking was attempted.** The measurements below are historical.
+
+### Attribution and narrow fixes
+
+- The no-IME minimal navigation/restore/undo sequence reproduced the native
+  `NSRangeException` (range `{0,38}`, length 26). It was not caused by CJK input.
+  NSH's multiline editor used the window's undo history, and authoritative
+  `setString` replacements did not invalidate old edit ranges. The pinned AppKit
+  patch supplies a per-input manager through `undoManagerForTextView:` and clears
+  only that manager on authoritative replacements, not on unchanged edit echoes.
+  Undo remains enabled. Native Undo/Redo notifications synchronize changed text
+  back to Rust, without double-reporting an already observed edit.
+- Directly messaging `undo:` to `NSTextView` was a probe error: that selector is
+  not implemented there. Responder-chain dispatch succeeds but does not edit this
+  hidden non-key window. The passing hidden tests drive its actual undo manager;
+  they do **not** qualify the active-app Edit menu or keyboard equivalents.
+- The list failure is upstream ordering, not a missing custom scroller. A prepend
+  already shifts the held offset before `anchor_end` compares it to the old end.
+  That can falsely look like a reader near/beyond the tail and pull them down.
+  The core patch rebases that comparison by the same anchoring delta. It leaves
+  inverted-list policy unchanged and includes a focused core regression.
+- Copy diagnostics previously targeted a descendant view, whose weak surface
+  reference is unset. Only the NSH surface root owns event/Copy dispatch. Probes
+  now dispatch there, use the actual coordinate orientation, and distinguish
+  parked recycling cells from the mounted row when choosing geometry. Those are
+  harness fixes, not proof that recycling selection works.
+
+`patches/{nsh-core,nsh-platform-macos}.patch` are applied only to generated local
+copies of revision `c7b249970c2f9a15e20c5a461a7324ea9227c08f`. There is no vendored
+fork, shared Cargo-cache edit or upstream mutation. `prepare-patches.py` resolves
+inherited manifests and preserves inherited feature unions. Run staging before
+direct Cargo checks. `NSH_CHAT_BASELINE=1` stages unpatched copies for attribution,
+never alongside a build/probe using the same stage.
+
+### Minimal reproductions and acceptance matrix
+
+Commands are in README. `--checks --undo-only` is a strict native regression for
+navigation, exact native/Rust agreement after Undo/Redo, authoritative restore,
+Unicode paste/Undo/Redo and Send/Undo. `--checks --anchors-only` strictly checks a
+stable message identity and its viewport y before prepend and after 100 replay
+updates including image admission. These exit nonzero on failure. Full `--checks`
+records failures instead of treating diagnostic completion as acceptance.
+
+| Gate | Result | Boundary |
+| --- | --- | --- |
+| Navigation, native Undo/Redo, Unicode paste, authoritative restore, Send/Undo | Pass | Actual hidden NSTextView and native manager; not active-app menu routing |
+| Held prepend and tail/image growth | Pass | Same message at the same viewport y before/after both operations in the isolated native repro, zero drift against the 1pt limit |
+| Simulated marked Return | Pass | Native marked-text API commits without Send, exact Rust/native text agreement |
+| Simulated marked Escape | Fail | Native marked text remains while Rust reports no composition and an older draft; no Send alone is not acceptance |
+| Cross-message drag/Copy | Unmeasured | Synthetic drag still produced an empty selection, not an established OS pointer interaction |
+| Native Select All and Copy | Fail | Selection is established, but Copy repeats beta before alpha rather than copying each message once in order |
+| Retained selection across recycling/prepend | Fail | Copy changes from duplicated beta to an unrelated older message after holding/prepending, without a new selection |
+| Latest after selection/held growth | Fail | Tail gap remained 291pt after bounded 1.8s settling; resizing reached the tail. Attribution remains open |
+| Genuine Japanese/Chinese OS IME, active-app keyboard/menu Undo/Copy | Unmeasured | Hidden API calls do not establish OS input-source or focused responder behavior |
+| Fair matched performance comparison | Unmeasured | Withheld until functional gates pass; historical offscreen counters remain incomparable |
+
+The marked-text mismatch is a direct `setMarkedText`/`cancelOperation:` simulation,
+not an exercised OS input-context session. Its upstream-versus-harness attribution
+remains unresolved; it is not evidence of a genuine OS IME failure. Reproduce it
+alone with `--checks --marked-only`, which exits nonzero and writes `marked-only.json`.
+
+The native Copy reproduction uses the two final rows, `Selection alpha…` followed
+by `Selection beta…`, then root Select All/Copy, Hold/Earlier and Copy again, all
+within `--checks`. Beta appeared twice before alpha; after recycling the first
+copied text became an unrelated older message. This is real native selection/
+clipboard output, not a retained sentinel. Upstream `selectable_view::walk` collects
+mounted/recycling nodes in mount order, and `SelectionTexts::key` uses native node
+IDs, not message identity. Fixing that list/selection contract is not a justified
+one-line prototype workaround. No selection framework or broad fork was added.
+
+The remaining marked-text mismatch, selection failures and Latest gap are concrete
+qualification blockers. Do not replace selection/scrolling with a broad custom
+framework, weaken the assertions or claim a stack-adoption/performance result.
+
+## Original prototype evidence (before follow-up fixes)
+
+### What changed after the first prototype
 
 At the user's request, the delivered version is all Rust. `screen.rs` uses
 NSH's native component, signal, TextView and virtual-list APIs. The `js`
