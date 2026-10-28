@@ -4,6 +4,8 @@ pub(crate) mod conversation_images_view;
 pub(crate) mod inline_visual;
 #[path = "message_fold_view.rs"]
 pub(crate) mod message_fold_view;
+#[path = "question_entry_view.rs"]
+pub(crate) mod question_entry_view;
 #[path = "transcript_find.rs"]
 mod transcript_find;
 #[path = "transcript_find_view.rs"]
@@ -59,6 +61,7 @@ pub struct TranscriptView {
     folds: crate::message_fold::Folds,
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
+    questions: question_entry_view::Disclosures,
     images: conversation_images_view::Preview,
     inline_visuals: inline_visual::State,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
@@ -192,6 +195,7 @@ impl TranscriptView {
             folds: Default::default(),
             fold_focus: Default::default(),
             fold_retired: Vec::new(),
+            questions: Default::default(),
             transcript,
             images: Default::default(),
             inline_visuals: Default::default(),
@@ -837,6 +841,9 @@ impl TranscriptView {
         }
         if let Some(reference) = row.artifact_data() {
             return self.inline_row(row.id(), reference, row.artifact_size(), cx, owner);
+        }
+        if row.question_data().is_some() {
+            return self.question_row(ix, cx, owner);
         }
         if let Some(view) = self.work_ui.groups.get(&row.id()) {
             return div()

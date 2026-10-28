@@ -656,6 +656,18 @@ impl LiveTranscript {
                     "[Invalid artifact publication metadata; no lookup performed.]".into(),
                 ));
             }
+        } else if kind == crate::question_entry::KIND {
+            match crate::question_entry::Record::read(&entry["data"]) {
+                Some(record) => rows.push(Message::question(id * 64, record)),
+                None => {
+                    self.unsupported += 1;
+                    rows.push(Message::live(
+                        id * 64,
+                        "Agent question".into(),
+                        "[This question record has no readable text.]".into(),
+                    ));
+                }
+            }
         } else if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
             for (ix, value) in models.iter().take(32).enumerate() {
                 let first_row = rows.len();
@@ -1381,6 +1393,36 @@ mod tests {
         assert_eq!(pending_question_id(&model), Some(4));
         model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)],"generation":{"message":{"role":"assistant","content":[]}}}));
         assert_eq!(pending_question_id(&model), None);
+    }
+    #[test]
+    fn question_entries_render_as_question_rows_not_structured_placeholders() {
+        let mut model = LiveTranscript::default();
+        let malformed = json!({"id":5,"kind":"pilot.question","data":{"question":" "},"model":[]});
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1),malformed]}));
+        let rows = model.rows();
+        assert_eq!(rows.len(), 2);
+        let asked = &rows[0];
+        assert_eq!(asked.display_label(), "Agent asked");
+        assert_eq!(asked.source(), "Which checks?\n\n1. Tests");
+        assert_eq!(asked.question_data().unwrap().options.len(), 1);
+        assert_eq!(
+            asked.reader_key(),
+            Some(crate::model::ReaderKey::Entry {
+                entry: 4,
+                model: None,
+                block: None
+            })
+        );
+        // Malformed records say so plainly; neither is a generic structured row.
+        assert!(rows[1].question_data().is_none());
+        assert_eq!(
+            rows[1].source(),
+            "[This question record has no readable text.]"
+        );
+        assert!(
+            rows.iter()
+                .all(|r| !r.source().contains("Structured entry"))
+        );
     }
     #[test]
     fn question_projection_prefix_actual_user_compaction_and_invalid_latest() {

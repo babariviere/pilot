@@ -47,6 +47,8 @@ pub(crate) struct Message {
     /// Delivery caption for user input not yet in canonical history (Sending, Queued).
     pending: Option<&'static str>,
     sent: Option<u64>,
+    /// A historical ask_user record (pilot.question), shown as a disclosure.
+    question: Option<Arc<crate::question_entry::Record>>,
 }
 
 impl Message {
@@ -76,6 +78,7 @@ impl Message {
             image: None,
             pending: None,
             sent: None,
+            question: None,
         }
     }
     pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
@@ -153,6 +156,15 @@ impl Message {
     }
     pub(crate) fn image_data(&self) -> Option<&Arc<crate::conversation_images::Source>> {
         self.image.as_ref()
+    }
+    /// A question record row: label "Agent asked", source its formatted Markdown.
+    pub(crate) fn question(id: u64, record: crate::question_entry::Record) -> Self {
+        let mut row = Self::live(id, "Agent asked".into(), record.source());
+        row.question = Some(Arc::new(record));
+        row
+    }
+    pub(crate) fn question_data(&self) -> Option<&Arc<crate::question_entry::Record>> {
+        self.question.as_ref()
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.source.len()
@@ -351,6 +363,7 @@ impl Transcript {
             image: None,
             pending: None,
             sent: None,
+            question: None,
         });
     }
 
@@ -440,6 +453,7 @@ fn history_message(ix: usize) -> Message {
         image: None,
         pending: None,
         sent: None,
+        question: None,
     }
 }
 

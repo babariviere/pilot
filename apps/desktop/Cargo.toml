@@ -434,6 +434,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "question_entry"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "message_footer"
 harness = false
 required-features = ["native-probes"]
