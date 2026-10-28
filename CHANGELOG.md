@@ -1,5 +1,46 @@
 # Changelog
 
+## [1.82.0](https://github.com/babariviere/pilot/compare/v1.81.0...v1.82.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** add Force work and Continue with another model recovery ([7ba337a](https://github.com/babariviere/pilot/commit/7ba337ac72a15c3adecf64632152e87af171ee77))
+* **desktop:** add glass window background and calm motion ([8b3545a](https://github.com/babariviere/pilot/commit/8b3545aa9d36d70a52ed1ecd6de9ca345f18a7f6))
+* **desktop:** add readable chart axes and bounded readouts ([ceefa1d](https://github.com/babariviere/pilot/commit/ceefa1d4985d52bc0ca9fa2480fe4d2259c3741d))
+* **desktop:** clip out-of-domain line, area and scatter charts ([45fef83](https://github.com/babariviere/pilot/commit/45fef8339e6c50e3def101490d692ea57d595d16))
+* **desktop:** draw stacked area charts as cumulative bands ([01cd50d](https://github.com/babariviere/pilot/commit/01cd50d8d32c20b1d4f1e37c4355a0fe454255b5))
+* **desktop:** frost the glass window background ([0df8c92](https://github.com/babariviere/pilot/commit/0df8c921c9b9e0536512ab296623728f2451bb45))
+* **desktop:** give Pilot Next its sky identity ([e4e7d70](https://github.com/babariviere/pilot/commit/e4e7d701a9ff553b2e23ef1e45bff87aadde7a14))
+* **desktop:** group repeated chart categories natively ([5808e7a](https://github.com/babariviere/pilot/commit/5808e7a6383f8b006a054a9f7a4b0dd675ffe149))
+* **desktop:** honour native visual text spans and table column alignment ([6c5fd9e](https://github.com/babariviere/pilot/commit/6c5fd9e1d744f358c2bac17da5c3dfc476bb5dfc))
+* **desktop:** keyboard readout navigation for native charts ([bce0acc](https://github.com/babariviere/pilot/commit/bce0acc1e8880d2014c9bbd960118a42c7c19a0e))
+* **desktop:** list tickets, comments and proposals in mission Needs you ([50277b3](https://github.com/babariviere/pilot/commit/50277b3f7e15ba0e9ef7e6f0243b441b68f63cb5))
+* **desktop:** overview at a glance with task and chat links ([64f34ec](https://github.com/babariviere/pilot/commit/64f34ecc48774d371bd9d09cd8a6625adaa71f78))
+* **desktop:** quiet native slider steppers ([834628b](https://github.com/babariviere/pilot/commit/834628be32b7fff47136fa107c7d4798ef1f29a3))
+* **desktop:** render animated native canvases ([74c8332](https://github.com/babariviere/pilot/commit/74c83325b706c6f3b8606a201360beed478391b2))
+* **desktop:** render Mermaid fences in messages natively ([7f1cf5f](https://github.com/babariviere/pilot/commit/7f1cf5f41abf323268748f652b8444c63860b9ad))
+* **desktop:** show legacy artifact kinds as source-only placeholders ([e5cd7af](https://github.com/babariviere/pilot/commit/e5cd7afbb192a9a951d642baf43f822617b676fe))
+
+
+### Bug Fixes
+
+* **daemon:** keep Force work on when usage windows move or appear ([e572e71](https://github.com/babariviere/pilot/commit/e572e71f259c0535a2becc2fd16b4e44970897c8))
+* **deps:** update Pi SDK to 1.4.0 ([eee804c](https://github.com/babariviere/pilot/commit/eee804caec395f2f1a0f056feafebc38b641e88b))
+* **desktop:** hide the sidebar scrollbar while keeping it scrollable ([9b3ecef](https://github.com/babariviere/pilot/commit/9b3ecefcfbaa40317153610d30f26953ee4de914))
+* **desktop:** keep delivery check outcomes truthful ([13befc4](https://github.com/babariviere/pilot/commit/13befc4d166b7ebecd9f326c8ea53b0a6fb5815b))
+* **desktop:** match Tasks pane progress legend to overview bar order ([1682444](https://github.com/babariviere/pilot/commit/1682444fd9fac85e9143472d9d32180660ab06c4))
+* **desktop:** read whole mission detail before brief and edits ([6bab6a5](https://github.com/babariviere/pilot/commit/6bab6a5f5e6c0602aefadbfebb112c8296d429e0))
+* **desktop:** redraw native canvases on pointer changes ([5f97073](https://github.com/babariviere/pilot/commit/5f970733f9e9b523cfc5d3b880783e39bf941a65))
+* **desktop:** render all native visual stat fields ([ad3de1c](https://github.com/babariviere/pilot/commit/ad3de1c3c1e786305b472e8bd66ba26b1eba79c6))
+* **desktop:** show all tasks of missions beyond 256 tasks ([e04e633](https://github.com/babariviere/pilot/commit/e04e633b0a94e2267a62fb9128dfa018528d8324))
+
+
+### Performance Improvements
+
+* **desktop:** keep native visual helpers warm between interactions ([c58d105](https://github.com/babariviere/pilot/commit/c58d105e8216a76da776e082bd2dbdc2a1c9050f))
+* **desktop:** skip clock-only canvas draw invalidation ([ed88f12](https://github.com/babariviere/pilot/commit/ed88f12c6f5bb213a786854b13e17be91990f2e5))
+
 ## [1.81.0](https://github.com/babariviere/pilot/compare/v1.80.0...v1.81.0) (2026-10-27)
 
 
