@@ -207,6 +207,8 @@ pub use catalog_probe::run_catalog_probe;
 pub use usage_overview_probe::run_usage_overview_probe;
 
 #[cfg(feature = "native-probes")]
+pub use artifact_view::chart_keyboard_probe::run_chart_keyboard_probe;
+#[cfg(feature = "native-probes")]
 pub use artifact_view::gallery::probe::run_artifact_gallery_probe;
 #[cfg(feature = "native-probes")]
 pub use artifact_view::image_probe::run_artifact_image_probe;

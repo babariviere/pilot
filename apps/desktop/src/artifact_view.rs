@@ -1,6 +1,9 @@
 //! Native read-only artifact detail. User controls change isolated reader state only.
 #[path = "artifact_canvas.rs"]
 mod canvas;
+#[cfg(feature = "native-probes")]
+#[path = "artifact_chart_keyboard_probe.rs"]
+pub(crate) mod chart_keyboard_probe;
 #[path = "artifact_gallery_view.rs"]
 pub(crate) mod gallery;
 #[cfg(feature = "native-probes")]
@@ -1387,6 +1390,7 @@ impl ArtifactPane {
                         crate::visual_chart_view::render_scaled(
                             chart.clone(),
                             path,
+                            generation,
                             scale,
                             self.chart_hovered(path),
                             Rc::new(move |index, _, cx| {
@@ -1394,7 +1398,6 @@ impl ArtifactPane {
                                     view.hover_chart(generation, inline, key.clone(), index, cx)
                                 });
                             }),
-                            cx,
                         )
                     }
                 }

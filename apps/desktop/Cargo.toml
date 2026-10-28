@@ -403,3 +403,8 @@ required-features = ["native-probes"]
 name = "native_mermaid"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "chart_keyboard"
+harness = false
+required-features = ["native-probes"]

@@ -1,15 +1,15 @@
 //! Trusted native primitives over a finite normalized plan. No dynamic SVG or image-cache churn.
-use crate::visual_chart::{Chart, Readout};
+use crate::visual_chart::{Chart, Readout, Step};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, Bounds, Context, Corners, DispatchPhase, HitboxBehavior, Hsla, IntoElement,
-    MouseExitEvent, MouseMoveEvent, ParentElement, PathBuilder, ScrollWheelEvent, SharedString,
-    Styled, Window, canvas,
+    AnyElement, App, Bounds, Corners, DispatchPhase, FocusHandle, HitboxBehavior, Hsla,
+    IntoElement, KeyDownEvent, MouseExitEvent, MouseMoveEvent, ParentElement, PathBuilder,
+    RenderOnce, ScrollWheelEvent, SharedString, Styled, Subscription, Window, canvas,
     component::{ActiveTheme, StyledExt},
     div, fill, point, px, relative, size,
 };
 use std::{rc::Rc, sync::Arc};
-/// Reports the x entry under the pointer, or `None` when it leaves the plot.
+/// Reports the readout's x entry, or `None` when the readout closes.
 pub(crate) type OnHover = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
 pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
     let t = cx.theme();
@@ -29,13 +29,93 @@ pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
         _ => t.foreground,
     }
 }
-pub(crate) fn render_scaled<T: 'static>(
+/// A chart whose plot is a tab stop. The pointer picks the readout entry; while
+/// the plot has focus, Left/Right/Home/End also do, and the readout stays when
+/// the pointer leaves. Escape or blur closes it. `epoch` scopes the plot's focus
+/// to one presentation generation.
+pub(crate) fn render_scaled(
+    chart: Arc<Chart>,
+    key: &str,
+    epoch: u64,
+    scale: f32,
+    hover: Option<usize>,
+    on_hover: OnHover,
+) -> AnyElement {
+    ChartPlot {
+        chart,
+        key: key.to_owned(),
+        epoch,
+        scale,
+        hover,
+        on_hover,
+    }
+    .into_any_element()
+}
+#[derive(IntoElement)]
+struct ChartPlot {
+    chart: Arc<Chart>,
+    key: String,
+    epoch: u64,
+    scale: f32,
+    hover: Option<usize>,
+    on_hover: OnHover,
+}
+/// The plot's focus, and the latest readout facts its focus listeners act on.
+/// Owns no work; it retires when the plot unmounts.
+struct Keys {
+    focus: FocusHandle,
+    chart: Arc<Chart>,
+    hover: Option<usize>,
+    report: OnHover,
+    _focus: [Subscription; 2],
+}
+impl RenderOnce for ChartPlot {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let (chart, hover, report) = (self.chart, self.hover, self.on_hover);
+        let keys = window.use_keyed_state(
+            SharedString::from(format!("{}:{}", self.key, self.epoch)),
+            cx,
+            |window, cx| {
+                let focus = cx.focus_handle().tab_stop(true);
+                // Focus shows a readout, so a focused plot is visible without a ring.
+                let shown = cx.on_focus(&focus, window, |k: &mut Keys, window, cx| {
+                    if k.hover.is_none()
+                        && let Some(first) = k.chart.step(None, Step::First)
+                    {
+                        (k.report.clone())(Some(first), window, cx);
+                    }
+                });
+                let hidden = cx.on_blur(&focus, window, |k: &mut Keys, window, cx| {
+                    if k.hover.is_some() {
+                        (k.report.clone())(None, window, cx);
+                    }
+                });
+                Keys {
+                    focus,
+                    chart: chart.clone(),
+                    hover,
+                    report: report.clone(),
+                    _focus: [shown, hidden],
+                }
+            },
+        );
+        let focus = keys.update(cx, |k, _| {
+            k.chart = chart.clone();
+            k.hover = hover;
+            k.report = report.clone();
+            k.focus.clone()
+        });
+        build(chart, &self.key, self.scale, hover, report, focus, cx)
+    }
+}
+fn build(
     chart: Arc<Chart>,
     key: &str,
     scale: f32,
     hover: Option<usize>,
     on_hover: OnHover,
-    cx: &Context<T>,
+    focus: FocusHandle,
+    cx: &App,
 ) -> AnyElement {
     let colors = chart
         .series
@@ -122,6 +202,34 @@ pub(crate) fn render_scaled<T: 'static>(
     let card = readout
         .map(|(i, readout)| readout_card(chart.positions[i], readout, &colors, scale, below, cx));
     let (overlay_card, below_card) = if below { (None, card) } else { (card, None) };
+    let keyboard = {
+        let (chart, report) = (chart.clone(), on_hover.clone());
+        move |e: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+            let m = e.keystroke.modifiers;
+            if m.control || m.alt || m.shift || m.platform {
+                return;
+            }
+            let step = match e.keystroke.key.as_str() {
+                "left" => Step::Previous,
+                "right" => Step::Next,
+                "home" => Step::First,
+                "end" => Step::Last,
+                // With no readout open, Escape belongs to the surrounding view.
+                "escape" if hover.is_some() => {
+                    cx.stop_propagation();
+                    report(None, window, cx);
+                    return;
+                }
+                _ => return,
+            };
+            if let Some(next) = chart.step(hover, step) {
+                cx.stop_propagation();
+                if Some(next) != hover {
+                    report(Some(next), window, cx);
+                }
+            }
+        }
+    };
     let plot = {
         use gpui_kit::InteractiveElement;
         use gpui_kit::TestSupportExt;
@@ -132,6 +240,8 @@ pub(crate) fn render_scaled<T: 'static>(
             .overflow_hidden()
             .id("chart-plot")
             .test_support()
+            .track_focus(&focus)
+            .on_key_down(keyboard)
     };
     view.child(
         div().h_flex().w_full().min_w_0().child(axis).child(
@@ -286,18 +396,22 @@ pub(crate) fn render_scaled<T: 'static>(
                                 }
                             }
                             // Hover is local presentation: it never reaches the visual's
-                            // state, takes focus or changes selection.
+                            // state, takes focus or changes selection. A focused plot keeps
+                            // its readout when the pointer leaves or content scrolls.
                             // Observe in the capture phase, so an element that handles the
                             // move (or scroll) elsewhere cannot leave a stale readout.
                             let at = move |x: gpui_kit::Pixels| f32::from(x - origin.x) / w;
                             let plan = chart.clone();
                             let report = on_hover.clone();
+                            let focused = focus.clone();
                             window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
                                 if phase != DispatchPhase::Capture {
                                     return;
                                 }
                                 let next = if hitbox.is_hovered(window) {
                                     plan.nearest(at(e.position.x).clamp(0., 1.))
+                                } else if focused.is_focused(window) {
+                                    hover
                                 } else {
                                     None
                                 };
@@ -309,17 +423,23 @@ pub(crate) fn render_scaled<T: 'static>(
                                 // Content moving under a still pointer, or the pointer
                                 // leaving the window, hides the readout until it moves again.
                                 let report = on_hover.clone();
+                                let focused = focus.clone();
                                 window.on_mouse_event(
                                     move |_: &ScrollWheelEvent, phase, window, cx| {
-                                        if phase == DispatchPhase::Capture {
+                                        if phase == DispatchPhase::Capture
+                                            && !focused.is_focused(window)
+                                        {
                                             report(None, window, cx);
                                         }
                                     },
                                 );
                                 let report = on_hover.clone();
+                                let focused = focus.clone();
                                 window.on_mouse_event(
                                     move |_: &MouseExitEvent, phase, window, cx| {
-                                        if phase == DispatchPhase::Capture {
+                                        if phase == DispatchPhase::Capture
+                                            && !focused.is_focused(window)
+                                        {
                                             report(None, window, cx);
                                         }
                                     },
@@ -377,13 +497,13 @@ pub(crate) fn number(value: f64) -> String {
 }
 /// Swift's readout card: the x label, then each series' colour, name and value.
 /// It sits beside the rule on the side with more room, inside the plot.
-fn readout_card<T: 'static>(
+fn readout_card(
     at: f32,
     readout: Readout,
     colors: &[Hsla],
     scale: f32,
     below: bool,
-    cx: &Context<T>,
+    cx: &App,
 ) -> AnyElement {
     use gpui_kit::{InteractiveElement, TestSupportExt};
     let theme = cx.theme();
@@ -458,7 +578,7 @@ fn readout_card<T: 'static>(
 mod tests {
     use super::*;
     use gpui_kit::test::{TestEventExt, TestWindowExt};
-    use gpui_kit::{AppContext, Render, TestAppContext, WindowBounds, WindowOptions};
+    use gpui_kit::{AppContext, Context, Render, TestAppContext, WindowBounds, WindowOptions};
     use serde_json::json;
 
     struct Plot {
@@ -471,6 +591,7 @@ mod tests {
             render_scaled(
                 self.chart.clone(),
                 "test-chart",
+                0,
                 1.,
                 self.hover,
                 Rc::new(move |next, _, cx| {
@@ -479,7 +600,6 @@ mod tests {
                         cx.notify();
                     });
                 }),
-                cx,
             )
         }
     }

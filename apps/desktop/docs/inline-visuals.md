@@ -108,7 +108,21 @@ local presentation keyed by reader generation, presentation and node path: it
 never reaches the visual's state or worker, takes focus or changes selection.
 It follows re-rendered values while the pointer stays over the same chart, and
 clears when the pointer leaves the plot or window, or content scrolls under it.
-There is no keyboard readout yet.
+
+The plot is also a tab stop. Focusing it shows the readout for its first x
+entry with a value; Left/Right step through entries with values in plot order
+(scatter by x, not input order), and Home/End jump to the ends. Unmodified keys
+only, and only while the plot itself has focus. While focused, the readout stays
+when the pointer leaves or content scrolls, and the pointer can still move it.
+Escape closes it (with no readout open, Escape propagates); blur closes it too.
+There is no focus ring: the readout is the focus indication. Focus is scoped to
+the reader generation, like the readout. `chart_keyboard` covers this beside a
+real composing input at 520/1100 light/dark, inline and expanded:
+
+```sh
+PILOT_NEXT_IMAGE_DIR=/tmp/chart-keyboard python3 scripts/check-scoped.py \
+  --unit visual_chart --native-probes --test chart_keyboard
+```
 
 Nothing is written to conversation history by a visual control. No control can
 run tools, access files/network or change revision. Host/chat changes fence the

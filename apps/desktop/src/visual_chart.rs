@@ -34,6 +34,14 @@ pub(crate) struct Readout {
     /// Series index, name and formatted value. Series with a gap here are omitted.
     pub(crate) rows: Vec<(usize, String, String)>,
 }
+/// A keyboard move between readout entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Step {
+    Previous,
+    Next,
+    First,
+    Last,
+}
 fn normal(value: f64, min: f64, max: f64) -> f32 {
     if min == max {
         return 0.5;
@@ -73,6 +81,24 @@ impl Chart {
                     .abs()
                     .total_cmp(&(self.positions[b] - at).abs())
             })
+    }
+    /// The x entry a key moves to from `from`, among entries with a value in
+    /// left-to-right plot order (scatter input order may differ). Without a
+    /// current entry, Next starts at the first and Previous at the last.
+    pub(crate) fn step(&self, from: Option<usize>, step: Step) -> Option<usize> {
+        let mut order = (0..self.positions.len())
+            .filter(|&j| self.series.iter().any(|s| s.values[j].is_some()))
+            .collect::<Vec<_>>();
+        order.sort_by(|&a, &b| self.positions[a].total_cmp(&self.positions[b]));
+        let last = order.len().checked_sub(1)?;
+        let at = from.and_then(|i| order.iter().position(|&j| j == i));
+        let k = match (step, at) {
+            (Step::First, _) | (Step::Next, None) => 0,
+            (Step::Last, _) | (Step::Previous, None) => last,
+            (Step::Next, Some(k)) => (k + 1).min(last),
+            (Step::Previous, Some(k)) => k.saturating_sub(1),
+        };
+        Some(order[k])
     }
     pub(crate) fn readout(&self, index: usize) -> Option<Readout> {
         let label = self.x.get(index)?.clone();
@@ -510,5 +536,37 @@ mod tests {
         let line = Chart::parse(&json!({"kind":"line","x":["a","b","c","d","e"],"series":[{"name":"s","values":[1,2,3,4,5]}]})).unwrap();
         assert_eq!(line.positions, vec![0., 0.25, 0.5, 0.75, 1.]);
         assert_eq!(line.nearest(0.6), Some(2));
+    }
+    #[test]
+    fn keyboard_steps_follow_plot_order_and_skip_entries_without_values() {
+        let line = Chart::parse(&json!({"kind":"line","x":["a","b","c","d"],"series":[{"name":"s","values":[null,2,null,4]},{"name":"t","values":[null,null,3,null]}]})).unwrap();
+        assert_eq!(line.step(None, Step::Next), Some(1));
+        assert_eq!(line.step(None, Step::Previous), Some(3));
+        assert_eq!(
+            line.step(Some(1), Step::Next),
+            Some(2),
+            "any series value counts"
+        );
+        assert_eq!(line.step(Some(3), Step::Next), Some(3), "stops at the end");
+        assert_eq!(
+            line.step(Some(1), Step::Previous),
+            Some(1),
+            "stops at the start"
+        );
+        assert_eq!(line.step(Some(2), Step::Last), Some(3));
+        assert_eq!(line.step(Some(3), Step::First), Some(1));
+        // An entry without values (or out of range) restarts like no entry.
+        assert_eq!(line.step(Some(0), Step::Next), Some(1));
+        assert_eq!(line.step(Some(9), Step::Previous), Some(3));
+        let scatter = Chart::parse(
+            &json!({"kind":"scatter","x":[100,-5,2],"series":[{"name":"s","values":[1,2,3]}]}),
+        )
+        .unwrap();
+        assert_eq!(scatter.step(None, Step::First), Some(1));
+        assert_eq!(scatter.step(Some(1), Step::Next), Some(2));
+        assert_eq!(scatter.step(Some(2), Step::Next), Some(0));
+        let empty =
+            Chart::parse(&json!({"kind":"bar","x":["a"],"series":[{"values":[null]}]})).unwrap();
+        assert_eq!(empty.step(None, Step::Next), None);
     }
 }
