@@ -138,3 +138,7 @@ impl LocalViewer {
             )
     }
 }
+
+#[cfg(test)]
+#[path = "jump_shortcut_tests.rs"]
+mod tests;

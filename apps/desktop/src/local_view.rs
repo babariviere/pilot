@@ -651,6 +651,9 @@ pub struct LocalViewer {
     jump: Option<Entity<crate::jump_view::JumpPalette>>,
     jump_subscription: Option<Subscription>,
     jump_return: Option<gpui_kit::FocusHandle>,
+    /// Window-level fallback focus. Without it, Cmd-K and other window shortcuts
+    /// dispatch only to GPUI's root node and never reach this view's handlers.
+    root_focus: gpui_kit::FocusHandle,
     mission: Entity<crate::mission_view::MissionForm>,
     mission_open: bool,
     mission_return: Option<gpui_kit::FocusHandle>,
@@ -1694,6 +1697,13 @@ impl LocalViewer {
             },
         );
         settings.update(cx, |owner, cx| owner.load(cx));
+        let root_focus = cx.focus_handle();
+        if window.focused(cx).is_none() {
+            root_focus.focus(window, cx);
+        }
+        // GPUI calls this only when no rendered element in this window holds
+        // focus (e.g. the focused element was removed); keep shortcuts reachable.
+        let focus_lost = cx.on_focus_lost(window, |v, w, cx| v.root_focus.focus(w, cx));
         Self {
             chat_actions,
             settings,
@@ -1736,6 +1746,7 @@ impl LocalViewer {
             jump: None,
             jump_subscription: None,
             jump_return: None,
+            root_focus,
             mission,
             mission_open: false,
             mission_return: None,
@@ -1780,6 +1791,7 @@ impl LocalViewer {
                 project_events,
                 shell_events,
                 inbox_events,
+                focus_lost,
             ],
             updates: None,
             writes: None,
@@ -2478,7 +2490,7 @@ impl Render for LocalViewer {
             )
             .collect::<Vec<_>>()
             .join(" · ");
-        div().map(menu_routing::window_commands).id("desktop-root").test_support().relative().h_flex().items_stretch().size_full().min_w_0()
+        div().map(menu_routing::window_commands).id("desktop-root").track_focus(&self.root_focus).test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             // Over glass the sidebar and page are separate tints, never stacked.
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
