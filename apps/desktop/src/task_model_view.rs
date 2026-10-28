@@ -118,8 +118,9 @@ impl Form {
     pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
         w.open_dialog(cx, {
             let form = form.clone();
-            move |d, _, _| {
-                d.title("Preferred model")
+            move |d, _, cx| {
+                crate::ui::dialog(d, cx)
+                    .title("Preferred model")
                     .w(px(480.))
                     .overlay_closable(false)
                     .close_button(false)

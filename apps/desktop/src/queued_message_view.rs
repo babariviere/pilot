@@ -198,8 +198,8 @@ impl Popup {
     fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
         w.open_dialog(cx, {
             let form = form.clone();
-            move |dialog, _, _| {
-                dialog
+            move |dialog, _, cx| {
+                crate::ui::dialog(dialog, cx)
                     .title("Queued messages")
                     .w(px(520.))
                     .overlay_closable(false)

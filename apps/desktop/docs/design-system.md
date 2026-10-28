@@ -67,6 +67,13 @@ deliberately. In particular use `Surface::Card.color(cx)` on an existing editor
 root, not another padded wrapper. Preserve76pt tray/34pt editor and the opaque
 white-on-gray/light, card-on-tray/dark distinction.
 
+Popup content is opaque even with glass enabled. Use `ui::dialog` on Kit dialogs:
+Kit's default uses the page token, which is translucent with glass. The shared
+wrapper uses the opaque popover background/foreground without replacing native
+focus, dismissal, geometry or shadows. Kit popovers, menus, selects and tooltips
+already use that popover token. Translucent modal scrims are separate from their
+opaque content; page/sidebar/list glass stays unchanged.
+
 The conversation and composer share `ui::CONVERSATION_MAX_WIDTH` (960pt outer
 cap), shrinking with the available pane width. Keep their existing 12pt content
 insets aligned; pages and artifact inspectors retain their separate 760pt cap.

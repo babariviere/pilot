@@ -32,6 +32,50 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
     settle(cx, h);
 }
+fn assert_opaque(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    width: f32,
+    dark: bool,
+    captures: Option<&std::path::Path>,
+    state: &str,
+) {
+    let (bounds, color) = cx
+        .update_window(h, |_, w, cx| {
+            let c: gpui_kit::Rgba = cx.theme().popover.into();
+            (
+                w.find("queued-message-popup").bounds(),
+                [c.r, c.g, c.b].map(|v| (v * 255.).round() as u8),
+            )
+        })
+        .unwrap();
+    let shot = cx.capture_screenshot(h).unwrap();
+    if let Some(dir) = captures {
+        shot.save(dir.join(format!("surface-{width}-{dark}-{state}.png")))
+            .unwrap();
+    }
+    let scale = shot.width() as f32 / width;
+    // The dialog's content padding is above dense, high-contrast transcript text.
+    // Inspect the actual parent surface, not the editor's own opaque background.
+    for x in [
+        f32::from(bounds.left()) - 8.,
+        f32::from(bounds.right()) + 8.,
+    ] {
+        for dy in 4..60 {
+            let pixel = shot
+                .get_pixel(
+                    (x * scale) as u32,
+                    ((f32::from(bounds.top()) + dy as f32) * scale) as u32,
+                )
+                .0;
+            assert_eq!(
+                [pixel[0], pixel[1], pixel[2]],
+                color,
+                "opaque queue {state} padding width={width} dark={dark} y={dy}"
+            );
+        }
+    }
+}
 pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
     crate::local_view::submit_visibility_probe::run(cx);
     capacity(cx);
@@ -62,7 +106,12 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             v.state.user_queue=Arc::new(Snapshot::read(&json!([
                 {"id":42,"mode":"followUp","content":"Original 日本語 🦀","guardToken":"a".repeat(64)},
                 {"id":43,"mode":"steer","content":[{"type":"text","text":"With image"},{"type":"image","data":"preserved"}],"guardToken":"b".repeat(64)}
-            ])));v
+            ])));
+            v.transcript.update(cx, |t, cx| t.replace_readonly(vec![crate::model::Message::live(
+                1, "assistant".into(),
+                "Underlying chat: WWW MMM ### 0123456789 high contrast text. ".repeat(120),
+            )], true, cx));
+            v
         }))).unwrap();
             settle(cx, h);
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
@@ -96,6 +145,7 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             cx.advance_clock(Duration::from_millis(300));
             settle(cx, h);
             let form = cx.update(|cx| view.read(cx).queue_open.clone().unwrap());
+            assert_opaque(cx, h, width, dark, captures.as_deref(), "inspect");
             cx.update_window(h, |_, w, cx| {
                 assert!(form.read(cx).current);
                 assert!(form.read(cx).visible);
@@ -118,6 +168,7 @@ pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            assert_opaque(cx, h, width, dark, captures.as_deref(), "edit");
             click(cx, h, "queued-message-save");
             click(cx, h, "queued-message-close");
             click(cx, h, "queued-message-follow-up");

@@ -431,9 +431,9 @@ impl TranscriptView {
             }),
         });
         let focus = reader.read(cx).focus.clone();
-        w.open_dialog(cx, move |dialog, w, _| {
+        w.open_dialog(cx, move |dialog, w, cx| {
             let closing = reader.clone();
-            dialog
+            crate::ui::dialog(dialog, cx)
                 .on_close(move |_, _, cx| {
                     closing.update(cx, |v, _| {
                         v.source_copy = None;

@@ -145,6 +145,28 @@ pub fn run_tool_diff_preview_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             let shot = cx.capture_screenshot(h).unwrap();
             let scale = shot.width() as f32 / width;
+            let (panel, color) = cx
+                .update_window(h, |_, w, cx| {
+                    let c: gpui_kit::Rgba = cx.theme().popover.into();
+                    (
+                        w.find("tool-diff-preview").bounds(),
+                        [c.r, c.g, c.b].map(|v| (v * 255.).round() as u8),
+                    )
+                })
+                .unwrap();
+            for dy in 4..60 {
+                let pixel = shot
+                    .get_pixel(
+                        ((f32::from(panel.left()) - 4.) * scale) as u32,
+                        ((f32::from(panel.top()) + dy as f32) * scale) as u32,
+                    )
+                    .0;
+                assert_eq!(
+                    [pixel[0], pixel[1], pixel[2]],
+                    color,
+                    "opaque shared popover padding"
+                );
+            }
             let mut added = 0;
             let mut removed = 0;
             for y in (f32::from(source_bounds.top()) * scale) as u32

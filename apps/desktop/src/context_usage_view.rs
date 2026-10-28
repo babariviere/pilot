@@ -148,8 +148,8 @@ impl LocalViewer {
             generation: self.generation,
             _subscription: cx.observe(&viewer, |_, _, cx| cx.notify()),
         });
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
+        window.open_dialog(cx, move |dialog, _, cx| {
+            crate::ui::dialog(dialog, cx)
                 .title("Context usage")
                 .w(px(440.))
                 .child(info.clone())

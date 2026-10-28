@@ -236,6 +236,41 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             let anchor = cx.update(|cx| transcript.read(cx).history_probe_anchor(cx));
             menu(cx, h, "Archive");
+            // Evaluate the resting surface after Kit's dropdown entrance fade.
+            cx.advance_clock(Duration::from_millis(300));
+            settle(cx, h);
+            let (menu_bounds, row_centers, color) = cx
+                .update_window(h, |_, w, cx| {
+                    let c: gpui_kit::Rgba = cx.theme().popover.into();
+                    (
+                        w.find("popup-menu").bounds(),
+                        ["Rename…", "Archive", "Retry startup", "Make a mission…"].map(|label| {
+                            w.within("popup-menu")
+                                .find_by_label(label)
+                                .bounds()
+                                .center()
+                                .y
+                        }),
+                        [c.r, c.g, c.b].map(|v| (v * 255.).round() as u8),
+                    )
+                })
+                .unwrap();
+            let shot = cx.capture_screenshot(h).unwrap();
+            let scale = shot.width() as f32 / width;
+            // Sample each row's gutter, not the intentional full-width separator.
+            for y in row_centers {
+                let pixel = shot
+                    .get_pixel(
+                        ((f32::from(menu_bounds.left()) + 3.) * scale) as u32,
+                        (f32::from(y) * scale) as u32,
+                    )
+                    .0;
+                assert_eq!(
+                    [pixel[0], pixel[1], pixel[2]],
+                    color,
+                    "opaque action menu gutter"
+                );
+            }
             cx.update_window(h, |_, w, _| {
                 let root = w.find("desktop-root").bounds();
                 let b = w.find("popup-menu").bounds();

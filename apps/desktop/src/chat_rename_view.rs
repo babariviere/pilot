@@ -126,8 +126,8 @@ impl Rename {
     pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
         let cancel = form.clone();
         let input = form.read(cx).input.clone();
-        w.open_dialog(cx, move |dialog, _, _| {
-            dialog
+        w.open_dialog(cx, move |dialog, _, cx| {
+            crate::ui::dialog(dialog, cx)
                 .title("Rename chat")
                 .w(px(380.))
                 .overlay_closable(false)
