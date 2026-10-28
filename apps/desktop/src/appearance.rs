@@ -26,6 +26,7 @@ const FONTS: [&[u8]; 9] = [
 
 /// Sky accent from the app icon: its deep sky on light pages, its base sky on dark.
 /// Used for commit actions (including Send), links, text selection and the caret.
+/// A coordinator's sidebar mark (Compass and mission name) uses [`Accent::mark`].
 /// Navigation, row selection and chat-state tints keep their own neutral/state roles.
 pub(crate) struct Accent {
     pub fill: &'static str,
@@ -33,6 +34,9 @@ pub(crate) struct Accent {
     pub pressed: &'static str,
     pub on_fill: &'static str,
     pub selection: &'static str,
+    /// Caption text and glyphs marking a coordinator on a sidebar row. Light uses the
+    /// deeper sky so the caption keeps AA contrast on hover and selection washes.
+    pub mark: &'static str,
 }
 pub(crate) const fn accent(dark: bool) -> Accent {
     if dark {
@@ -42,6 +46,7 @@ pub(crate) const fn accent(dark: bool) -> Accent {
             pressed: "#a9d2f2",
             on_fill: "#23262c",
             selection: "#7db9e84d",
+            mark: "#7db9e8",
         }
     } else {
         Accent {
@@ -50,8 +55,15 @@ pub(crate) const fn accent(dark: bool) -> Accent {
             pressed: "#22518f",
             on_fill: "#ffffff",
             selection: "#2f6fc638",
+            mark: "#285fab",
         }
     }
+}
+/// [`Accent::mark`] for the active appearance.
+pub(crate) fn accent_mark(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::Rgba::try_from(accent(cx.theme().is_dark()).mark)
+        .unwrap_or_default()
+        .into()
 }
 
 #[derive(Clone, Copy, Default)]
@@ -626,6 +638,8 @@ mod tests {
                 sidebar,
                 ink,
                 meta,
+                muted,
+                selected,
                 tray,
                 card,
                 ..
@@ -653,6 +667,36 @@ mod tests {
                     accent.on_fill
                 );
             }
+            // A coordinator's mark stays readable on a hovered and selected row.
+            let blend = |wash: &str, base: &str| {
+                let v = |h: &str, i: usize| {
+                    u8::from_str_radix(&h[1 + 2 * i..3 + 2 * i], 16).unwrap() as f64
+                };
+                let a = v(wash, 3) / 255.;
+                (0..3).fold("#".to_owned(), |s, i| {
+                    s + &format!(
+                        "{:02x}",
+                        (v(wash, i) * a + v(base, i) * (1. - a)).round() as u8
+                    )
+                })
+            };
+            let hovered = blend(muted, sidebar);
+            for surface in [
+                sidebar.to_owned(),
+                blend(selected, sidebar),
+                blend(selected, &hovered),
+                hovered,
+            ] {
+                assert!(
+                    ratio(accent.mark, &surface) >= 4.5,
+                    "{} mark on {surface}",
+                    accent.mark
+                );
+            }
+            assert!(
+                [accent.fill, accent.hover].contains(&accent.mark),
+                "no new hue"
+            );
         }
     }
 }

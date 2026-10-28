@@ -27,7 +27,9 @@ Pilot's identity comes from its icon: the Bayer-dithered sky (Home sky, row
 state), neutrals tinted toward that sky (a slate night sky in dark) and its sky
 colour as the one accent. The accent marks commit actions
 (Kit primary buttons, including Send), links, the caret and text selection, and
-Kit's checked/slider controls follow it. Navigation, row selection, hover and
+Kit's checked/slider controls follow it. The one role mark it colours is a
+mission coordinator's sidebar Compass and mission name (`appearance::accent_mark`,
+the deeper light sky so caption text keeps AA on row washes). Navigation, row selection, hover and
 chat-state tints stay neutral or keep their state colours; never use the accent
 as decoration, status or a focus ring.
 
@@ -253,7 +255,9 @@ row keeps its faint neutral fill. Missions is the sidebar's only mission entry
 (Command-3 opens the same browser); mission and member chats stay ordinary rows.
 A linked chat's metadata line ends with its mission: Map (`AppIcon::Mission`)
 for a member, Compass (`AppIcon::Coordinator`) for the summary's coordinator
-role, as in Swift, then the cached Local mission name. Beside it the project
+role, as in Swift, then the cached Local mission name. Only a coordinator's
+Compass and real (current or last known) mission name take the accent; the
+member Map, placeholders, Info, title and project stay neutral. Beside it the project
 keeps a `Space::SECTION` start and its own separator, the name segment keeps
 two of them, and the state shares the rest; the title, menu slot and corner
 lane are unchanged. The tooltip and row accessible name give the

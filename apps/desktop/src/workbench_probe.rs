@@ -771,6 +771,26 @@ fn painted(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f3
     count
 }
 
+/// Pixels in `bounds` with the sky accent's hue (blue well above red, green
+/// between). Neutral metadata, titles and row washes have none in either mode.
+fn sky(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f32) -> usize {
+    let (x0, y0) = (
+        (f32::from(bounds.left()) * scale).ceil() as u32,
+        (f32::from(bounds.top()) * scale).ceil() as u32,
+    );
+    let (x1, y1) = (
+        (f32::from(bounds.right()) * scale).floor() as u32,
+        (f32::from(bounds.bottom()) * scale).floor() as u32,
+    );
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let [r, g, b, _] = image.get_pixel(x, y).0.map(i32::from);
+            b - r > 45 && r < g && g < b
+        })
+        .count()
+}
+
 /// Chat rows: one title line, at most one quiet metadata line that never
 /// repeats its section, uniform rhythm, actions revealed on hover or keyboard
 /// selection, and Missions as the sidebar's only mission entry.
@@ -905,6 +925,28 @@ fn sidebar_rows(
         .unwrap()
     };
     use crate::app_icon::AppIcon::{Coordinator, Info, Mission};
+    // Sky-accent pixel counts on a row's mission glyph and name, its title and
+    // its project. Only the coordinator's Compass and mission name are accented.
+    let accents = |cx: &mut HeadlessAppContext, id: &str| {
+        let bounds = cx
+            .update_window(h, |_, w, _| {
+                let scope = w.within(SharedString::from(format!("chat-row-{id}")));
+                let glyph = [Coordinator, Mission, Info]
+                    .iter()
+                    .find_map(|i| scope.try_find(format!("chat-mission-glyph-{i:?}")))
+                    .map(|g| g.bounds());
+                [
+                    glyph,
+                    scope.try_find("chat-mission-name").map(|n| n.bounds()),
+                    Some(scope.find("sidebar-chat-title").bounds()),
+                    scope.try_find("sidebar-chat-project").map(|p| p.bounds()),
+                ]
+            })
+            .unwrap();
+        let image = cx.capture_screenshot(h).unwrap();
+        let scale = image.width() as f32 / width;
+        bounds.map(|b| b.map_or(0, |b| sky(&image, b, scale)))
+    };
     assert!(association(cx, "idle1").is_none());
     assert_eq!(
         association(cx, "idle2").unwrap().0,
@@ -923,7 +965,8 @@ fn sidebar_rows(
     assert!(glyph(cx, "failed", Mission) && glyph(cx, "member", Mission));
     // The name sits on the metadata line, after project and state and inside
     // the corner's text lane; the title and menu slot keep their places.
-    let mission_line = |cx: &mut HeadlessAppContext| {
+    // `named`: the cached catalog names the linked missions.
+    let mission_line = |cx: &mut HeadlessAppContext, named: bool| {
         for id in ["member", "coord", "failed", "stall", "idle2"] {
             // The narrow window lists fewer rows than this: bring each target
             // into the sidebar viewport before reading its bounds and pixels.
@@ -994,7 +1037,36 @@ fn sidebar_rows(
                     "{id}: project painted"
                 );
             }
+            let [glyph, name, title, project] = accents(cx, id);
+            assert_eq!(title, 0, "{id}: title stays neutral");
+            assert_eq!(project, 0, "{id}: project stays neutral");
+            if id == "coord" {
+                assert!(glyph > 0, "{id}: Compass takes the accent");
+                assert_eq!(
+                    name > 0,
+                    named,
+                    "{id}: only a real mission name is accented"
+                );
+            } else {
+                assert_eq!(glyph, 0, "{id}: member Map and Info stay neutral");
+                // The long catalog name for stall carries a colour emoji.
+                if !(named && id == "stall") {
+                    assert_eq!(name, 0, "{id}: member name stays neutral");
+                }
+            }
         }
+        // An ordinary row has no accent anywhere.
+        cx.update_window(h, |_, w, cx| {
+            let ix = v.read(cx).chats.read(cx).delegate().index("idle1").unwrap();
+            v.update(cx, |v, cx| {
+                v.chats.update(cx, |l, cx| {
+                    l.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center, w, cx)
+                })
+            });
+        })
+        .unwrap();
+        settle(cx, h);
+        assert_eq!(accents(cx, "idle1"), [0; 4], "ordinary row stays neutral");
         // Back to the top, where the following checks and captures start.
         cx.update_window(h, |_, w, cx| {
             v.update(cx, |v, cx| {
@@ -1011,7 +1083,7 @@ fn sidebar_rows(
         .unwrap();
         settle(cx, h);
     };
-    mission_line(cx);
+    mission_line(cx, false);
     // Existing cached catalog, not a new per-row request. Same ID at another
     // home is not allowed to name a Local association.
     let long = format!("Release {}", "長いミッション名 👩‍💻 ".repeat(4));
@@ -1047,7 +1119,7 @@ fn sidebar_rows(
         association(cx, "stall").unwrap().0,
         format!("Mission: {long}")
     );
-    mission_line(cx);
+    mission_line(cx, true);
     capture(cx, h, captures, name("-mission-names"));
     cx.update_window(h, |_, _, cx| {
         v.update(cx, |v, cx| {
@@ -1138,12 +1210,25 @@ fn sidebar_rows(
         "Coordinator · Mission: Renamed mission"
     );
     assert!(glyph(cx, "member", Coordinator) && !glyph(cx, "member", Mission));
+    // On the keyboard-selected row the Compass and name keep the accent, and
+    // the title stays neutral; the change of role takes the accent away again.
+    let [compass, mission, title, _] = accents(cx, "member");
+    assert!(
+        compass > 0 && mission > 0 && title == 0,
+        "selected coordinator mark"
+    );
+    capture(cx, h, captures, name("-coordinator-selected"));
     set_role(cx, false);
     assert_eq!(
         association(cx, "member").unwrap().0,
         "Mission: Renamed mission"
     );
     assert!(glyph(cx, "member", Mission) && !glyph(cx, "member", Coordinator));
+    assert_eq!(
+        accents(cx, "member")[..2],
+        [0, 0],
+        "member mark stays neutral"
+    );
     // Disconnect retains the last known name; reconnect uses the new summary.
     cx.update_window(h, |_, w, cx| {
         v.update(cx, |v, cx| {

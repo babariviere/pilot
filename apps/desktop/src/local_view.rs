@@ -549,7 +549,11 @@ impl ListDelegate for ChatList {
                                         )
                                     })
                                     .when_some(mark, |d, mark| {
-                                        d.child(mission_segment(mark, !detail.is_empty()))
+                                        d.child(mission_segment(
+                                            mark,
+                                            !detail.is_empty(),
+                                            appearance::accent_mark(cx),
+                                        ))
                                     }),
                             )
                         })
@@ -2597,6 +2601,16 @@ pub(crate) struct MissionMark {
     pub(crate) text: String,
     /// The tooltip and the row's accessible name.
     pub(crate) label: String,
+    /// `text` is the mission's cached name, not a placeholder.
+    pub(crate) named: bool,
+}
+impl MissionMark {
+    /// Whether the glyph and the name take the accent: only a coordinator's
+    /// Compass and its mission's name do. Members, placeholders and errors stay quiet.
+    pub(crate) fn accents(&self) -> (bool, bool) {
+        let coordinator = self.icon == AppIcon::Coordinator;
+        (coordinator, coordinator && self.named)
+    }
 }
 /// `name` resolves a linked mission's cached name and whether it is current.
 pub(crate) fn mission_mark(
@@ -2609,32 +2623,36 @@ pub(crate) fn mission_mark(
     } else {
         AppIcon::Mission
     };
-    let (icon, text, label) = match &chat.mission {
+    let (icon, text, label, named) = match &chat.mission {
         MissionAssociation::Unlinked if !chat.mission_coordinator => return None,
         MissionAssociation::Unlinked => {
             return Some(MissionMark {
                 icon: role,
                 text: "Coordinator".into(),
                 label: "Mission coordinator".into(),
+                named: false,
             });
         }
         MissionAssociation::Unknown => (
             AppIcon::Info,
             "Mission unavailable".to_owned(),
             "Mission association unavailable".to_owned(),
+            false,
         ),
         MissionAssociation::Linked(id) => {
             match name(id).filter(|(title, _)| !title.trim().is_empty()) {
-                Some((title, true)) => (role, title.clone(), format!("Mission: {title}")),
+                Some((title, true)) => (role, title.clone(), format!("Mission: {title}"), true),
                 Some((title, false)) => (
                     role,
                     title.clone(),
                     format!("Mission (last known): {title}"),
+                    true,
                 ),
                 None => (
                     role,
                     "Name unavailable".to_owned(),
                     "Mission linked · name unavailable".to_owned(),
+                    false,
                 ),
             }
         }
@@ -2644,13 +2662,20 @@ pub(crate) fn mission_mark(
     } else {
         label
     };
-    Some(MissionMark { icon, text, label })
+    Some(MissionMark {
+        icon,
+        text,
+        label,
+        named,
+    })
 }
 /// Map (member) or Compass (coordinator) and the mission name, after the
 /// project and state. A minimum width keeps a long project or state from
 /// hiding it; the full wording stays in the tooltip and the row's label.
-fn mission_segment(mark: MissionMark, separated: bool) -> impl IntoElement {
+/// A coordinator's Compass and mission name take `accent`; nothing else does.
+fn mission_segment(mark: MissionMark, separated: bool, accent: gpui_kit::Hsla) -> impl IntoElement {
     use gpui_kit::StatefulInteractiveElement as _;
+    let (glyph_accent, name_accent) = mark.accents();
     let label = SharedString::from(mark.label);
     div()
         .id("chat-mission-mark")
@@ -2682,6 +2707,7 @@ fn mission_segment(mark: MissionMark, separated: bool) -> impl IntoElement {
                 )))
                 .test_support()
                 .flex_none()
+                .when(glyph_accent, |d| d.text_color(accent))
                 .child(mark.icon.inline()),
         )
         .child(
@@ -2690,6 +2716,7 @@ fn mission_segment(mark: MissionMark, separated: bool) -> impl IntoElement {
                 .test_support()
                 .min_w_0()
                 .truncate()
+                .when(name_accent, |d| d.text_color(accent))
                 .child(SharedString::from(mark.text)),
         )
 }
@@ -2704,10 +2731,12 @@ mod mission_association_mark_tests {
         let named = |_: &str| Some(("Launch 日本語 👩‍💻".to_owned(), true));
         let unread = |_: &str| -> Option<(String, bool)> { panic!("no lookup") };
         let mark = |icon, text: &str, label: &str| {
+            let named = !["Coordinator", "Mission unavailable", "Name unavailable"].contains(&text);
             Some(MissionMark {
                 icon,
                 text: text.into(),
                 label: label.into(),
+                named,
             })
         };
         // Titles and projects never imply a mission or a role.
@@ -2766,6 +2795,57 @@ mod mission_association_mark_tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn only_coordinator_compass_and_mission_name_take_the_accent() {
+        let chat = |v: serde_json::Value| crate::local_model::chat(&v).unwrap();
+        let accents = |v: serde_json::Value, name: Option<(&str, bool)>| {
+            mission_mark(&chat(v), |_| name.map(|(n, c)| (n.to_owned(), c))).map(|m| m.accents())
+        };
+        let named = Some(("Launch", true));
+        // Ordinary chats have no mark at all.
+        assert_eq!(
+            accents(json!({"id":"o","title":"Coordinator"}), named),
+            None
+        );
+        // Members keep the quiet Map and name, current or last known.
+        for name in [named, Some(("Launch", false)), None] {
+            assert_eq!(
+                accents(json!({"id":"m","missionId":"mission-A"}), name),
+                Some((false, false))
+            );
+        }
+        // Coordinators accent the Compass, and the name only when it is a real
+        // (current or last known) mission name rather than a placeholder.
+        for name in [named, Some(("Launch", false))] {
+            assert_eq!(
+                accents(
+                    json!({"id":"c","missionId":"mission-A","missionCoordinator":true}),
+                    name
+                ),
+                Some((true, true))
+            );
+        }
+        assert_eq!(
+            accents(
+                json!({"id":"c","missionId":"mission-A","missionCoordinator":true}),
+                None
+            ),
+            Some((true, false))
+        );
+        assert_eq!(
+            accents(json!({"id":"c","activeMissionCoordinator":true}), None),
+            Some((true, false))
+        );
+        // Malformed association shows Info, never an accented guess.
+        assert_eq!(
+            accents(
+                json!({"id":"c","missionId":true,"missionCoordinator":true}),
+                None
+            ),
+            Some((false, false))
+        );
     }
 }
 #[cfg(test)]
