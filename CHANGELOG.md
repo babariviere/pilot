@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.86.0](https://github.com/babariviere/pilot/compare/v1.85.0...v1.86.0) (2026-10-28)
+
+
+### Features
+
+* **desktop:** accent coordinator compass and name in sidebar ([c51a06c](https://github.com/babariviere/pilot/commit/c51a06c2b6315e2b9f6b06a89cbcb1051ed4c560))
+* **desktop:** copy session path and link from chat menus ([9dcb9d7](https://github.com/babariviere/pilot/commit/9dcb9d7943db6cbe18f82db23361c7a8d4a29806))
+* **desktop:** effects-first work line with call ribbon and live tail ([86098f9](https://github.com/babariviere/pilot/commit/86098f9a942376c2a62e45018a68ac3d1096e7f7))
+* **desktop:** fold automatic transcript inputs by default ([a645193](https://github.com/babariviere/pilot/commit/a645193ccdfb853f13d8a1d32714ed77c21e6f08))
+* **desktop:** open a chat's mission from its sidebar name ([b7ef3ae](https://github.com/babariviere/pilot/commit/b7ef3ae8ef9b129bce577bbf59bc4c8e3a260c4a))
+* **desktop:** render question records as disclosures ([8b78b5d](https://github.com/babariviere/pilot/commit/8b78b5d1ef73ca682543e17128bb9fb6c2281b64))
+* **desktop:** support explicit verified daemon upgrades ([2fb0f42](https://github.com/babariviere/pilot/commit/2fb0f42aacc5933bb34643823fe6162d238ddd57))
+
+
+### Bug Fixes
+
+* **desktop:** keep accepted question replies out of recovery ([93b4846](https://github.com/babariviere/pilot/commit/93b48466a7d814d723363a6205ee61ab3d9b924d))
+* **desktop:** keep window shortcuts reachable without a focused element ([00c35ec](https://github.com/babariviere/pilot/commit/00c35ecb1c34243523a7df97ced0fcf7beccec93))
+* **kernel:** preserve questions across automatic inputs ([1a58e6f](https://github.com/babariviere/pilot/commit/1a58e6fe122adb6e4ebaeb1dc9507c0a2d4786a1))
+* **tools:** bound shared planning authoring inputs ([9bb7eb3](https://github.com/babariviere/pilot/commit/9bb7eb3089e656b944b53e677aebb3403c552ec3))
+* **updater:** archive completed history before staging ([4a9a669](https://github.com/babariviere/pilot/commit/4a9a66910c3e3379efd15cd7f7a1d617045abf40))
+
 ## [1.85.0](https://github.com/babariviere/pilot/compare/v1.84.0...v1.85.0) (2026-10-28)
 
 
