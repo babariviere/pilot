@@ -164,3 +164,12 @@ when a menu item has moved it to another input or dialog. No layout wrapper,
 activation, dependency version or default menu selection changes. A blurred
 keyboard unit is the negative regression; native history verifies the real
 Escape, Tab-to-trigger, Enter and arrow/Enter path.
+
+## Styled selectable ranges
+
+One Base edit adds `SelectableText::styled_ranges`, which forwards byte-range
+highlights (weight, color, italic, strikethrough) and font-family overrides to
+the element's own `StyledText`. They resolve against the inherited text style at
+layout. Selection, hit testing and copy still use the unchanged plain text, so
+native visual text runs keep exact selection/copy. Callers give every run its own
+range: GPUI applies a family override only to whole runs.

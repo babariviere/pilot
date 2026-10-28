@@ -17,6 +17,9 @@ pub(crate) mod mermaid_probe;
 #[cfg(feature = "native-probes")]
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
+#[cfg(test)]
+#[path = "artifact_text_tests.rs"]
+mod text_tests;
 use crate::{
     LocalOptions,
     app_icon::AppIcon,
@@ -46,10 +49,90 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     hash::{DefaultHasher, Hash, Hasher},
+    ops::Range,
     rc::Rc,
     sync::Arc,
     time::Instant,
 };
+type Highlights = Vec<(Range<usize>, gpui_kit::HighlightStyle)>;
+type Families = Vec<(Range<usize>, SharedString)>;
+/// GPUI's default line height (phi), made explicit where text clamps to whole lines.
+const LINE_HEIGHT: f32 = 1.618;
+/// A visual text node's runs joined into one exact string, with each run's own
+/// style as byte-range overrides of the node style (Swift VisualTextView). Every
+/// run gets a range, even unstyled ones, so GPUI never merges a font-family
+/// override's run with its neighbours (it applies only to whole runs).
+fn text_runs(value: &Value, cx: &gpui_kit::App) -> (String, Highlights, Families) {
+    let theme = cx.theme();
+    let node_mono = value["mono"] == true;
+    let (mut text, mut highlights, mut families) = (String::new(), Vec::new(), Vec::new());
+    for run in value["runs"].as_array().into_iter().flatten() {
+        let Some(piece) = run["text"].as_str() else {
+            continue;
+        };
+        let range = text.len()..text.len() + piece.len();
+        text.push_str(piece);
+        if range.is_empty() {
+            continue;
+        }
+        highlights.push((
+            range.clone(),
+            gpui_kit::HighlightStyle {
+                color: run["color"]
+                    .as_str()
+                    .map(|c| crate::visual_chart_view::color(c, cx)),
+                font_weight: run["weight"]
+                    .as_f64()
+                    .map(|w| gpui_kit::FontWeight(w as f32)),
+                font_style: run["italic"].as_bool().map(|italic| {
+                    if italic {
+                        gpui_kit::FontStyle::Italic
+                    } else {
+                        gpui_kit::FontStyle::Normal
+                    }
+                }),
+                strikethrough: (run["strike"] == true).then(|| gpui_kit::StrikethroughStyle {
+                    thickness: px(1.),
+                    color: None,
+                }),
+                ..Default::default()
+            },
+        ));
+        if let Some(mono) = run["mono"].as_bool()
+            && mono != node_mono
+        {
+            let family = if mono {
+                &theme.mono_font_family
+            } else {
+                &theme.font_family
+            };
+            families.push((range, family.clone()));
+        }
+    }
+    (text, highlights, families)
+}
+/// Swift's table default: end when every non-empty cell of a column is a number.
+fn column_aligns(columns: &[Value], rows: &[Value]) -> Vec<&'static str> {
+    (0..columns.len())
+        .map(|j| match columns[j]["align"].as_str() {
+            Some("center") => "center",
+            Some("end") => "end",
+            Some(_) => "start",
+            None => {
+                let mut cells = rows
+                    .iter()
+                    .filter_map(|row| row.get(j))
+                    .filter(|cell| !cell.is_null())
+                    .peekable();
+                if cells.peek().is_some() && cells.all(Value::is_number) {
+                    "end"
+                } else {
+                    "start"
+                }
+            }
+        })
+        .collect()
+}
 pub(crate) struct ArtifactPane {
     inline: bool,
     /// Raster geometry an inline preview reserves while its revision loads.
@@ -852,23 +935,53 @@ impl ArtifactPane {
         Some((path.clone(), chart.readout(index)?))
     }
     fn text(&self, id: String, text: String) -> AnyElement {
+        self.styled_text(id, text, "start", Vec::new(), Vec::new())
+    }
+    /// Exact selectable text. Center and end hug the text and move its box, never
+    /// the glyphs within it, so selection geometry stays exact.
+    fn styled_text(
+        &self,
+        id: String,
+        text: String,
+        align: &str,
+        highlights: Highlights,
+        families: Families,
+    ) -> AnyElement {
         let focus = self.focus.clone();
         let mut hash = DefaultHasher::new();
         text.hash(&mut hash);
+        let mut selectable = SelectableText::new(
+            SharedString::from(format!("{id}-{}", hash.finish())),
+            SharedString::from(text),
+        );
+        if !highlights.is_empty() || !families.is_empty() {
+            selectable = selectable.styled_ranges(highlights, families);
+        }
+        let hug = matches!(align, "center" | "end");
+        let selectable = if hug {
+            div()
+                .id(SharedString::from(format!("{id}-text")))
+                .test_support()
+                .max_w_full()
+                .child(selectable)
+                .into_any_element()
+        } else {
+            selectable.into_any_element()
+        };
         div()
             .id(SharedString::from(id.clone()))
             .test_support()
             .min_w_0()
             .w_full()
+            .when(hug, |d| d.v_flex())
+            .when(align == "center", |d| d.items_center())
+            .when(align == "end", |d| d.items_end())
             .on_mouse_down(gpui_kit::MouseButton::Left, move |_, window, cx| {
                 if let Some(focus) = &focus {
                     focus.focus(window, cx);
                 }
             })
-            .child(SelectableText::new(
-                SharedString::from(format!("{id}-{}", hash.finish())),
-                SharedString::from(text),
-            ))
+            .child(selectable)
             .into_any_element()
     }
     fn note(text: &'static str) -> AnyElement {
@@ -1019,12 +1132,7 @@ impl ArtifactPane {
                 box_.into_any_element()
             }
             "text" => {
-                let text = value["runs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|r| r["text"].as_str())
-                    .collect::<String>();
+                let (text, highlights, families) = text_runs(value, cx);
                 if text.len() > 8192 {
                     return Self::note(
                         "Text exceeds the current native display limit. Copy Source retains it.",
@@ -1037,6 +1145,7 @@ impl ArtifactPane {
                     Some("xl") => 26.,
                     _ => 15.,
                 };
+                let line = (size * LINE_HEIGHT).round();
                 div()
                     .text_size(px(size))
                     .font_weight(gpui_kit::FontWeight(
@@ -1049,7 +1158,21 @@ impl ArtifactPane {
                     .when(value["mono"] == true, |d| {
                         d.font_family(cx.theme().mono_font_family.clone())
                     })
-                    .child(self.text(path.into(), text))
+                    .when(value["italic"] == true, |d| d.italic())
+                    // Clip to whole lines rather than truncating, so the laid-out text
+                    // stays the exact source and remains selectable.
+                    .when_some(value["lines"].as_u64(), |d, lines| {
+                        d.line_height(px(line))
+                            .max_h(px(line * lines as f32))
+                            .overflow_hidden()
+                    })
+                    .child(self.styled_text(
+                        path.into(),
+                        text,
+                        value["align"].as_str().unwrap_or("start"),
+                        highlights,
+                        families,
+                    ))
                     .into_any_element()
             }
             "stat" => {
@@ -1276,6 +1399,8 @@ impl ArtifactPane {
                     );
                 }
                 *budget -= rows.len() * columns.len();
+                let aligns = column_aligns(columns, rows);
+                let figures = gpui_kit::FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
                 let mut table = div()
                     .v_flex()
                     .w_full()
@@ -1286,10 +1411,17 @@ impl ArtifactPane {
                     .border_1()
                     .border_color(cx.theme().border);
                 let mut header = div().h_flex().gap_2().font_semibold();
-                for c in columns {
-                    header = header.child(div().flex_1().min_w_0().child(SharedString::from(
-                        c["label"].as_str().unwrap_or("").to_owned(),
-                    )));
+                for (c, align) in columns.iter().zip(&aligns) {
+                    header = header.child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .when(*align == "center", |d| d.text_center())
+                            .when(*align == "end", |d| d.text_right())
+                            .child(SharedString::from(
+                                c["label"].as_str().unwrap_or("").to_owned(),
+                            )),
+                    );
                 }
                 table = table.child(header);
                 for (i, row) in rows.iter().enumerate() {
@@ -1299,16 +1431,27 @@ impl ArtifactPane {
                         .border_t_1()
                         .border_color(cx.theme().border);
                     for (j, cell) in row.as_array().unwrap().iter().enumerate() {
-                        cells = cells.child(div().flex_1().min_w_0().child(self.text(
-                            format!("{path}-{i}-{j}"),
-                            if cell.is_null() {
-                                "—".into()
-                            } else if let Some(s) = cell.as_str() {
-                                s.into()
-                            } else {
-                                crate::visual_chart_view::number(cell.as_f64().unwrap_or(0.))
-                            },
-                        )));
+                        cells = cells.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .when(cell.is_number(), |d| d.font_features(figures.clone()))
+                                .child(self.styled_text(
+                                    format!("{path}-{i}-{j}"),
+                                    if cell.is_null() {
+                                        "—".into()
+                                    } else if let Some(s) = cell.as_str() {
+                                        s.into()
+                                    } else {
+                                        crate::visual_chart_view::number(
+                                            cell.as_f64().unwrap_or(0.),
+                                        )
+                                    },
+                                    aligns[j],
+                                    Vec::new(),
+                                    Vec::new(),
+                                )),
+                        );
                     }
                     table = table.child(cells);
                 }

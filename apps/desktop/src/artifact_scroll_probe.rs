@@ -303,6 +303,8 @@ mod tests {
                     last.bottom() <= viewport.bottom(),
                     "last row remains reachable"
                 );
+                // Numeric columns end-align, so drag across the figure itself.
+                let last = w.find("0-39-7-text").bounds();
                 w.drag(
                     point(last.left() + px(1.), last.center().y),
                     point(last.right() - px(1.), last.center().y),

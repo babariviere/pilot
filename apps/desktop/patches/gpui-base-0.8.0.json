@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "archiveSha256": "d5cd7de73d5b2d3d18b94a928abf343922091fa77bc472f77b7d2e7e8b1823a7",
   "upstream": "https://crates.io/crates/gpui-base/0.8.0",
-  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans.",
+  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans. Let SelectableText style byte ranges (weight, color, italic, strike, font family) without changing its plain selection/copy text.",
   "edits": [
     {
       "path": "src/text_selection.rs",
@@ -175,6 +175,11 @@
       "path": "src/selectable_text.rs",
       "old": "if selected_text_before != TextSelection::selected_text(window, cx) {",
       "new": "if selected_text_before != handle.projected_text_for_paint(cx) {"
+    },
+    {
+      "path": "src/selectable_text.rs",
+      "old": "    /// Overrides the selection background, which defaults to the theme's",
+      "new": "    /// Styles sorted, non-overlapping byte ranges against the inherited text style at\n    /// layout. Selection and copy still use the plain text.\n    pub fn styled_ranges(\n        mut self,\n        highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,\n        families: Vec<(Range<usize>, SharedString)>,\n    ) -> Self {\n        let styled = StyledText::new(self.text.clone()).with_highlights(highlights);\n        self.styled_text = if families.is_empty() {\n            styled\n        } else {\n            styled.with_font_family_overrides(families)\n        };\n        self\n    }\n\n    /// Overrides the selection background, which defaults to the theme's"
     }
   ]
 }

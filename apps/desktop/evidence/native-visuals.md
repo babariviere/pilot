@@ -16,14 +16,18 @@ keeps read-only source/provenance instead of executing it. Metadata never
 automatically changes an open pinned revision. Previous revision/All artifacts
 give explicit historical/latest navigation.
 
-Native rows/columns/grids, plain selectable text, stats, tables (numeric/null
-cells), rules/spaces, inert links, buttons/toggles/tabs and slider steppers.
+Native rows/columns/grids, selectable text with per-run weight/color/mono/
+italic/strike, node italic, start/center/end alignment and whole-line clamps
+(clipped, no ellipsis, so the exact text stays selectable), stats, tables
+(numeric/null cells, column alignment, numeric columns end-aligned with tabular
+figures), rules/spaces, inert links, buttons/toggles/tabs and slider steppers.
 Non-stacked line/area/bar/scatter charts use trusted native primitives over
 finite normalized geometry prepared off UI; missing values stay gaps. No
 dynamic SVG/image cache. Aggregate4096 weighted display units include nodes,
 text, table cells and geometry. Max8192 bytes per text node,1024 table cells and
-2048 chart points plus shared budgets. Overflow is explicit. Per-run typography,
-some alignment/axis/hover details, slider dragging, stacked plotting and
+2048 chart points plus shared budgets. Overflow is explicit. Multi-line centered
+or end-aligned text moves as a block (lines stay start-aligned inside it). Some
+axis/hover details, slider dragging, stacked plotting and
 out-of-domain clipping remain incomplete. Large numeric table labels are
 compact. Source/data is unchanged.
 
