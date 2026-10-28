@@ -88,7 +88,7 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 format!("{}-{}-chat.png", width as u32, mode.name()),
             );
             if !baseline {
-                header_alignment(cx, h, &v, width, &captures, mode.name());
+                header_layout(cx, h, &v, width, &captures, mode.name());
             }
             cx.update_window(h, |_, w, cx| {
                 for id in [
@@ -649,34 +649,10 @@ fn chooser_checks(
     cx.update(|cx| assert!(!v.read(cx).projects_open));
 }
 
-/// Lowest device row where most of a text run's ink ends: its baseline,
-/// ignoring the few descender columns below it.
-fn ink_baseline(
-    pixel: &impl Fn(u32, u32) -> [u8; 4],
-    b: Bounds<Pixels>,
-    scale: f32,
-    bg: [u8; 4],
-) -> u32 {
-    let device = |v: Pixels| (f32::from(v) * scale).round() as u32;
-    let rows: Vec<(u32, u32)> = (device(b.top())..device(b.bottom()))
-        .map(|y| {
-            let ink = (device(b.left())..device(b.right()))
-                .filter(|&x| {
-                    let p = pixel(x, y);
-                    (0..3).any(|c| p[c].abs_diff(bg[c]) > 96)
-                })
-                .count() as u32;
-            (y, ink)
-        })
-        .collect();
-    let most = rows.iter().map(|r| r.1).max().unwrap_or(0);
-    assert!(most > 0, "text paints ink");
-    rows.iter().rev().find(|r| r.1 * 10 >= most * 3).unwrap().0
-}
-
-/// Title and project meta share one baseline and stay inside the row,
-/// including long Unicode titles and chats without a project.
-fn header_alignment(
+/// Title sits over the project subtitle, the stack is centred in the row and
+/// each line truncates on its own, including long Unicode titles and chats
+/// without a project.
+fn header_layout(
     cx: &mut HeadlessAppContext,
     h: gpui_kit::AnyWindowHandle,
     v: &gpui_kit::Entity<LocalViewer>,
@@ -695,37 +671,33 @@ fn header_alignment(
         })
         .unwrap()
     };
-    let (header, title, meta, action) = found(cx);
-    let meta = meta.expect("project meta is shown");
-    let image = cx.capture_screenshot(h).unwrap();
-    let scale = image.width() as f32 / width;
-    let pixel = |x, y| image.get_pixel(x, y).0;
-    let bg = pixel(
-        (f32::from(header.left()) * scale) as u32 + 2,
-        (f32::from(header.top()) * scale) as u32 + 2,
-    );
-    let (a, b) = (
-        ink_baseline(&pixel, title, scale, bg),
-        ink_baseline(&pixel, meta, scale, bg),
-    );
-    println!(
-        "{}",
-        json!({"header_baselines": [a, b], "width": width, "scale": scale})
-    );
-    assert!(
-        a.abs_diff(b) <= 1,
-        "title baseline {a} and meta baseline {b} (device rows) align at {width}"
-    );
-    for (id, bounds) in [("title", title), ("meta", meta)] {
-        assert!(
-            bounds.top() >= header.top() && bounds.bottom() <= header.bottom(),
-            "{id} stays in the header row"
+    let stacked = |header: Bounds<Pixels>,
+                   title: Bounds<Pixels>,
+                   meta: Bounds<Pixels>,
+                   action: Bounds<Pixels>| {
+        println!(
+            "{}",
+            json!({"header_stack": [f32::from(title.top()), f32::from(title.bottom()), f32::from(meta.top()), f32::from(meta.bottom())], "width": width})
         );
-    }
-    assert!(title.right() <= meta.left() && meta.right() <= action.left());
+        assert!(
+            title.bottom() <= meta.top() && (title.left() - meta.left()).abs() <= px(0.5),
+            "project subtitle sits under the title: {title:?} {meta:?}"
+        );
+        assert!(
+            title.top() >= header.top()
+                && meta.bottom() <= header.bottom()
+                && ((title.top() + meta.bottom()) / 2. - header.center().y).abs() <= px(1.),
+            "title and subtitle are centred in the row: {header:?} {title:?} {meta:?}"
+        );
+        assert!(title.right() <= action.left() && meta.right() <= action.left());
+    };
+    let (header, title, meta, action) = found(cx);
+    let meta = meta.expect("project subtitle is shown");
+    stacked(header, title, meta, action);
 
-    // Long Unicode title: both truncate inside the row and the project stays readable.
+    // Long Unicode title: it truncates before the actions, the project stays whole.
     let restore = cx.update(|cx| v.read(cx).title.clone());
+    let meta_width = meta.size.width;
     cx.update(|cx| {
         v.update(cx, |v, cx| {
             v.title = "資料 👩‍💻 e\u{301} Ελληνικά ".repeat(12);
@@ -740,17 +712,14 @@ fn header_alignment(
         captures,
         format!("{}-{mode}-header-unicode.png", width as u32),
     );
-    let meta = meta.expect("project meta stays beside a long title");
-    assert!(
-        title.right() <= meta.left()
-            && meta.right() <= action.left()
-            && meta.size.width >= px(48.)
-            && title.top() >= header.top()
-            && meta.bottom() <= header.bottom(),
-        "long title truncates and leaves project identity readable: {title:?} {meta:?}"
+    let meta = meta.expect("project subtitle stays under a long title");
+    stacked(header, title, meta, action);
+    assert_eq!(
+        meta.size.width, meta_width,
+        "a long title never squeezes the project"
     );
 
-    // No project: the title alone, still vertically centred in the row.
+    // No project: the title alone, vertically centred in the row.
     let project = cx.update(|cx| {
         v.update(cx, |v, cx| {
             v.title = restore;
@@ -763,7 +732,7 @@ fn header_alignment(
     });
     settle(cx, h);
     let (header, title, meta, _) = found(cx);
-    assert!(meta.is_none(), "no empty meta without a project");
+    assert!(meta.is_none(), "no empty subtitle without a project");
     assert!((title.center().y - header.center().y).abs() <= px(1.));
     cx.update(|cx| {
         v.update(cx, |v, cx| {
