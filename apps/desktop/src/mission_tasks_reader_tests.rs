@@ -58,27 +58,26 @@ async fn exact_local_get_only_no_task_endpoint_paging_redirect_or_identity_fallb
     assert!(s.all_gets());
 }
 #[tokio::test]
-async fn wire_declared_streamed_malformed_foreign_and_body_caps_fail_closed() {
+async fn large_details_load_whole_while_malformed_foreign_and_body_caps_fail_closed() {
     let s = Server::start();
     let c = client();
     let route = Route(f::key("mission-A"));
+    // Over 2 MiB and 256 rows, declared or streamed: every task arrives.
+    let large = serde_json::to_vec(&f::many("mission-A", 300)).unwrap();
+    assert!(large.len() > 2 * 1024 * 1024);
     for chunked in [false, true] {
         s.reply(
             "/api/missions/mission-A",
             Reply {
                 status: 200,
-                bytes: vec![b'!'; model::WIRE_BYTES + 1],
+                bytes: large.clone(),
                 chunked,
                 delay_ms: 0,
             },
         );
-        assert!(
-            fetch(&c, &s.options, &route)
-                .await
-                .err()
-                .unwrap()
-                .contains("byte limit")
-        );
+        let snapshot = fetch(&c, &s.options, &route).await.unwrap();
+        assert_eq!(snapshot.tasks.len(), 302);
+        assert_eq!(snapshot.tasks[300].id, "task-A");
     }
     s.reply(
         "/api/missions/mission-A",

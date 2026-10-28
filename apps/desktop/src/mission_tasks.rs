@@ -1,10 +1,9 @@
-//! Exact task snapshot from the existing mission-detail GET. No task paging contract exists.
+//! Exact task snapshot from the existing mission-detail GET, which returns every task.
+//! There is no task paging contract, so every received task is admitted.
 use crate::{local_model::valid_id, mission_browser::Key};
 use serde_json::Value;
 use std::{collections::HashSet, sync::Arc};
 
-pub(crate) const WIRE_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const ROW_LIMIT: usize = 256;
 pub(crate) const BODY_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Debug)]
@@ -37,10 +36,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     if !key.valid() || v["mission"]["id"] != key.id {
         return Err("Task snapshot belongs to a different mission.");
     }
-    let raw = v["tasks"]
-        .as_array()
-        .filter(|a| a.len() <= ROW_LIMIT)
-        .ok_or("Tasks aren't available, or there are more than 256.")?;
+    let raw = v["tasks"].as_array().ok_or("Tasks aren't available.")?;
     let mut ids = HashSet::new();
     let mut numbers = HashSet::new();
     let mut tasks = Vec::with_capacity(raw.len());
@@ -75,7 +71,6 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
         if !t["dependsOn"].is_null() {
             let deps = t["dependsOn"]
                 .as_array()
-                .filter(|a| a.len() <= ROW_LIMIT)
                 .ok_or("Invalid task dependencies.")?;
             let mut values = Vec::with_capacity(deps.len());
             for dep in deps {

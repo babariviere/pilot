@@ -144,7 +144,7 @@ pub(crate) async fn fetch(
                 client,
                 options,
                 "/api/mission-catalog",
-                model::CATALOG_BYTES,
+                Some(model::CATALOG_BYTES),
             )
             .await?,
         )?))),
@@ -155,7 +155,8 @@ pub(crate) async fn fetch(
                     client,
                     options,
                     &format!("/api/missions/{}", key.id),
-                    model::DETAIL_BYTES,
+                    // The detail carries every task: no byte ceiling.
+                    None,
                 )
                 .await?,
             )?);
@@ -163,7 +164,7 @@ pub(crate) async fn fetch(
                 client,
                 options,
                 &format!("/api/sessions?archived=all&missionId={}", key.id),
-                model::MEMBER_BYTES,
+                Some(model::MEMBER_BYTES),
             )
             .await
             {
@@ -178,7 +179,7 @@ async fn get(
     client: &reqwest::Client,
     options: &LocalOptions,
     path: &str,
-    cap: usize,
+    cap: Option<usize>,
 ) -> Result<Value, &'static str> {
     let mut r = client
         .get(format!("{}{path}", options.loopback()))
@@ -197,7 +198,8 @@ async fn get(
             );
         }
     }
-    if r.content_length().is_some_and(|n| n > cap as u64) {
+    let over = |n: u64| cap.is_some_and(|cap| n > cap as u64);
+    if r.content_length().is_some_and(over) {
         return Err("Mission response exceeds the viewer byte limit; no partial JSON was decoded.");
     }
     let mut body = Vec::new();
@@ -206,7 +208,7 @@ async fn get(
         .await
         .map_err(|_| "Mission response was interrupted.")?
     {
-        if body.len().saturating_add(chunk.len()) > cap {
+        if over(body.len().saturating_add(chunk.len()) as u64) {
             return Err(
                 "Mission response exceeds the viewer byte limit; no partial JSON was decoded.",
             );

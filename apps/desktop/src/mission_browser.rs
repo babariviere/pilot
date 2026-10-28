@@ -7,9 +7,7 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 pub(crate) const CATALOG_BYTES: usize = 128 * 1024;
-pub(crate) const DETAIL_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MEMBER_BYTES: usize = 1024 * 1024;
-pub(crate) const TASK_CAP: usize = 256;
 pub(crate) const MEMBER_CAP: usize = 128;
 pub(crate) const DISPLAY_TASKS: usize = 24;
 pub(crate) const DISPLAY_MEMBERS: usize = 16;
@@ -242,12 +240,10 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     if id(&m["id"])? != key.id {
         return Err("Mission response belongs to a different canonical ID.");
     }
+    // Every received task counts; only the overview preview is short.
     let raw = v["tasks"]
         .as_array()
         .ok_or("Mission task context is unavailable.")?;
-    if raw.len() > TASK_CAP {
-        return Err("Mission detail exceeds the 256-task viewer limit.");
-    }
     let mut seen = HashSet::new();
     let mut tasks = Vec::with_capacity(raw.len());
     for t in raw {

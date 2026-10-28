@@ -134,13 +134,7 @@ pub(crate) async fn fetch(
         );
     }
     crate::local_client::gate(client, options).await?;
-    let value = get(
-        client,
-        options,
-        &format!("/api/missions/{}", key.id),
-        model::WIRE_BYTES,
-    )
-    .await?;
+    let value = get(client, options, &format!("/api/missions/{}", key.id)).await?;
     model::parse(key, &value).map(Arc::new)
 }
 
@@ -148,9 +142,8 @@ async fn get(
     client: &reqwest::Client,
     options: &LocalOptions,
     path: &str,
-    cap: usize,
 ) -> Result<Value, &'static str> {
-    let mut r = client
+    let r = client
         .get(format!("{}{path}", options.loopback()))
         .send()
         .await
@@ -167,22 +160,14 @@ async fn get(
             );
         }
     }
-    if r.content_length().is_some_and(|n| n > cap as u64) {
-        return Err("Mission response exceeds the viewer byte limit; no partial JSON was decoded.");
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = r
-        .chunk()
+    detail_body(r).await
+}
+/// A whole mission-detail body. It carries every task, so it has no byte ceiling.
+pub(crate) async fn detail_body(r: reqwest::Response) -> Result<Value, &'static str> {
+    let body = r
+        .bytes()
         .await
-        .map_err(|_| "Mission response was interrupted.")?
-    {
-        if body.len().saturating_add(chunk.len()) > cap {
-            return Err(
-                "Mission response exceeds the viewer byte limit; no partial JSON was decoded.",
-            );
-        }
-        body.extend_from_slice(&chunk);
-    }
+        .map_err(|_| "Mission response was interrupted.")?;
     serde_json::from_slice(&body)
         .map_err(|_| "Malformed mission JSON; previous snapshot is not current.")
 }

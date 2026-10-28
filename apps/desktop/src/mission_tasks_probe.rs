@@ -17,6 +17,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+const TASKS: usize = 300;
 struct Host {
     browser: Entity<Browser>,
     _events: Subscription,
@@ -129,7 +130,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cases += 1;
             let server = Server::start();
             let mut detail = f::detail("mission-A");
-            detail["tasks"]=json!((0..40).map(|n|json!({"id":format!("exact-{n}"),"number":n+1,"title":"Same title 日本語 👩‍💻","status":if n%2==0 {"todo"} else {"blocked"},"body":format!("Exact description {n}\n\nUnicode 👩‍💻 é 日本語\nLiteral ![image](https://invalid.example) <script>no execution</script>"),"order":n})).collect::<Vec<_>>());
+            detail["tasks"]=json!((0..TASKS).map(|n|json!({"id":format!("exact-{n}"),"number":n+1,"title":"Same title 日本語 👩‍💻","status":if n%2==0 {"todo"} else {"blocked"},"body":format!("Exact description {n}\n\nUnicode 👩‍💻 é 日本語\nLiteral ![image](https://invalid.example) <script>no execution</script>"),"order":n,"completion":{"checks":"x".repeat(7500)}})).collect::<Vec<_>>());
+            // Beyond 256 rows and 2 MiB: every received task stays reachable.
+            assert!(serde_json::to_vec(&detail).unwrap().len() > 2 * 1024 * 1024);
             server.reply("/api/missions/mission-A", Reply::json(200, detail.clone()));
             cx.update(|cx| Theme::change(mode, None, cx));
             let (h, host) = cx
@@ -174,7 +177,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| {
                 assert_eq!(
                     pane.read(cx).state.snapshot.as_ref().unwrap().tasks.len(),
-                    40
+                    TASKS
                 )
             });
             reveal(cx, h, "mission-tasks-list");
@@ -237,7 +240,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                         .contains("Exact description 1")
                 )
             });
-            // The received list is not the old 24-row preview: actual wheel reaches exact task 40.
+            // The received list is not the old 24-row preview: actual wheel reaches the last task.
             cx.update_window(h, |_, w, cx| w.press("escape", cx))
                 .unwrap();
             settle(cx, h);
@@ -251,10 +254,10 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-item-exact-39", cx))
+            cx.update_window(h, |_, w, cx| w.click("mission-tasks-item-exact-299", cx))
                 .unwrap();
             settle(cx, h);
-            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-39")));
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-299")));
             reveal(cx, h, "mission-tasks-copy");
             cx.update_window(h, |_, w, cx| w.click("mission-tasks-copy", cx))
                 .unwrap();
@@ -264,9 +267,70 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                         .unwrap()
                         .text()
                         .unwrap()
-                        .contains("Exact description 39")
+                        .contains("Exact description 299")
                 )
             });
+            // The overview's exact reveal bridge reaches row 257 from the top of the
+            // list and scrolls it into view; Up/Down then cross the 256 boundary.
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            settle(cx, h);
+            reveal(cx, h, "mission-tasks-list");
+            cx.update_window(h, |_, w, cx| {
+                w.scroll(
+                    "mission-tasks-list",
+                    ScrollDelta::Pixels(point(px(0.), px(100_000.))),
+                    cx,
+                )
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("mission-tasks-item-exact-256").is_none());
+                pane.update(cx, |p, cx| p.reveal(Some("exact-256".into()), w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            let row_in_list = |cx: &mut HeadlessAppContext, id: &str| {
+                let id = gpui_kit::SharedString::from(format!("mission-tasks-item-{id}"));
+                cx.update_window(h, |_, w, _| {
+                    let list = w.find("mission-tasks-list").bounds();
+                    let row = w.find(id).bounds();
+                    assert!(
+                        row.top() >= list.top() - px(1.) && row.bottom() <= list.bottom() + px(1.),
+                        "{row:?} in {list:?}"
+                    );
+                })
+                .unwrap();
+            };
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-256")));
+            row_in_list(cx, "exact-256");
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("mission-tasks-detail").focused(), Some(true));
+                w.press("escape", cx);
+                w.press("up", cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-255")));
+            row_in_list(cx, "exact-255");
+            cx.update_window(h, |_, w, cx| {
+                w.press("escape", cx);
+                w.press("down", cx);
+                w.press("down", cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-257")));
+            row_in_list(cx, "exact-257");
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("{name}-reveal-257.png")))
+                    .unwrap();
+            }
             // Refresh errors retain exact selected description, with explicit stale/error presentation.
             server.reply("/api/missions/mission-A", Reply::json(503, json!({})));
             reveal(cx, h, "mission-tasks-refresh");
@@ -277,8 +341,8 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             });
             cx.update(|cx| {
                 let p = pane.read(cx);
-                assert_eq!(p.state.selected.as_deref(), Some("exact-39"));
-                assert_eq!(p.state.snapshot.as_ref().unwrap().tasks.len(), 40);
+                assert_eq!(p.state.selected.as_deref(), Some("exact-257"));
+                assert_eq!(p.state.snapshot.as_ref().unwrap().tasks.len(), TASKS);
             });
             if let Some(d) = &dir {
                 cx.capture_screenshot(h)
@@ -341,7 +405,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| h.update(cx, |_, w, _| w.remove_window()).unwrap());
             cx.run_until_parked();
             println!(
-                "mission_tasks {name}: exact IDs, 40-row list, keyboard, Unicode copy, stale refresh, mission cancellation PASS"
+                "mission_tasks {name}: exact IDs, {TASKS}-row 2 MiB+ list, reveal past 256, keyboard, Unicode copy, stale refresh, mission cancellation PASS"
             );
         }
     }

@@ -14,7 +14,7 @@ progress bar and legend, then **Needs you** and **Working now** when they have
 rows, followed by Chats, Tasks and Brief. Raw mission and project IDs stay out
 of the visible text.
 
-- Progress counts every received task (up to 256), not only the displayed rows,
+- Progress counts every received task, not only the displayed rows,
   by Swift's work status: the stored status when phase gating projects Blocked.
   Dropped tasks are excluded; legend order is done, in review, in progress,
   blocked, to do, delegated, zeros omitted.
@@ -103,10 +103,10 @@ bounded Unicode string, never silently claims the full clipped source.
 | Boundary | Limit |
 | --- | --- |
 | Catalog HTTP, before JSON decode | 128 KiB, including chunked bodies |
-| Detail HTTP, before JSON decode | 2 MiB |
+| Detail HTTP, before JSON decode | none: it carries every task |
 | Member HTTP, before JSON decode | 1 MiB |
 | Catalog projection | 50 rows, 16 provenance items per row |
-| Detail task admission/display | 256 received / 24 displayed |
+| Detail task admission/display | every received / 24 displayed |
 | Member admission/display | 128 received / 16 displayed, coordinator first if present |
 | Goal/brief display | 8 KiB / 32 KiB, UTF-8-safe clipping with notice |
 | Title/task/member label | bounded 512/800-byte projections |

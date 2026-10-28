@@ -62,6 +62,20 @@ async fn exact_project_capped_catalog_and_one_passive_payload() {
     );
 }
 #[tokio::test]
+async fn task_beyond_256_rows_and_2_mib_detail_is_still_admitted() {
+    let s = Server::start();
+    s.reply(
+        "GET",
+        "/api/missions/mission-A",
+        Reply::json(200, f::many("mission-A", 300)),
+    );
+    assert_eq!(
+        write(&client().unwrap(), &s.options, &save()).await,
+        Outcome::Saved
+    );
+    assert_eq!(writes(&s), 1);
+}
+#[tokio::test]
 async fn missing_capability_foreign_project_home_task_and_scope_never_send() {
     for case in 0..6 {
         let s = Server::start();

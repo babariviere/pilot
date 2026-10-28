@@ -36,9 +36,10 @@ deletion and Start are not fields or outgoing operations.
 
 At most16 forms per window pin canonical Local home/mission/task/number plus
 connection. Numeric task IDs are refused because the daemon interprets numeric
-references as display-number aliases. Reads use bounded mission detail, not an
-invented task GET or paging API. Canonical catalog/hello and exact task admission
-precede the single PATCH. Maximum response2MiB and256 task rows; no partial
+references as display-number aliases. Reads use the whole mission detail (every
+task, no byte or row ceiling), not an invented task GET or paging API. Canonical
+catalog/hello and exact task admission precede the single PATCH. The save
+response is capped at 2 MiB; no partial
 source clipping. Transport has no retries, redirects, remote fallback or cookies.
 
 Each Save captures an immutable ID, target and normalized title/body. Only its

@@ -93,14 +93,11 @@ async fn fetch(c: &reqwest::Client, o: &LocalOptions, s: &Target) -> Result<Cont
     if r.status().as_u16() != 200 {
         return Err("Mission task text read unavailable. Retained text is unchanged.");
     }
-    let v = body(r).await?;
+    let v = crate::mission_tasks_reader::detail_body(r).await?;
     if v["mission"]["id"] != s.key.id {
         return Err("Wrong mission detail.");
     }
-    let tasks = v["tasks"]
-        .as_array()
-        .filter(|a| a.len() <= crate::mission_tasks::ROW_LIMIT)
-        .ok_or("Task snapshot unavailable or over limit.")?;
+    let tasks = v["tasks"].as_array().ok_or("Task snapshot unavailable.")?;
     let mut matches = tasks.iter().filter(|t| t["id"] == s.task);
     let task = matches.next().ok_or("Exact task unavailable.")?.clone();
     if matches.next().is_some() {

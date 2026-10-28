@@ -72,9 +72,14 @@ fn detail_is_canonical_bounded_and_plain_text_never_a_program_or_image() {
     let mut v = f::detail(&key.id);
     v["brief"]["missionId"] = json!("mission-B");
     assert!(detail(&key, &v).is_err());
-    let mut v = f::detail(&key.id);
-    v["tasks"] = json!(vec![v["tasks"][0].clone(); TASK_CAP + 1]);
-    assert!(detail(&key, &v).is_err());
+    // 256, 257 and 1002 received tasks all count; only the overview preview is short.
+    for extra in [254, 255, 1000] {
+        let d = detail(&key, &f::many(&key.id, extra)).unwrap();
+        assert_eq!(d.task_count, extra + 2);
+        assert_eq!(d.summary.total(), extra + 2);
+        assert_eq!(d.summary.done(), 1);
+        assert_eq!(d.tasks.len(), DISPLAY_TASKS);
+    }
 }
 #[test]
 fn context_row_caps_do_not_invent_task_counts_or_replace_membership() {

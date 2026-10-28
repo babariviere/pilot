@@ -21,11 +21,15 @@ selectable plain text; Markdown images, links and scripts are not executed.
 - `src/mission_tasks_reader.rs` verifies the pinned Local daemon/lineage through
   the existing hello gate before each GET. Requests have no redirects, proxy,
   transport retries or host fallback. Bounds: 2-second connect / 5-second request,
-  2 MiB declared and streamed response, then JSON decoding off the UI thread.
-- `src/mission_tasks.rs` admits at most 256 rows, 128 KiB per description and
-  800 bytes per title. Oversized/malformed/duplicate/foreign data rejects the
-  snapshot, never silently truncates a description or pretends a partial list
-  is complete. Empty means no tasks received, not a loading state.
+  then JSON decoding off the UI thread. The detail carries every task, so it has
+  no byte or row ceiling; a mission with hundreds or thousands of tasks loads whole.
+- `src/mission_tasks.rs` admits every received row, at most 128 KiB per
+  description and 800 bytes per title. Oversized/malformed/duplicate/foreign data
+  rejects the snapshot, never silently truncates a description or pretends a
+  partial list is complete. Empty means no tasks received, not a loading state.
+- The virtual list keeps every received task reachable by wheel and Up/Down;
+  selecting or revealing a task (including from the overview) scrolls its row
+  into view. No client paging: the single GET already supplies every task.
 - One bounded worker lane coalesces reads. Mission change/close cancels work;
   exact mission key plus generation fences late success and error. Refresh is
   explicit, read-only and local to this pane. Failed refresh retains the last

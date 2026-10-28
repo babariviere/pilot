@@ -63,6 +63,13 @@ pub(crate) fn start(
     })
 }
 async fn get(c: &reqwest::Client, o: &LocalOptions, path: &str) -> Result<Value, &'static str> {
+    body(send(c, o, path).await?).await
+}
+async fn send(
+    c: &reqwest::Client,
+    o: &LocalOptions,
+    path: &str,
+) -> Result<reqwest::Response, &'static str> {
     let r = c
         .get(format!("{}{path}", o.loopback()))
         .send()
@@ -71,7 +78,7 @@ async fn get(c: &reqwest::Client, o: &LocalOptions, path: &str) -> Result<Value,
     if r.status().as_u16() != 200 {
         return Err("Preference source unavailable. No save sent.");
     }
-    body(r).await
+    Ok(r)
 }
 pub(crate) async fn load(
     c: &reqwest::Client,
@@ -96,7 +103,10 @@ pub(crate) async fn load(
     else {
         return Err("Canonical mission catalog unavailable.");
     };
-    let v = get(c, o, &format!("/api/missions/{}", t.key.id)).await?;
+    let v = crate::mission_tasks_reader::detail_body(
+        send(c, o, &format!("/api/missions/{}", t.key.id)).await?,
+    )
+    .await?;
     let project = v["mission"]["projectId"]
         .as_str()
         .filter(|id| crate::local_model::valid_id(id))
@@ -117,10 +127,7 @@ pub(crate) async fn load(
     {
         return Err("Canonical mission/project changed. No save sent.");
     }
-    let tasks = v["tasks"]
-        .as_array()
-        .filter(|a| a.len() <= crate::mission_tasks::ROW_LIMIT)
-        .ok_or("Task snapshot unavailable or over limit.")?;
+    let tasks = v["tasks"].as_array().ok_or("Task snapshot unavailable.")?;
     let mut matches = tasks.iter().filter(|v| v["id"] == t.task);
     let task = matches.next().ok_or("Exact task unavailable.")?;
     if matches.next().is_some() {

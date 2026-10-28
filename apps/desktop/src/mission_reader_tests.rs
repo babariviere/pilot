@@ -120,19 +120,27 @@ async fn byte_limits_before_json_including_chunked_and_member_failure_preserves_
         panic!("malformed response")
     };
     assert!(e.contains("Malformed"));
-    s.reply(
-        "/api/missions/mission-B",
-        Reply {
-            status: 200,
-            bytes: vec![b'!'; model::DETAIL_BYTES + 1],
-            chunked: false,
-            delay_ms: 0,
-        },
-    );
-    let Err(e) = fetch(&c, &s.options, &Route::Detail(f::key("mission-B"))).await else {
-        panic!("oversized detail")
-    };
-    assert!(e.contains("byte limit"));
+    // Detail carries every task: over 2 MiB and 256 rows still loads whole.
+    let large = serde_json::to_vec(&f::many("mission-B", 300)).unwrap();
+    assert!(large.len() > 2 * 1024 * 1024);
+    for chunked in [false, true] {
+        s.reply(
+            "/api/missions/mission-B",
+            Reply {
+                status: 200,
+                bytes: large.clone(),
+                chunked,
+                delay_ms: 0,
+            },
+        );
+        let Ok(Data::Detail(d, _)) =
+            fetch(&c, &s.options, &Route::Detail(f::key("mission-B"))).await
+        else {
+            panic!("large detail")
+        };
+        assert_eq!(d.task_count, 302);
+        assert_eq!(d.summary.total(), 302);
+    }
     s.reply(
         "/api/sessions?archived=all&missionId=mission-A",
         Reply {

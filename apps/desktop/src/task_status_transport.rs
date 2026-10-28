@@ -74,7 +74,7 @@ pub(crate) async fn submit(
     }
     let route = format!("{}/api/missions/{}", options.loopback(), s.target.key.id);
     let detail = match client.get(&route).send().await {
-        Ok(r) if r.status().as_u16() == 200 => body(r, crate::mission_tasks::WIRE_BYTES).await,
+        Ok(r) if r.status().as_u16() == 200 => crate::mission_tasks_reader::detail_body(r).await,
         _ => Err("Cannot verify current task. No change sent."),
     };
     let detail = match detail {
@@ -87,11 +87,8 @@ pub(crate) async fn submit(
     {
         return Outcome::NotSent("Mission identity or lifecycle is unsupported. No change sent.");
     }
-    let Some(tasks) = detail["tasks"]
-        .as_array()
-        .filter(|a| a.len() <= crate::mission_tasks::ROW_LIMIT)
-    else {
-        return Outcome::NotSent("Task snapshot exceeds supported limits. No change sent.");
+    let Some(tasks) = detail["tasks"].as_array() else {
+        return Outcome::NotSent("Task snapshot unavailable. No change sent.");
     };
     let mut matches = tasks.iter().filter(|t| t["id"] == s.target.task);
     let Some(task) = matches.next() else {

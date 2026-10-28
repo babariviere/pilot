@@ -52,6 +52,25 @@ async fn exact_patch_and_ack_only_title_body() {
     );
 }
 #[tokio::test]
+async fn task_beyond_256_rows_and_2_mib_detail_is_still_admitted() {
+    let server = Server::start();
+    server.reply(
+        "GET",
+        "/api/missions/mission-A",
+        Reply::json(200, f::many("mission-A", 300)),
+    );
+    server.reply(
+        "PATCH",
+        "/api/missions/mission-A/tasks/task-A",
+        Reply::json(200, ack()),
+    );
+    assert!(matches!(
+        write(&client().unwrap(), &server.options, &capture()).await,
+        Outcome::Saved(_)
+    ));
+    assert_eq!(writes(&server), 1);
+}
+#[tokio::test]
 async fn foreign_home_missing_catalog_and_wrong_mission_never_patch() {
     let server = Server::start();
     let mut s = capture();

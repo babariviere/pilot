@@ -38,14 +38,31 @@ fn invalid_duplicate_foreign_overlimit_never_admit_partial_rows_or_bodies() {
     v["tasks"][0]["body"] = json!("語".repeat(BODY_BYTES / 3 + 1));
     assert!(parse(&key, &v).unwrap_err().contains("No partial"));
     let mut v = value();
-    v["tasks"] = json!(vec![v["tasks"][0].clone(); ROW_LIMIT + 1]);
-    assert!(parse(&key, &v).unwrap_err().contains("256"));
-    let mut v = value();
     v["tasks"][0]["id"] = json!("bad/id");
     assert!(parse(&key, &v).is_err());
     let mut v = value();
     v["tasks"] = json!([]);
     assert!(parse(&key, &v).unwrap().tasks.is_empty());
+}
+#[test]
+fn every_received_task_is_admitted_in_order_at_and_beyond_256() {
+    let key = f::key("mission-A");
+    // 2, 256, 257 and 1002 received tasks: no row ceiling, exact order kept.
+    for extra in [0, 254, 255, 1000] {
+        let s = parse(&key, &f::many("mission-A", extra)).unwrap();
+        assert_eq!(s.tasks.len(), extra + 2);
+        assert_eq!(s.tasks[extra].id, "task-A");
+        assert_eq!(s.tasks[extra + 1].id, "task-B");
+        if extra > 0 {
+            assert_eq!(s.tasks[0].id, "filler-0");
+            assert_eq!(s.tasks[extra - 1].id, format!("filler-{}", extra - 1));
+            assert_eq!(s.tasks[extra - 1].body.len(), 8000);
+        }
+    }
+    let mut v = f::many("mission-A", 300);
+    v["tasks"][0]["dependsOn"] = json!((1..300).map(|i| format!("filler-{i}")).collect::<Vec<_>>());
+    let s = parse(&key, &v).unwrap();
+    assert!(s.task("filler-0").unwrap().context.contains("filler-299"));
 }
 #[test]
 fn stale_generation_mission_switch_errors_and_removed_selection_are_fenced() {

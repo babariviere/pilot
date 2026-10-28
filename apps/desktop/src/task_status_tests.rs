@@ -91,6 +91,18 @@ async fn exact_status_only_patch_assigned_and_closed_missions() {
     }
 }
 #[tokio::test]
+async fn task_beyond_256_rows_and_2_mib_detail_is_still_admitted() {
+    let server = Server::start();
+    let detail = f::many("mission-A", 300);
+    server.reply("GET", "/api/missions/mission-A", Reply::json(200, detail));
+    let s = State::default().begin(&target(), "todo").unwrap();
+    assert_eq!(
+        submit(&client(), &server.options, &s).await,
+        Outcome::Acknowledged
+    );
+    assert_eq!(server.writes(), 1);
+}
+#[tokio::test]
 async fn bad_home_canonical_source_and_stale_task_never_write() {
     let server = Server::start();
     let mut s = State::default().begin(&target(), "todo").unwrap();

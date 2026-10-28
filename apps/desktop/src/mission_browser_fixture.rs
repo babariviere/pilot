@@ -35,6 +35,19 @@ pub(crate) fn catalog() -> Value {
 pub(crate) fn detail(id: &str) -> Value {
     json!({"mission":{"id":id,"projectId":if id=="mission-A"{"project-A"}else{"project-B"},"title":"Same mission 日本語","goal":"Keep the existing chat and its draft. 私の目標 👩‍💻","status":"active","briefRevision":1,"coordinatorSessionId":"chat-A","tasksDone":1,"tasksTotal":2},"brief":{"missionId":id,"revision":1,"markdown":"# Private fixture brief\n\n![Never fetch](https://invalid.example/image.png)\n<script>Never execute</script>\n\nUnicode: 日本語 👩‍💻"},"tasks":[{"id":"task-B","number":2,"title":"Preserve the reader","status":"todo","order":2},{"id":"task-A","number":1,"title":"Keep the draft","status":"done","order":1,"sessionId":"chat-A"}],"decisions":[],"comments":[],"resources":[],"events":[],"artifacts":[],"phases":[]})
 }
+/// `detail(id)` with `extra` filler tasks received and ordered before its own two,
+/// each with an 8 KB body: beyond 256 rows and, from about 260 extra, beyond 2 MiB.
+#[cfg(test)]
+pub(crate) fn many(id: &str, extra: usize) -> Value {
+    let mut v = detail(id);
+    let own = v["tasks"].as_array().unwrap().clone();
+    let mut tasks: Vec<Value> = (0..extra)
+        .map(|i| json!({"id":format!("filler-{i}"),"number":i+10,"title":format!("Filler {i}"),"status":"todo","order":i as f64-1e9,"body":"x".repeat(8000)}))
+        .collect();
+    tasks.extend(own);
+    v["tasks"] = json!(tasks);
+    v
+}
 pub(crate) fn members(id: &str) -> Value {
     let project = if id == "mission-A" {
         "project-A"

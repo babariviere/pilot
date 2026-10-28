@@ -8,8 +8,8 @@ use crate::{
 };
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
-    WeakEntity, Window,
+    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Styled, Subscription, Task,
+    TestSupportExt, WeakEntity, Window,
     base::SelectableText,
     component::{
         ActiveTheme, Disableable, IndexPath, StyledExt,
@@ -248,7 +248,15 @@ impl Pane {
                         .as_ref()
                         .is_some_and(|s| s.task(&id).is_some()) =>
             {
-                self.select(&id, self.state.generation, w, cx)
+                self.select(&id, self.state.generation, w, cx);
+                // The revealed task may be any received row: centre it in the list.
+                if let Some(list) = &self.list {
+                    list.update(cx, |l, cx| {
+                        if let Some(ix) = l.selected_index() {
+                            l.scroll_to_item(ix, ScrollStrategy::Center, w, cx);
+                        }
+                    });
+                }
             }
             _ => self.back(w, cx),
         }
