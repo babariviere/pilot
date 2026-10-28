@@ -909,6 +909,37 @@ impl LocalViewer {
     /// Network/state-free native renderer corpus. Uses stored expected trees, never evaluates JS.
     pub fn visual_preview(index: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut view = Self::preview(PreviewState::Conversation, window, cx);
+        if index == 14 {
+            let tree: serde_json::Value =
+                serde_json::from_str(include_str!("../fixtures/stat.json")).unwrap();
+            let scene = crate::visual_scene::Scene::parse(tree.clone()).unwrap();
+            let source = format!(
+                "({{ui}})=>ui.column([{}])",
+                tree["root"]["children"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|node| {
+                        let mut props = node.clone();
+                        props.as_object_mut().unwrap().remove("type");
+                        format!("ui.stat({props})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let reference = crate::artifact_model::Reference {
+                id: "synthetic-visual".into(),
+                session: "synthetic".into(),
+                revision: 1,
+                title: "Stat fields".into(),
+                kind: "visual".into(),
+            };
+            view.state.artifacts = Arc::new(vec![reference.clone()]);
+            view.artifacts_open = true;
+            view.artifacts
+                .update(cx, |p, cx| p.preview(reference, source, scene, cx));
+            return view;
+        }
         if index >= 10 {
             let (title, tree) = crate::visual_chart::synthetic_fixture(index);
             let reference = crate::artifact_model::Reference {

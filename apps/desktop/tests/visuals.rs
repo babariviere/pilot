@@ -1,7 +1,7 @@
 //! Native expected-tree corpus only. No runtime, service, real data, writes or visible window.
 use gpui_kit::{
     AppContext, Bounds, HeadlessAppContext, ScrollDelta, SharedString, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, Theme, ThemeMode},
     point, px, size,
     test::TestWindowExt,
 };
@@ -26,7 +26,7 @@ fn main() {
     let mut count = 0;
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            for case in 0..14 {
+            for case in 0..15 {
                 cx.update(|cx| Theme::change(mode, None, cx));
                 let (handle, view) = cx.update(|cx| {
                     gpui_kit::open_window(
@@ -139,6 +139,97 @@ fn main() {
                             "same-column signed layers must actually paint distinct native colors"
                         );
                     }
+                }
+                if case == 14 {
+                    cx.update_window(handle, |_, window, cx| {
+                        for (index, delta, token) in [
+                            (0, "+12%", cx.theme().success),
+                            (1, "+8%", cx.theme().warning),
+                            (2, "+2", cx.theme().danger),
+                            (3, "±0%", cx.theme().muted_foreground),
+                        ] {
+                            let label = window
+                                .find(SharedString::from(format!("0.{index}-label")))
+                                .bounds();
+                            let value = window
+                                .find(SharedString::from(format!("0.{index}")))
+                                .bounds();
+                            let id = SharedString::from(format!("0.{index}-delta"));
+                            let bounds = window.find(id.clone()).bounds();
+                            let caption = window
+                                .find(SharedString::from(format!("0.{index}-caption")))
+                                .bounds();
+                            assert!(
+                                label.bottom() <= value.top() && value.bottom() <= bounds.top()
+                            );
+                            assert!(bounds.right() <= px(width) && caption.right() <= px(width));
+                            if index < 3 {
+                                let unit = window
+                                    .find(SharedString::from(format!("0.{index}-unit")))
+                                    .bounds();
+                                assert!(unit.left() >= value.right());
+                                assert!(
+                                    unit.top() < value.bottom() && unit.bottom() <= value.bottom()
+                                );
+                            }
+                            let scale = shot.width() as f32 / width;
+                            let target: gpui_kit::Rgba = token.into();
+                            let expected = [target.r * 255., target.g * 255., target.b * 255.];
+                            let mut painted = 0;
+                            for y in (f32::from(bounds.top()) * scale) as u32
+                                ..(f32::from(bounds.bottom()) * scale) as u32
+                            {
+                                for x in (f32::from(bounds.left()) * scale) as u32
+                                    ..(f32::from(bounds.right()) * scale) as u32
+                                {
+                                    let pixel = shot.get_pixel(x, y).0;
+                                    if (0..3).all(|i| (pixel[i] as f32 - expected[i]).abs() < 12.) {
+                                        painted += 1;
+                                    }
+                                }
+                            }
+                            assert!(painted > 4, "{delta} must paint its semantic tone");
+                            window.drag(
+                                bounds.origin + point(px(0.), bounds.size.height / 2.),
+                                bounds.bottom_right() - point(px(0.), bounds.size.height / 2.),
+                                cx,
+                            );
+                            window.render_frame(cx);
+                            window.press("secondary-c", cx);
+                            assert_eq!(
+                                cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+                                Some(delta)
+                            );
+                        }
+                        for (id, expected) in [
+                            ("0.0-label", "Builds · 東京"),
+                            ("0.0-unit", "runs"),
+                            ("0.0-caption", "last 7 days"),
+                            ("0.4", "12"),
+                        ] {
+                            let b = window.find(id).bounds();
+                            window.drag(
+                                b.origin + point(px(0.), b.size.height / 2.),
+                                b.bottom_right() - point(px(0.), b.size.height / 2.),
+                                cx,
+                            );
+                            window.render_frame(cx);
+                            window.press("secondary-c", cx);
+                            assert_eq!(
+                                cx.read_from_clipboard().and_then(|c| c.text()).as_deref(),
+                                Some(expected)
+                            );
+                        }
+                        let long = window.find("0.5-caption").bounds();
+                        assert!(long.bottom() < px(760.) && long.right() <= px(width));
+                        if width == 680. {
+                            assert!(long.size.height > px(20.));
+                        }
+                        window.click("artifact-copy-source", cx);
+                        assert!(cx.read_from_clipboard().and_then(|c| c.text())
+                            .is_some_and(|s| s.contains("ui.stat") && s.contains("last 7 days")));
+                    })
+                    .unwrap();
                 }
                 if let Some(dir) = &directory {
                     shot.save(dir.join(format!("{}-{}-{case}.png", width as u32, mode.name())))

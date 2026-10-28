@@ -872,7 +872,7 @@ impl ArtifactPane {
                 .filter_map(|r| r["text"].as_str())
                 .map(str::len)
                 .sum(),
-            "stat" => ["label", "value", "detail"]
+            "stat" => ["label", "value", "unit", "delta", "caption"]
                 .iter()
                 .filter_map(|k| value[*k].as_str())
                 .map(str::len)
@@ -1024,29 +1024,49 @@ impl ArtifactPane {
                     .into_any_element()
             }
             "stat" => {
+                // Swift VisualStatView: muted label, baseline value/unit, then delta/caption.
+                let tone = match value["tone"].as_str() {
+                    Some("success") => crate::ui::Tone::Success,
+                    Some("warning") => crate::ui::Tone::Warning,
+                    Some("danger") => crate::ui::Tone::Error,
+                    _ => crate::ui::Tone::Quiet,
+                };
+                let figures = gpui_kit::FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
                 div()
                     .v_flex()
-                    .gap_1()
-                    .p_3()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(cx.theme().border)
+                    .min_w_0()
+                    .gap_0p5()
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(
-                                value["label"].as_str().unwrap_or("").to_owned(),
-                            )),
+                            .child(self.text(format!("{path}-label"), value["label"].as_str().unwrap_or("").into())),
                     )
-                    .child(div().text_2xl().font_semibold().child(
-                        self.text(path.into(), value["value"].as_str().unwrap_or("").into()),
-                    ))
-                    .children(
-                        value["detail"]
-                            .as_str()
-                            .map(|s| div().text_xs().child(SharedString::from(s.to_owned()))),
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_baseline()
+                            .gap_1()
+                            .child(div().min_w_0().text_2xl().font_semibold()
+                                .font_features(figures.clone())
+                                .text_color(cx.theme().foreground)
+                                .child(self.text(path.into(), value["value"].as_str().unwrap_or("").into())))
+                            .children(value["unit"].as_str().map(|unit| {
+                                div().min_w_0().text_sm().text_color(cx.theme().muted_foreground)
+                                    .child(self.text(format!("{path}-unit"), unit.into()))
+                            })),
                     )
+                    .when(value["delta"].is_string() || value["caption"].is_string(), |d| {
+                        d.child(div().h_flex().items_baseline().flex_wrap().gap_1p5().text_xs()
+                            .children(value["delta"].as_str().map(|delta| {
+                                div().min_w_0().font_features(figures).text_color(tone.color(cx))
+                                    .child(self.text(format!("{path}-delta"), delta.into()))
+                            }))
+                            .children(value["caption"].as_str().map(|caption| {
+                                div().min_w_0().text_color(cx.theme().muted_foreground)
+                                    .child(self.text(format!("{path}-caption"), caption.into()))
+                            })))
+                    })
                     .into_any_element()
             }
             "rule" => div()

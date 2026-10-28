@@ -1,0 +1,8 @@
+{"api":1,"root":{"type":"column","gap":12,"children":[
+  {"type":"stat","label":"Builds · 東京","value":"42","unit":"runs","delta":"+12%","tone":"success","caption":"last 7 days"},
+  {"type":"stat","label":"Latency","value":"184","unit":"ms","delta":"+8%","tone":"warning","caption":"above target"},
+  {"type":"stat","label":"Errors","value":"3","unit":"requests","delta":"+2","tone":"danger","caption":"needs attention"},
+  {"type":"stat","label":"Change","value":"0","delta":"±0%","tone":"neutral","caption":"unchanged"},
+  {"type":"stat","label":"Count only","value":"12"},
+  {"type":"stat","label":"Long caption · café é 東京","value":"128","caption":"A longer caption wraps naturally in the narrow reader without losing Unicode or the exact selectable text."}
+]}}
