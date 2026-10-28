@@ -96,9 +96,13 @@ impl Session {
         id: &str,
         width: f64,
         height: f64,
+        pointer: Option<[f64; 2]>,
     ) -> Result<crate::visual_drawing::Drawing, Fault> {
         if version != self.version
             || self.process.is_none()
+            || pointer.is_some_and(|[x, y]| {
+                !x.is_finite() || !y.is_finite() || x < 0. || y < 0. || x > width || y > height
+            })
             || !width.is_finite()
             || !height.is_finite()
             || !(24.0..=600.).contains(&height)
@@ -116,7 +120,7 @@ impl Session {
             .as_mut()
             .unwrap()
             .drawing(
-                json!({"kind":"draw","id":id,"width":width,"height":height,"t":0,"pointer":null}),
+                json!({"kind":"draw","id":id,"width":width,"height":height,"t":0,"pointer":pointer.map(|[x,y]| json!({"x":x,"y":y}))}),
             )
             .await;
         if result.is_err() {
@@ -295,6 +299,39 @@ mod tests {
     }
     #[cfg(target_os = "macos")]
     #[tokio::test]
+    async fn canvas_pointer_draws_reuse_the_vm_and_preserve_state() {
+        let mut session = Session::new(Program {
+            source: "({ui,state})=>{const s=state({n:7});let draws=0;return()=>ui.canvas({height:120,draw:(g,{pointer})=>{g.text(4,4,(pointer?pointer.x+':'+pointer.y:'none')+':'+(++draws));}});}".into(),
+            data: Value::Null, seed: "synthetic".into(), now: 0.,
+        }, None).unwrap();
+        session.retry().await.unwrap();
+        let (version, state) = (session.version, session.state.clone());
+        for (pointer, expected) in [
+            (None, "none:1"),
+            (Some([25., 30.]), "25:30:2"),
+            (None, "none:3"),
+        ] {
+            let drawing = session
+                .draw(version, "0", 320., 120., pointer)
+                .await
+                .unwrap();
+            assert_eq!(drawing.strings, vec![expected]);
+            assert_eq!(session.version, version);
+            assert_eq!(session.state, state);
+        }
+        for pointer in [Some([f64::NAN, 1.]), Some([-1., 1.]), Some([321., 1.])] {
+            assert!(
+                session
+                    .draw(version, "0", 320., 120., pointer)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(session.process.is_some());
+        session.stop().await;
+    }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
     async fn draw_interrupt_or_null_error_discards_vm_and_keeps_committed_state() {
         for failure in ["for(;;){}", "throw null;"] {
             let source="({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(String(s.n)+':'+String(globalThis.partial||0)),ui.canvas({height:120,draw:g=>{globalThis.partial=7;__FAILURE__}})]);}".replace("__FAILURE__",failure);
@@ -311,7 +348,10 @@ mod tests {
             session.retry().await.unwrap();
             let state = session.state.clone();
             let version = session.version;
-            let error = session.draw(version, "0.1", 320., 120.).await.unwrap_err();
+            let error = session
+                .draw(version, "0.1", 320., 120., None)
+                .await
+                .unwrap_err();
             assert!(matches!(error.kind, "timeout" | "memory"));
             assert!(session.process.is_none());
             assert_eq!(session.state, state);
@@ -321,7 +361,12 @@ mod tests {
                 session.scene.as_ref().unwrap().root["children"][0]["runs"][0]["text"],
                 "0:0"
             );
-            assert!(session.draw(version, "0.1", 320., 120.).await.is_err());
+            assert!(
+                session
+                    .draw(version, "0.1", 320., 120., None)
+                    .await
+                    .is_err()
+            );
             session.stop().await;
         }
     }

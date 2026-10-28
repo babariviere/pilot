@@ -31,6 +31,7 @@ pub(crate) struct DrawingFrame {
     pub(crate) version: u64,
     pub(crate) width: f64,
     pub(crate) height: f64,
+    pub(crate) pointer: Option<[f64; 2]>,
     pub(crate) plan: Result<Arc<crate::visual_canvas_plan::Plan>, &'static str>,
 }
 pub(crate) enum Command {
@@ -45,6 +46,7 @@ pub(crate) enum Command {
         id: String,
         width: f64,
         height: f64,
+        pointer: Option<[f64; 2]>,
     },
 }
 pub(crate) struct Worker {
@@ -308,8 +310,9 @@ async fn run(
                 id,
                 width,
                 height,
+                pointer,
             } => {
-                let drawing = tokio::select! {biased;_=cancelled.recv()=>None,drawing=session.draw(version,&id,width,height)=>Some(drawing)};
+                let drawing = tokio::select! {biased;_=cancelled.recv()=>None,drawing=session.draw(version,&id,width,height,pointer)=>Some(drawing)};
                 match drawing {
                     None => None,
                     Some(Err(error)) => Some(Err(error)),
@@ -323,6 +326,7 @@ async fn run(
                                 version,
                                 width,
                                 height,
+                                pointer,
                                 plan,
                             },
                         );
@@ -538,7 +542,8 @@ mod tests {
             version: next.version,
             id: "0.2".into(),
             width: 320.,
-            height: 120.
+            height: 120.,
+            pointer: Some([25., 30.]),
         }));
         let frame = tokio::time::timeout(std::time::Duration::from_secs(3), updates.recv())
             .await
@@ -546,6 +551,7 @@ mod tests {
             .unwrap();
         assert!(frame.live && frame.error.is_none());
         let drawing = &frame.drawings["0.2"];
+        assert_eq!(drawing.pointer, Some([25., 30.]));
         assert_eq!(drawing.version, next.version);
         assert!(drawing.plan.is_ok());
         assert_eq!(frame.state, next.state);

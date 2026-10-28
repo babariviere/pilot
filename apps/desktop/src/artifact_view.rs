@@ -1,4 +1,6 @@
 //! Native read-only artifact detail. User controls change isolated reader state only.
+#[path = "artifact_canvas.rs"]
+mod canvas;
 #[path = "artifact_gallery_view.rs"]
 pub(crate) mod gallery;
 #[cfg(feature = "native-probes")]
@@ -83,6 +85,7 @@ pub(crate) struct ArtifactPane {
     /// Chart under the pointer: generation, presentation, node path and x entry.
     /// Local presentation only; it never reaches the visual's state.
     chart_hover: Option<(u64, bool, String, usize)>,
+    canvases: BTreeMap<String, canvas::Mounted>,
     #[cfg(feature = "native-probes")]
     slider_dispatches: VecDeque<(Instant, Instant, String)>,
 }
@@ -141,6 +144,7 @@ impl ArtifactPane {
             slider_wake: None,
             slider_wake_serial: 0,
             chart_hover: None,
+            canvases: BTreeMap::new(),
             #[cfg(feature = "native-probes")]
             slider_dispatches: VecDeque::new(),
         }
@@ -240,6 +244,7 @@ impl ArtifactPane {
                 version: 1,
                 width,
                 height: 180.,
+                pointer: None,
                 plan,
             },
         )]));
@@ -296,6 +301,7 @@ impl ArtifactPane {
         self.busy = false;
         self.drawing = false;
         self.queued_event = None;
+        self.canvases.clear();
         self.source = false;
         self.zoom = Default::default();
         self.inline_measured.set(-1.);
@@ -451,6 +457,7 @@ impl ArtifactPane {
             self.event(generation, version, id, value, cx);
         }
         self.pump_slider(cx);
+        self.pump_canvas(cx);
         cx.notify();
     }
     fn valid_slider(&self, intent: &SliderIntent) -> bool {
@@ -489,6 +496,7 @@ impl ArtifactPane {
         self.busy = false;
         self.drawing = false;
         self.queued_event = None;
+        self.canvases.clear();
         self.slider_flow.clear();
         self.cancel_slider_wake();
         self.sliders.clear();
@@ -699,6 +707,7 @@ impl ArtifactPane {
             }
         }
     }
+    #[cfg(test)]
     fn draw(
         &mut self,
         generation: u64,
@@ -706,6 +715,19 @@ impl ArtifactPane {
         id: String,
         width: f64,
         height: f64,
+        cx: &mut Context<Self>,
+    ) {
+        self.draw_pointer(generation, version, id, width, height, None, cx);
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn draw_pointer(
+        &mut self,
+        generation: u64,
+        version: u64,
+        id: String,
+        width: f64,
+        height: f64,
+        pointer: Option<[f64; 2]>,
         cx: &mut Context<Self>,
     ) {
         if generation != self.generation
@@ -723,7 +745,10 @@ impl ArtifactPane {
             return;
         }
         if self.snapshot.drawings.get(&id).is_some_and(|f| {
-            f.version == version && (f.width - width).abs() < 0.5 && (f.height - height).abs() < 0.5
+            f.version == version
+                && f.pointer == pointer
+                && (f.width - width).abs() < 0.5
+                && (f.height - height).abs() < 0.5
         }) {
             return;
         }
@@ -733,6 +758,7 @@ impl ArtifactPane {
                 id,
                 width,
                 height,
+                pointer,
             })
         }) {
             self.busy = true;
@@ -1316,50 +1342,9 @@ impl ArtifactPane {
                     }
                     *budget -= plan.cost;
                 }
-                let weak = cx.weak_entity();
                 let height = value["height"].as_f64().unwrap_or(160.);
-                let colors = crate::visual_canvas_view::palette(cx);
-                let mono = cx.theme().mono_font_family.clone();
                 let live = self.snapshot.live;
-                let busy = self.busy;
-                let queued = frame.clone();
-                let canvas = gpui_kit::canvas(
-                    move |bounds, window, cx| {
-                        let visible = bounds.intersect(&window.content_mask().bounds);
-                        if visible.size.width <= px(0.)
-                            || visible.size.height <= px(0.)
-                            || !live
-                            || busy
-                        {
-                            return;
-                        }
-                        let width = f32::from(bounds.size.width) as f64 / scale as f64;
-                        if queued.as_ref().is_some_and(|f| {
-                            f.version == version
-                                && (f.width - width).abs() < 0.5
-                                && (f.height - height).abs() < 0.5
-                        }) {
-                            return;
-                        }
-                        let id = id.clone();
-                        let weak = weak.clone();
-                        window.defer(cx, move |_, cx| {
-                            let _ = weak.update(cx, |view, cx| {
-                                if view.inline == inline {
-                                    view.draw(generation, version, id, width, height, cx)
-                                }
-                            });
-                        });
-                    },
-                    move |bounds, _, window, cx| {
-                        if let Some(plan) = &plan {
-                            crate::visual_canvas_view::paint_scaled(
-                                plan, bounds, &colors, &mono, scale, window, cx,
-                            );
-                        }
-                    },
-                )
-                .size_full();
+                let canvas = self.canvas_element(id.clone(), height, scale, plan, cx);
                 div()
                     .id(SharedString::from(path.to_owned()))
                     .test_support()
@@ -1422,6 +1407,7 @@ impl ArtifactPane {
 }
 impl Render for ArtifactPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.prepare_canvases();
         if self.inline {
             return self.render_inline(window, cx);
         }

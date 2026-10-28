@@ -353,6 +353,7 @@ fn pacing_probe(
     cx.run_until_parked();
 }
 pub fn run_slider_probe(cx: &mut HeadlessAppContext) {
+    super::canvas::probe::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_SLIDER_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
