@@ -1,6 +1,6 @@
 # Linux visual helper checkpoint, 2026-10-28
 
-**Partial native helper/kernel evidence, not Wayland/product qualification.**
+**Native helper/kernel and isolated Wayland evidence, not full product qualification.**
 Linux visual execution remains refused by `Process::start`. No platform guard,
 security policy, release configuration or production acknowledgement changed.
 
@@ -77,63 +77,97 @@ The final native driver completed **80 checks**:
   a fresh process renders successfully afterward. Every driver-owned helper
   is reaped and absent from `/proc` after teardown.
 
-The last lifecycle checks exercise the independent driver, **not** the disabled
-Linux product transport. They do not qualify product cancellation races,
-restart admission, global two-worker scheduling or the teardown-failure latch.
-The real product's startup/exchange2s deadline, reap1s deadline and transactional
-reader commit are source-audited only on Linux at this checkpoint.
+The original driver lifecycle checks are independent, not product transport
+acceptance. Later native parent-transport tests below exercise actual Linux
+IPC deadlines/cancellation/reaping and two-worker capacity. Full mounted-reader
+lifetime and teardown-failure-latch qualification remain separate.
 
 Scoped checks also passed: locked worker/example builds, strict worker
 Clippy `--all-targets`, pinned rustfmt on the new Rust file and Python syntax.
 `cargo test -p pilot-visual-worker` contains zero unit tests; the80 native
 subprocess checks above are the executed security suite, not that empty gate.
 
-## Wayland blocker and remaining qualification
+## Wayland fixture and remaining qualification
 
-`sway` and `weston` are absent from the authorized host's PATH. Installed
-Cage0.3.1 successfully advertises `wl_seat`9/seat0 and HEADLESS-1 using owned
-headless/pixman `wayland-info`. **Compiled XWayland support alone does not
-disqualify a native Wayland fixture.** The earlier log-based exclusion was too
-broad: Cage's "XWayland is running" message is emitted when setting `DISPLAY`,
-not after checking that an X server process started.
+**Correction: Wayland-only is a Pilot backend requirement, not a ban on a
+compositor optionally serving other X11 clients.** Cage's unused X11 listeners
+are neither a Pilot XWayland fallback nor a helper confinement failure. The
+previous Sway/runtime-disable/native-only-compositor-build prerequisite was
+invented and is withdrawn. Do not install Sway or alter the user's KDE session.
 
-The follow-up audit checked installed `cage-0.3.1-1.fc44` help/man/README and the
-matching upstream [v0.3.1 source](https://github.com/cage-kiosk/cage/tree/v0.3.1).
-`cage.c` calls `wlr_xwayland_create(..., true)` for lazy creation and sets DISPLAY
-whenever this succeeds. There is no documented runtime XWayland-off switch.
-`meson_options.txt` contains only `man-pages`; `meson.build` derives
-`CAGE_HAS_XWAYLAND` from wlroots' `have_xwayland`. Do not invent a Cage
-`-Dxwayland=disabled` build option or treat unsetting DISPLAY in a client as
-disabling the compositor's listeners.
+Installed Cage0.3.1 already provides an owned headless/pixman compositor with
+wl_seat9/seat0 and HEADLESS-1. Its matching release source requests lazy
+XWayland support and logs "XWayland is running" when setting DISPLAY. A bounded
+owned wayland-info probe observed no XWayland process, but did observe Cage's
+own abstract/pathname X11 listeners and inherited DISPLAY=:1. Those observations
+describe Cage, not Pilot's selected renderer/backend. Both owned diagnostic
+processes exited0 and were reaped. The subsequent real GUI probe is below.
 
-An additional owned native-only fixture under `cage-audit` showed the concrete
-distinction: client DISPLAY=:1, WAYLAND_DISPLAY=wayland-0, real wl_seat, and
-**no XWayland process observed**. At inspection time Cage's only child was the
-Python primary client, which had no children after `wayland-info` completed.
-However, Cage's own fd table mapped to listening Unix sockets at both
-`/tmp/.X11-unix/X1` and its abstract counterpart (`00010000` accept-listener
-flags), alongside the owned Wayland socket. Namespace socket records were
-filtered to inode IDs from that exact owned Cage pid, not other apps/processes.
-Thus this stock fixture does not meet the requested no-DISPLAY-listener path,
-even though no X11 client or product X11 fallback was used. Cage/client exited0
-and were reaped; the owned Wayland socket disappeared. No product GUI was run.
-The diagnostic was limited to5CPU seconds,512MiB address space,256MiB file size
-and bounded waits. Product helper limits were untouched.
+Use that existing isolated Cage fixture, **unset DISPLAY in the client**, and
+require Pilot's real Wayland connection/seat/toplevel/buffer evidence and
+fail-closed platform guard. Do not connect to or reconfigure the real KDE
+session. Keep all existing helper confinement and product execution guards.
 
-The prerequisite is **not specifically Sway**: supply either a compositor with
-a supported runtime XWayland disable (such as Sway with `xwayland disable`), or
-a native-only Cage/wlroots build. A fixture-local source build is a valid option,
-not a policy relaxation, but current prerequisites are absent: Meson, Ninja,
-wayland-scanner, wayland-server headers/pkg-config, wlroots0.20 headers/pkg-config
-and xkbcommon headers/pkg-config. Matching runtime libraries alone do not provide
-that build closure. No system installation, arbitrary binary download or
-compositor source patch was attempted. The pinned GPUI native build closure
-also remains unverified; ambient pkg-config lacks wayland-client, xkbcommon,
-libudev and vulkan metadata despite versioned runtime libraries being present.
+Missing Meson/Ninja/wayland-scanner and compositor development headers do not
+block using the installed compositor. The actual pinned GPUI build **passed**
+under CPU2/4GiB limits, without privileged/global installation or broad toolchain
+changes. The first source transfer omitted three tracked icon/sky assets and a
+later test compile needed the tracked Mermaid corpus. Supplying their exact
+source revisions fixed these fixture-copy errors. No new host prerequisite was
+needed. Existing build.rs linked versioned system libraries through its private
+native-libs directory; no system symlinks or security policy changed.
 
-Then validate the exact-source GPUI fixture on that owned compositor: actual
-seat/toplevel/buffers and native visual rendering, selection/copy, mounted
-canvas lifetime, aggregate budgeting and product cancellation/reap/recovery.
+### Isolated real Wayland GUI and native tests
+
+The initial GUI run used103407a8a8d51256adabeea82012bd5efa3c0b84. The final
+build/test recheck reconciles concurrent renderer work on
+7f1cf5f41abf323268748f652b8444c63860b9ad, plus the test-only parent helper coverage
+and qualification driver published alongside this evidence. Production
+Process::start remains macOS-only. No environment variable or production fixture
+flag can bypass it.
+
+`scripts/linux_visual_wayland.py` runs an owned headless/pixman Cage with private
+HOME/XDG directories, then starts the **real GUI** with DISPLAY absent. Actual
+`/proc/<owned-gui>/environ` confirms it is absent. `wayland-info` observes
+wl_seat/seat0, and WAYLAND_DEBUG from the GUI proves actual get_toplevel and
+wl_surface.attach requests. The GUI stays alive for the bounded observation,
+then is stopped/reaped; Cage is also stopped/reaped. A separate launch with
+DISPLAY=:99 but no Wayland is refused by the unchanged production preflight.
+Main uses `platform::linux(WindowingModes::WAYLAND)`, not backend auto-fallback.
+
+Under that same owned Cage, the reconciled visual library filter passed35 tests
+(the initial pre-reconciliation run passed34).
+Existing real helper transport tests now run on native Linux through a private
+**cfg(test)-only** start_at fixture, retaining the production refusal test.
+They cover hello identity/runtime/active-denial validation, shared view/event/
+state and draw records/errors, failed helper disposal, SIGSTOP-to-parent2s
+deadline/kill/reap/fresh recovery, cancellation of an active exchange followed
+by stop/reap/replacement, and a third worker waiting until a slot is reaped.
+The same selection includes hostile wire/drawing data, scene/geometry aggregate
+budgets, invalid state/frame transactional rejection and restart fencing.
+
+The reconciled native visuals target passed72 narrow/wide/light/dark expected-tree
+scenes, native canvas pixels, synthetic selection/copy/scroll/source disclosure
+with a fake clipboard. It uses native headless GPUI rendering/text, with a real
+Wayland compositor connection, not a visible-window or motion acceptance claim.
+The initial pre-reconciliation native run passed68 scenes. No generated source
+executes inside that renderer suite. The source helper and
+trusted renderer are tested separately; this is not an integrated live reader
+or enabled Linux product visual path.
+
+The general check-scoped.py native-target guard remains macOS-only. This
+explicitly authorized Linux qualification uses that wrapper for library tests
+and the same pinned cargo.sh/profile for the single native visuals target.
+No broad CI/native-admission policy was changed. Sway installation, compositor
+rebuilds and changes to the user's real KDE session are unnecessary.
+
+Locked workspace binaries, scoped production-library Clippy with native-probes,
+pinned rustfmt on the changed Rust file and Python syntax cover this checkpoint.
+Linux lib-test builds emit existing unused synthetic fixture warnings outside
+the selected security tests; these were not hidden or converted into new gates.
+
+Still qualify integrated mounted canvas/reader lifetime and combined source-to-
+UI recovery before considering a narrowly scoped product-enabling delta.
 Do not turn the product guard off merely to make these probes run. Any narrowly
 scoped qualification admission needs an explicit source-backed design, not an
 unconstrained fallback or a blanket Linux enablement.
@@ -150,4 +184,6 @@ python3 scripts/linux_visual_confinement.py \
   --worker target/dev/debug/pilot-visual-worker \
   --probe target/dev/debug/examples/linux_confinement --root "$OWNED_FIXTURE_ROOT"
 bash scripts/cargo.sh clippy --locked -p pilot-visual-worker --all-targets -- -D warnings
+python3 scripts/linux_visual_wayland.py \
+  --binary target/dev/debug/pilot-desktop --root "$OWNED_FIXTURE_ROOT" --checks
 ```

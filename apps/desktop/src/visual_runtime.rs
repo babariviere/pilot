@@ -2,7 +2,7 @@
 use crate::visual_wire;
 use serde::Deserialize;
 use serde_json::Value;
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
@@ -474,7 +474,7 @@ mod unsupported_platform_tests {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod tests {
     #[cfg(target_os = "macos")]
     #[test]
@@ -490,6 +490,59 @@ mod tests {
         drop(all);
     }
     use super::*;
+    // Native Linux qualification only. The production Process::start refusal
+    // stays intact and has its own test above. Never add an environment bypass.
+    async fn fixture_worker() -> Process {
+        #[cfg(target_os = "macos")]
+        {
+            Process::start().await.unwrap()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Process::start_at(&worker_path().unwrap()).await.unwrap()
+        }
+    }
+    #[tokio::test]
+    async fn third_worker_waits_for_a_reaped_slot() {
+        let mut first = fixture_worker().await;
+        let mut second = fixture_worker().await;
+        let path = worker_path().unwrap();
+        let mut third = Box::pin(Process::start_at(&path));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut third)
+                .await
+                .is_err()
+        );
+        assert_eq!(SLOTS.available_permits(), 0);
+        first.stop().await;
+        assert!(first.child.try_wait().unwrap().is_some());
+        let mut third = tokio::time::timeout(HARD, third).await.unwrap().unwrap();
+        second.stop().await;
+        third.stop().await;
+        assert_eq!(SLOTS.available_permits(), 2);
+    }
+    #[tokio::test]
+    async fn cancelled_exchange_can_be_stopped_reaped_and_replaced() {
+        let mut process = fixture_worker().await;
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(10),
+                process.exchange(load("()=>{while(true){}}", None)),
+            )
+            .await
+            .is_err()
+        );
+        process.stop().await;
+        assert!(process.child.try_wait().unwrap().is_some());
+        let mut fresh = fixture_worker().await;
+        assert!(
+            fresh
+                .exchange(load("({ui})=>ui.text('Fresh')", None))
+                .await
+                .is_ok()
+        );
+        fresh.stop().await;
+    }
     #[tokio::test]
     async fn shared_draw_errors_match_without_relaxing_the_production_budget() {
         let corpus: Value = serde_json::from_str(include_str!(
@@ -504,7 +557,7 @@ mod tests {
             .iter()
             .filter(|c| c.get("draws").is_some())
         {
-            let mut p = Process::start().await.unwrap();
+            let mut p = fixture_worker().await;
             p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":null,"seed":"","now":0})).await.unwrap();
             let mut error = None;
             for draw in case["draws"].as_array().unwrap() {
@@ -566,7 +619,7 @@ mod tests {
             .iter()
             .find(|c| c.get("drawings").is_some())
             .unwrap();
-        let mut p = Process::start().await.unwrap();
+        let mut p = fixture_worker().await;
         p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":case.get("state"),"seed":case["id"],"now":case["now"]})).await.unwrap();
         for step in case["steps"].as_array().unwrap().iter().skip(1) {
             p.exchange(json!({"kind":"event","id":step["event"]["id"],"value":step["event"]["value"],"now":case["now"]})).await.unwrap();
@@ -603,7 +656,7 @@ mod tests {
         ))
         .unwrap();
         for case in corpus["cases"].as_array().unwrap() {
-            let mut p = Process::start().await.unwrap();
+            let mut p = fixture_worker().await;
             let mut value=p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":case.get("state"),"seed":case["id"],"now":case["now"]})).await.unwrap();
             for (i, step) in case["steps"].as_array().unwrap().iter().enumerate() {
                 if i > 0 {
@@ -635,7 +688,7 @@ mod tests {
             .iter()
             .filter(|c| c.get("draws").is_none())
         {
-            let mut p = Process::start().await.unwrap();
+            let mut p = fixture_worker().await;
             let mut result=p.exchange(json!({"kind":"load","source":case["source"],"data":case["data"],"state":null,"seed":"","now":0})).await;
             if result.is_ok() {
                 for event in case["events"].as_array().unwrap_or(&Vec::new()) {
@@ -671,7 +724,7 @@ mod tests {
     }
     #[tokio::test]
     async fn real_sandbox_load_event_and_oom_null_discard() {
-        let mut p = Process::start().await.unwrap();
+        let mut p = fixture_worker().await;
         let value=p.exchange(load("({ui,state})=>{const s=state({n:0});return()=>ui.column([ui.text(s.n),ui.toggle({label:'Synthetic',value:false,onChange:()=>s.n++})]);}",None)).await.unwrap();
         assert_eq!(value["state"], "[{\"n\":0}]");
         let changed = p
@@ -680,7 +733,7 @@ mod tests {
             .unwrap();
         assert_eq!(changed["state"], "[{\"n\":1}]");
         p.stop().await;
-        let mut p = Process::start().await.unwrap();
+        let mut p = fixture_worker().await;
         let error = p
             .exchange(load("()=>{throw null}", None))
             .await
@@ -692,13 +745,13 @@ mod tests {
     }
     #[tokio::test]
     async fn stopped_owned_worker_hits_parent_hard_deadline_and_is_killed_reaped() {
-        let mut p = Process::start().await.unwrap();
+        let mut p = fixture_worker().await;
         let pid = p.child.id().unwrap();
         assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
         let error=p.exchange(json!({"kind":"load","source":"({ui})=>ui.text('Synthetic')","data":null,"state":null,"seed":"synthetic","now":0})).await.unwrap_err();
         assert_eq!(error.kind, "timeout");
         assert!(p.child.try_wait().unwrap().is_some());
-        let mut fresh = Process::start().await.unwrap();
+        let mut fresh = fixture_worker().await;
         assert!(fresh.exchange(json!({"kind":"load","source":"({ui})=>ui.text('Fresh')","data":null,"state":null,"seed":"synthetic","now":0})).await.is_ok());
         fresh.stop().await;
     }
