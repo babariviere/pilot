@@ -4,6 +4,9 @@ Status: opt-in. Default rollout stays blocked until the digest is validated with
 `PILOT_DETERMINISTIC_COMPACTION=1` in pilotd's environment (kernels inherit it) to enable it; otherwise ordinary
 chats keep pi-durable's default thresholds and model summaries, and `history_recall` is available either way.
 
+[context-edit-compaction.md](context-edit-compaction.md) proposes trimming old tool output in place with
+pi-durable context edits, as an addition to the digest.
+
 When enabled, ordinary chats (Build, Ask, diagnostics and mission chats) compact with a deterministic digest. Control is
 unchanged: it keeps its OptChat memory hierarchy and has Harness compaction disabled. Project memory remains
 the only cross-chat memory store; compaction never writes to it.
