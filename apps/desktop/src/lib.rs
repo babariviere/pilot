@@ -20,6 +20,11 @@ mod session_todos_view;
 mod subscription_pause;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_todos_probe::run_session_todos_probe;
+mod chat_links;
+#[cfg(any(test, feature = "native-probes"))]
+mod chat_links_fixture;
+#[cfg(feature = "native-probes")]
+pub use local_view::chat_links_probe::run_chat_links_probe;
 mod conversation_links;
 mod session_failure;
 mod session_file_view;

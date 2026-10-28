@@ -106,6 +106,12 @@ fn main() {
     let application = gpui_kit::platform::linux(gpui_kit::WindowingModes::WAYLAND);
     #[cfg(target_os = "macos")]
     let application = gpui_kit::application();
+    let (url_send, url_requests) = async_channel::unbounded();
+    application.on_open_urls(move |urls| {
+        for url in urls {
+            let _ = url_send.try_send(url);
+        }
+    });
     application
         .with_assets(pilot_desktop::ChromeAssets)
         .run(move |cx| {
@@ -115,7 +121,7 @@ fn main() {
             TranscriptView::bind_keys(cx);
             LocalViewer::bind_keys(cx);
             // Initial window geometry is a physical platform boundary, not a UI token.
-            gpui_kit::open_window(
+            let (handle, desktop) = gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
@@ -150,6 +156,27 @@ fn main() {
                 },
             )
             .expect("open fixture window");
+            cx.spawn(async move |cx| {
+                while let Ok(url) = url_requests.recv().await {
+                    let handled = cx.update_window(handle, |_, w, cx| {
+                        w.activate_window();
+                        cx.activate(true);
+                        desktop.update(cx, |desktop, cx| match desktop {
+                            Desktop::Local(v) => v.update(cx, |v, cx| v.open_chat_url(&url, w, cx)),
+                            Desktop::Bundled(v) => {
+                                v.update(cx, |v, cx| v.open_chat_url(url, w, cx))
+                            }
+                            Desktop::Fixture(_) => {
+                                eprintln!("Chat links require Local mode. Relaunch with --local.")
+                            }
+                        });
+                    });
+                    if handled.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

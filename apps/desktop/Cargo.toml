@@ -408,3 +408,9 @@ required-features = ["native-probes"]
 name = "chart_keyboard"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "chat_links"
+path = "tests/chat_links.rs"
+harness = false
+required-features = ["native-probes"]

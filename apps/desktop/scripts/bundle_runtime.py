@@ -263,7 +263,8 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         with (contents / "Info.plist").open("wb") as stream:
             plistlib.dump(dict(CFBundleIdentifier=APP_ID, CFBundleName="Pilot Next", CFBundleDisplayName="Pilot Next",
                                CFBundleExecutable="pilot-desktop", CFBundlePackageType="APPL", CFBundleVersion=bundle_build,
-                               CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True), stream)
+                               CFBundleShortVersionString=build["version"], CFBundleIconFile="AppIcon", LSMinimumSystemVersion="15.0", NSHighResolutionCapable=True,
+                               CFBundleURLTypes=[dict(CFBundleURLName=APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")]), stream)
         # Production private distribution requires an explicitly approved ad-hoc
         # policy plus independently signed update metadata. No ambient signing identity.
         for binary in native_closure(output):

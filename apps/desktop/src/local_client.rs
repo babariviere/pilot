@@ -172,6 +172,9 @@ fn identity_file(path: PathBuf) -> Result<String, Failure> {
 
 enum ReadRoute {
     Hello,
+    Session {
+        id: String,
+    },
     History {
         id: String,
         before: u64,
@@ -185,7 +188,7 @@ enum ReadRoute {
 impl ReadRoute {
     fn budget(&self) -> Option<(usize, &'static str)> {
         match self {
-            Self::Hello | Self::History { .. } => None,
+            Self::Hello | Self::History { .. } | Self::Session { .. } => None,
             // Pins may not carry a kind. Their revision can still be an image.
             Self::Artifact { .. } => Some((
                 crate::artifact_image::HTTP_CAP,
@@ -196,6 +199,7 @@ impl ReadRoute {
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
+            Self::Session { id } => format!("/api/sessions/{id}"),
             Self::Artifact {
                 owner,
                 id,
@@ -337,6 +341,11 @@ async fn get_bytes(
         .send()
         .await
         .map_err(|_| "Local read failed. Check that Pilot is running.")?;
+    if matches!(route, ReadRoute::Session { .. })
+        && response.status() == reqwest::StatusCode::NOT_FOUND
+    {
+        return Err("Chat not found on Local. Check the link or restore the chat.");
+    }
     if response.status() != reqwest::StatusCode::OK {
         return Err("Local read refused (HTTP status). No redirect or authentication fallback.");
     }
@@ -368,6 +377,28 @@ async fn get_bytes(
     Ok(body)
 }
 
+/// Existing GET-only session contract, pinned before and after the read.
+pub(crate) async fn linked_chat(options: &LocalOptions, id: &str) -> Result<Chat, Failure> {
+    if !local_model::valid_id(id) {
+        return Err("Invalid canonical chat identity.");
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|_| "Cannot read the linked chat.")?;
+    gate(&client, options).await?;
+    let value = get(&client, options, ReadRoute::Session { id: id.into() }).await?;
+    gate(&client, options).await?;
+    let chat = local_model::chat(&value).ok_or("Linked chat response is invalid.")?;
+    if chat.id != id {
+        return Err("Linked chat identity differs. No chat was opened.");
+    }
+    Ok(chat)
+}
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     hello(client, options).await.map(|_| ())
 }

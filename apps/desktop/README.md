@@ -55,6 +55,16 @@ of loaded message text. **Copy link** copies the received URL; **Sources** revea
 its exact loaded message. **Refresh** captures newer loaded text. This never opens
 a URL or fetches earlier history. See [conversation-links.md](docs/conversation-links.md).
 
+Rendered Markdown `pilot://chat/<id>` links open the exact canonical Local chat,
+not a title match. Missing loaded summaries use the existing hello-pinned session
+GET. Invalid or unavailable targets show a navigation error, never a browser
+fallback. Draft capture, composition guards and navigation history still apply.
+The native macOS URL-open handler uses this same route, including during bundled
+startup; the bundle declares the `pilot` scheme without changing the Swift app.
+Synthetic dispatch and mocked bundle checks do not establish Launch Services
+registration/default-handler acceptance. No live registration is performed by
+development checks. Linux OS URL activation is not qualified by these checks.
+
 ### Chat context usage
 
 Use **Context…** in a Local chat header for read-only reported context and separate

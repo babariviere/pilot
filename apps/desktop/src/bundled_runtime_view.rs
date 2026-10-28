@@ -15,6 +15,7 @@ use std::sync::{
 
 pub struct BundledRuntimeView {
     local: Option<Entity<LocalViewer>>,
+    pending_chat_url: Option<String>,
     error: Option<&'static str>,
     cancel: Arc<AtomicBool>,
     _updates: Task<()>,
@@ -26,6 +27,13 @@ impl Drop for BundledRuntimeView {
     }
 }
 impl BundledRuntimeView {
+    pub fn open_chat_url(&mut self, url: String, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(local) = &self.local {
+            local.update(cx, |v, cx| v.open_chat_url(&url, w, cx));
+        } else {
+            self.pending_chat_url = Some(url);
+        }
+    }
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let cancel = Arc::new(AtomicBool::new(false));
         let (send, result) = async_channel::bounded(1);
@@ -71,7 +79,11 @@ impl BundledRuntimeView {
                     match reply {
                         Ok(options) => {
                             window.set_window_title("Pilot Next · Local");
-                            view.local = Some(cx.new(|cx| make_local(options, window, cx)));
+                            let local = cx.new(|cx| make_local(options, window, cx));
+                            if let Some(url) = view.pending_chat_url.take() {
+                                local.update(cx, |v, cx| v.open_chat_url(&url, window, cx));
+                            }
+                            view.local = Some(local);
                         }
                         Err(error) => { view.error.get_or_insert(error); },
                     }
@@ -80,6 +92,7 @@ impl BundledRuntimeView {
         });
         Self {
             local: None,
+            pending_chat_url: None,
             error,
             cancel,
             _updates: updates,

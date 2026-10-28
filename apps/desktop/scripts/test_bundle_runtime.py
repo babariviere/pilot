@@ -125,6 +125,7 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertEqual(info["CFBundleVersion"], "1.64.0")
         self.assertEqual(info["CFBundleShortVersionString"], "1.64.0")
         self.assertNotEqual(info["CFBundleIdentifier"], "com.babariviere.pilot")
+        self.assertEqual(info["CFBundleURLTypes"], [dict(CFBundleURLName=bundle.APP_ID + ".chat", CFBundleURLSchemes=["pilot"], CFBundleTypeRole="Viewer")])
         self.assertTrue((self.output / "Contents/Helpers/pilot-desktop-update-helper").is_file())
         self.assertEqual(bundle.read_json(self.output / "Contents/Resources/update-runtime-policy.json"), dict(schema=1, accepted_capsules=[]))
         self.assertTrue((self.output / "Contents/Resources/updater-inputs.json").is_file())

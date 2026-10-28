@@ -28,6 +28,11 @@ use crate::model::{Message, TICK_MS, Transcript};
 
 gpui_kit::actions!(fixture, [Quit, FocusComposer]);
 pub(crate) struct ArtifactOpen(pub(crate) crate::artifact_model::Reference);
+pub(crate) struct LinkOpen {
+    pub(crate) url: String,
+    pub(crate) generation: u64,
+}
+impl gpui_kit::EventEmitter<LinkOpen> for TranscriptView {}
 impl gpui_kit::EventEmitter<ArtifactOpen> for TranscriptView {}
 pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
@@ -815,7 +820,21 @@ impl TranscriptView {
                 .selectable(true)
                 .scrollable(false)
                 .stream_fade(!self.folds.collapsed(row))
-                .on_link_click(|_, _, _, _| {})
+                .on_link_click({
+                    let owner = owner.clone();
+                    let generation = self.history_scope;
+                    move |url, event, _, cx| {
+                        if event.is_right_click() || event.is_middle_click() {
+                            return;
+                        }
+                        let _ = owner.update(cx, |_, cx| {
+                            cx.emit(LinkOpen {
+                                url: url.to_string(),
+                                generation,
+                            })
+                        });
+                    }
+                })
                 .into_any_element(),
                 None => div()
                     .w_full()

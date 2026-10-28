@@ -4,6 +4,11 @@ mod chat_actions_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "chat_actions_probe.rs"]
 pub(crate) mod chat_actions_probe;
+#[path = "chat_link_navigation.rs"]
+mod chat_link_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "chat_links_probe.rs"]
+pub(crate) mod chat_links_probe;
 #[cfg(feature = "native-probes")]
 #[path = "chat_model_probe.rs"]
 pub(crate) mod chat_model_probe;
@@ -548,6 +553,8 @@ pub struct LocalViewer {
     title: String,
     generation: u64,
     state: Presentation,
+    link_epoch: u64,
+    link_read: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
     updates: Option<Task<()>>,
     writes: Option<Task<()>>,
@@ -1391,6 +1398,15 @@ impl LocalViewer {
                     }
                 }
             });
+        let link_events = cx.subscribe_in(
+            &transcript,
+            window,
+            |v, _, event: &crate::transcript_view::LinkOpen, w, cx| {
+                if event.generation == v.generation && v.page == Page::Chat {
+                    v.open_chat_url(&event.url, w, cx);
+                }
+            },
+        );
         let artifact_events = cx.subscribe_in(
             &transcript,
             window,
@@ -1526,7 +1542,10 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
+            link_epoch: 0,
+            link_read: None,
             _subscriptions: vec![
+                link_events,
                 chat_action_events,
                 subscription,
                 mission_events,
