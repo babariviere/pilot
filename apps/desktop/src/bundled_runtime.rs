@@ -27,6 +27,7 @@ const MANIFEST: &str = "Contents/Resources/bundled-runtime.json";
 mod linux;
 
 type Failure = &'static str;
+pub(crate) const RETAINED_OWNER_REFUSED: &str = "The running daemon has no exact supported retained runtime. It was left running; startup was refused.";
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 static UPDATE_RECEIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -422,8 +423,8 @@ fn start_runtime(
     } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
         let capsule = own_capsule(root, &trust, &cancel, deadline)?;
         let location = runtime_location()?;
-        pilot_desktop_updater::coordination::selected(&location,&capsule,&trust)
-            .map_err(|_|"The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
+        pilot_desktop_updater::coordination::selected(&location, &capsule, &trust)
+            .map_err(|_| RETAINED_OWNER_REFUSED)?
     } else {
         runtime_root
     };

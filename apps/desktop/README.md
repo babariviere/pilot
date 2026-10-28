@@ -27,6 +27,14 @@ Local daemon capability; an older daemon is refused without a mutation. The defa
 network-free synthetic transcript and memory-only local-echo composer, without
 disk state. No read-status writes, service installation or default switch.
 
+On macOS, a packaged startup refused for an unsupported retained owner offers
+**Connect to existing daemon**. This explicitly uses the existing Local client
+after checking the configured daemon/lineage identity and protocol/capabilities,
+without starting or changing a daemon. Its chat actions are the same as `--local`,
+not read-only. The session is marked externally managed; daemon changes and app
+installation are unavailable. No automatic fallback weakens bundled proof.
+See [bundled Local runtime](docs/bundled-runtime.md) for the exact boundary.
+
 ### Chat actions
 
 Right-click a Local chat row, including an unselected row, for **Rename…**, **Archive**,

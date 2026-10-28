@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::{
 #[derive(Clone, Copy)]
 enum Scenario {
     Normal,
+    Incompatible,
     BadIdentity,
     Redirect,
     Resume,
@@ -27,6 +28,61 @@ enum Scenario {
     Todos,
     LargeFrame,
     LargeFragmentedMessage,
+}
+
+#[tokio::test]
+async fn explicit_existing_connection_is_get_only_and_rejects_changed_or_vanished_daemons() {
+    for scenario in [
+        Scenario::Normal,
+        Scenario::BadIdentity,
+        Scenario::Incompatible,
+        Scenario::Redirect,
+    ] {
+        let mock = Mock::start(scenario).await;
+        let options = mock.options.clone();
+        let result = tokio::task::spawn_blocking(move || options.verify_existing())
+            .await
+            .unwrap();
+        if matches!(scenario, Scenario::Normal) {
+            let options = result
+                .ok()
+                .expect("matching hello permits explicit external connection");
+            assert!(options.externally_managed);
+            assert!(
+                options.update_location().is_none(),
+                "external connection cannot supply retained-runtime authority"
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "incompatible, changed or redirected hello is refused"
+            );
+        }
+        assert_eq!(*mock.requests.lock().unwrap(), ["GET /api/hello HTTP/1.1"]);
+        assert_eq!(mock.sockets.load(Ordering::SeqCst), 0);
+    }
+    let mock = Mock::start(Scenario::Normal).await;
+    let mut options = mock.options.clone();
+    options.lineage_id = "previous-lineage".into();
+    assert!(
+        tokio::task::spawn_blocking(move || options.verify_existing())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let mut options = mock.options.clone();
+    options.port = listener.local_addr().unwrap().port();
+    drop(listener);
+    assert!(
+        tokio::task::spawn_blocking(move || options.verify_existing())
+            .await
+            .unwrap()
+            .is_err(),
+        "vanished daemon is not started or replaced"
+    );
 }
 
 #[tokio::test]
@@ -79,6 +135,7 @@ impl Mock {
             .await
             .unwrap();
         let options = LocalOptions {
+            externally_managed: false,
             port: listener.local_addr().unwrap().port(),
             daemon_id: "synthetic-daemon".into(),
             lineage_id: "synthetic-lineage".into(),
@@ -119,7 +176,7 @@ impl Mock {
                                 if matches!(scenario,Scenario::Redirect) {
                                     stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap(); return;
                                 }
-                                let body=json!({"daemonId":if matches!(scenario,Scenario::BadIdentity) {"wrong"}else{"synthetic-daemon"},"lineageId":"synthetic-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}).to_string();
+                                let body=json!({"daemonId":if matches!(scenario,Scenario::BadIdentity) {"wrong"}else{"synthetic-daemon"},"lineageId":"synthetic-lineage","protocolVersion":1,"minimumClientProtocolVersion":if matches!(scenario,Scenario::Incompatible) {2}else{1},"capabilities":{"independentExecution":true}}).to_string();
                                 let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
                                 stream.write_all(response.as_bytes()).await.unwrap(); return;
                             }

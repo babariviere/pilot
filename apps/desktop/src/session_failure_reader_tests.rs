@@ -31,6 +31,7 @@ async fn session_failure_summary_updates_and_reader_errors_stay_separate_and_cha
         .await
         .unwrap();
     let options = LocalOptions {
+        externally_managed: false,
         port: listener.local_addr().unwrap().port(),
         daemon_id: "failure-daemon".into(),
         lineage_id: "failure-lineage".into(),

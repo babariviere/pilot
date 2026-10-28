@@ -27,6 +27,7 @@ impl Server {
             .await
             .unwrap();
         let options = LocalOptions {
+            externally_managed: false,
             port: listener.local_addr().unwrap().port(),
             daemon_id: "synthetic-daemon".into(),
             lineage_id: "synthetic-lineage".into(),

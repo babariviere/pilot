@@ -3,7 +3,7 @@ use crate::{
     LocalOptions, LocalViewer, bundled_runtime,
     ui::{self, Notice, Text, Tone},
 };
-use gpui_kit::component::{ActiveTheme, StyledExt};
+use gpui_kit::component::{ActiveTheme, Disableable, StyledExt};
 use gpui_kit::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Task, TestSupportExt, Window,
@@ -17,6 +17,11 @@ pub struct BundledRuntimeView {
     local: Option<Entity<LocalViewer>>,
     pending_chat_url: Option<String>,
     error: Option<&'static str>,
+    connection_error: Option<&'static str>,
+    connecting: bool,
+    connector: fn() -> Result<LocalOptions, &'static str>,
+    connection: Option<Task<()>>,
+    make_local: fn(LocalOptions, &mut Window, &mut Context<LocalViewer>) -> LocalViewer,
     cancel: Arc<AtomicBool>,
     _updates: Task<()>,
     _closed: gpui_kit::Subscription,
@@ -94,10 +99,64 @@ impl BundledRuntimeView {
             local: None,
             pending_chat_url: None,
             error,
+            connection_error: None,
+            connecting: false,
+            connector: LocalOptions::connect_existing,
+            connection: None,
+            make_local,
             cancel,
             _updates: updates,
             _closed: closed,
         }
+    }
+    fn existing_available(&self) -> bool {
+        cfg!(target_os = "macos")
+            && self.error == Some(bundled_runtime::RETAINED_OWNER_REFUSED)
+            && bundled_runtime::update_receipt().is_none()
+    }
+    fn connect_existing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.existing_available() || self.connecting {
+            return;
+        }
+        self.connecting = true;
+        self.connection_error = None;
+        let connect = self.connector;
+        let (send, result) = async_channel::bounded(1);
+        if std::thread::Builder::new()
+            .name("existing-daemon-check".into())
+            .spawn(move || {
+                let _ = send.send_blocking(connect());
+            })
+            .is_err()
+        {
+            self.connecting = false;
+            self.connection_error = Some("Cannot start the existing-daemon check.");
+        } else {
+            self.connection = Some(cx.spawn_in(window, async move |view, cx| {
+                let reply = result
+                    .recv()
+                    .await
+                    .unwrap_or(Err("Existing-daemon check stopped before reporting."));
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.connecting = false;
+                    match reply {
+                        Ok(options) => {
+                            window
+                                .set_window_title("Pilot Next · Local · Externally managed daemon");
+                            let make_local = view.make_local;
+                            let local = cx.new(|cx| make_local(options, window, cx));
+                            if let Some(url) = view.pending_chat_url.take() {
+                                local.update(cx, |v, cx| v.open_chat_url(&url, window, cx));
+                            }
+                            view.local = Some(local);
+                        }
+                        Err(error) => view.connection_error = Some(error),
+                    }
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
     }
 }
 impl Render for BundledRuntimeView {
@@ -105,7 +164,7 @@ impl Render for BundledRuntimeView {
         if let Some(local) = &self.local {
             return local.clone().into_any_element();
         }
-        let content = ui::page()
+        let mut content = ui::page()
             .child(ui::heading("runtime-title", "Pilot Next", Text::Title))
             .child(gpui_kit::div().id("runtime-status").test_support().child(
                 Notice::new(self.error.unwrap_or("Starting Local…")).tone(
@@ -123,11 +182,23 @@ impl Render for BundledRuntimeView {
                 )
                 .id("runtime-detail")
                 .test_support(),
-            )
-            .child(
-                ui::action("runtime-close", "Close", ui::Action::Quiet)
-                    .on_click(|_, _, cx| cx.quit()),
             );
+        if self.existing_available() {
+            content = content
+                .child(ui::text(Text::Body, "Connect without managing the daemon. Local chat actions, including Send and Stop, remain available as in --local. Daemon changes and app installation are unavailable."))
+                .child(ui::action("runtime-connect-existing", "Connect to existing daemon", ui::Action::Primary)
+                    .disabled(self.connecting)
+                    .on_click(cx.listener(|view, _, window, cx| view.connect_existing(window, cx))));
+        }
+        if self.connecting {
+            content = content.child(Notice::new("Checking Local identity…").tone(Tone::Quiet));
+        }
+        if let Some(error) = self.connection_error {
+            content = content.child(Notice::new(error).tone(Tone::Error));
+        }
+        content = content.child(
+            ui::action("runtime-close", "Close", ui::Action::Quiet).on_click(|_, _, cx| cx.quit()),
+        );
         ui::surface(ui::Surface::Page, cx)
             .id("runtime-startup-root")
             .test_support()
@@ -145,6 +216,7 @@ impl BundledRuntimeView {
     /// Native production-view probe with an injected result lane and memory-only Local fixture.
     /// Never starts the startup worker, discovers Local, or reads/writes user state.
     pub fn run_probe(cx: &mut gpui_kit::HeadlessAppContext) {
+        cx.update(crate::updates_view::Updates::probe_external_guards);
         use gpui_kit::{
             AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, px, size,
             test::TestWindowExt,
@@ -159,6 +231,22 @@ impl BundledRuntimeView {
             }
         }
         let output = std::env::var_os("PILOT_NEXT_RUNTIME_DIR").map(PathBuf::from);
+        fn finish_connection(
+            cx: &mut HeadlessAppContext,
+            handle: AnyWindowHandle,
+            view: &Entity<BundledRuntimeView>,
+        ) {
+            let until = std::time::Instant::now() + Duration::from_secs(5);
+            while cx.update(|cx| view.read(cx).connecting) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "synthetic connection completed"
+                );
+                settle(cx, handle);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            settle(cx, handle);
+        }
         if let Some(output) = &output {
             std::fs::create_dir_all(output).unwrap();
         }
@@ -209,7 +297,7 @@ impl BundledRuntimeView {
                     assert!(view.read(cx).error.is_none());
                     assert!(view.read(cx).local.is_none());
                 });
-                for state in ["loading", "unconfirmed"] {
+                for state in ["loading", "unconfirmed", "existing"] {
                     if state == "unconfirmed" {
                         send.send_blocking(Err("Local startup is unconfirmed. An activated daemon may still be starting. It was left running to preserve work.")).unwrap();
                         settle(cx, handle);
@@ -217,6 +305,22 @@ impl BundledRuntimeView {
                             assert!(view.read(cx).error.unwrap().contains("unconfirmed"));
                             assert!(view.read(cx).local.is_none());
                         });
+                    }
+                    if state == "existing" {
+                        view.update(cx, |view, cx| {
+                            view.error = Some(bundled_runtime::RETAINED_OWNER_REFUSED);
+                            cx.notify();
+                        });
+                        settle(cx, handle);
+                        cx.update_window(handle, |_, window, _| {
+                            assert_ne!(
+                                window.find("runtime-connect-existing").disabled(),
+                                Some(true)
+                            );
+                            let button = window.find("runtime-connect-existing").bounds();
+                            assert!(button.left() >= px(0.) && button.right() <= px(width));
+                        })
+                        .unwrap();
                     }
                     cx.update_window(handle, |_, window, _| {
                         let root = window.find("runtime-startup-root").bounds();
@@ -250,6 +354,47 @@ impl BundledRuntimeView {
                             .unwrap();
                     }
                 }
+                static CHECKS: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                view.update(cx, |view, _| {
+                    view.connector = || {
+                        CHECKS.fetch_add(1, Ordering::SeqCst);
+                        Err("Synthetic Local identity changed. Nothing was started.")
+                    };
+                });
+                let before = CHECKS.load(Ordering::SeqCst);
+                assert!(
+                    cx.update(|cx| view.read(cx).local.is_none()),
+                    "no automatic downgrade after refusal"
+                );
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-connect-existing", cx);
+                })
+                .unwrap();
+                finish_connection(cx, handle, &view);
+                assert_eq!(CHECKS.load(Ordering::SeqCst), before + 1);
+                cx.update(|cx| {
+                    assert!(view.read(cx).local.is_none());
+                    assert!(
+                        view.read(cx)
+                            .connection_error
+                            .unwrap()
+                            .contains("identity changed")
+                    );
+                    assert_eq!(
+                        view.read(cx).error,
+                        Some(bundled_runtime::RETAINED_OWNER_REFUSED)
+                    );
+                });
+                view.update(cx, |view, _| {
+                    view.connector = || Ok(LocalOptions::synthetic(1))
+                });
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-connect-existing", cx)
+                })
+                .unwrap();
+                finish_connection(cx, handle, &view);
+                cx.update(|cx| assert!(view.read(cx).local.is_some()));
                 cx.update_window(handle, |_, window, _| window.remove_window())
                     .unwrap();
                 drop(view);

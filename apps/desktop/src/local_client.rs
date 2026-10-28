@@ -19,6 +19,7 @@ mod model_scope_access;
 
 #[derive(Clone)]
 pub struct LocalOptions {
+    externally_managed: bool,
     port: u16,
     daemon_id: String,
     lineage_id: String,
@@ -30,6 +31,9 @@ pub struct LocalOptions {
 impl LocalOptions {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn update_location(&self) -> Option<pilot_desktop_updater::coordination::Location> {
+        if self.externally_managed {
+            return None;
+        }
         Some(pilot_desktop_updater::coordination::Location {
             home: self.native_home.clone()?,
             port: self.port,
@@ -42,6 +46,7 @@ impl LocalOptions {
     ) -> Result<Self, &'static str> {
         let home = location.home;
         Ok(Self {
+            externally_managed: false,
             port: location.port,
             daemon_id: identity_file(home.join("daemon-id"))?,
             lineage_id: identity_file(home.join("storage-lineage"))?,
@@ -52,6 +57,7 @@ impl LocalOptions {
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn synthetic(port: u16) -> Self {
         Self {
+            externally_managed: false,
             port,
             daemon_id: "test-daemon".into(),
             lineage_id: "test-lineage".into(),
@@ -95,6 +101,7 @@ impl LocalOptions {
             data.join("pilot")
         };
         Ok(Self {
+            externally_managed: false,
             port,
             daemon_id: identity_file(home.join("daemon-id"))?,
             lineage_id: identity_file(home.join("storage-lineage"))?,
@@ -103,6 +110,30 @@ impl LocalOptions {
             update_policy: pilot_desktop_updater::coordination::captured_policy()
                 .map_err(|_| "Configured runtime policy is invalid.")?,
         })
+    }
+
+    /// Explicit existing-daemon connection. No launcher, capsule publication or profile writes.
+    pub(crate) fn connect_existing() -> Result<Self, Failure> {
+        Self::discover()?.verify_existing()
+    }
+    fn verify_existing(mut self) -> Result<Self, Failure> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| "Cannot start Local connection check.")?;
+        runtime.block_on(async {
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .retry(reqwest::retry::never())
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(2))
+                .timeout(Duration::from_secs(5))
+                .build()
+                .map_err(|_| "Cannot check the existing daemon.")?;
+            gate(&client, &self).await
+        })?;
+        self.externally_managed = true;
+        Ok(self)
     }
 
     pub(crate) fn verify(&self, hello: &Value) -> Result<(), Failure> {
@@ -957,6 +988,7 @@ mod tests {
     #[test]
     fn identity_protocol_and_allowlist_fail_closed() {
         let options = LocalOptions {
+            externally_managed: false,
             port: 4319,
             daemon_id: "daemon".into(),
             lineage_id: "lineage".into(),
@@ -970,6 +1002,9 @@ mod tests {
         assert!(options.verify(&hello).is_err());
         hello["lineageId"] = json!("lineage");
         hello["minimumClientProtocolVersion"] = json!(2);
+        assert!(options.verify(&hello).is_err());
+        hello["minimumClientProtocolVersion"] = json!(1);
+        hello["capabilities"]["independentExecution"] = json!(false);
         assert!(options.verify(&hello).is_err());
         for id in ["../stop", "id?send=1", "id/archive", "", "remote:123"] {
             assert!(options.ws_path(Some(id), None).is_err());

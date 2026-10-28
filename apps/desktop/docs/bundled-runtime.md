@@ -69,6 +69,30 @@ separate signature and platform-security contract.
   chat reads are still unauthenticated loopback reads, not newly authenticated API.
 - Unbundled no-argument/explicit fixture modes retain synthetic behavior.
 
+On macOS, a retained-owner selection refusal offers **Connect to existing daemon**.
+This is an explicit existing-daemon connection, never an automatic fallback or
+acceptance of an unknown capsule. A GET-only check pins the configured profile's
+daemonId/lineageId and the existing Local protocol/capability requirements before
+opening the ordinary Local client. A changed identity, incompatible hello or
+missing daemon refuses the connection without starting a replacement. This is
+loopback identity pinning, not request authentication or retained-runtime proof.
+The connection does not publish capsules or modify the daemon profile.
+
+Current `--local` already supports user-driven chat actions, including create,
+Send and Stop, with its existing identity/delivery guards. The new choice uses
+that same client, not a read-only viewer and not a new mutation permission.
+`--local-check` remains read-only. The window and Updates identify the new
+connection as externally managed. Daemon upgrade/pause and app installation are
+unavailable in this session; update checks/downloads do not install. Update
+receipt recovery cannot switch to this path. Bundled exact-capsule validation
+and all other startup refusals remain unchanged.
+
+There is no standalone GPUI daemon-restart command. Settings' **Install and
+restart…** installs/relaunches the GUI using the retained-runtime update contract;
+it is not a restart control for a Swift-owned daemon. Its older-retained-runtime
+handoff only targets Next's own store, never a Swift-app runtime. An externally
+managed daemon must continue to be managed by its existing owner.
+
 Bundled launch uses the existing configured Local home/port. It does not silently
 select a new profile, import Swift state or retarget retained drafts/operations.
 An existing legacy/unproven profile is refused **without enrollment or migration**.

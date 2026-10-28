@@ -47,6 +47,33 @@ pub(crate) struct Updates {
 }
 impl EventEmitter<Event> for Updates {}
 impl Updates {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_external_guards(cx: &mut gpui_kit::App) {
+        let updates = cx.new(|cx| Self::new(None, cx));
+        updates.update(cx, |updates, cx| {
+            assert!(!updates.ensure_agents_paused(cx));
+            assert!(updates.pausing.is_none());
+            assert!(!updates.agents_paused);
+            let flush = pilot_desktop_updater::Flush {
+                requested: 1,
+                acknowledged: Some(1),
+                failed: false,
+            };
+            let safety = Safety {
+                drafts: flush,
+                deliveries: flush,
+                settings: flush,
+                has_preedit: false,
+                active_work: false,
+                runtime: pilot_desktop_updater::Runtime::Unknown,
+                admissions_fenced: true,
+            };
+            updates.prepare(safety, cx);
+            updates.commit(safety, cx);
+            assert!(!updates.fenced);
+            assert!(updates.notice.unwrap().contains("Externally managed"));
+        });
+    }
     pub(crate) fn new(location: Option<Location>, cx: &mut Context<Self>) -> Self {
         let (sender, receiver) = async_channel::bounded(1);
         let worker = Worker::for_running_app(move || {
@@ -288,6 +315,13 @@ impl Updates {
         self.check(cx);
     }
     pub(crate) fn prepare(&mut self, safety: Safety, cx: &mut Context<Self>) {
+        if self.location.is_none() {
+            self.defer(
+                "Externally managed daemon. App installation is unavailable in this session.",
+                cx,
+            );
+            return;
+        }
         self.fenced = true;
         self.cancel_prepare = false;
         self.notice = None;
@@ -299,6 +333,9 @@ impl Updates {
         cx.notify();
     }
     pub(crate) fn commit(&mut self, safety: Safety, cx: &mut Context<Self>) {
+        if self.location.is_none() {
+            return;
+        }
         if self.cancel_prepare {
             return;
         }
@@ -320,7 +357,11 @@ impl Updates {
     /// renewed off the UI thread, and `Event::Restart` is emitted again when ready.
     pub(crate) fn ensure_agents_paused(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(location) = self.location.clone() else {
-            return true;
+            self.defer(
+                "Externally managed daemon. App installation is unavailable in this session.",
+                cx,
+            );
+            return false;
         };
         if self.agents_paused {
             return true;
@@ -529,7 +570,8 @@ impl Render for Updates {
         let can_install = matches!(
             state,
             Some(State::ReadyToRestart(_) | State::Deferred { .. })
-        ) && !self.fenced
+        ) && self.location.is_some()
+            && !self.fenced
             && self.pausing.is_none();
         let can_cancel = matches!(
             state,
@@ -551,6 +593,9 @@ impl Render for Updates {
                     .disabled(self.controller.is_none() || checking || self.fenced)
                     .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
             );
+        if self.location.is_none() {
+            view = view.child(Notice::new("Externally managed daemon. Update checks and downloads do not install. Daemon changes and app installation are unavailable in this session.").tone(Tone::Quiet));
+        }
         if self.startup_started {
             let status = match self.startup {
                 Some(Ok(())) => {
