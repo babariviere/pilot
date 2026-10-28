@@ -53,8 +53,13 @@ outside composition. No global delivery or keyboard defaults change.
 
 ## In the conversation
 
-A sent message appears at the end of the conversation at once, never only after
-the agent consumes it. Each stage uses the owner that already holds it:
+A sent message appears at once, never only after the agent consumes it. Sent to
+a busy chat, it shows read-only above the editor, where its queue row will take its
+place; sent to an idle chat, at the end of the conversation. The place is chosen
+when the send first shows and kept until it resolves. A send first seen already in
+progress (Sent, Not confirmed or Not sent, as when recovered after a restart)
+shows above the editor.
+Each stage uses the owner that already holds it:
 
 - **Sending…**: Return/Send hands an ordinary chat message to the conversation
   ([chat_sending.rs](../src/chat_sending.rs)). The composer shows an empty editor
@@ -63,25 +68,29 @@ the agent consumes it. Each stage uses the owner that already holds it:
   returns the exact text to the composer. An unknown outcome stays in the
   conversation as **Not confirmed**, with the composer's existing Resolve actions;
   a known acknowledgment whose receipt was not saved reads Sent/Sending/Not sent.
-  An accepted send keeps its row as **Sent** (exact text held in memory by the
-  composer) until the conversation replaces it, because the acknowledgment can
-  arrive before the queue update.
+  An accepted send keeps its row as **Sent** until the conversation replaces it,
+  because the acknowledgment can arrive before the queue update, and stays even
+  after newer sends. Above the editor, Sent's tooltip says it was accepted by
+  Local and is not yet in the conversation; the truncated text's tooltip shows the
+  whole message. Both are read-only.
   Typing during delivery edits only the composer. Stop, new-chat creation and
   question replies keep their existing composer behavior.
 - **Queued / Queued to steer**: the existing projection from
   [local_model.rs](../src/local_model.rs) is placed above the editor instead of after
   history, keyed by its submission ID, so edits keep the row. Automatic input is
-  not shown here. Pending ordinary sends stay in the transcript until this echo.
+  not shown here.
 - **History**: the committed user entry replaces the queued row.
 
-The Local wire has no operation or submission ID on queue rows or history entries,
-so reconciliation is presentation only and never settles a delivery. The sending
+Queue rows carry a submission ID, but the Local wire has no operation or submission
+cross-link between queue rows, history entries and delivery receipts, so
+reconciliation is presentation only and never settles a delivery. The sending
 row hides once a queue row or user entry newer than when it first showed has the
-same exact text ([submit_visibility.rs](../src/submit_visibility.rs)). A **Sent** row
-also hides at the next queue update: Local commits the admission before it
-acknowledges, so that update normally contains the message (or its consumption).
-A queue update produced by an earlier change but delivered after the
-acknowledgment could still drop it briefly. Once replaced, a send never shows
+same exact text ([submit_visibility.rs](../src/submit_visibility.rs)). Each such
+row is the echo of one send, oldest first, so identical messages keep their count;
+a send keeps its row while that row can still become a newer history entry. An
+echo already present when a send is first seen (after a restart) is not
+recognised, so that send stays until resolved. Only a matching row replaces a
+send; a queue update alone never does. Once replaced, a send never shows
 again. The queue and history arrive on separate
 streams: a history entry that arrives first hides its
 queued row (exact content, oldest first) until the queue update; a row that leaves

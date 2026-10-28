@@ -5,8 +5,8 @@ use crate::delivery_store::{Draft, Store};
 use crate::interaction::{Interaction, WriteCommand, WriteState};
 use crate::local_model::LiveTranscript;
 use gpui_kit::{
-    AnyWindowHandle, Bounds, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds,
-    WindowOptions, point, size,
+    AnyWindowHandle, Bounds, EntityInputHandler, Focusable, HeadlessAppContext, ScrollDelta,
+    WindowBounds, WindowOptions, point, size,
     test::{TestQueryExt, TestWindowExt},
 };
 use serde_json::{Value, json};
@@ -135,6 +135,17 @@ impl Probe {
                 .to_string()
         })
     }
+    /// Sending, queueing and history never take focus from the composer.
+    fn focused(&self, cx: &mut HeadlessAppContext) {
+        cx.update_window(self.h, |_, w, cx| {
+            let input = self.v.read(cx).editor.read(cx).shell_probe().0;
+            assert!(
+                input.focus_handle(cx).is_focused(w),
+                "the composer keeps focus"
+            );
+        })
+        .unwrap();
+    }
     /// Rows with this exact text, and their delivery captions.
     fn shown(&self, cx: &mut HeadlessAppContext, text: &str) -> Vec<Option<&'static str>> {
         cx.update(|cx| {
@@ -144,41 +155,44 @@ impl Probe {
                 .rows()
                 .iter()
                 .chain(v.sending_view.queued.iter())
+                .chain(v.sending_view.pending_rows(v.selected.as_deref()))
                 .filter(|r| r.source() == text)
                 .map(|r| r.pending())
                 .collect()
         })
     }
-    /// Queued captions sit above the editor; unresolved sends stay in the transcript.
-    fn caption(&self, cx: &mut HeadlessAppContext, status: &str) {
+    /// A busy chat's unresolved sends share the queue rows' place above the
+    /// editor, so a send never moves from the conversation to the queue. An idle
+    /// chat's stay with the user's bubble. Returns the caption's y.
+    fn caption(&self, cx: &mut HeadlessAppContext, status: &str) -> f32 {
+        self.placed(cx, status, true)
+    }
+    fn placed(&self, cx: &mut HeadlessAppContext, status: &str, tray: bool) -> f32 {
         cx.update_window(self.h, |_, w, cx| {
             w.render_frame(cx);
             let caption = w.find_by_label(status).bounds();
-            let viewport = w
-                .find(if status.starts_with("Queued") {
-                    "composer-queue"
-                } else {
-                    "viewport"
-                })
-                .bounds();
-            assert!(
-                viewport.contains(&caption.center()),
-                "{status} outside {viewport:?}"
-            );
-            if !status.starts_with("Queued") {
+            let input = w.find("composer-input").bounds();
+            if tray {
+                let tray = w.find("composer-queue").bounds();
+                assert!(
+                    tray.contains(&caption.center()),
+                    "{status} outside the tray above the editor {tray:?}"
+                );
+                assert!(tray.bottom() <= input.top(), "{status} must precede editor");
+            } else {
+                let viewport = w.find("viewport").bounds();
+                assert!(
+                    viewport.contains(&caption.center()),
+                    "{status} outside {viewport:?}"
+                );
                 assert!(
                     caption.right() > viewport.center().x,
                     "{status} is not with the user's bubble"
                 );
-            } else {
-                let input = w.find("composer-input").bounds();
-                assert!(
-                    viewport.bottom() <= input.top(),
-                    "queued preview must precede editor"
-                );
             }
+            f32::from(caption.center().y)
         })
-        .unwrap();
+        .unwrap()
     }
 }
 
@@ -259,7 +273,8 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     // 1. Busy chat: Return shows the message at once, before any acknowledgment.
     let (draft, request) = p.send(cx, FIRST);
     assert_eq!(p.shown(cx, FIRST), [Some("Sending…")]);
-    p.caption(cx, "Sending…");
+    let sending_y = p.caption(cx, "Sending…");
+    p.focused(cx);
     capture(cx, h, format!("{}-{mode}-sending.png", width as u32));
     let following = cx.update(|cx| p.v.read(cx).transcript.read(cx).reading_mark(cx).unwrap());
     assert!(following.following, "the user was at the latest message");
@@ -274,7 +289,12 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     // Delayed consumption: the admitted queue row replaces it, before the ACK.
     p.publish(cx, json!({"type":"queue_update","items":[{"id":42,"mode":"steer","content":FIRST,"guardToken":"a".repeat(64)}]}));
     assert_eq!(p.shown(cx, FIRST), [Some("Queued to steer")]);
-    p.caption(cx, "Queued to steer");
+    let queued_y = p.caption(cx, "Queued to steer");
+    assert!(
+        (queued_y - sending_y).abs() <= 2.,
+        "its queue row takes the sending row's place"
+    );
+    p.focused(cx);
     capture(cx, h, format!("{}-{mode}-queued.png", width as u32));
     p.store.finish(&first, "accepted", None).unwrap();
     p.write(cx, Some(request));
@@ -285,6 +305,7 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     assert_eq!(p.shown(cx, FIRST), [Some("Queued to steer")]);
     p.publish(cx, json!({"type":"message_end","entry":user(25, FIRST)}));
     assert_eq!(p.shown(cx, FIRST), [None]);
+    p.focused(cx);
 
     // 1b. The ACK can beat the queue update: the message stays visible as Sent
     // (the queue event is held back here) until its queue row replaces it.
@@ -305,9 +326,17 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     );
     p.caption(cx, "Sent");
     assert_eq!(p.composer(cx), "");
-    // Unrelated republication (same queue) keeps it; the held queue update replaces it.
+    // Unrelated republication keeps it, and so does an unrelated queue update.
     p.publish(cx, json!({"type":"jobs_update","jobs":[]}));
     assert_eq!(p.shown(cx, early), [Some("Sent")]);
+    p.publish(cx, json!({"type":"queue_update","items":[{"id":44,"mode":"followUp","content":"Unrelated","guardToken":"e".repeat(64)}]}));
+    assert_eq!(
+        p.shown(cx, early),
+        [Some("Sent")],
+        "an unrelated queue update retired an accepted send"
+    );
+    p.caption(cx, "Sent");
+    // Its own queue row, delayed, replaces it.
     p.publish(cx, json!({"type":"queue_update","items":[{"id":45,"mode":"steer","content":early,"guardToken":"d".repeat(64)}]}));
     assert_eq!(p.shown(cx, early), [Some("Queued to steer")]);
     p.publish(cx, json!({"type":"message_end","entry":user(30, early)}));
@@ -333,6 +362,30 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
         .id;
     p.write(cx, Some(request));
     assert_eq!(p.shown(cx, second), [Some("Not confirmed")]);
+    p.caption(cx, "Not confirmed");
+    // Reconnect: a fresh reader replays the same history and queue. The Unknown
+    // send keeps exactly one row, in place, and no other row is added or lost.
+    let counts = |p: &Probe, cx: &mut HeadlessAppContext| {
+        cx.update(|cx| {
+            let v = p.v.read(cx);
+            (
+                v.transcript.read(cx).rows().len(),
+                v.sending_view.queued.len(),
+                v.sending_view.pending_rows(v.selected.as_deref()).len(),
+            )
+        })
+    };
+    let before = counts(&p, cx);
+    p.model = LiveTranscript::default();
+    p.publish(
+        cx,
+        json!({"type":"snapshot","entries":compacted.clone(),"run":{"startedAt":2}}),
+    );
+    p.publish(cx, json!({"type":"queue_update","items":[]}));
+    assert_eq!(counts(&p, cx), before);
+    assert_eq!(p.shown(cx, second), [Some("Not confirmed")]);
+    p.caption(cx, "Not confirmed");
+    p.focused(cx);
     cx.update_window(h, |_, w, cx| {
         w.render_frame(cx);
         assert_eq!(
@@ -426,6 +479,46 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     assert_eq!(after.message, reading.message);
     assert!(!after.following);
     assert!((after.offset - reading.offset).abs() <= 2.);
+
+    // 4b. Idle chat, same words as earlier history: shown at once in the
+    // conversation as before, not taken for that older entry, the composer keeps
+    // focus, and history is its echo.
+    // The reader returns to the latest message first, with the existing control.
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        w.click("latest", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    let latest = cx.update(|cx| p.v.read(cx).transcript.read(cx).reading_mark(cx).unwrap());
+    assert!(latest.following, "Latest returns the reader to the end");
+    cx.update(|cx| {
+        p.v.update(cx, |v, _| {
+            let mut chat = v.state.chats[0].clone();
+            chat.busy = false;
+            v.state.chats = Arc::new(vec![chat]);
+        })
+    });
+    p.publish(cx, json!({"type":"queue_update","items":[]}));
+    // The newest user entry in the compacted history above.
+    let again = "Compacted";
+    assert_eq!(p.shown(cx, again), [None]);
+    let (draft, request) = p.send(cx, again);
+    assert_eq!(p.shown(cx, again), [None, Some("Sending…")]);
+    p.placed(cx, "Sending…", false);
+    p.focused(cx);
+    let intent = p
+        .store
+        .prepare("chat:synthetic", &draft, false, false)
+        .unwrap()
+        .id;
+    p.write(cx, None);
+    p.store.finish(&intent, "accepted", None).unwrap();
+    p.write(cx, Some(request));
+    assert_eq!(p.shown(cx, again), [None, Some("Sent")]);
+    p.placed(cx, "Sent", false);
+    p.publish(cx, json!({"type":"message_end","entry":user(40, again)}));
+    assert_eq!(p.shown(cx, again), [None, None]);
 
     // 5. Navigation: another chat never shows this chat's pending input.
     let pending = "Still sending elsewhere";

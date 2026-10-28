@@ -528,6 +528,8 @@ impl Render for Popup {
 impl LocalViewer {
     fn queued_message_tray(&self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         let rows = &self.sending_view.queued;
+        // Unresolved sends of a busy chat wait here, where their queue row will be.
+        let pending = self.sending_view.pending_rows(self.selected.as_deref());
         let retained = self.selected.as_ref().is_some_and(|id| {
             self.queue_forms
                 .iter()
@@ -536,7 +538,7 @@ impl LocalViewer {
         if self.page != Page::Chat
             || self.selected.is_none()
             || self.artifacts_open
-            || (rows.is_empty() && !retained)
+            || (rows.is_empty() && pending.is_empty() && !retained)
         {
             return div().hidden().into_any_element();
         }
@@ -552,11 +554,22 @@ impl LocalViewer {
         let ordered = rows
             .iter()
             .filter(|r| r.pending() == Some("Queued to steer"))
+            .map(|r| (r, true))
+            .chain(pending.iter().map(|r| (r, false)))
             .chain(
                 rows.iter()
-                    .filter(|r| r.pending() != Some("Queued to steer")),
+                    .filter(|r| r.pending() != Some("Queued to steer"))
+                    .map(|r| (r, true)),
             );
-        for row in ordered {
+        for (row, queued) in ordered {
+            if !queued {
+                list = list.child(super::submit_visibility::pending_send_row(
+                    row,
+                    px(QUEUE_ROW_HEIGHT),
+                    cx,
+                ));
+                continue;
+            }
             let id = crate::local_model::queued_submission(row).expect("projected queue row");
             let preview = row
                 .source()
@@ -680,8 +693,8 @@ impl LocalViewer {
                     cx.stop_propagation();
                 }
             }))
-            .children((!rows.is_empty()).then_some(list))
-            .when(rows.is_empty() && retained, |tray| {
+            .children((!rows.is_empty() || !pending.is_empty()).then_some(list))
+            .when(rows.is_empty() && pending.is_empty() && retained, |tray| {
                 tray.child(
                     ui::action("queued-message-open", "Queue drafts", Action::Quiet)
                         .disabled(disabled)
