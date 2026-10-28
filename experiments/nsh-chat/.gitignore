@@ -1,0 +1,5 @@
+/target/
+/output/
+/gpui/target/
+/.nsh/
+/__pycache__/
