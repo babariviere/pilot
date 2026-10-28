@@ -98,6 +98,9 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(complete_draft(draft), "complete")
         self.assertIn("Pilot-Next-linux-x64.zip", DRAFT_ASSETS)
         self.assertIn("desktop-macos-arm64-update.json", DRAFT_ASSETS)
+        self.assertNotIn("Pilot-arm64.zip", DRAFT_ASSETS)
+        self.assertNotIn("appcast.xml", DRAFT_ASSETS)
+        self.assertEqual(len(DRAFT_ASSETS), 4)
         self.assertNotIn("runtime-manifest.json.sig", DRAFT_ASSETS)
         self.assertNotIn("Pilot-linux-x64.tar.gz", DRAFT_ASSETS)
         for name in DRAFT_ASSETS:

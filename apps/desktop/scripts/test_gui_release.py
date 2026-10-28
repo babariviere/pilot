@@ -101,15 +101,17 @@ class GuiReleaseTests(unittest.TestCase):
                 self.assertEqual(archive.read(link), b"bin/pilot-next")
                 self.assertEqual(archive.getinfo("Pilot Next/bin/pilot-next").external_attr >> 16 & 0o777, 0o755)
 
-    def test_workflow_builds_real_gui_and_only_finalizes_gui_plus_preserved_swift(self):
+    def test_workflow_builds_and_finalizes_only_real_gui(self):
         root = bundle.ROOT
         workflow = (root / ".github/workflows/release.yaml").read_text()
         package = (root / ".github/workflows/gui-package.yml").read_text()
         self.assertNotIn("release/Pilot-linux-x64", workflow)
         self.assertNotIn("LINUX_RUNTIME_PRIVATE_KEY", workflow)
-        for name in ("macos-gui:", "linux-gui:", "gui-publish:", "macos-publish:"):
+        for name in ("macos-gui:", "linux-gui:", "gui-publish:"):
             self.assertIn(name, workflow)
-        self.assertIn("needs: [target, gui-publish, macos-publish]", workflow)
+        self.assertIn("needs: [target, gui-publish]", workflow)
+        self.assertNotIn("macos-app:", workflow)
+        self.assertNotIn("macos-publish:", workflow)
         self.assertIn("bundle_runtime", (root / "apps/desktop/scripts/gui_release.py").read_text())
         self.assertIn("--release --locked --workspace --bins", package)
         self.assertIn("--platform macos", package)

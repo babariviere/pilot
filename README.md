@@ -157,7 +157,12 @@ unchanged; outstanding accounting memory and release verification is documented 
 
 ### Install a release
 
-Download `Pilot-arm64.zip` from the [latest release](https://github.com/babariviere/pilot/releases/latest),
+New releases contain the Rust GPUI desktop, with `Pilot-Next-macos-arm64.zip` for macOS 15+
+and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [Pilot Next](apps/desktop/README.md).
+The legacy Swift app is no longer built or published by CI. Its source and existing releases remain available.
+
+For the last legacy Swift release, download `Pilot-arm64.zip` from
+[v1.84.0](https://github.com/babariviere/pilot/releases/tag/v1.84.0),
 unzip it and move `Pilot.app` to Applications.
 
 - Released builds target **Apple Silicon Macs running macOS 14 or later**.

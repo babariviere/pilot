@@ -108,7 +108,7 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 	}
 });
 
-for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-build", "api-error", "incomplete"]) {
+for (const scenario of ["stable-first", "stable-upgrade", "older-app", "equal-app", "invalid-signature", "wrong-source", "api-error", "incomplete"]) {
 	test("publication safety: " + scenario, () => {
 		const dir = mkdtempSync(join(tmpdir(), "pilot-publication-test-"));
 		const gui = signedGuiDraft();
@@ -123,10 +123,8 @@ for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-bu
 const args = process.argv.slice(2);
 const scenario = process.env.SCENARIO;
 appendFileSync(process.env.CALL_LOG, JSON.stringify(args) + "\n");
-const feed = (build) => '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>' +
-  '<sparkle:version>' + build + '</sparkle:version><sparkle:shortVersionString>0.2.0</sparkle:shortVersionString></item></channel></rss>';
 if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") + 1] === "isDraft,isPrerelease,assets") {
-  const names = ["Pilot-arm64.zip", "appcast.xml", "Pilot-Next-macos-arm64.zip", "desktop-macos-arm64-update.json",
+  const names = ["Pilot-Next-macos-arm64.zip", "desktop-macos-arm64-update.json",
     "Pilot-Next-linux-x64.zip", "desktop-linux-x64-update.json"];
   console.log(JSON.stringify({isDraft: true, isPrerelease: false,
     assets: names.filter((name) => scenario !== "incomplete" || !name.startsWith("desktop-"))
@@ -143,19 +141,12 @@ if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") +
   console.log("557");
 } else if (args[0] === "api" && args[1].endsWith("/assets/557")) {
   process.stdout.write(process.env.GUI_LINUX_ENVELOPE);
-} else if (args[0] === "api" && args[1].endsWith("/12345/assets")) {
-  console.log("555");
-} else if (args[0] === "api" && args[1].endsWith("/assets/555")) {
-  console.log(feed("10.1"));
 } else if (args[0] === "api" && args[1].endsWith("/releases/latest")) {
   if (scenario === "stable-first" || scenario === "api-error") {
     console.error(scenario === "stable-first" ? "HTTP 404" : "HTTP 403");
     process.exit(1);
   }
-  console.log(JSON.stringify({tag_name: scenario === "older-app" ? "v0.3.0" : "v0.1.0",
-    assets: [{name: "appcast.xml", id: 777}]}));
-} else if (args[0] === "api" && args[1].endsWith("/assets/777")) {
-  console.log(feed(scenario === "older-build" ? "11.1" : "9.1"));
+  console.log(JSON.stringify({tag_name: scenario === "older-app" ? "v0.3.0" : scenario === "equal-app" ? "v0.2.0" : "v0.1.0"}));
 } else if (args[0] === "release" && args[1] === "edit") {
   const valid = args.includes("--draft=false") && args.includes("--latest") && !args.includes("--prerelease");
   if (!valid) process.exit(1);
@@ -176,17 +167,18 @@ if (args[0] === "release" && args[1] === "view" && args[args.indexOf("--json") +
 					GH_TOKEN: "test-only-token",
 					RELEASE_TAG: "v0.2.0",
 					PILOT_UPDATE_REPOSITORY: "owner/repo",
-					RELEASE_SOURCE: gui.source,
+					RELEASE_SOURCE: scenario === "wrong-source" ? "b".repeat(40) : gui.source,
 					PILOT_NEXT_UPDATER_PUBLIC_KEY: gui.publicBase64,
 					GUI_RELEASE: gui.release,
-					GUI_MACOS_ENVELOPE: gui.envelopes.macos,
+					GUI_MACOS_ENVELOPE: scenario === "invalid-signature" ? JSON.stringify({ ...JSON.parse(gui.envelopes.macos), signature: Buffer.alloc(64).toString("base64") }) : gui.envelopes.macos,
 					GUI_LINUX_ENVELOPE: gui.envelopes.linux,
 				},
 			});
-			if (["api-error", "incomplete"].includes(scenario)) assert.notEqual(result.status, 0);
+			if (["api-error", "incomplete", "invalid-signature", "wrong-source"].includes(scenario)) assert.notEqual(result.status, 0);
 			else assert.equal(result.status, 0, result.stderr);
 			const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
 			assert.ok(!calls.some((args) => args[1] === "upload"));
+			assert.ok(!calls.some((args) => args.join(" ").includes("appcast")));
 			const edits = calls.filter((args) => args[1] === "edit");
 			assert.equal(edits.length, ["stable-first", "stable-upgrade"].includes(scenario) ? 1 : 0);
 		} finally {

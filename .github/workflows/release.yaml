@@ -1,7 +1,7 @@
 name: Release
 
 # Runs Release Please on every main push, without waiting for tests. When it creates a stable draft,
-# this workflow builds Swift and Rust GUI apps from the tagged commit, signs and uploads them,
+# this workflow builds Rust GUI apps from the tagged commit, signs and uploads them,
 # then publishes the draft. Tests run separately in main.yaml and never block a release.
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  # macos-15 is the standard arm64 runner. Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
+  # Native Swift helpers still use the pinned macOS SDK; the legacy app is not built.
   DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
   NODE_VERSION: 24.21.0
 
@@ -77,157 +77,6 @@ jobs:
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
-
-  # Builds and verifies the self-contained Mac app once. No private keys: publishing signs it separately.
-  macos-app:
-    needs: target
-    runs-on: macos-15
-    timeout-minutes: 45
-    env:
-      PILOT_SWIFT_JOBS: 3
-      BUNDLE_RUNTIME: '1'
-      PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
-      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-      # Sparkle build versions must keep increasing. The release.yml workflow ended near run 1,100 with an
-      # offset of 10,000, so release.yaml starts above it. Raise this again if the workflow is renamed.
-      BUNDLE_VERSION_OFFSET: '20000'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.target.outputs.sha }}
-      - uses: pnpm/action-setup@v4
-        if: hashFiles('pnpm-lock.yaml') != ''
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Configure production bundle
-        run: |
-          test -n "$SPARKLE_PUBLIC_KEY" || { echo '::error::Configure SPARKLE_PUBLIC_KEY before building production packages.'; exit 1; }
-          echo "BUNDLE_VERSION=$((GITHUB_RUN_NUMBER + BUNDLE_VERSION_OFFSET)).$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
-      - name: Verify toolchain and architecture
-        id: swift-toolchain
-        run: |
-          test "$(uname -m)" = arm64
-          swift --version
-          identity="$(printf '%s\n' "$(swift --version)" "$(xcrun --show-sdk-version)" | shasum -a 256 | awk '{print $1}')"
-          echo "key=$identity" >> "$GITHUB_OUTPUT"
-      - name: Cache pinned Swift dependencies
-        uses: actions/cache@v4
-        with:
-          # Only dependency downloads and patched vendor sources, never build products or signing data.
-          path: |
-            ~/Library/Caches/org.swift.swiftpm/repositories
-            ~/Library/Caches/org.swift.swiftpm/artifacts
-            apps/macos/Vendor/libghostty-spm
-            apps/macos/Vendor/MermaidKit
-            apps/macos/Vendor/QuickJSNG
-          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.resolved', 'apps/macos/Package.swift', 'apps/macos/scripts/vendor-ghostty.sh', 'apps/macos/scripts/patch-ghostty-resources.py', 'apps/macos/scripts/patch-ghostty-layout.py', 'apps/macos/scripts/vendor-mermaidkit.sh', 'apps/macos/scripts/vendor-quickjs.sh', 'apps/macos/scripts/patches/**') }}
-      - name: Load current release packaging tools
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          path: .pilot-release-tools
-          sparse-checkout: apps/macos/scripts
-      - name: Apply current packaging policy to tagged application source
-        # An older draft must still use ZIP-only publishing and runtime cleanup.
-        # Overlay only packaging helpers, keeping the app, dependencies and vendor pins tagged.
-        run: |
-          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
-          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
-          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
-          # Preserve the executable bit even when retrying a tag with a non-executable helper.
-          cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh
-      # Build, sign and smoke-test the relocated app, not just the Swift executable.
-      - run: apps/macos/scripts/bundle.sh
-      - name: Archive and verify the production app
-        run: |
-          stage="$RUNNER_TEMP/macos-production"
-          mkdir -p "$stage"
-          ditto -c -k --sequesterRsrc --keepParent apps/macos/build/Pilot.app "$stage/Pilot-arm64.zip"
-          python3 apps/macos/scripts/production_artifact.py create "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
-          ditto -x -k "$stage/Pilot-arm64.zip" "$stage/extracted"
-          codesign --verify --deep --strict "$stage/extracted/Pilot.app"
-          apps/macos/scripts/check-runtime.sh "$stage/extracted/Pilot.app/Contents/Resources/runtime"
-      - name: Upload verified production app
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-production-app
-          path: |
-            ${{ runner.temp }}/macos-production/Pilot-arm64.zip
-            ${{ runner.temp }}/macos-production/production-artifact.json
-          if-no-files-found: error
-          overwrite: true
-          compression-level: 0
-
-  # Preserve the Swift updater and distribution independently of the Rust GUI packages.
-  macos-publish:
-    needs: [target, macos-app]
-    runs-on: macos-15
-    timeout-minutes: 20
-    permissions:
-      contents: write
-    env:
-      PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
-      SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
-      RELEASE_TAG: ${{ needs.target.outputs.tag }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.target.outputs.sha }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Verify tagged release source
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - "$RELEASE_TAG" <<'PY'
-          import json, re, sys
-          version = json.load(open('package.json'))['version']
-          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) or sys.argv[1] != f'v{version}':
-              raise SystemExit('Release tag must match the stable package.json version.')
-          PY
-          test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
-      - name: Load current release packaging tools
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          path: .pilot-release-tools
-          sparse-checkout: apps/macos/scripts
-      - name: Apply current packaging policy to tagged application source
-        run: |
-          cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py
-          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
-          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
-          cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh
-      - name: Require update signing configuration
-        env:
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: |
-          if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
-            echo '::error::Configure SPARKLE_PUBLIC_KEY repository variable and SPARKLE_PRIVATE_KEY secret with apps/macos/scripts/setup-updates.sh before publishing.'
-            exit 1
-          fi
-      - uses: actions/download-artifact@v4
-        with:
-          name: macos-production-app
-          path: ${{ runner.temp }}/macos-production
-      - name: Verify and restore the release ZIP
-        run: |
-          stage="$RUNNER_TEMP/macos-production"
-          python3 apps/macos/scripts/production_artifact.py verify "$stage" "$(git rev-parse HEAD)" "$(node -p 'require("./package.json").version')"
-          mkdir -p apps/macos/build
-          ditto -x -k "$stage/Pilot-arm64.zip" apps/macos/build
-          codesign --verify --deep --strict apps/macos/build/Pilot.app
-      - name: Sign and upload the macOS update ZIP and appcast to the stable draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: apps/macos/scripts/publish-release.sh apps/macos/build/Pilot.app "$RUNNER_TEMP/macos-production/Pilot-arm64.zip"
 
   macos-gui:
     needs: target
@@ -305,7 +154,7 @@ jobs:
           gh release upload "$RELEASE_TAG" "release/$manifest" --clobber
 
   publish:
-    needs: [target, gui-publish, macos-publish]
+    needs: [target, gui-publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # Serialize stable publishing. Semantic-version ordering protects latest.

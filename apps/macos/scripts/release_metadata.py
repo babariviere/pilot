@@ -15,8 +15,6 @@ SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 ET.register_namespace("sparkle", SPARKLE)
 # Every platform's assets must be on the draft before it is published.
 DRAFT_ASSETS = (
-    "Pilot-arm64.zip",
-    "appcast.xml",
     "Pilot-Next-macos-arm64.zip",
     "desktop-macos-arm64-update.json",
     "Pilot-Next-linux-x64.zip",

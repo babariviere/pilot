@@ -1,7 +1,11 @@
-# Private builds and automatic updates
+# Legacy Swift builds and automatic updates
 
-GitHub Actions verifies changes on `main`. Release Please maintains a version/changelog PR;
-merging it builds a stable **Apple Silicon (arm64) macOS 14+** release tagged `vX.Y.Z`.
+The Swift application is no longer built or published by GitHub Actions. Existing release assets
+and local build scripts remain available. New releases ship the [Rust GPUI desktop](../desktop/README.md).
+The following documents the retained legacy tooling and historical update behavior, not the active release workflow.
+
+Previously, GitHub Actions verified changes on `main` and Release Please maintained a version/changelog PR;
+merging it built a stable **Apple Silicon (arm64) macOS 14+** release tagged `vX.Y.Z`.
 CI publishes only when Release Please creates a stable release or an existing stable draft is
 explicitly retried. Ordinary main pushes do not publish dev prereleases.
 Pilot checks the private repository every hour while the app is running, first reuses local `gh`

@@ -83,12 +83,10 @@ test("tests never block a release and Release Please never waits for tests", () 
 	const job = jobOf(release);
 	assert.doesNotMatch(job("release-please"), /^    needs:/m);
 	assert.match(job("target"), /^    needs: release-please$/m);
-	assert.match(job("macos-app"), /^    needs: target$/m);
-	assert.match(job("macos-publish"), /^    needs: \[target, macos-app\]$/m);
 	assert.match(job("macos-gui"), /^    needs: target$/m);
 	assert.match(job("linux-gui"), /^    needs: target$/m);
 	assert.match(job("gui-publish"), /^    needs: \[target, macos-gui, linux-gui\]$/m);
-	assert.match(job("publish"), /^    needs: \[target, gui-publish, macos-publish\]$/m);
+	assert.match(job("publish"), /^    needs: \[target, gui-publish\]$/m);
 	for (const name of ["pr.yaml", "main.yaml", "tests.yaml"]) {
 		assert.doesNotMatch(read(name), /release-please-action|contents: write|secrets\./, name);
 	}
@@ -154,34 +152,9 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 	}
 });
 
-test("Swift production release builds cache only pinned dependencies with toolchain-specific keys", () => {
-	for (const [job, script] of [
-		[jobOf(read("release.yaml"))("macos-app"), "bundle"],
-	]) {
-		assert.match(job, /id: swift-toolchain/);
-		assert.match(job, /xcrun --show-sdk-version/);
-		assert.match(job, /uses: actions\/cache@v4/);
-		assert.match(job, /steps\.swift-toolchain\.outputs\.key/);
-		assert.match(job, /runner\.os.*runner\.arch/);
-		assert.match(job, /hashFiles\('apps\/macos\/Package.resolved', 'apps\/macos\/Package.swift'/);
-		assert.match(job, /scripts\/vendor-ghostty.sh.*scripts\/patch-ghostty-resources.py/);
-		assert.match(job, /scripts\/vendor-mermaidkit.sh.*scripts\/patches\/\*\*/);
-		assert.match(job, /scripts\/vendor-quickjs.sh/);
-		const cached = job.slice(job.indexOf("path: |"), job.indexOf("key: swift-deps"));
-		assert.match(cached, /org.swift.swiftpm\/repositories/);
-		assert.match(cached, /org.swift.swiftpm\/artifacts/);
-		assert.match(cached, /Vendor\/libghostty-spm/);
-		assert.match(cached, /Vendor\/MermaidKit/);
-		assert.match(cached, /Vendor\/QuickJSNG/);
-		assert.ok(!cached.includes(".build") && !cached.includes("build/") && !cached.includes("sign"));
-		const build = job.indexOf(`run: apps/macos/scripts/${script}.sh`);
-		assert.ok(build >= 0 && job.indexOf("uses: actions/cache@v4") < build);
-	}
-});
-
 test("shared CI never builds or tests the legacy Swift app", () => {
 	const workflow = read("tests.yaml");
-	for (const name of ["pr.yaml", "main.yaml", "tests.yaml", "gui-package.yml", "linux-package.yml"]) {
+	for (const name of ["pr.yaml", "main.yaml", "tests.yaml", "release.yaml", "gui-package.yml", "linux-package.yml"]) {
 		const source = read(name);
 		assert.doesNotMatch(source, /apps\/macos\/scripts\/(?:build|test|bundle)\.sh|swift (?:build|test)\b/, name);
 		assert.doesNotMatch(source, /steps\.(?:swift[\w-]*|pr-fixtures)\.|outputs\.swift/, name);
@@ -190,8 +163,8 @@ test("shared CI never builds or tests the legacy Swift app", () => {
 	}
 	assert.doesNotMatch(jobOf(workflow)("macos"), /id: changes|fetch-depth:|upload-artifact|actions\/cache|PILOT_SWIFT_JOBS/);
 	assert.doesNotMatch(workflow, /^    needs:/m, "remaining test lanes are independent");
-	// The Swift app and its production release path are deliberately retained.
-	assert.match(jobOf(read("release.yaml"))("macos-app"), /run: apps\/macos\/scripts\/bundle\.sh/);
+	// Keep local Swift source/build tooling, but no legacy release jobs or credentials.
+	assert.doesNotMatch(read("release.yaml"), /macos-app:|macos-publish|SPARKLE_|macos-production-app/);
 	assert.doesNotMatch(read("release.yaml"), /swift-build|actions\/cache\/restore|actions\/cache\/save|stable-mtimes/);
 	const script = readFileSync(new URL("../bundle.sh", import.meta.url), "utf8");
 	assert.match(script, /Release bundles always compile from source/);
@@ -262,7 +235,7 @@ test("release builds run only for newly created stable drafts or explicit retrie
 	c.github.ref = "refs/heads/main";
 	c.github.event.repository.fork = true;
 	assert.equal(evaluate(source, c), false);
-	for (const name of ["macos-app", "macos-publish", "macos-gui", "linux-gui", "gui-publish", "publish"]) {
+	for (const name of ["macos-gui", "linux-gui", "gui-publish", "publish"]) {
 		assert.doesNotMatch(job(name), /^    if:/m, `${name} runs only after target succeeds`);
 	}
 });
@@ -290,43 +263,16 @@ test("the release target resolves the tagged commit and rejects unstable or mism
 
 test("release jobs build and publish the tagged commit, never this run's newer main", () => {
 	const job = jobOf(read("release.yaml"));
-	for (const name of ["macos-app", "macos-publish", "gui-publish"]) {
+	for (const name of ["gui-publish"]) {
 		assert.match(job(name), /- uses: actions\/checkout@v4\n        with:\n(?:          .*\n)*?          ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
 	}
 	for (const name of ["macos-gui", "linux-gui"]) {
 		assert.match(job(name), /ref: \$\{\{ needs\.target\.outputs\.sha \}\}/, name);
 	}
-	for (const name of ["macos-publish", "gui-publish", "publish"]) {
+	for (const name of ["gui-publish", "publish"]) {
 		assert.match(job(name), /RELEASE_TAG: \$\{\{ needs\.target\.outputs\.tag \}\}/, name);
 	}
 	assert.doesNotMatch(read("release.yaml"), /linux-release-rebuild|rebuild=true|production-source/);
-});
-
-test("production packages are built once without private keys and publishing promotes the same bytes", () => {
-	const job = jobOf(read("release.yaml"));
-	const app = job("macos-app");
-	const publish = job("macos-publish");
-	assert.equal(app.match(/run: apps\/macos\/scripts\/bundle\.sh/g).length, 1);
-	assert.match(app, /BUNDLE_RUNTIME: '1'/);
-	assert.match(app, /GITHUB_RUN_NUMBER \+ BUNDLE_VERSION_OFFSET/);
-	assert.match(app, /GITHUB_RUN_ATTEMPT/);
-	// release.yml ended near run 1,100 with offset 10,000. The renamed workflow restarts at run 1.
-	assert.ok(Number(app.match(/BUNDLE_VERSION_OFFSET: '(\d+)'/)[1]) >= 20000);
-	assert.doesNotMatch(app, /secrets\.|contents: write/);
-	assert.match(app, /production_artifact\.py create/);
-	assert.match(app, /codesign --verify --deep --strict "\$stage\/extracted\/Pilot.app"/);
-	assert.match(app, /check-runtime.sh "\$stage\/extracted\/Pilot.app\/Contents\/Resources\/runtime"/);
-	assert.ok(app.indexOf('check-runtime.sh "$stage/extracted') < app.indexOf("- name: Upload verified production app"));
-	assert.match(app, /name: macos-production-app/);
-	assert.match(publish, /uses: actions\/download-artifact@v4\n        with:\n          name: macos-production-app/);
-	assert.match(publish, /production_artifact\.py verify "\$stage" "\$\(git rev-parse HEAD\)"/);
-	assert.ok(publish.indexOf("production_artifact.py verify") < publish.indexOf('ditto -x -k "$stage/Pilot-arm64.zip"'));
-	assert.match(publish, /publish-release.sh apps\/macos\/build\/Pilot.app "\$RUNNER_TEMP\/macos-production\/Pilot-arm64.zip"/);
-	assert.doesNotMatch(publish, /swift build|pnpm install|bundle\.sh|bundle-runtime\.sh/);
-	assert.doesNotMatch(publish, /run-id:|github-token:/);
-	assert.match(publish, /contents: write/);
-	assert.doesNotMatch(publish, /LINUX_RUNTIME_PUBLIC_KEY/);
-	assert.doesNotMatch(publish, /--draft=false|finalize-release|concurrency:/);
 });
 
 test("GUI release signing follows successful package verification", () => {
@@ -351,28 +297,11 @@ test("one serialized job publishes the complete draft after both platforms uploa
 	assert.doesNotMatch(script, /--draft=false/);
 });
 
-test("release jobs apply current packaging helpers without changing tagged application source", () => {
-	const job = jobOf(read("release.yaml"));
-	for (const name of ["macos-app", "macos-publish"]) {
-		const body = job(name);
-		const tools = body.indexOf("- name: Load current release packaging tools");
-		const overlay = body.indexOf("- name: Apply current packaging policy");
-		assert.ok(tools >= 0 && tools < overlay, name);
-		assert.match(body.slice(tools, overlay), /ref: \$\{\{ github\.sha \}\}/);
-		assert.match(body.slice(tools, overlay), /persist-credentials: false/);
-		assert.match(body.slice(tools, overlay), /path: \.pilot-release-tools/);
-		const end = body.indexOf("\n      - ", overlay + 1);
-		const commands = body
-			.slice(overlay, end)
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.startsWith("cp "));
-		assert.deepEqual(commands, [
-			"cp .pilot-release-tools/apps/macos/scripts/production_artifact.py apps/macos/scripts/production_artifact.py",
-			"cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py",
-			"cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh",
-			"cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh",
-		], name);
-	}
-	assert.ok(job("macos-app").indexOf("Apply current packaging policy") < job("macos-app").indexOf("run: apps/macos/scripts/bundle.sh"));
+test("finalization verifies GUI signatures without requiring legacy Sparkle assets", () => {
+	const script = readFileSync(new URL("../finalize-release.sh", import.meta.url), "utf8");
+	assert.match(script, /complete-draft/);
+	assert.match(script, /gui-release-manifest\.mjs" verify-release/);
+	assert.match(script, /is-newer "\$app_version" "\$latest_tag"/);
+	assert.doesNotMatch(script, /appcast|Sparkle|is-newer-build|publish-release\.sh/);
+	assert.ok(script.indexOf("verify-release") < script.indexOf("gh release edit"));
 });
