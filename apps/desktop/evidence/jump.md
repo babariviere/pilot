@@ -3,8 +3,9 @@
 Cmd/Ctrl-K is a read-only jump palette, not a general action launcher or full
 Swift palette replacement. It projects existing loaded Local pages, configured
 project IDs and chat IDs only. It never treats folder equality as identity.
-No transcript scan, new endpoint/subscription, private review marks, provider
-reasoning, canonical write or inferred authority is involved in building/search.
+The contextual link extension below scans a captured loaded reader only. No new
+endpoint/subscription, private review marks, provider reasoning, canonical write
+or inferred authority is involved in building/search.
 
 ## Behavior and boundaries
 
@@ -175,3 +176,46 @@ incorrectly inspected backing draft state rather than the live textarea. Both
 were corrected; neither failing run is counted as successful evidence. The final
 run removed an unnecessary URL-length cap under the simpler-code decision.
 No new state machine, subscription, transport request or recovery layer added.
+
+
+## Current-chat web destinations
+
+`jump_links.rs` adds current-chat PR and web destinations directly to the main
+palette. There is no intermediate chooser or popup. Each Open pull request /
+Open link row names its target and opens it only on explicit activation. The
+Current chat links (loaded) group retains all admitted links, not just six
+suggestions, and uses the normal palette search, selection and Escape/focus.
+Canonical summary/bound PR URLs lead, then confirmed loaded creation events, then
+explicit loaded message URLs in the existing Links inspector's latest-first scan
+order. Exact WHATWG web serializations deduplicate harmless host/default-port
+spellings without stripping query strings, fragments or other meaningful parts.
+Repository/PR titles and host/destination distinguish choices. No branch/remote
+guess, command execution, URL fetch or new history read is involved.
+
+Opening captures the mounted reader once. Scanning/filtering run off-thread and
+reuse the existing bounded `conversation_links` scan, including its exclusions
+and limit notice. The group label says Current chat links (loaded); these are not complete
+history. Reopening captures newer messages; streaming does
+not continuously rescan. Selected chat plus reader generation fence the catalog
+and activation, independent of writable/archive state. A reader switch discards
+captured rows; stale rendered destinations cannot open another chat's URLs.
+The existing `external_links::web/open` path rejects credentials, non-web schemes
+and unsafe targets, keeps existing macOS Linear/Slack mapping, and preserves
+Linux's web fallback. No OS opener runs while building or refreshing lists.
+
+Coverage is part of the existing `jump` native target and `jump::` library scope:
+zero/one/multiple PRs and links, canonical duplicates, unsafe URLs, unknown
+creation outcomes, confirmed audit provenance, Unicode filtering, scan caveats,
+archived Ask/read-only chats, selected-reader races, Return/arrow/Escape and
+synthetic preedit. The hidden production palette journeys use an injected
+opener, assert exactly two specific opens per scene and zero transport commands,
+and optionally capture 680/1100 light/dark frames via `PILOT_NEXT_JUMP_DIR`.
+This is not live browser, OS IME, Wayland or performance qualification.
+
+Direct-entry verification: `python3 scripts/check-scoped.py --unit jump:: --test
+jump --lint` passed all8 catalog tests, all4 existing navigation scenes and all4
+contextual-link scenes (680/1100 light/dark). Strict scoped Clippy, plain
+`cargo.sh build --locked -p pilot-desktop` and changed-file rustfmt passed.
+Actual narrow light and wide dark main-palette GPUI captures were inspected for
+readable titles/destinations, neutral selection and unclipped controls. The
+existing `block0.1.6` future-compatibility notice remains.

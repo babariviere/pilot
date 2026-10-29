@@ -9,6 +9,18 @@ use gpui_kit::{EntityInputHandler, StatefulInteractiveElement};
 impl LocalViewer {
     pub(super) fn jump_source(&self) -> Snapshot {
         Snapshot {
+            reader: (self.page == Page::Chat
+                && self.state.loaded
+                && self.state.generation == self.generation)
+                .then(|| {
+                    self.selected
+                        .clone()
+                        .map(|chat| crate::jump::links::Reader {
+                            chat,
+                            generation: self.generation,
+                        })
+                })
+                .flatten(),
             chats: self.state.chats.clone(),
             projects: self.state.projects.clone(),
             scope: self.project_scope.clone(),
@@ -61,7 +73,12 @@ impl LocalViewer {
         }
         self.jump_return = w.focused(cx);
         let source = self.jump_source();
-        let palette = cx.new(|cx| JumpPalette::new(source, w, cx));
+        let rows = if source.reader.is_some() {
+            self.transcript.read(cx).link_snapshot_rows()
+        } else {
+            Vec::new()
+        };
+        let palette = cx.new(|cx| JumpPalette::new(source, rows, w, cx));
         self.jump_subscription = Some(cx.subscribe_in(&palette, w, |v, p, event, w, cx| {
             if v.jump.as_ref() != Some(p) {
                 return;
@@ -86,6 +103,10 @@ impl LocalViewer {
                         Destination::ArchiveChat(id) => {
                             v.jump_source().archive.as_ref() == Some(id)
                         }
+                        Destination::OpenLink { reader, url } => {
+                            v.jump_source().reader.as_ref() == Some(reader)
+                                && crate::external_links::web(url).is_some()
+                        }
                         _ => true,
                     };
                     if !valid {
@@ -104,6 +125,11 @@ impl LocalViewer {
                             }
                         }
                         Destination::ArchiveChat(id) => v.archive_current_chat(id, w, cx),
+                        Destination::OpenLink { url, .. } => {
+                            if let Some(url) = crate::external_links::web(&url) {
+                                crate::external_links::open(&url, cx);
+                            }
+                        }
                     }
                 }
             }

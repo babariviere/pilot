@@ -526,14 +526,22 @@ Markdown metrics. See [shell hierarchy evidence](evidence/workbench.md).
 Cmd/Ctrl-F focuses chat search.
 Cmd/Ctrl-K opens a read-only resource jump palette over loaded pages, projects
 and chats. Search is case/diacritic/width folded, grouped and bounded to six
-matches per group. Empty search offers pages, projects and recent writable
+matches per ordinary group. Empty search offers pages, projects, current-chat links and recent writable
 nonarchived chats; explicit search also finds retained/archived chats. Arrow keys
 choose, Return opens, Escape or Cmd/Ctrl-K closes and restores focus. No actions
 or background reads run from search; explicit chat opens use the existing Local
 subscription contract. Catalog/search work runs off the UI thread only while
 open; closing releases it. Search by `123`, `#123` or `PR #123` to prioritize chats with an exact loaded
 PR association, showing repository/project context. No GitHub lookup or title-digit
-inference is performed. See [jump evidence](evidence/jump.md).
+inference is performed. Current-chat PRs and web links appear directly in the main
+palette, under Current chat links (loaded), with meaningful titles and exact
+destinations. Each Open pull request or Open link row opens only that explicit
+target, with no secondary popup or chooser. Sources are linked PR metadata,
+confirmed loaded GitHub events and explicit web URLs in the captured loaded
+message window, not complete history. The existing safe web/desktop-app opener
+is reused, without history fanout, URL prefetch or GitHub commands. Archived/
+read-only chats can open links; a selected-reader change invalidates stale
+targets. Reopen the palette to capture newer messages. See [jump evidence](evidence/jump.md).
 
 Swift-style 4/6/8/10/12/14-point radii shape small
 controls, rows, controls, cards, user bubbles and composer trays. Native 2-point

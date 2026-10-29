@@ -32,6 +32,9 @@ fn rows() -> Vec<Message> {
         "Synthetic retained reader 👩‍💻 e\u{301}.".into(),
     )]
 }
+#[path = "jump_links_probe.rs"]
+mod link_journeys;
+
 pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_JUMP_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
@@ -455,4 +458,5 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             cx.run_until_parked();
         }
     }
+    link_journeys::run(cx);
 }

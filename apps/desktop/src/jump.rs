@@ -3,11 +3,15 @@ use crate::local_model::{Chat, Project};
 use std::sync::{Arc, Weak};
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub(crate) const GROUP_LIMIT: usize = 6;
-// Retain only summary association metadata, never PR titles or opener targets.
+#[path = "jump_links.rs"]
+pub(crate) mod links;
+
+// Exact summary association, including its validated opener target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PullRequest {
     number: u64,
     repository: String,
+    url: String,
 }
 fn number(text: &str) -> Option<u64> {
     (!text.is_empty() && text.len() <= 9 && text.bytes().all(|b| b.is_ascii_digit()))
@@ -19,7 +23,7 @@ fn pr_query(text: &str) -> Option<u64> {
     number(text.strip_prefix('#').unwrap_or(text))
 }
 fn pr_url(text: &str) -> Option<PullRequest> {
-    let url = reqwest::Url::parse(text).ok()?;
+    let url = crate::external_links::web(text)?;
     if !matches!(url.scheme(), "https" | "http")
         || !url.username().is_empty()
         || url.password().is_some()
@@ -41,6 +45,7 @@ fn pr_url(text: &str) -> Option<PullRequest> {
     }
     Some(PullRequest {
         number: number(parts[3])?,
+        url: url.to_string(),
         repository: if host == "github.com" {
             format!("{}/{}", parts[0], parts[1])
         } else {
@@ -85,6 +90,7 @@ pub(crate) enum Destination {
     Project(String),
     Chat(String),
     ArchiveChat(String),
+    OpenLink { reader: links::Reader, url: String },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
@@ -92,6 +98,7 @@ pub(crate) enum Kind {
     Project,
     Chat,
     Action,
+    Link,
 }
 impl Kind {
     pub(crate) fn title(self, suggested: bool) -> &'static str {
@@ -101,6 +108,7 @@ impl Kind {
             Self::Chat if suggested => "Recent chats",
             Self::Chat => "Chats",
             Self::Action => "Actions",
+            Self::Link => "Current chat links (loaded)",
         }
     }
 }
@@ -113,6 +121,7 @@ pub(crate) struct Snapshot {
     pub(crate) archive: Option<String>,
     pub(crate) loaded: bool,
     pub(crate) projects_error: bool,
+    pub(crate) reader: Option<links::Reader>,
 }
 impl Snapshot {
     pub(crate) fn same(&self, other: &Self) -> bool {
@@ -123,6 +132,7 @@ impl Snapshot {
             && self.archive == other.archive
             && self.loaded == other.loaded
             && self.projects_error == other.projects_error
+            && self.reader == other.reader
     }
 }
 #[derive(Clone, PartialEq, Eq)]
@@ -148,6 +158,7 @@ pub(crate) struct Entry {
     keywords: Vec<String>,
     suggested: bool,
     pull_requests: Vec<PullRequest>,
+    pub(crate) is_pr: bool,
 }
 impl Entry {
     fn new(
@@ -169,6 +180,7 @@ impl Entry {
             detail,
             suggested,
             pull_requests: Vec::new(),
+            is_pr: false,
         }
     }
 }
@@ -179,6 +191,8 @@ pub(crate) struct Catalog {
     scope: Option<String>,
     selected: Option<String>,
     archive: Option<String>,
+    reader: Option<links::Reader>,
+    pub(crate) links_limited: bool,
 }
 pub(crate) struct Group {
     pub(crate) kind: Kind,
@@ -196,6 +210,7 @@ impl Catalog {
             && self.scope == s.scope
             && self.selected == s.selected
             && self.archive == s.archive
+            && self.reader == s.reader
     }
     // Invoked off the UI thread. Weak allocation identities cannot alias a reused
     // address and do not retain the full summary/cwd payload in the catalog.
@@ -326,6 +341,8 @@ impl Catalog {
             scope: s.scope.clone(),
             selected: s.selected.clone(),
             archive: s.archive.clone(),
+            reader: s.reader.clone(),
+            links_limited: false,
         }
     }
     pub(crate) fn detail(&self, entry: &Entry, query: &Query) -> String {
@@ -404,7 +421,11 @@ impl Catalog {
                 kind,
                 rows: rows
                     .into_iter()
-                    .take(GROUP_LIMIT)
+                    .take(if kind == Kind::Link {
+                        usize::MAX
+                    } else {
+                        GROUP_LIMIT
+                    })
                     .map(|(ix, _)| ix)
                     .collect(),
             })
@@ -458,7 +479,7 @@ mod tests {
             json!({"id":"prefix","title":"Atlas notes","state":"idle","projectId":"a"}),
             json!({"id":"exact","title":"Atlas","state":"idle"}),
             json!({"id":"archived","title":"Old notes","state":"idle","archivedAt":1}),
-        ].iter().map(|v|crate::local_model::chat(v).unwrap()).collect()),scope:None,selected:Some("current".into()),archive:Some("current".into()),loaded:true,projects_error:false}
+        ].iter().map(|v|crate::local_model::chat(v).unwrap()).collect()),scope:None,selected:Some("current".into()),archive:Some("current".into()),loaded:true,projects_error:false,reader:None}
     }
     #[test]
     fn archive_action_search_targets_current_only() {

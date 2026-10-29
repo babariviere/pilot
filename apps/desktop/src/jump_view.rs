@@ -82,6 +82,8 @@ impl ListDelegate for JumpList {
         let group = self.matches.groups.get(section)?;
         Some(
             div()
+                .id(SharedString::from(format!("jump-section-{:?}", group.kind)))
+                .test_support()
                 .px_2()
                 .py_1()
                 .text_xs()
@@ -125,6 +127,8 @@ impl ListDelegate for JumpList {
             Destination::Overview(_) => AppIcon::Overview,
             Destination::Project(_) => AppIcon::Project,
             Destination::ArchiveChat(_) => AppIcon::Chats,
+            Destination::OpenLink { .. } if e.is_pr => AppIcon::PullRequest,
+            Destination::OpenLink { .. } => AppIcon::OpenLink,
         };
         let epoch = self.epoch;
         Some(
@@ -179,6 +183,7 @@ pub(crate) struct JumpPalette {
     ready: bool,
     task: Option<Task<()>>,
     _subscription: Subscription,
+    rows: Arc<Vec<crate::model::Message>>,
 }
 impl EventEmitter<JumpEvent> for JumpPalette {}
 impl JumpPalette {
@@ -192,7 +197,12 @@ impl JumpPalette {
             d.selected.clone(),
         )
     }
-    pub(crate) fn new(source: Snapshot, w: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        source: Snapshot,
+        rows: Vec<crate::model::Message>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let owner = cx.weak_entity();
         let list = cx.new(|cx| {
             ListState::new(
@@ -237,6 +247,7 @@ impl JumpPalette {
             ready: false,
             task: None,
             _subscription: subscription,
+            rows: Arc::new(rows),
         };
         v.request(Query::new(""), w, cx);
         v
@@ -254,6 +265,11 @@ impl JumpPalette {
         if self.source.same(&source) {
             return;
         }
+        if self.source.reader != source.reader {
+            // Never scan the previous chat after a reader switch. Reopen to
+            // capture the new reader; linked metadata remains independently valid.
+            self.rows = Arc::new(Vec::new());
+        }
         self.source = source;
         self.request(self.query.clone(), w, cx);
     }
@@ -264,11 +280,14 @@ impl JumpPalette {
         self.ready = false;
         let source = self.source.clone();
         let existing = self.catalog.clone().filter(|c| c.same(&source));
+        let rows = self.rows.clone();
         self.task = Some(cx.spawn_in(w, async move |v, cx| {
             let (catalog, matches) = cx
                 .background_executor()
                 .spawn(async move {
-                    let catalog = existing.unwrap_or_else(|| Arc::new(Catalog::new(&source)));
+                    let catalog = existing.unwrap_or_else(|| {
+                        Arc::new(Catalog::with_links(&source, rows.as_ref().clone()))
+                    });
                     let matches = catalog.search(&query);
                     (catalog, matches)
                 })
@@ -374,17 +393,17 @@ impl Render for JumpPalette {
             .min_w_0()
             .gap_2()
             .child(div().font_semibold().child("Jump to…"))
-            .child(
-                div().flex_1().min_h_0().min_w_0().child(
-                    List::new(&self.list).search_placeholder("Pages, projects, chats or PR #…"),
-                ),
-            )
+            .child(div().flex_1().min_h_0().min_w_0().child(
+                List::new(&self.list).search_placeholder("Pages, projects, chats, links or PR #…"),
+            ))
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(if !self.ready {
                         "Updating matches…"
+                    } else if self.catalog.as_ref().is_some_and(|c| c.links_limited) {
+                        "Scan limit reached · more loaded links may be omitted"
                     } else if self.source.projects_error {
                         "Couldn't refresh projects · showing the last list"
                     } else if !self.source.loaded {
