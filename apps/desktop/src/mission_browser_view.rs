@@ -533,6 +533,24 @@ impl Browser {
             cx.notify();
         }
         let source = self.brief_source();
+        for form in &self.lifecycle {
+            let available = self.online
+                && self.current(self.generation)
+                && self.catalog_current
+                && source.as_ref().is_some_and(|s| {
+                    self.catalog.as_ref().is_some_and(|c| s.canonical(c))
+                        && self
+                            .options
+                            .as_ref()
+                            .is_some_and(|o| form.read(cx).matches(s, o))
+                });
+            form.update(cx, |f, cx| {
+                if f.available != available {
+                    f.available = available;
+                    cx.notify();
+                }
+            });
+        }
         if let Some(brief) = &self.brief {
             brief.update(cx, |v, cx| v.sync(source.as_ref(), self.online, cx));
         }

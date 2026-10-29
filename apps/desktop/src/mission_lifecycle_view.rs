@@ -20,6 +20,7 @@ pub(crate) struct Form {
     pub(crate) source: Source,
     options: LocalOptions,
     pub(crate) visible: bool,
+    pub(crate) available: bool,
     pub(crate) state: State,
     pub(crate) snapshot: Option<Snapshot>,
     action: Lifecycle,
@@ -60,6 +61,7 @@ impl Form {
             source,
             options,
             visible: true,
+            available: true,
             state: State::default(),
             snapshot: None,
             action,
@@ -100,7 +102,7 @@ impl Form {
         if self.snapshot.is_some() || self.read.is_some() || self.state.attempt.is_some() {
             return;
         }
-        let output = match wire::read(self.options.clone(), self.source.clone()) {
+        let output = match wire::read(self.options.clone(), self.source.clone(), self.action) {
             Ok(o) => o,
             Err(e) => {
                 self.error = Some(e);
@@ -125,7 +127,7 @@ impl Form {
         }));
     }
     fn submit(&mut self, cx: &mut Context<Self>) {
-        if !self.visible || self.read.is_some() {
+        if !self.visible || !self.available || self.read.is_some() {
             return;
         }
         let Some(before) = &self.snapshot else {
@@ -166,10 +168,11 @@ impl Form {
 }
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let blocked = self
-            .snapshot
-            .as_ref()
-            .is_none_or(|s| !self.action.allowed(&s.status))
+        let blocked = !self.available
+            || self
+                .snapshot
+                .as_ref()
+                .is_none_or(|s| !self.action.eligible(s))
             || self.state.attempt.is_some()
             || self.read.is_some();
         let mut form=div().id("mission-lifecycle").test_support().track_focus(&self.focus).key_context("MissionLifecycle").w_full().min_w_0().v_flex().gap_3()
@@ -181,6 +184,18 @@ impl Render for Form {
             .child(Notice::new("Only the mission status changes. Chats, coordinator, tasks, brief, history and drafts are kept. No chat is archived, restored, started or stopped. Existing work continues."))
             .child(Notice::new("Automatic coordinator notices stay paused for this mission, including after restart. Use its chats explicitly. Reopening does not restore an already archived chat."));
         if let Some(s) = &self.snapshot {
+            if self.action == Lifecycle::Complete
+                && let Some(f) = &s.finished
+            {
+                form = form.child(ui::text(
+                    Text::Body,
+                    SharedString::from(if f.dropped == 0 {
+                        format!("{} tasks done", f.done)
+                    } else {
+                        format!("{} done · {} dropped", f.done, f.dropped)
+                    }),
+                ));
+            }
             form = form.child(ui::text(
                 Text::Caption,
                 SharedString::from(format!("{} → {}", s.status, self.action.status())),

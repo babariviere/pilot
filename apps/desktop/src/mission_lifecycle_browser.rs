@@ -2,6 +2,33 @@
 use super::*;
 use crate::{mission_lifecycle::Action as Lifecycle, mission_lifecycle_view::Form};
 impl Browser {
+    pub(super) fn completion_action(
+        &self,
+        generation: u64,
+        cx: &Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
+        let d = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())) && d.status == "active")?;
+        let source = self.brief_source()?;
+        let enabled = self.current(generation)
+            && self.online
+            && self.catalog_current
+            && self.catalog.as_ref().is_some_and(|c| source.canonical(c))
+            && d.finished.is_some();
+        Some(
+            ui::action("mission-mark-done", "Mark done", Action::Primary)
+                .disabled(!enabled)
+                .tooltip("Mark this mission done when every remaining task is done")
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    if v.generation == generation {
+                        v.open_lifecycle(Lifecycle::Complete, w, cx);
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
     pub(crate) fn hide_lifecycle(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         let owned = self
             .lifecycle
@@ -30,6 +57,15 @@ impl Browser {
             return;
         };
         if !self.catalog.as_ref().is_some_and(|c| source.canonical(c)) {
+            return;
+        }
+        if action == Lifecycle::Complete
+            && (!self.catalog_current
+                || !self
+                    .detail
+                    .as_ref()
+                    .is_some_and(|d| d.status == "active" && d.finished.is_some()))
+        {
             return;
         }
         let form = if let Some(f) = self
@@ -69,6 +105,7 @@ impl Browser {
         self.sync_tasks(None, w, cx);
         form.update(cx, |v, cx| {
             v.visible = true;
+            v.available = true;
             v.prepare(action);
             v.load(cx);
             v.focus(w, cx);

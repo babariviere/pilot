@@ -34,6 +34,7 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     /// Existing-chat conversion has atomic unassigned-source admission. Absent on older runtimes.
     public let guardedMissionConversion: Bool?
     public let passiveMissionLifecycle: Bool?
+    public let passiveMissionCompletion: Bool?
     public let passiveTaskModel: Bool?
     public let passiveFailedModel: Bool?
     public let guardedQueue: Bool?

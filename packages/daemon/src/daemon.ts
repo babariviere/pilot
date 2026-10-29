@@ -218,7 +218,7 @@ const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at)
 });
 // Recover a completion committed just before a crash. Per-item events preserve later user reopens.
 for (const mission of missionStore.list())
-	if (mission.status === "done" && mission.completedAt !== undefined)
+	if (mission.status === "done" && !mission.passiveLifecycle && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
 // Keep legacy grants occupied and delegated sessions fenced, without loading any live

@@ -1958,7 +1958,7 @@ export interface MissionLifecycleRequest {
 	home: { daemonId: string; lineageId: string };
 	projectId: string;
 	expectedStatus: MissionStatus;
-	action: "archive" | "reopen";
+	action: "archive" | "reopen" | "complete";
 }
 export interface MissionLifecycleResponse {
 	operationId: string;

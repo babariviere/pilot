@@ -36,6 +36,98 @@ fn writes(server: &Server) -> usize {
         .filter(|(m, _, _)| m != "GET")
         .count()
 }
+fn finished_detail() -> Value {
+    let mut v = f::detail("mission-A");
+    v["tasks"][0]["status"] = json!("dropped");
+    v["mission"]["tasksTotal"] = json!(1);
+    v
+}
+fn completion() -> Submission {
+    State::default()
+        .begin(
+            &source(),
+            &model::detail(&source(), &finished_detail()).unwrap(),
+            Action::Complete,
+        )
+        .unwrap()
+}
+#[tokio::test]
+async fn completion_requalifies_capability_identity_and_catalog_before_one_post() {
+    let s = completion();
+    for kind in [
+        "eligible",
+        "reopened",
+        "offline",
+        "incomplete",
+        "foreign",
+        "old-daemon",
+    ] {
+        let server = Server::start();
+        let mut v = finished_detail();
+        match kind {
+            "reopened" => v["tasks"][1]["status"] = json!("todo"),
+            "incomplete" => v["tasks"] = json!([]),
+            "foreign" => v["mission"]["projectId"] = json!("other"),
+            "old-daemon" => server.reply("GET", "/api/hello", Reply::json(200, json!({"daemonId":"test-daemon","lineageId":"test-lineage","capabilities":{"passiveMissionLifecycle":true}}))),
+            _ => {}
+        }
+        server.reply(
+            "GET",
+            "/api/missions/mission-A",
+            Reply::json(if kind == "offline" { 503 } else { 200 }, v),
+        );
+        server.reply(
+            "POST",
+            "/api/missions/mission-A/lifecycle",
+            Reply::json(200, ack(&s)),
+        );
+        let outcome = write(&client().unwrap(), &server.options, &s).await;
+        if kind == "eligible" {
+            assert_eq!(outcome, Outcome::Ack);
+            assert_eq!(writes(&server), 1);
+        } else {
+            assert!(
+                matches!(outcome, Outcome::NotSent(_)),
+                "{kind}: {outcome:?}"
+            );
+            assert_eq!(writes(&server), 0);
+        }
+    }
+}
+#[tokio::test]
+async fn completion_error_lost_or_mismatched_ack_stays_unknown_without_replay() {
+    for status in [Some(400), Some(409), Some(500), None, Some(200)] {
+        let server = Server::start();
+        server.reply(
+            "GET",
+            "/api/missions/mission-A",
+            Reply::json(200, finished_detail()),
+        );
+        let mut state = State::default();
+        let s = state
+            .begin(&source(), &completion().before, Action::Complete)
+            .unwrap();
+        let mut reply = Reply::json(status.unwrap_or(200), json!({"operationId":"wrong"}));
+        reply.status = status;
+        server.reply("POST", "/api/missions/mission-A/lifecycle", reply);
+        let outcome = write(&client().unwrap(), &server.options, &s).await;
+        assert!(matches!(outcome, Outcome::Unknown(_)));
+        assert!(state.finish(&s, outcome));
+        let mut later = finished_detail();
+        later["mission"] = ack(&s)["mission"].clone();
+        server.reply("GET", "/api/missions/mission-A", Reply::json(200, later));
+        assert_eq!(
+            fetch(&client().unwrap(), &server.options, &source())
+                .await
+                .unwrap()
+                .status,
+            "done"
+        );
+        assert!(state.begin(&source(), &s.before, Action::Complete).is_err());
+        assert!(matches!(state.attempt, Some((_, Outcome::Unknown(_)))));
+        assert_eq!(writes(&server), 1);
+    }
+}
 #[tokio::test]
 async fn exact_post_and_ack_with_no_other_mutations() {
     let server = Server::start();
@@ -137,7 +229,7 @@ async fn whole_detail(chunked: bool) {
     server.reply("GET", "/api/missions/mission-A", reply);
     let s = capture();
     assert_eq!(
-        read(server.options.clone(), source())
+        read(server.options.clone(), source(), Action::Archive)
             .unwrap()
             .recv()
             .await

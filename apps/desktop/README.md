@@ -43,6 +43,13 @@ See [bundled Local runtime](docs/bundled-runtime.md) and
 
 ### Chat actions
 
+Mission detail offers **Mark done** when every remaining task is done, with at
+least one done task. Dropped tasks do not block it and are named in confirmation.
+This is an explicit status-only action, independent of task filters/folds. It
+keeps working chats and history, never completes tasks or releases claims, and
+requires the daemon's passive-completion capability. Archive/Reopen remain in
+the mission's More menu. See [mission lifecycle](docs/mission-lifecycle.md).
+
 macOS has a native application menu bar with standard editing, New Chat,
 navigation, Settings and window commands. See [native menus](docs/native-menus.md)
 for focus ownership, Quit persistence and verification boundaries.

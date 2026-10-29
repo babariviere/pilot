@@ -773,6 +773,7 @@ export function createDaemonServer(
 					...hello.capabilities,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
+					passiveMissionCompletion: missions ? true : undefined,
 					passiveTaskModel: missions ? true : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,

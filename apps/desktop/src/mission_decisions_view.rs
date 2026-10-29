@@ -188,34 +188,46 @@ impl Browser {
                 div()
                     .h_flex()
                     .items_center()
-                    .justify_between()
-                    .children(
-                        self.decisions
-                            .opened
-                            .then(|| ui::heading("decisions-heading", "Decisions", Text::Headline)),
-                    )
+                    .gap_2()
+                    .flex_wrap()
+                    .children(self.decisions.opened.then(|| {
+                        div().flex_1().child(ui::heading(
+                            "decisions-heading",
+                            "Decisions",
+                            Text::Headline,
+                        ))
+                    }))
                     .child(
-                        ui::action(
-                            "mission-decisions-open",
-                            if self.decisions.opened {
-                                "Hide"
-                            } else {
-                                "Read decisions"
-                            },
-                            if self.decisions.opened {
-                                Action::Quiet
-                            } else {
-                                Action::Secondary
-                            },
-                        )
-                        .on_click(cx.listener(move |v, _, w, cx| {
-                            if v.generation != generation || v.brief_marked(w, cx) {
-                                return;
-                            }
-                            v.focus.focus(w, cx);
-                            v.decisions.opened = !v.decisions.opened;
-                            cx.notify();
-                        })),
+                        div()
+                            .h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(
+                                ui::action(
+                                    "mission-decisions-open",
+                                    if self.decisions.opened {
+                                        "Hide"
+                                    } else {
+                                        "Read decisions"
+                                    },
+                                    if self.decisions.opened {
+                                        Action::Quiet
+                                    } else {
+                                        Action::Secondary
+                                    },
+                                )
+                                .on_click(cx.listener(
+                                    move |v, _, w, cx| {
+                                        if v.generation != generation || v.brief_marked(w, cx) {
+                                            return;
+                                        }
+                                        v.focus.focus(w, cx);
+                                        v.decisions.opened = !v.decisions.opened;
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .children(self.completion_action(generation, cx)),
                     ),
             );
         if !self.decisions.opened {

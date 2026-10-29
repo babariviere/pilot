@@ -5505,3 +5505,115 @@ test("proposals expose only coordinator results and never alter member prompt wo
 	result = (await f.service.call(lead.id, "get", {})) as typeof result;
 	assert.equal(result.decisionProposals[0]!.status, "accepted");
 });
+
+test("passive completion HTTP ACK waits for durability and preserves working members", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const m = f.store.create({ projectId: f.project.id, title: "Keep", tasks: [{ title: "Done" }] });
+	f.store.join(member.id, m.id);
+	f.store.updateTask(m.id, "1", { status: "done", sessionId: member.id });
+	const worker = f.workers.get(member.id)!;
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	const before = f.sessions.get(member.id)!;
+	const requestsBefore = worker.requests.length;
+	const tasks = f.store.tasks(m.id);
+	const start = t.mock.method(f.sessions as unknown as { start(id: string): Promise<void> }, "start", async () =>
+		assert.fail("no starts"),
+	);
+	const archive = t.mock.method(f.sessions, "archive", async () => assert.fail("no archive"));
+	const phases = t.mock.method(f.store as unknown as { reconcilePhases(id: string): void }, "reconcilePhases", () =>
+		assert.fail("no phase reconciliation"),
+	);
+	const linear = t.mock.method(f.store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () =>
+		assert.fail("no Linear reconciliation"),
+	);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "test",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: "darwin",
+			arch: "arm64",
+			capabilities: {
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: true,
+				independentExecution: true,
+			},
+		},
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const hello = await fetch(`${base}/hello`).then((r) => r.json());
+	assert.equal(hello.capabilities.passiveMissionCompletion, true);
+
+	const payload = {
+		operationId: randomUUID(),
+		home: { daemonId: hello.daemonId, lineageId: hello.lineageId },
+		projectId: f.project.id,
+		expectedStatus: "active",
+		action: "complete",
+	};
+	const post = (value: unknown) =>
+		fetch(`${base}/missions/${m.id}/lifecycle`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+	let release!: () => void;
+	const hold = new Promise<void>((r) => {
+		release = r;
+	});
+	const durable = f.store.durable.bind(f.store);
+	const wait = t.mock.method(f.store, "durable", async () => {
+		await hold;
+		await durable();
+	});
+	let received = false;
+	const response = post(payload).then(async (r) => {
+		const body = await r.json();
+		received = true;
+		return { status: r.status, body };
+	});
+	await until(() => wait.mock.calls.length > 0);
+	assert.equal(received, false);
+	assert.equal(f.store.require(m.id).status, "done");
+	release();
+	const ack = await response;
+	assert.equal(ack.status, 200);
+	assert.equal(ack.body.operationId, payload.operationId);
+	assert.equal(ack.body.mission.id, m.id);
+	assert.equal(ack.body.mission.passiveLifecycle, true);
+	assert.deepEqual(f.store.tasks(m.id), tasks);
+	assert.equal(f.sessions.get(member.id)!.working, before.working);
+	assert.equal(f.sessions.get(member.id)!.archivedAt, before.archivedAt);
+	assert.equal(start.mock.calls.length, 0);
+	assert.equal(archive.mock.calls.length, 0);
+	assert.equal(worker.stopped, false);
+	assert.equal(worker.requests.length, requestsBefore, "no input, abort or other worker request");
+	assert.equal(phases.mock.calls.length, 0);
+	assert.equal(linear.mock.calls.length, 0);
+});

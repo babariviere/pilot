@@ -20,7 +20,7 @@ export function parseMissionLifecycle(
 		typeof v.projectId !== "string" ||
 		!/^[a-zA-Z0-9._-]{1,128}$/.test(v.projectId) ||
 		!["active", "done", "archived"].includes(String(v.expectedStatus)) ||
-		(v.action !== "archive" && v.action !== "reopen")
+		(v.action !== "archive" && v.action !== "reopen" && v.action !== "complete")
 	)
 		throw new Error("Invalid lifecycle confirmation");
 	if (!home || h.daemonId !== home.daemonId || h.lineageId !== home.lineageId)

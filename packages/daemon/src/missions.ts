@@ -2242,28 +2242,49 @@ export class MissionStore {
 	}
 
 	/** Explicit status-only lifecycle. No task reconciliation, role transitions, chat archival or wake. */
-	lifecycle(id: string, projectId: string, expected: MissionStatus, action: "archive" | "reopen"): Mission {
+	lifecycle(
+		id: string,
+		projectId: string,
+		expected: MissionStatus,
+		action: "archive" | "reopen" | "complete",
+	): Mission {
 		if (this.batchedChanges) throw new Conflict("Lifecycle changes cannot be batched");
-		const mission = this.require(id);
-		if (mission.projectId !== projectId || mission.status !== expected)
-			throw new Conflict("The confirmed mission has changed; review it again");
-		if (
-			(action !== "archive" && action !== "reopen") ||
-			(action === "archive" ? expected === "archived" : expected === "active")
-		)
-			throw new Conflict("That lifecycle transition is unavailable");
-		const status = action === "archive" ? "archived" : "active";
+		const status = action === "complete" ? "done" : action === "archive" ? "archived" : "active";
 		const now = Date.now();
 		this.transaction(() => {
+			const mission = this.require(id);
+			if (mission.projectId !== projectId || mission.status !== expected)
+				throw new Conflict("The confirmed mission has changed; review it again");
+			if (
+				!["archive", "reopen", "complete"].includes(action) ||
+				(action === "complete"
+					? expected !== "active"
+					: action === "archive"
+						? expected === "archived"
+						: expected === "active")
+			)
+				throw new Conflict("That lifecycle transition is unavailable");
+			// BEGIN IMMEDIATE holds task eligibility through the status write, including external writers.
+			if (action === "complete") {
+				const counts = this.one(
+					"SELECT SUM(status='done') AS done, SUM(status NOT IN ('done','dropped')) AS unfinished FROM tasks WHERE mission_id=?",
+					id,
+				)!;
+				if (!counts.done || counts.unfinished)
+					throw new Conflict(
+						"Mission completion requires every remaining task to be done and at least one done task",
+					);
+			}
 			this.run(
-				"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=NULL,archived_at=? WHERE id=?",
+				"UPDATE missions SET status=?,passive_lifecycle=1,updated_at=?,completed_at=?,archived_at=? WHERE id=?",
 				status,
 				now,
+				status === "done" ? now : null,
 				status === "archived" ? now : null,
 				id,
 			);
 			this.event(id, "status", `Mission marked ${status} without chat lifecycle actions`, USER, { at: now });
-		});
+		}, true);
 		this.changed(id, [], true);
 		return this.require(id);
 	}

@@ -39,11 +39,12 @@ fn runtime() -> Result<tokio::runtime::Runtime, &'static str> {
 pub(crate) fn read(
     o: LocalOptions,
     s: Source,
+    action: model::Action,
 ) -> Result<async_channel::Receiver<Result<Snapshot, &'static str>>, &'static str> {
     spawn(move || {
         runtime()?.block_on(async {
             let c = client()?;
-            qualify(&c, &o, &s).await?;
+            qualify(&c, &o, &s, action).await?;
             fetch(&c, &o, &s).await
         })
     })
@@ -65,7 +66,12 @@ pub(crate) fn start(
         })
     })
 }
-async fn qualify(c: &reqwest::Client, o: &LocalOptions, s: &Source) -> Result<(), &'static str> {
+async fn qualify(
+    c: &reqwest::Client,
+    o: &LocalOptions,
+    s: &Source,
+    action: model::Action,
+) -> Result<(), &'static str> {
     if !s.valid() || s.key.home != Home::local(&o.host()) {
         return Err("Captured Local home is unavailable. Nothing sent.");
     }
@@ -94,6 +100,9 @@ async fn qualify(c: &reqwest::Client, o: &LocalOptions, s: &Source) -> Result<()
             "This Local daemon cannot safely archive/reopen without chat side effects. Nothing sent.",
         );
     }
+    if action == model::Action::Complete && v["capabilities"]["passiveMissionCompletion"] != true {
+        return Err("This Local daemon cannot safely mark missions done. Nothing sent.");
+    }
     Ok(())
 }
 async fn fetch(
@@ -109,19 +118,21 @@ async fn fetch(
     if r.status().as_u16() != 200 {
         return Err("Mission read unavailable. Nothing sent.");
     }
-    model::parse(
-        s,
-        &crate::mission_tasks_reader::detail_body(r).await?["mission"],
-    )
+    model::detail(s, &crate::mission_tasks_reader::detail_body(r).await?)
 }
 pub(crate) async fn write(c: &reqwest::Client, o: &LocalOptions, s: &Submission) -> Outcome {
-    if !s.action.allowed(&s.before.status) {
+    if !s.action.eligible(&s.before) {
         return Outcome::NotSent("Invalid captured transition.");
     }
-    if let Err(e) = qualify(c, o, &s.source).await {
+    if let Err(e) = qualify(c, o, &s.source, s.action).await {
         return Outcome::NotSent(e);
     }
-    if fetch(c, o, &s.source).await.as_ref() != Ok(&s.before) {
+    let current = fetch(c, o, &s.source).await;
+    if !current.as_ref().is_ok_and(|m| {
+        m.title == s.before.title
+            && m.status == s.before.status
+            && (s.action != model::Action::Complete || m.finished == s.before.finished)
+    }) {
         return Outcome::NotSent(
             "The mission changed or could not be checked. Nothing sent. Review a fresh confirmation.",
         );

@@ -96,6 +96,8 @@ fn response(state: &mut State, method: &str, path: &str, body: Value) -> Reply {
         let mut mission = f::detail("mission-A")["mission"].clone();
         mission["status"] = json!(if body["action"] == "archive" {
             "archived"
+        } else if body["action"] == "complete" {
+            "done"
         } else {
             "active"
         });
@@ -111,7 +113,7 @@ fn response(state: &mut State, method: &str, path: &str, body: Value) -> Reply {
         if path == "/api/hello" {
             return Reply::json(
                 200,
-                json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"passiveMissionLifecycle":true}}),
+                json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"passiveMissionLifecycle":true,"passiveMissionCompletion":true}}),
             );
         }
         if path == "/api/mission-catalog" {

@@ -1,4 +1,12 @@
-# Status-only mission Archive/Reopen
+# Status-only mission completion, Archive/Reopen
+
+Mission Overview has a named **Mark done** action beside **Read decisions**, available only for an active
+canonical Local mission whose current, complete task detail proves all remaining
+tasks done. Dropped tasks are excluded, as in Swift; at least one done task is
+required, so empty and all-dropped missions cannot complete. Confirmation states
+the done and dropped counts. Task filters, collapsed phases and the short Overview
+preview do not decide eligibility. Loading, failed/offline and incomplete reads
+never enable it. Completion is explicit, never inferred from chat outcomes.
 
 Overview offers contextual Archive or Reopen, followed by an explicit confirmation
 for the canonical Local home, project and mission. The confirmation reads the
@@ -10,12 +18,18 @@ Return or Command-Return confirms. Close restores mounted browser focus.
 
 `POST /api/missions/:id/lifecycle` is opt-in, distinct from legacy status PATCH.
 The body contains only operationId, home (daemonId/lineageId), projectId,
-expectedStatus and action (`archive` or `reopen`). The server pins home, checks
+expectedStatus and action (`complete`, `archive` or `reopen`). The server pins home, checks
 project/status synchronously and commits only mission status/timestamps, a status
 event and the durable passive-lifecycle marker. It does not reconcile tasks,
 change membership/role/autopilot, archive/restore chats, remove scratch, send input
 or stop work. An already-running turn is not interrupted. Legacy calls on missions
 that never opted in retain their existing behavior.
+
+Completion re-reads canonical identity and task eligibility before its single POST.
+The server checks the active mission and current stored task statuses inside the
+same immediate transaction as the status write, so a task reopened after preflight
+blocks completion. Passive completion neither invokes tracker completion listeners
+nor replays them on daemon startup. It does not complete tasks or release claims.
 
 Passive lifecycle is durable: coordinator auto-archival and automatic coordinator
 notices remain suppressed, including already-frozen/queued notices and restart.
@@ -28,6 +42,8 @@ editor in this feature. Confirmation discloses the ongoing notice hold.
 
 Old daemons without the `passiveMissionLifecycle` hello capability fail before
 POST. No fallback to legacy PATCH is allowed.
+Completion additionally requires `passiveMissionCompletion`; an older daemon may
+still support Archive/Reopen without supporting Mark done.
 
 ## Delivery
 

@@ -358,6 +358,7 @@ pub(crate) struct Detail {
     pub(crate) task_count: usize,
     pub(crate) counts: Option<(u64, u64)>,
     pub(crate) summary: Summary,
+    pub(crate) finished: Option<crate::mission_lifecycle::Finished>,
     /// The Overview's phase rows: phases with tasks that count, in order, and
     /// "No phase" last. Empty for a mission without phases.
     pub(crate) phases: Vec<crate::mission_phases::Group>,
@@ -465,6 +466,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         tasks: tasks.into_iter().take(DISPLAY_TASKS).collect(),
         counts: counts(m)?,
         summary,
+        finished: crate::mission_lifecycle::finished(v),
         phases,
     })
 }

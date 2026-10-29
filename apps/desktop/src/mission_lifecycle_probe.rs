@@ -241,6 +241,7 @@ pub fn run_mission_lifecycle_probe(cx: &mut HeadlessAppContext) {
             );
         }
     }
+    completion(cx);
     root(cx);
 }
 fn root(cx: &mut HeadlessAppContext) {
@@ -324,4 +325,202 @@ fn root(cx: &mut HeadlessAppContext) {
     println!(
         "lifecycle-native actual LocalViewer/Root close/navigation preserves mounted focus and sends nothing"
     );
+}
+
+fn completion(cx: &mut HeadlessAppContext) {
+    let dir = std::env::var_os("PILOT_NEXT_LIFECYCLE_DIR").map(PathBuf::from);
+    for width in [680., 1100.] {
+        for dark in [false, true] {
+            let server = Server::start();
+            let mut detail = f::detail("mission-A");
+            detail["tasks"][0]["status"] = serde_json::json!("dropped");
+            detail["mission"]["tasksTotal"] = serde_json::json!(1);
+            detail["phases"] =
+                serde_json::json!([{"id":"phase-one","name":"Finished work","order":1}]);
+            for task in detail["tasks"].as_array_mut().unwrap() {
+                task["phaseId"] = serde_json::json!("phase-one");
+            }
+            server.reply(
+                "GET",
+                "/api/missions/mission-A",
+                Reply::json(200, detail.clone()),
+            );
+            let (h, b) = cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                );
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(850.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut b = Browser::new(cx);
+                            b.options(server.options.clone());
+                            b.sync(input(Some(Route::Catalog)), w, cx);
+                            b
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            until(cx, h, |cx| b.read(cx).catalog.is_some() && !b.read(cx).busy);
+            cx.update_window(h, |_, w, cx| {
+                b.update(cx, |b, cx| {
+                    b.sync(input(Some(Route::Detail(f::key("mission-A")))), w, cx)
+                })
+            })
+            .unwrap();
+            until(cx, h, |cx| b.read(cx).detail.is_some() && !b.read(cx).busy);
+            cx.update_window(h, |_, w, cx| {
+                w.render_frame(cx);
+                assert_ne!(w.find("mission-mark-done").disabled(), Some(true));
+                assert!(w.find("mission-mark-done").bounds().right() <= px(width));
+                let decisions = w.find("mission-decisions-open").bounds();
+                let done = w.find("mission-mark-done").bounds();
+                assert!(done.left() >= decisions.right());
+                assert_eq!(
+                    done.top(),
+                    decisions.top(),
+                    "completion belongs beside Read decisions"
+                );
+            })
+            .unwrap();
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("complete-overview-{}-{dark}.png", width as u32)))
+                    .unwrap();
+            }
+            click(cx, h, "mission-tab-tasks");
+            until(cx, h, |cx| {
+                b.read(cx).tasks_browser.read(cx).state.snapshot.is_some()
+            });
+            click(cx, h, "mission-tasks-hide-finished");
+            click(cx, h, "mission-tasks-phase-0");
+            click(cx, h, "mission-tab-overview");
+            cx.update_window(h, |_, w, _| {
+                assert_ne!(w.find("mission-mark-done").disabled(), Some(true));
+            })
+            .unwrap();
+            // Offline retains content, never completion authority.
+            cx.update_window(h, |_, w, cx| {
+                b.update(cx, |b, cx| {
+                    let mut i = input(Some(Route::Detail(f::key("mission-A"))));
+                    i.online = false;
+                    b.sync(i, w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("mission-mark-done").disabled(), Some(true))
+            })
+            .unwrap();
+            click(cx, h, "mission-mark-done");
+            assert!(cx.update(|cx| b.read(cx).lifecycle.is_empty()));
+            cx.update_window(h, |_, w, cx| {
+                b.update(cx, |b, cx| {
+                    b.sync(input(Some(Route::Detail(f::key("mission-A")))), w, cx)
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                b.update(cx, |b, cx| b.focus(w, cx));
+                for _ in 0..30 {
+                    w.press("tab", cx);
+                    if w.find("mission-mark-done").focused() == Some(true) {
+                        break;
+                    }
+                }
+                assert_eq!(w.find("mission-mark-done").focused(), Some(true));
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let form = cx.update(|cx| b.read(cx).lifecycle[0].clone());
+            until(cx, h, |cx| form.read(cx).snapshot.is_some());
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("complete-confirm-{}-{dark}.png", width as u32)))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(!cx.update(|cx| form.read(cx).visible));
+            cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| form.read(cx).state.attempt.is_none()));
+            click(cx, h, "mission-mark-done");
+            // The task reopened while confirmation was visible: a fresh preflight refuses it.
+            detail["tasks"][1]["status"] = serde_json::json!("todo");
+            server.reply(
+                "GET",
+                "/api/missions/mission-A",
+                Reply::json(200, detail.clone()),
+            );
+            cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
+                .unwrap();
+            until(cx, h, |cx| {
+                matches!(form.read(cx).state.attempt, Some((_, Outcome::NotSent(_))))
+            });
+            assert_eq!(
+                server
+                    .state
+                    .lock()
+                    .unwrap()
+                    .seen
+                    .iter()
+                    .filter(|(m, _, _)| m == "POST")
+                    .count(),
+                0
+            );
+            detail["tasks"][1]["status"] = serde_json::json!("done");
+            server.reply("GET", "/api/missions/mission-A", Reply::json(200, detail));
+            click(cx, h, "lifecycle-review");
+            until(cx, h, |cx| {
+                form.read(cx)
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.finished.is_some())
+            });
+            cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
+                .unwrap();
+            until(cx, h, |cx| {
+                matches!(form.read(cx).state.attempt, Some((_, Outcome::Ack)))
+            });
+            click(cx, h, "lifecycle-submit");
+            assert_eq!(
+                server
+                    .state
+                    .lock()
+                    .unwrap()
+                    .seen
+                    .iter()
+                    .filter(|(m, _, _)| m == "POST")
+                    .count(),
+                1
+            );
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            println!(
+                "completion-native {width} dark={dark}: discoverable action, offline disabled, cancel/focus, keyboard and reopened-task refusal passed"
+            );
+        }
+    }
 }
