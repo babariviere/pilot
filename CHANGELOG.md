@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.87.0](https://github.com/babariviere/pilot/compare/v1.86.0...v1.87.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** add coordinator jump to the overview title row ([29bce53](https://github.com/babariviere/pilot/commit/29bce5360d1e3771664dcc9b0b37e137c6523c5a))
+
+
+### Bug Fixes
+
+* **desktop:** draw native canvases past 512 commands ([3347440](https://github.com/babariviere/pilot/commit/33474400bc8b6fa79d02daa17315362f62c6c30c))
+* **kernel:** await explicit answers in ask_user ([03832d6](https://github.com/babariviere/pilot/commit/03832d602dde2492555d48ae291a772999b363df))
+* **kernel:** keep follow-ups behind steering batches ([b7d7d43](https://github.com/babariviere/pilot/commit/b7d7d43ee19f857779c3cc74e238fec0182bf2a5))
+
 ## [1.86.0](https://github.com/babariviere/pilot/compare/v1.85.0...v1.86.0) (2026-10-28)
 
 
