@@ -41,9 +41,12 @@ public struct AgentQuestion: Equatable, Sendable {
     public let options: [Option]
     public let multiSelect: Bool
     public let databaseAccess: DatabaseAccess?
+    /// The live run awaits this reply (`blocking: true`), so it is answered while that run works. Absent means a
+    /// legacy turn-ending ask. Access requests never await a message.
+    public let blocking: Bool
 
     public init(entryID: Int, question: String, context: String? = nil, options: [Option] = [], multiSelect: Bool = false,
-                databaseAccess: DatabaseAccess? = nil) {
+                databaseAccess: DatabaseAccess? = nil, blocking: Bool = false) {
         self.entryID = entryID
         self.question = question
         self.context = context
@@ -51,6 +54,7 @@ public struct AgentQuestion: Equatable, Sendable {
         // Access requests are single choice: allow or deny.
         self.multiSelect = databaseAccess == nil && multiSelect && self.options.count > 1
         self.databaseAccess = databaseAccess
+        self.blocking = databaseAccess == nil && blocking
     }
 
     init?(entryID: Int, data: JSONValue?) {
@@ -65,13 +69,16 @@ public struct AgentQuestion: Equatable, Sendable {
         }
         let context = data["context"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
         let access = data["databaseAccess"]
+        // Any access marker, even malformed, keeps the request off the awaited message path.
+        let blocking = access == nil && data["blocking"]?.bool == true
         let databaseAccess = access.flatMap { access -> DatabaseAccess? in
             guard let id = access["id"]?.string, !id.isEmpty, let env = access["env"]?.string,
                   let mode = access["mode"]?.string else { return nil }
             return DatabaseAccess(id: id, env: env, mode: mode)
         }
         self.init(entryID: entryID, question: question, context: context?.isEmpty == false ? context : nil,
-                  options: options, multiSelect: data["multiSelect"]?.bool ?? false, databaseAccess: databaseAccess)
+                  options: options, multiSelect: data["multiSelect"]?.bool ?? false, databaseAccess: databaseAccess,
+                  blocking: blocking)
     }
 
     /// The message sent as the reply: the picked answers' labels, then any text in the user's own words.
@@ -100,10 +107,19 @@ extension Transcript {
 }
 
 extension TranscriptPresentation {
-    /// Wait for the agent's turn to end, not for background jobs or subagents to finish.
+    /// Wait for the agent's turn to end, not for background jobs or subagents to finish. An awaited (`blocking`)
+    /// ask shows while its run works, since that run cannot continue without the reply.
     /// Check both feeds because session summaries and transcript events arrive independently.
     public func questionForComposer(session: SessionSummary, hasSnapshot: Bool) -> AgentQuestion? {
-        guard hasSnapshot, !working, session.state != "starting", session.state != "working" else { return nil }
-        return pendingQuestion
+        AgentQuestion.forComposer(pendingQuestion, working: working, session: session, hasSnapshot: hasSnapshot)
+    }
+}
+
+extension AgentQuestion {
+    static func forComposer(_ question: AgentQuestion?, working: Bool, session: SessionSummary,
+                            hasSnapshot: Bool) -> AgentQuestion? {
+        guard hasSnapshot, session.state != "starting", let question else { return nil }
+        if working || session.state == "working" { return question.blocking ? question : nil }
+        return question
     }
 }

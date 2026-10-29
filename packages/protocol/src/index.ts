@@ -852,6 +852,8 @@ export interface ArtifactImageSize {
  */
 export interface AgentQuestion {
 	question: string;
+	/** ask_user is suspended in the live run; legacy questions and DB approvals still end their turn. */
+	blocking?: boolean;
 	context?: string;
 	/** At most nine answers, in the order shown and numbered from 1. May be empty for an open question. */
 	options: Array<{ label: string; detail?: string; suggested?: boolean }>;

@@ -116,6 +116,90 @@ test("an answer accepted during queue pause resolves the question without bypass
 	}
 });
 
+test("a blocking reply resolves current work during pause but preserves held automatic FIFO", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			(await tx.doc(InboxDoc, f.id)).items = [];
+			(await tx.doc(LiveDoc, f.id)).run = {
+				taskId: await tx.createTask(
+					GenerationTask,
+					{},
+					{ ownership: { kind: "conversation" }, conversationId: f.id },
+				),
+				inputs: [],
+			};
+		}, context);
+		await publishQuestionWithHeld(
+			f.session,
+			f.id,
+			f.read,
+			"question:blocking",
+			{ question: "Which?", blocking: true },
+			context,
+		);
+		await pauseInputs(f.session, f.id, context);
+		for (const requestId of ["mission:send:one", "native:jobs.result:two"])
+			await admitWithHeld(f.session, f.id, { requestId, content: requestId, mode: "steer" }, context);
+		const answer = await admitWithHeld(
+			f.session,
+			f.id,
+			{ requestId: "user:answer", content: "Answer", mode: "steer" },
+			context,
+		);
+		assert.equal(answer?.held, undefined);
+		assert.equal((await f.storage.submission(answer!.id!, context))?.status, "done");
+		const held = (await f.session.snapshot(HeldInputsDoc, f.id, context))!;
+		assert.equal(held.questionPending, false);
+		assert.equal(held.blockingQuestion?.answer, "Answer");
+		assert.deepEqual(held.questionReplies, ["Answer"]);
+		assert.deepEqual(
+			held.items.map((item) => item.content),
+			["mission:send:one", "native:jobs.result:two"],
+		);
+		assert.equal((await f.session.snapshot(InboxDoc, f.id, context))?.items.length, 0);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
+test("concurrent questions cannot replace a live awaited question or break its session", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			(await tx.doc(InboxDoc, f.id)).items = [];
+		}, context);
+		await publishQuestionWithHeld(
+			f.session,
+			f.id,
+			f.read,
+			"question:one",
+			{ question: "First?", blocking: true },
+			context,
+		);
+		await assert.rejects(
+			publishQuestionWithHeld(
+				f.session,
+				f.id,
+				f.read,
+				"question:two",
+				{ question: "Second?", blocking: true },
+				context,
+			),
+			/pending question/,
+		);
+		assert.equal((await f.session.snapshot(HeldInputsDoc, f.id, context))?.blockingQuestion?.callId, "question:one");
+		assert.equal(await initializeQuestionHold(f.session, f.id, f.read, context), true);
+		assert.equal(
+			await initializeQuestionHold(f.session, f.id, f.read, context),
+			true,
+			"a crash before retiring the run cannot lose the recovery marker",
+		);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
 for (const user of [false, true]) {
 	test(
 		user

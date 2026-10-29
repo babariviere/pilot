@@ -57,6 +57,7 @@ fn control_key(w: &mut Window, key: &str, cx: &mut gpui_kit::App) {
     );
     w.dispatch_event(gpui_kit::KeyUpEvent { keystroke }.to_platform_input(), cx);
 }
+/// Wide cases are awaited asks published by a live run; narrow ones are legacy.
 fn question_data(multi: bool) -> serde_json::Value {
     let options=(0..if multi {9}else{3}).map(|ix|serde_json::json!({
   "label":format!("{}: {}",ix+1,if ix==0 {"Typecheck shared types 日本語 👩‍💻"} else {"Run the focused checks for this change"}),
@@ -66,18 +67,29 @@ fn question_data(multi: bool) -> serde_json::Value {
     serde_json::json!({
      "question":"Which checks should run before continuing?",
      "context":"Choose one answer or several, then confirm explicitly. You can add your own words. Your existing message draft remains separate; choosing alone never sends.",
-     "options":options,"multiSelect":multi,
+     "options":options,"multiSelect":multi,"blocking":!multi,
     })
 }
 fn question(multi: bool) -> Arc<Question> {
     Arc::new(Question::parse(4, &question_data(multi)).unwrap())
 }
 /// The production reducer's projection after held automatic input arrives
-/// while the question waits (synthetic snapshot, no worker).
+/// while the question waits (synthetic snapshot, no worker). An awaited ask
+/// arrives while its run is live; a legacy ask never presents during a run.
 fn held_arrival(model: &mut crate::local_model::LiveTranscript, multi: bool) -> Projection {
+    let awaited = !multi;
+    let mut legacy = question_data(multi);
+    legacy["blocking"] = false.into();
+    model.apply(&serde_json::json!({"type":"snapshot","entries":[
+        {"id":4,"head":1,"kind":"pilot.question","data":legacy,"model":[]}
+    ],"run":{"startedAt":1}}));
+    assert!(
+        matches!(model.question(), Projection::Unavailable),
+        "A legacy ask stays hidden while a run is live"
+    );
     model.apply(&serde_json::json!({"type":"snapshot","entries":[
         {"id":4,"head":1,"kind":"pilot.question","data":question_data(multi),"model":[]}
-    ]}));
+    ],"run":if awaited {serde_json::json!({"startedAt":1})} else {serde_json::Value::Null}}));
     model.apply(
         &serde_json::json!({"type":"queue_update","items":[],"automatic":[
             {"id":1,"origin":"mission","mode":"followUp","preview":"Mission update","held":true}
@@ -167,11 +179,12 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 matches!(&held, Projection::Pending(p) if p.identity == q.identity),
                 "Held automatic input keeps the same question pending"
             );
-            // Mirror LocalView: held input still counts as queued, so the composer is busy.
+            // Mirror LocalView: held input still counts as queued, and an
+            // awaited ask's run is live, so the composer is busy.
             assert_eq!(model.queued, 1);
             cx.update_window(h, |_, w, cx| {
                 editor.update(cx, |e, cx| {
-                    e.permission(true, model.queued > 0, cx);
+                    e.permission(true, model.queued > 0 || !multi, cx);
                     e.question_context(Some("a"), held, true, w, cx)
                 })
             })
@@ -435,16 +448,26 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
             model.apply(&serde_json::json!({"type":"queue_update","items":[],"automatic":[]}));
             assert_eq!(model.queued, 0);
             let cleared = model.question();
+            if !multi {
+                assert!(
+                    matches!(&cleared, Projection::Pending(p) if p.identity == q.identity),
+                    "The live run still awaits the same ask"
+                );
+            }
             cx.update_window(h, |_, w, cx| {
                 editor.update(cx, |e, cx| {
-                    e.permission(true, model.queued > 0, cx);
+                    e.permission(true, model.queued > 0 || !multi, cx);
                     e.question_context(Some("a"), cleared, true, w, cx)
                 })
             })
             .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("question-stop").is_none());
+                assert_eq!(
+                    w.try_find("question-stop").is_some(),
+                    !multi,
+                    "Stop stays beside an awaited ask while its run is live"
+                );
                 assert_eq!(w.find("answer-question").disabled(), Some(true));
                 w.click("answer-question", cx);
             })
@@ -454,6 +477,9 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 commands.try_recv().is_err(),
                 "Cleared holds never repeat an Unknown reply"
             );
+            // The reply's ordinary user entry closes the ask, even mid-run.
+            model.apply(&serde_json::json!({"type":"entry_appended","entry":{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Reply"}]}}));
+            assert!(!matches!(model.question(), Projection::Pending(_)));
             // The exact receipt arrives later: the run hides the question and
             // the accepted reply settles silently, never as recovered text.
             store.finish(&intent.id, "accepted", None).unwrap();

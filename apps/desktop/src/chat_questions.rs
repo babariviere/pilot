@@ -189,6 +189,34 @@ impl ChatEditor {
                 })
         })
     }
+    /// Explicit Send again. An answer carries the fresh current question only
+    /// when it still projects the reply's exact identity; otherwise the worker
+    /// applies the ended-turn rule.
+    pub(super) fn retry_command(&self, id: &str) -> WriteCommand {
+        let answer = self
+            .state
+            .book
+            .as_ref()
+            .and_then(|book| book.pending.get(id))
+            .and_then(|intent| intent.answer.as_ref().map(|a| (intent.key.clone(), a)));
+        match (answer, &self.questions.current) {
+            (Some((key, answer)), Some(q))
+                if self.questions.fresh
+                    && self.questions.owner.as_ref() == Some(&key)
+                    && self.selected.as_ref() == Some(&key)
+                    && q.identity == answer.question =>
+            {
+                WriteCommand::RetryAnswer {
+                    id: id.into(),
+                    question: q.clone(),
+                }
+            }
+            _ => WriteCommand::Check {
+                id: id.into(),
+                retry: true,
+            },
+        }
+    }
     fn question_editable(&self) -> bool {
         self.ready()
             && self.writable

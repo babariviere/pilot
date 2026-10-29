@@ -14,6 +14,8 @@ struct QuestionComposer: View {
     let onSend: (String) async throws -> Void
     /// Allows or denies a database access request. Throws to keep the question open.
     let onDecideAccess: (AgentQuestion.DatabaseAccess, Bool) async throws -> Void
+    /// Present while the asking run still works (an awaited ask), so Stop stays reachable.
+    var onStop: (() -> Void)? = nil
 
     @Environment(\.pilotFonts) private var fonts
     @State private var highlighted: Int?
@@ -28,7 +30,17 @@ struct QuestionComposer: View {
     var body: some View {
         VStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 0) {
-                header
+                HStack(alignment: .top, spacing: 0) {
+                    header
+                    if let onStop {
+                        Button(action: onStop) { PilotSymbol(PilotIcon.stop, context: .toolbar) }
+                            .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive, foreground: .white))
+                            .help("Stop the current run")
+                            .accessibilityLabel("Stop")
+                            .padding(.top, 10)
+                            .padding(.trailing, 10)
+                    }
+                }
                 if !options.isEmpty { choices }
                 reply
                 hints

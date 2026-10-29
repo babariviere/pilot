@@ -33,6 +33,48 @@ fn question_parses_swift_fields_limits_and_stable_identity() {
     assert!(Question::parse(4, &json!({"question":"🧪".repeat(151)})).is_err());
 }
 #[test]
+fn question_blocking_marker_defaults_off_and_is_part_of_identity() {
+    let legacy = Question::parse(4, &question(4)["data"]).unwrap();
+    assert!(
+        !legacy.content.blocking,
+        "Absent marker is a turn-ending ask"
+    );
+    // Pinned pre-marker fingerprint: existing private reply identities still match.
+    assert_eq!(
+        legacy.identity.fingerprint,
+        "f203ecc0c89e8acbb2043a3599e6b2de2c0a510649f269c67340b17aa7a6fbd5"
+    );
+    let mut data = question(4)["data"].clone();
+    data["blocking"] = false.into();
+    assert_eq!(Question::parse(4, &data).unwrap().identity, legacy.identity);
+    data["blocking"] = Value::Null;
+    assert_eq!(Question::parse(4, &data).unwrap().identity, legacy.identity);
+    data["blocking"] = true.into();
+    let awaited = Question::parse(4, &data).unwrap();
+    assert!(awaited.content.blocking);
+    assert_ne!(
+        awaited.identity, legacy.identity,
+        "A reply captured under one delivery contract never answers the other"
+    );
+    for malformed in [json!("true"), json!(1), json!({})] {
+        data["blocking"] = malformed;
+        assert!(
+            Question::parse(4, &data).is_err(),
+            "Malformed markers fail closed"
+        );
+    }
+    // Database access requests keep their separate unavailable path.
+    let access = json!({"question":"Allow access?","options":[{"label":"Allow"},{"label":"Deny"}],"databaseAccess":{"id":"r"},"blocking":true});
+    let access = Question::parse(4, &access).unwrap();
+    assert!(access.content.kind == Kind::AccessUnavailable);
+    assert!(!access.content.blocking);
+    let legacy_access = json!({"question":"Allow access?","options":[{"label":"Allow"},{"label":"Deny"}],"databaseAccess":{"id":"r"}});
+    assert_eq!(
+        Question::parse(4, &legacy_access).unwrap().identity,
+        access.identity
+    );
+}
+#[test]
 fn question_reply_ports_swift_order_bullets_and_own_words() {
     let q=Question::parse(1,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"},{"label":"Build"}],"multiSelect":true})).unwrap();
     assert_eq!(q.reply(&BTreeSet::new(), "  ").unwrap(), None);

@@ -39,6 +39,17 @@ a question; a live turn or queued input does. Malformed identity/question
 metadata fails closed. The parser deliberately mirrors Foundation reply
 whitespace, including U+200B and U+0085 but not U+FEFF.
 
+An awaited ask (`blocking: true`) is the exception to hiding during a live
+turn: its run waits for the reply, so it presents and accepts a reply while that
+run works, with Stop beside it. The reply is still an ordinary steering message
+and its user entry closes the question. Absent or false is the legacy
+turn-ending ask; a malformed marker is invalid; access requests never await a
+message. The marker is part of the question identity, while legacy identities
+are unchanged. After its run ends, the ask reads like a legacy question and a
+later run never presents it again. Explicit Retry of an Unknown reply accepts a
+working turn only with the exact fresh awaited question it answered, so a lost
+first reply cannot answer a newer question.
+
 ## Ownership, bounds and recovery
 
 - `question.rs`: bounded typed metadata, exact entry ID plus canonical-content

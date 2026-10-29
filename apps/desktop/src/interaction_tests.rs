@@ -59,6 +59,10 @@ async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing
 fn question_answer_fixture() -> Arc<crate::question::Question> {
     Arc::new(crate::question::Question::parse(4,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true})).unwrap())
 }
+/// The same ask published by a live run that awaits the explicit reply.
+fn blocking_answer_fixture() -> Arc<crate::question::Question> {
+    Arc::new(crate::question::Question::parse(4,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true,"blocking":true})).unwrap())
+}
 fn question_answer_command(
     client: &Interaction,
     question: Arc<crate::question::Question>,
@@ -130,6 +134,117 @@ async fn question_answer_courier_uses_steer_once_and_keeps_ordinary_draft() {
         1,
         "Repeated confirmation cannot create another answer"
     );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+#[tokio::test]
+async fn blocking_question_answer_sends_once_while_its_run_waits() {
+    // The synthetic summary reports a working run, as while ask_user awaits.
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    let question = blocking_answer_fixture();
+    question_answer_command(&client, question.clone(), 1);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let draft = &state.book.as_ref().unwrap().drafts["chat:a"];
+    assert_eq!(draft.text, "Keep ordinary 日本語 👩‍💻");
+    assert!(draft.pending.is_none());
+    let last = draft.last.as_ref().unwrap();
+    assert_eq!(last.state, "accepted");
+    assert_eq!(last.answer.as_ref().unwrap().question, question.identity);
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.executions, 1);
+        assert_eq!(seen.envelopes.len(), 1);
+        let op = &seen.envelopes[0];
+        assert_eq!(op["kind"], "chat-send");
+        assert_eq!(op["targetId"], "a");
+        assert_eq!(
+            serde_json::from_str::<Value>(op["payload"].as_str().unwrap()).unwrap(),
+            json!({"message":"- Typecheck\n- Tests\n\nown words","mode":"steer"}),
+            "The awaited reply keeps the ordinary steering payload"
+        );
+    }
+    question_answer_command(&client, question, 2);
+    until(&updates, |s| s.handled.get("chat:a") == Some(&2)).await;
+    assert_eq!(
+        daemon.seen.lock().unwrap().executions,
+        1,
+        "Repeated confirmation cannot create another awaited answer"
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+#[tokio::test]
+async fn blocking_question_unknown_retry_needs_its_exact_awaited_question() {
+    let daemon = Daemon::start(Behavior::AnswerWorkingLost).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    let question = blocking_answer_fixture();
+    question_answer_command(&client, question.clone(), 1);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let intent = state
+        .book
+        .as_ref()
+        .unwrap()
+        .pending
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    assert_eq!(intent.state, "unknown");
+    let original = serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap();
+    let refused = |checkpoint: u64, command: WriteCommand| {
+        assert!(client.command(command));
+        assert!(client.command(WriteCommand::Checkpoint(checkpoint)));
+        checkpoint
+    };
+    // A working turn without the exact awaited question never re-posts.
+    for (n, command) in [
+        WriteCommand::Check { id: intent.id.clone(), retry: true },
+        WriteCommand::RetryAnswer { id: intent.id.clone(), question: question_answer_fixture() },
+        WriteCommand::RetryAnswer {
+            id: intent.id.clone(),
+            question: Arc::new(crate::question::Question::parse(8,&json!({"question":"Which checks?","options":[{"label":"Typecheck"},{"label":"Tests"}],"multiSelect":true,"blocking":true})).unwrap()),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let checkpoint = refused(50 + n as u64, command);
+        let state = until(&updates, |s| s.checkpoint == Some(checkpoint)).await;
+        let retained = &state.book.as_ref().unwrap().pending[&intent.id];
+        assert!(retained.operation == intent.operation && retained.answer == intent.answer);
+        assert_eq!(
+            state.delivery_reports[&intent.id].delivery.diagnostic.unwrap().category,
+            Category::Refused
+        );
+        assert_eq!(daemon.seen.lock().unwrap().envelopes.as_slice(), std::slice::from_ref(&original));
+    }
+    assert!(client.command(WriteCommand::RetryAnswer {
+        id: intent.id.clone(),
+        question,
+    }));
+    let done = until(&updates, |s| {
+        s.book.as_ref().is_some_and(|b| b.pending.is_empty())
+    })
+    .await;
+    assert_eq!(
+        done.book.as_ref().unwrap().drafts["chat:a"]
+            .last
+            .as_ref()
+            .unwrap()
+            .state,
+        "accepted"
+    );
+    let seen = daemon.seen.lock().unwrap();
+    assert_eq!(
+        seen.envelopes.as_slice(),
+        &[original.clone(), original],
+        "Exact envelope only"
+    );
+    assert_eq!(seen.executions, 1);
+    drop(seen);
     assert!(client.command(WriteCommand::Close));
     until(&updates, |s| s.flushed).await;
 }
@@ -442,6 +557,7 @@ async fn delivery_diagnostic_followup_malformed_state_and_identity_gate_never_ex
                 &mut store,
                 &intent.id,
                 false,
+                None,
                 &mut report
             )
             .await
@@ -549,6 +665,7 @@ async fn delivery_diagnostic_hello_and_target_keep_transport_outcome_and_never_e
             &mut store,
             &intent.id,
             true,
+            None,
             &mut report,
         )
         .await;
@@ -609,6 +726,7 @@ async fn delivery_diagnostic_followup_known_rejection_survives_non_io_adoption_f
             &mut store,
             &intent.id,
             true,
+            None,
             &mut report
         )
         .await
@@ -664,6 +782,7 @@ async fn delivery_diagnostic_followup_diagnostic_write_cannot_erase_a_durable_ac
             &mut store,
             &intent.id,
             true,
+            None,
             &mut report
         )
         .await
@@ -903,6 +1022,7 @@ async fn delivery_diagnostic_private_adoption_failure_retains_known_ack_in_exist
             &mut store,
             &intent.id,
             true,
+            None,
             &mut report
         )
         .await
@@ -988,6 +1108,7 @@ enum Behavior {
     LookupTruncated,
     HelloRefused,
     TargetMissing,
+    AnswerWorkingLost,
 }
 #[derive(Default)]
 struct Seen {
@@ -1074,7 +1195,7 @@ impl Daemon {
                                     if path.ends_with("/receipt") {seen.operations.get(&id).cloned().unwrap_or_else(||json!({"state":"unknown"}))}
                                     else {
                                         seen.envelopes.push(payload.clone());
-                                        if matches!(behavior,Behavior::LostBeforeAdmission|Behavior::AnswerLost)&&seen.envelopes.len()==1{return;}
+                                        if matches!(behavior,Behavior::LostBeforeAdmission|Behavior::AnswerLost|Behavior::AnswerWorkingLost)&&seen.envelopes.len()==1{return;}
                                         let state=if behavior==Behavior::Pending{"pending"}else if matches!(behavior,Behavior::Reject|Behavior::RejectThenLookupRefused){"rejected"}else{"accepted"};
                                         let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]},"reason":"private provider body /sensitive"});
                                         if !seen.operations.contains_key(&id){

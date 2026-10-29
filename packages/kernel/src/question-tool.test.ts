@@ -3,10 +3,11 @@ import { test } from "node:test";
 import type { AgentQuestion } from "@pilot/protocol";
 import { createQuestionTool, normalizeQuestion, QUESTION_TOOL } from "./question-tool.ts";
 
-test("ask_user publishes the normalized question and ends the turn", async () => {
+test("ask_user publishes the normalized question and awaits the answer", async () => {
 	const published: Array<[string, AgentQuestion]> = [];
 	const tool = createQuestionTool(async (callId, question) => {
 		published.push([callId, question]);
+		return "Sync worker";
 	});
 	assert.equal(tool.name, QUESTION_TOOL);
 	const result = await tool.execute(
@@ -30,8 +31,9 @@ test("ask_user publishes the normalized question and ends the turn", async () =>
 		options: [{ label: "Shared client", detail: "Every caller", suggested: true }, { label: "Sync worker" }],
 	};
 	assert.deepEqual(published, [["call-1", expected]]);
-	assert.deepEqual(result.details, expected);
-	assert.equal(result.terminate, true);
+	assert.deepEqual(result.details, { question: expected, answer: "Sync worker" });
+	assert.equal(result.terminate, undefined);
+	assert.deepEqual(result.content, [{ type: "text", text: "Sync worker" }]);
 });
 
 test("multiSelect needs several answers and keeps every suggestion", () => {

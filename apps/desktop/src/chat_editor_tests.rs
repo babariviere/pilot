@@ -239,6 +239,74 @@ fn question_composer_fixture(id: u64) -> std::sync::Arc<crate::question::Questio
     std::sync::Arc::new(crate::question::Question::parse(id,&serde_json::json!({"question":"Which checks should run?","context":"Choose explicitly. Your existing message stays separate.","options":[{"label":"Typecheck","detail":"Check shared types","suggested":true},{"label":"Tests"}],"multiSelect":true})).unwrap())
 }
 #[gpui_kit::test]
+fn question_retry_carries_only_the_exact_fresh_awaited_question(cx: &mut TestAppContext) {
+    use crate::question::{AnswerDraft, Projection, Question};
+    let (handle, view, commands) = setup(cx);
+    let awaited = |entry| {
+        std::sync::Arc::new(Question::parse(entry, &serde_json::json!({"question":"Which checks should run?","options":[{"label":"Tests"}],"blocking":true})).unwrap())
+    };
+    let (first, second) = (awaited(4), awaited(8));
+    let identity = AnswerDraft::capture(&first, 1, BTreeSet::from([0]), String::new())
+        .unwrap()
+        .identity;
+    let retry_answers = |command: WriteCommand| match command {
+        WriteCommand::RetryAnswer { id, question } => {
+            assert_eq!(id, "lost");
+            Some(question.identity.clone())
+        }
+        WriteCommand::Check { id, retry: true } => {
+            assert_eq!(id, "lost");
+            None
+        }
+        _ => panic!("Send again is only an explicit retry of the same intent"),
+    };
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            let mut book = (**e.state.book.as_ref().unwrap()).clone();
+            book.pending.insert(
+                "lost".into(),
+                crate::delivery_store::Intent {
+                    id: "lost".into(),
+                    key: "chat:a".into(),
+                    revision: 1,
+                    target: "a".into(),
+                    operation: None,
+                    state: "unknown".into(),
+                    diagnostic: None,
+                    answer: Some(identity.clone()),
+                },
+            );
+            e.state.book = Some(std::sync::Arc::new(book));
+            e.question_context(Some("a"), Projection::Pending(first.clone()), true, w, cx);
+            assert_eq!(
+                retry_answers(e.retry_command("lost")),
+                Some(first.identity.clone()),
+                "The same awaited ask still projects"
+            );
+            // A lost first answer cannot become the reply to a newer ask.
+            e.question_context(Some("a"), Projection::Pending(second.clone()), true, w, cx);
+            assert_eq!(retry_answers(e.retry_command("lost")), None);
+            e.question_context(Some("a"), Projection::Pending(first.clone()), false, w, cx);
+            assert_eq!(retry_answers(e.retry_command("lost")), None, "Stale source");
+            e.question_context(Some("a"), Projection::Unavailable, true, w, cx);
+            assert_eq!(retry_answers(e.retry_command("lost")), None);
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    while let Ok(command) = commands.try_recv() {
+        assert!(
+            !matches!(
+                command,
+                WriteCommand::Answer { .. }
+                    | WriteCommand::Check { .. }
+                    | WriteCommand::RetryAnswer { .. }
+            ),
+            "Projection changes never send or retry"
+        );
+    }
+}
+#[gpui_kit::test]
 fn question_composer_choice_then_explicit_reply_preserves_ordinary(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup_width(cx, 680.);
     let q = question_composer_fixture(4);

@@ -1,4 +1,4 @@
-/** The `ask_user` tool: shows the user a question in place of the composer. Their reply is the next user message. */
+/** The `ask_user` tool waits for the user's explicit reply, including inside codemode. */
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentQuestion } from "@pilot/protocol";
@@ -9,13 +9,14 @@ export { QUESTION_ENTRY } from "./question-entry.ts";
 export const MAX_QUESTION_OPTIONS = 9;
 
 /** Commits the question to the transcript. `callId` makes the write idempotent. */
-export type PublishQuestion = (callId: string, question: AgentQuestion) => Promise<void>;
+export type PublishQuestion = (callId: string, question: AgentQuestion, signal?: AbortSignal) => Promise<void>;
+export type AskQuestion = (callId: string, question: AgentQuestion, signal?: AbortSignal) => Promise<string>;
 
-export function createQuestionTool(publish: PublishQuestion): ToolDefinition {
+export function createQuestionTool(ask: AskQuestion): ToolDefinition {
 	return defineTool({
 		name: QUESTION_TOOL,
 		label: "Ask the user",
-		description: `Ask the user one question when you need their decision. Offer up to ${MAX_QUESTION_OPTIONS} short answers and mark the one you recommend as suggested; set multiSelect only when several answers can apply together. The user can always reply in their own words instead, including a question back. Your turn ends after this call and their reply arrives as the next user message, so ask last.`,
+		description: `Ask the user one question when you need their decision. Offer up to ${MAX_QUESTION_OPTIONS} short answers and mark the one you recommend as suggested; set multiSelect only when several answers can apply together. The user can always reply in their own words, including a question back. This call waits until they answer or the call is cancelled, then returns their answer. Await it before continuing.`,
 		promptSnippet: "Ask the user a question with suggested answers",
 		parameters: Type.Object({
 			question: Type.String({ minLength: 1, maxLength: 300, description: "One short question." }),
@@ -36,18 +37,17 @@ export function createQuestionTool(publish: PublishQuestion): ToolDefinition {
 		}),
 		executionMode: "sequential",
 		annotations: { readOnlyHint: true, openWorldHint: false },
-		async execute(callId, params) {
+		async execute(callId, params, signal) {
 			const question = normalizeQuestion(params);
-			await publish(callId, question);
+			const answer = await ask(callId, question, signal);
 			return {
 				content: [
 					{
 						type: "text",
-						text: "The user sees your question. End your turn now; their reply arrives as the next user message.",
+						text: answer,
 					},
 				],
-				details: question,
-				terminate: true,
+				details: { question, answer },
 			};
 		},
 	});

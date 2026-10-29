@@ -262,8 +262,7 @@ public struct TranscriptStatus: Equatable, Sendable {
 
     /// Same as `TranscriptPresentation.questionForComposer(session:hasSnapshot:)`.
     public func questionForComposer(session: SessionSummary, hasSnapshot: Bool) -> AgentQuestion? {
-        guard hasSnapshot, !working, session.state != "starting", session.state != "working" else { return nil }
-        return pendingQuestion
+        AgentQuestion.forComposer(pendingQuestion, working: working, session: session, hasSnapshot: hasSnapshot)
     }
 }
 

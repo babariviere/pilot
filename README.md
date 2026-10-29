@@ -115,6 +115,10 @@ unchanged; outstanding accounting memory and release verification is documented 
   suggested answers. Pick one with the number keys and Return, or reply in your own words. The chat shows as
   needing you until you answer. Automatic job, mission and agent inputs wait durably while the question is open,
   then run in arrival order after your reply. Stop keeps them held until you explicitly resume or send another message.
+  `await tools.ask_user(...)` suspends the calling script and returns your answer in that same script. Stop or a
+  script deadline cancels the wait. A worker replacement keeps the question, but never replays the interrupted
+  script; your answer then starts a fresh turn. Safe update drains wait for an answer or cancellation, rather
+  than interrupting a script's other effects. Database-access approvals keep their separate turn-ending flow.
 - **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
   access. Move the discussion into a separate Build chat when you're ready to make changes.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)

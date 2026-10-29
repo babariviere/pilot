@@ -435,7 +435,12 @@ test("all-mode automatic steers cannot answer a pending question at publication 
 	await first.started;
 	for (const id of ["mission:send:a", "mission:send:b"]) await f.session.submit(id, id, "steer");
 	first.release();
-	await f.session.harness.waitForIdle(context);
+	const deadline = Date.now() + 5000;
+	while (
+		!(await f.session.conversation.context(context)).entries.some((e) => e.kind === QUESTION_ENTRY) &&
+		Date.now() < deadline
+	)
+		await new Promise((resolve) => setTimeout(resolve, 5));
 	assert.equal(f.faux.state.callCount, 1, "automatic steers must wait rather than answering the question");
 	const view = await f.session.conversation.context(context);
 	assert.deepEqual(users(view), ["Start"]);

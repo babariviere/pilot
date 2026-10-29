@@ -119,6 +119,12 @@ pub(crate) enum WriteCommand {
         id: String,
         retry: bool,
     },
+    /// Explicit Retry of an answer, with the current projected question it
+    /// still answers. Only an exact awaited question permits a working turn.
+    RetryAnswer {
+        id: String,
+        question: Arc<crate::question::Question>,
+    },
     DismissStop {
         id: String,
     },
@@ -449,7 +455,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             | Some(WriteCommand::ClearRecovery { key, .. })
             | Some(WriteCommand::RetireEmpty { key, .. }) => Some(key.clone()),
             Some(WriteCommand::RetireAnswer { key, .. }) => Some(key.clone()),
-            Some(WriteCommand::Check { id, .. }) | Some(WriteCommand::DismissStop { id }) => store
+            Some(WriteCommand::Check { id, .. })
+            | Some(WriteCommand::RetryAnswer { id, .. })
+            | Some(WriteCommand::DismissStop { id }) => store
                 .as_ref()
                 .ok()
                 .and_then(|s| s.book.pending.get(id))
@@ -610,7 +618,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             // worker observation, not in the durable Book.
                             delivery_report = status.delivery_reports.get(&id).cloned();
                             tokio::select! {
-                                result=reconcile(&client,&options,store,&id,retry,&mut delivery_report)=>result,
+                                result=reconcile(&client,&options,store,&id,retry,None,&mut delivery_report)=>result,
+                                _=close.recv()=>{closing=true;Ok("Closing. Interrupted lookup is not rejection.")}
+                            }
+                        }
+                        Some(WriteCommand::RetryAnswer { id, question }) => {
+                            delivery_report = status.delivery_reports.get(&id).cloned();
+                            tokio::select! {
+                                result=reconcile(&client,&options,store,&id,true,Some(&question),&mut delivery_report)=>result,
                                 _=close.recv()=>{closing=true;Ok("Closing. Interrupted lookup is not rejection.")}
                             }
                         }
@@ -833,11 +848,15 @@ fn writable_summary(value: &Value, target: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-fn question_turn_idle(summary: &Value) -> Result<(), Failure> {
-    if !matches!(
-        summary["state"].as_str(),
-        Some("idle" | "parked" | "failed")
-    ) {
+/// An ended turn takes any reply as its next message. A working turn takes
+/// one only for the awaited (`blocking`) ask its run published.
+fn question_turn_ready(summary: &Value, awaited: bool) -> Result<(), Failure> {
+    let ready = match summary["state"].as_str() {
+        Some("idle" | "parked" | "failed") => true,
+        Some("working") => awaited,
+        _ => false,
+    };
+    if !ready {
         return Err(
             "The agent turn changed or is unavailable. Question reply retained; nothing sent",
         );
@@ -876,12 +895,24 @@ async fn submit_answer(
     if store.book.model_changes.contains_key(target) {
         return Err("A model switch is unconfirmed. Question reply retained");
     }
-    question_turn_idle(&writable(client, options, target).await?)?;
+    question_turn_ready(
+        &writable(client, options, target).await?,
+        question.content.blocking,
+    )?;
     // The native owner has checked its exact current question projection.
     // Local only offers ordinary steering, not an atomic question-CAS endpoint.
     let intent = store.prepare_answer(key, draft, question, answer)?;
     prepared(store);
-    reconcile(client, options, store, &intent.id, true, report).await
+    reconcile(
+        client,
+        options,
+        store,
+        &intent.id,
+        true,
+        Some(question),
+        report,
+    )
+    .await
 }
 
 struct Submission<'a> {
@@ -966,7 +997,7 @@ async fn submit(
             ),
         }
     } else {
-        reconcile(client, options, store, &intent.id, true, report).await
+        reconcile(client, options, store, &intent.id, true, None, report).await
     }
 }
 
@@ -1052,6 +1083,7 @@ async fn reconcile(
     store: &mut Store,
     id: &str,
     retry: bool,
+    question: Option<&crate::question::Question>,
     report: &mut Option<DeliveryReport>,
 ) -> Result<&'static str, Failure> {
     let previous = report.take();
@@ -1089,8 +1121,10 @@ async fn reconcile(
             .await?;
             writable_summary(&summary, &op.target_id)
                 .inspect_err(|_| diagnostic.category = Category::Refused)?;
-            if intent.answer.is_some() {
-                question_turn_idle(&summary)
+            if let Some(answer) = &intent.answer {
+                let awaited =
+                    question.is_some_and(|q| q.identity == answer.question && q.content.blocking);
+                question_turn_ready(&summary, awaited)
                     .inspect_err(|_| diagnostic.category = Category::Refused)?;
             }
         }

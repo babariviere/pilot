@@ -111,10 +111,7 @@ impl ChatEditor {
                                     )
                                     .on_click(cx.listener(move |view, _, _, _| {
                                         if let Some(client) = &view.client {
-                                            client.command(WriteCommand::Check {
-                                                id: retry_id.clone(),
-                                                retry: true,
-                                            });
+                                            client.command(view.retry_command(&retry_id));
                                         }
                                     })),
                             )

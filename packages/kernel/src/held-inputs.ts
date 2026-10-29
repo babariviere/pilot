@@ -5,12 +5,17 @@ import {
 	type ConversationId,
 	type Cursor,
 	type EntryDraft,
+	type EntryId,
+	type Extension,
 	GenerationTask,
+	type Harness,
+	hook,
 	InboxDoc,
 	type JsonObject,
 	LiveDoc,
 	type Session,
 	type SubmissionId,
+	ToolTask,
 	type Tx,
 	UserEntry,
 } from "@earendil-works/pi-durable";
@@ -22,7 +27,110 @@ import { previewText, type WithdrawnMessage } from "./queue.ts";
 
 export { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 
-/** Publish and fence the next boundary together, before ask_user's tool result can terminate its run. */
+/** A timed-out/cancelled script loses its stack, but its question still needs an explicit answer. */
+export function questionBoundary(extension: Extension, session: () => Harness | undefined): Extension {
+	return {
+		...extension,
+		hooks: [
+			hook(GenerationTask, {
+				afterTools: async (_assistant, results, api, context) => {
+					const host = session();
+					if (!host || !results.length) return;
+					await finishQuestionReply(host, api.conversationId, context, results[results.length - 1]);
+				},
+			}),
+			hook(ToolTask, {
+				afterTool: async (call, result, api, context) => {
+					if (call.parent) return;
+					const held = await session()?.snapshot(HeldInputsDoc, api.conversationId, context);
+					if (held?.blockingQuestion && held.questionPending)
+						return { ...result, control: { ...result.control, terminate: true } };
+				},
+			}),
+			...(extension.hooks ?? []),
+		],
+	};
+}
+
+/** Restore the reply's model contribution after the result, including after Stop/crash. */
+export async function finishQuestionReply(
+	session: Pick<Harness, "commit" | "snapshot">,
+	conversationId: ConversationId,
+	context: Context,
+	resultId?: EntryId,
+): Promise<void> {
+	if (!(await session.snapshot(HeldInputsDoc, conversationId, context))?.questionReplies?.length) return;
+	await session.commit(async (tx) => {
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		const answers = held.questionReplies;
+		if (!answers?.length) return;
+		let result = resultId ? await tx.entry(resultId) : undefined;
+		if (!resultId) {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await tx.scanEntries({ conversationId }, 100, cursor);
+				result = page.items.find((entry) => entry.kind === "pi.tool-result");
+				cursor = page.next;
+			} while (!result && cursor !== undefined);
+		}
+		if (!result) return;
+		// The JS stack is never replayed. Its successful or interrupted result is
+		// followed by the accepted reply, without a duplicate UI bubble.
+		await tx.appendEntry(conversationId, {
+			kind: "pilot.question-reply-context",
+			model: [],
+			edits: [
+				{
+					target: result.id,
+					action: "replace",
+					messages: [
+						...(result.model ?? []),
+						...answers.map((content) => ({ role: "user" as const, content, timestamp: Date.now() })),
+					],
+				},
+			],
+		});
+		delete held.questionReplies;
+		if (!held.questionPending) delete held.blockingQuestion;
+	}, context);
+}
+
+/** Observe the committed reply, not a transport ACK or an automatic notification. No polling. */
+export async function waitForQuestionAnswer(
+	session: Pick<Harness, "watchDoc">,
+	conversationId: ConversationId,
+	callId: string,
+	context: Context,
+	signal?: AbortSignal,
+): Promise<string> {
+	const watch = await session.watchDoc(HeldInputsDoc, conversationId, context);
+	if (!watch) throw new Error("Question is unavailable");
+	let abort = () => {};
+	try {
+		return await new Promise<string>((resolve, reject) => {
+			abort = () => reject(signal?.reason ?? new Error("Question cancelled"));
+			signal?.addEventListener("abort", abort, { once: true });
+			if (signal?.aborted) {
+				abort();
+				return;
+			}
+			const check = (state: typeof watch.value) => {
+				const question = state?.blockingQuestion;
+				// Stop clears the gate before signalling the tool. Only the signal cancels the
+				// await, so a script cannot catch a premature rejection and start another effect.
+				if (question?.callId === callId && question.answer !== undefined) resolve(question.answer);
+			};
+			check(watch.value);
+			watch.start(async (state) => check(state));
+			void watch.closed.then(() => reject(new Error("Question watch closed")), reject);
+		});
+	} finally {
+		signal?.removeEventListener("abort", abort);
+		await watch.stop();
+	}
+}
+
+/** Publish and fence the next boundary together, before a tool can return or suspend. */
 export async function publishQuestionWithHeld(
 	session: Pick<Session, "commit">,
 	conversationId: ConversationId,
@@ -31,12 +139,18 @@ export async function publishQuestionWithHeld(
 	data: EntryDraft["data"],
 	context: Context,
 ): Promise<void> {
-	await session.commit(async (tx) => {
-		if (await tx.submissionByRequest(conversationId, requestId)) return;
-		await holdQuestionInbox(tx, conversationId, readSubmission);
+	const published = await session.commit(async (tx) => {
+		if (await tx.submissionByRequest(conversationId, requestId)) return true;
+		const held = await tx.doc(HeldInputsDoc, conversationId);
+		if (held.questionPending && held.blockingQuestion) return false;
+		const blocking = typeof data === "object" && data !== null && !Array.isArray(data) && data.blocking === true;
+		await holdQuestionInbox(tx, conversationId, readSubmission, blocking);
+		if (blocking) held.blockingQuestion = { callId: requestId };
 		const entry = await tx.appendEntry(conversationId, { kind: QUESTION_ENTRY, data, model: [] });
 		await tx.createSubmission({ conversationId, requestId, type: "write", status: "done", entry: entry.id });
+		return true;
 	}, context);
+	if (!published) throw new Error("Answer the pending question before asking another");
 }
 
 /** Recover legacy pending questions before the Harness or native notifications can resume. */
@@ -45,17 +159,22 @@ export async function initializeQuestionHold(
 	conversationId: ConversationId,
 	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
 	context: Context,
-): Promise<void> {
-	await session.commit(async (tx) => {
+): Promise<boolean> {
+	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
-		if (held.questionPending !== undefined) return;
+		const interrupted = !!held.blockingQuestion && !!held.questionPending;
+		// Native tools are replay-unsafe. A replacement worker never resumes a script's JS stack.
+		// Keep its unanswered question as a legacy next-turn question instead.
+		// An accepted reply is restored at the recovered tool round's boundary.
+		// It must survive until then, even if a crash interrupted the script's result.
+		if (held.questionPending !== undefined) return interrupted;
 		let cursor: Cursor | undefined;
 		do {
 			const page = await tx.scanEntries({ conversationId }, 100, cursor);
 			for (const entry of page.items) {
 				if (entry.kind === QUESTION_ENTRY) {
 					await holdQuestionInbox(tx, conversationId, readSubmission);
-					return;
+					return false;
 				}
 				if (
 					entry.kind !== "pi.compaction" &&
@@ -63,12 +182,13 @@ export async function initializeQuestionHold(
 					entry.model?.some((m) => m.role === "user")
 				) {
 					held.questionPending = false;
-					return;
+					return false;
 				}
 			}
 			cursor = page.next;
 		} while (cursor !== undefined);
 		held.questionPending = false;
+		return false;
 	}, context);
 }
 
@@ -76,6 +196,7 @@ async function holdQuestionInbox(
 	tx: Tx,
 	conversationId: ConversationId,
 	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+	blocking = false,
 ) {
 	const held = await tx.doc(HeldInputsDoc, conversationId);
 	const inbox = await tx.doc(InboxDoc, conversationId);
@@ -83,7 +204,8 @@ async function holdQuestionInbox(
 	// An already queued explicit user instruction is a response, not an automatic wake-up.
 	held.questionPending =
 		!held.stopped &&
-		!inbox.items.some((item, index) => item.mode !== "write" && !inputOrigin(records[index]?.requestId));
+		(blocking ||
+			!inbox.items.some((item, index) => item.mode !== "write" && !inputOrigin(records[index]?.requestId)));
 	if (held.questionPending) {
 		inbox.items = inbox.items.filter((item, index) => {
 			if (item.mode === "write") {
@@ -164,6 +286,7 @@ export async function holdOnStop(
 		const records = await Promise.all(inputs.map((item) => readSubmission(item.id)));
 		held.stopped = true;
 		held.questionPending = false;
+		if (held.blockingQuestion?.answer === undefined) delete held.blockingQuestion;
 		const withdrawn: { mode: DeliveryMode; content: string; requestId?: string }[] = [];
 		inputs.forEach((item, index) => {
 			const requestId = records[index]?.requestId;
@@ -259,6 +382,42 @@ export async function admitWithHeld(
 		}
 		if (held.questionPending && input) {
 			if (onlyIfIdle && (live.run || live.compactions?.length)) throw new ConversationBusy(conversationId);
+			if (held.blockingQuestion && live.run) {
+				// Notices enter model context at the tool boundary, after its result, not between
+				// an assistant's tool calls and results (which provider APIs reject).
+				inbox.items.push(...(held.questionWrites ?? []));
+				const entry = await tx.appendEntry(UserEntry, conversationId, {
+					model: [{ role: "user", content: input.content, timestamp: Date.now() }],
+				});
+				// Keep the visible reply bubble, but deliver its model content only through the
+				// awaited tool result. A user message here would split the tool-call/result pair.
+				await tx.appendEntry(conversationId, {
+					kind: "pilot.question-reply",
+					model: [],
+					edits: [{ target: entry.id, action: "omit" }],
+				});
+				const submission = await tx.createSubmission({
+					conversationId,
+					requestId: input.requestId,
+					type: "input",
+					status: "done",
+					entry: entry.id,
+					answer: entry.id,
+				});
+				held.blockingQuestion.answer =
+					typeof input.content === "string"
+						? input.content
+						: input.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+				held.questionReplies ??= [];
+				held.questionReplies.push(held.blockingQuestion.answer);
+				held.questionPending = false;
+				held.questionWrites = [];
+				if (!held.paused || release) {
+					inbox.items.push(...held.items.map((item) => ({ ...item, mode: "followUp" as const })));
+					held.items = [];
+				}
+				return { id: submission.id };
+			}
 			const submission = await tx.createSubmission({
 				conversationId,
 				requestId: input.requestId,

@@ -363,6 +363,9 @@ pub(crate) struct LiveTranscript {
     pub(crate) image_owner: Option<(crate::delivery_store::Host, String)>,
     question_pending: crate::question::Pending,
     question_run_active: bool,
+    /// Latest question entry whose run ended. Its run no longer awaits it, so a
+    /// later run never presents it as an awaited ask.
+    question_released: u64,
     /// A run is live on a current connection. Work reads as Working only
     /// while this holds; tool events alone never decide it.
     run_live: bool,
@@ -420,14 +423,18 @@ struct SavedHistory {
 impl LiveTranscript {
     pub(crate) fn question(&self) -> crate::question::Projection {
         use crate::question::Projection;
-        if !self.loaded
-            || self.prefix_pending
-            || self.question_run_active
-            || self.runnable_queued != 0
+        if !self.loaded || self.prefix_pending || self.runnable_queued != 0 {
+            return Projection::Unavailable;
+        }
+        let current = self.question_pending.current();
+        // A live run hides questions, except the awaited ask that run published.
+        if self.question_run_active
+            && !matches!(&current, Ok(Some(q))
+                if q.content.blocking && q.identity.entry > self.question_released)
         {
             return Projection::Unavailable;
         }
-        match self.question_pending.current() {
+        match current {
             Ok(Some(question)) => Projection::Pending(question),
             Ok(None) => Projection::None,
             Err(error) => Projection::Invalid(error),
@@ -866,6 +873,11 @@ impl LiveTranscript {
                 self.run_live = true;
             }
             Some("run_end" | "run_error" | "error") => {
+                if self.question_run_active {
+                    self.question_released = self
+                        .question_released
+                        .max(self.question_pending.latest_id());
+                }
                 self.question_run_active = false;
                 self.run_live = false;
             }
@@ -1111,6 +1123,12 @@ impl LiveTranscript {
                     self.limited = true;
                 }
             }
+        }
+        // No run awaits any loaded question, including one stopped while away.
+        if !self.question_run_active {
+            self.question_released = self
+                .question_released
+                .max(self.question_pending.latest_id());
         }
     }
 
@@ -1527,6 +1545,66 @@ mod tests {
             model.question(),
             crate::question::Projection::Invalid(_)
         ));
+    }
+    #[test]
+    fn blocking_question_presents_during_its_live_run_and_closes_on_reply() {
+        let blocking = |id: u64| {
+            let mut entry = question_entry(id, 1);
+            entry["data"]["blocking"] = true.into();
+            entry
+        };
+        let run = json!({"startedAt":1});
+        // Reconnect while the live run waits on its ask.
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[blocking(4)],"run":run}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        // A legacy turn-ending ask still never presents during a run.
+        model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)],"run":run}));
+        assert_eq!(pending_question_id(&model), None);
+        // Publication inside the running turn, then ordinary run activity.
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[]}));
+        model.apply(&json!({"type":"run_start"}));
+        model.apply(&json!({"type":"entry_appended","entry":blocking(4)}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"tool_execution_update","toolCallId":"c1","output":"waiting"}));
+        model.apply(&json!({"type":"jobs_update","jobs":[{"status":"running"}]}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        let held =
+            json!([{"id":1,"origin":"mission","mode":"followUp","preview":"Update","held":true}]);
+        model.apply(&json!({"type":"queue_update","items":[],"automatic":held}));
+        assert_eq!(
+            pending_question_id(&model),
+            Some(4),
+            "Held FIFO input waits"
+        );
+        model.apply(&json!({"type":"queue_update","items":[{"id":2,"mode":"steer","content":"Tests"}],"automatic":held}));
+        assert_eq!(pending_question_id(&model), None, "A queued reply hides it");
+        // The explicit reply is an ordinary user entry: no repeat while the run continues.
+        model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Tests"}]}}));
+        model.apply(&json!({"type":"queue_update","items":[],"automatic":held}));
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"run_end"}));
+        assert_eq!(pending_question_id(&model), None);
+        // Stop before a reply: the ask reads like a legacy pending question,
+        // and a later run in this connection never presents it as awaited.
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[blocking(4)],"run":run}));
+        model.apply(&json!({"type":"run_end"}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        model.apply(&json!({"type":"run_start"}));
+        assert_eq!(pending_question_id(&model), None);
+        model.apply(&json!({"type":"run_error"}));
+        assert_eq!(pending_question_id(&model), Some(4));
+        // A newer awaited ask in a later run presents again.
+        model.apply(&json!({"type":"run_start"}));
+        model.apply(&json!({"type":"entry_appended","entry":blocking(6)}));
+        assert_eq!(pending_question_id(&model), Some(6));
+        // Malformed markers fail closed, never as an awaited ask.
+        let mut bad = blocking(8);
+        bad["data"]["blocking"] = "true".into();
+        model.apply(&json!({"type":"entry_appended","entry":bad}));
+        assert_eq!(pending_question_id(&model), None);
     }
     #[test]
     fn question_projection_held_automatic_input_keeps_question_runnable_queue_hides() {

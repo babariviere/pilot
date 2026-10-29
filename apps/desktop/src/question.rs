@@ -34,6 +34,10 @@ pub(crate) struct Content {
     pub(crate) options: Vec<Choice>,
     pub(crate) multi: bool,
     pub(crate) kind: Kind,
+    /// A live run awaits this reply (`ask_user` with `blocking: true`).
+    /// Omitted when false, so legacy turn-ending identities are unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) blocking: bool,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Question {
@@ -104,12 +108,19 @@ impl Question {
             Kind::AccessUnavailable
         };
         let multi = kind == Kind::Message && data["multiSelect"] == true && options.len() > 1;
+        // Only an exact boolean is a delivery contract; access requests never await a message.
+        let blocking = match &data["blocking"] {
+            Value::Null => false,
+            Value::Bool(blocking) => *blocking && kind == Kind::Message,
+            _ => return Err("Question delivery metadata is invalid"),
+        };
         let content = Content {
             question,
             context,
             options,
             multi,
             kind,
+            blocking,
         };
         let bytes =
             serde_json::to_vec(&content).map_err(|_| "Question metadata cannot be encoded")?;
@@ -224,6 +235,10 @@ impl Pending {
             Some((id, result)) if *id > self.user => result.clone().map(Some),
             _ => Ok(None),
         }
+    }
+    /// The newest observed question entry, valid or not.
+    pub(crate) fn latest_id(&self) -> u64 {
+        self.latest.as_ref().map_or(0, |(id, _)| *id)
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

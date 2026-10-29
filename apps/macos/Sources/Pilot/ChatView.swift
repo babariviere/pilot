@@ -446,7 +446,9 @@ struct ChatView: View {
                     ContinuedComposer(nextId: next)
                 } else if let question = pendingQuestion(transcript) {
                     QuestionComposer(question: question, draft: composer.draftState, onSend: answer,
-                                     onDecideAccess: decideDatabaseAccess)
+                                     onDecideAccess: decideDatabaseAccess,
+                                     onStop: transcript.working || session.state == "working"
+                                         ? { feed.clearOutgoing(); stop() } : nil)
                         .disabled(context?.available == false)
                         // Each question starts with nothing highlighted or ticked.
                         .id(question.entryID)

@@ -70,12 +70,15 @@ import {
 	admitWithHeld,
 	deferQuestionWrite,
 	discardHeld,
+	finishQuestionReply,
 	HeldInputsDoc,
 	holdOnStop,
 	initializeQuestionHold,
 	pauseInputs,
 	publishQuestionWithHeld,
+	questionBoundary,
 	type SystemMessageStateEvent,
+	waitForQuestionAnswer,
 } from "./held-inputs.ts";
 import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
@@ -338,20 +341,25 @@ export class KernelSession {
 		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
 		let serializeQuestion = (work: () => Promise<void>) => work();
-		const publishQuestion: PublishQuestion = async (callId, question) => {
+		const publishQuestion: PublishQuestion = async (callId, question, signal) => {
 			if (!artifactConversation) throw new Error("Questions require a bound conversation");
-			await serializeQuestion(() =>
-				publishQuestionWithHeld(
+			await serializeQuestion(async () => {
+				signal?.throwIfAborted();
+				await publishQuestionWithHeld(
 					harness!,
 					artifactConversation!.id,
 					(id) => owned.storage.submission(id, context),
 					`question:${callId}`,
 					{ ...question },
 					context,
-				),
-			);
+				);
+			});
 		};
-		const questionTool = createQuestionTool(publishQuestion);
+		const questionTool = createQuestionTool(async (callId, question, signal) => {
+			signal?.throwIfAborted();
+			await publishQuestion(callId, { ...question, blocking: true }, signal);
+			return waitForQuestionAnswer(harness!, artifactConversation!.id, `question:${callId}`, context, signal);
+		});
 		const callTodo: TodoCall = async (args, actor) => {
 			validateTodoArgs(args, actor);
 			if (!artifactConversation || !harness) throw new Error("Todos require a bound chat");
@@ -599,7 +607,10 @@ export class KernelSession {
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;
 				const tracked = jobs.prepare(refs ? refs.prepare(audited) : audited);
-				const events = compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness);
+				const events = questionBoundary(
+					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
+					() => harness,
+				);
 				return toolDrain.prepare(
 					coordinatorMemory.extension(digestCompaction ? digestCompaction.extension(events) : events),
 					(context) => adapter!.waitForSubscription(context.abortSignal),
@@ -835,7 +846,22 @@ export class KernelSession {
 			await adapter.refreshUsage(context);
 			if (spec.pauseInputsOnOpen !== undefined)
 				await pauseInputs(harness, conversation.id, context, spec.pauseInputsOnOpen);
-			await initializeQuestionHold(harness, conversation.id, (id) => owned.storage.submission(id, context), context);
+			const interruptedQuestion = await initializeQuestionHold(
+				harness,
+				conversation.id,
+				(id) => owned.storage.submission(id, context),
+				context,
+			);
+			// The lost JS stack cannot be recreated safely. Retire its run before scheduling,
+			// retaining the unanswered question and held inputs for an explicit next-turn reply.
+			if (interruptedQuestion) {
+				await conversation.abort(context);
+				await harness.commit(async (tx) => {
+					delete (await tx.doc(HeldInputsDoc, conversation.id)).blockingQuestion;
+				}, context);
+			}
+			if (!(await harness.snapshot(LiveDoc, conversation.id, context))?.run)
+				await finishQuestionReply(harness, conversation.id, context);
 			// Extension messages that start a turn (subagent answers) become durable follow-ups.
 			session.onSystemMessageState = hooks.onSystemMessageState;
 			await session.publishSystemMessageStates();
@@ -1368,6 +1394,7 @@ export class KernelSession {
 		);
 		await this.publishSystemMessageStates();
 		await this.conversation.abort(context, { background: true });
+		await finishQuestionReply(this.harness, this.conversation.id, context);
 		if (this.#releaseStoppedRequests) {
 			if (!this.#updateToolsPaused) this.#toolDrain.resume();
 			this.#releaseStoppedRequests();

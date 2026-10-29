@@ -71,6 +71,38 @@ private func transcript(_ entries: [String], working: Bool = false) throws -> Tr
     }
 }
 
+@Test func awaitedQuestionsShowWhileTheirRunWorksLegacyAndAccessDoNot() throws {
+    let awaited = #"{"id":4,"kind":"pilot.question","data":{"question":"Where should retries live?","options":[{"label":"Shared client"}],"blocking":true},"model":[]}"#
+    let access = #"{"id":4,"kind":"pilot.question","data":{"question":"Allow?","options":[{"label":"Allow"},{"label":"Deny"}],"blocking":true,"databaseAccess":{"id":"r","env":"prod","mode":"read"}},"model":[]}"#
+    let malformed = #"{"id":4,"kind":"pilot.question","data":{"question":"Where should retries live?","blocking":"true"},"model":[]}"#
+    let legacy = try #require(try transcript([questionEntry]).pendingQuestion)
+    #expect(!legacy.blocking)
+    #expect(try #require(try transcript([awaited]).pendingQuestion).blocking)
+    #expect(try #require(try transcript([access]).pendingQuestion).blocking == false)
+    #expect(try #require(try transcript([malformed]).pendingQuestion).blocking == false)
+    for (entry, showsWhileWorking) in [(awaited, true), (questionEntry, false), (access, false), (malformed, false)] {
+        let presentation = try TranscriptPresentation(transcript: transcript([entry]))
+        let question = try #require(presentation.pendingQuestion)
+        for state in ["starting", "working", "idle"] {
+            let session = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                         state: state, working: state != "idle")
+            let expected = state == "idle" || (state == "working" && showsWhileWorking) ? question : nil
+            #expect(presentation.questionForComposer(session: session, hasSnapshot: true) == expected)
+        }
+        var active = presentation
+        active.working = true
+        let idle = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "idle")
+        #expect(active.questionForComposer(session: idle, hasSnapshot: true) == (showsWhileWorking ? question : nil))
+        #expect(active.questionForComposer(session: idle, hasSnapshot: false) == nil)
+    }
+    // The ordinary reply entry answers it, even while the run continues.
+    let reply = #"{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Shared client"}]}"#
+    var answered = try TranscriptPresentation(transcript: transcript([awaited, reply]))
+    answered.working = true
+    let working = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "working")
+    #expect(answered.questionForComposer(session: working, hasSnapshot: true) == nil)
+}
+
 @Test func compactionDoesNotAnswerAPendingQuestion() async throws {
     let entries = [askCall, askResult, questionEntry]
     let expected = try #require(transcript(entries).pendingQuestion)

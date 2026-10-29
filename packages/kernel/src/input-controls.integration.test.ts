@@ -197,6 +197,20 @@ test("Stop aborts before redirect's new instruction starts and keeps its automat
 	assert.equal(f.faux.state.callCount, 2, "accepted redirect input is deduplicated");
 });
 
+async function waitingQuestion(f: Awaited<ReturnType<typeof fixture>>, count = 1) {
+	const deadline = Date.now() + 5000;
+	while (Date.now() < deadline) {
+		const entries = (await f.session.conversation.context(context)).entries;
+		if (
+			entries.filter((e) => e.kind === QUESTION_ENTRY).length >= count &&
+			(await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.questionPending
+		)
+			return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	assert.fail("question did not become pending");
+}
+
 test("automatic input preserves a pending question across reconnect and runs FIFO only after its answer", {
 	timeout: 20_000,
 }, async (t) => {
@@ -210,7 +224,7 @@ test("automatic input preserves a pending question across reconnect and runs FIF
 		}),
 	]);
 	await f.session.submit("user:ask", "Ask me", "followUp");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	const before = (await f.session.conversation.context(context)).entries;
 	assert.ok(before.some((entry) => entry.kind === QUESTION_ENTRY));
 	for (const [requestId, content, mode] of [
@@ -255,7 +269,7 @@ test("question publication fences already queued automatic input, including nati
 	await f.started.promise;
 	await f.session.submit("mission:send:before", "Before publication", "followUp");
 	f.finish.resolve();
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	assert.equal(f.faux.state.callCount, 2, "final boundary cannot consume automatic input as an answer");
 	await f.native.sendCustomMessage(
 		{ customType: "jobs.result", content: "Native result", display: true },
@@ -281,7 +295,7 @@ test("Stop cancels the question gate without losing deferred work or starting it
 		fauxAssistantMessage("Explicitly resumed."),
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	await f.session.submit("watch-notice:first", "Retain this", "followUp");
 	assert.deepEqual(await f.session.abort(), []);
 	await f.session.submit("control:send:late", "Retain late input", "steer");
@@ -321,7 +335,7 @@ test("passive mission decisions do not dismiss a question and survive recovery w
 		},
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	const before = (await f.session.conversation.context(context)).entries;
 	f.session.setMission({ ...mission, decisionVersion: "2", decisions: ["New binding rule"] });
 	await f.session.submit("user:ask", "Ask", "followUp");
@@ -342,7 +356,7 @@ test("idle-only automatic origins wait while an explicit user steer can answer",
 		...Array.from({ length: 8 }, () => fauxAssistantMessage("Done.")),
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	for (const prefix of [
 		"mission-notice:",
 		"watch-notice:",
@@ -373,12 +387,20 @@ test("a second question keeps deferred automatic input waiting instead of treati
 		fauxAssistantMessage("Processed notice."),
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f);
 	const event = { kind: "mission_updated" as const, text: "Fixture task changed" };
 	await f.session.submit("mission-notice:fixture", "Deferred notice", "followUp", true, true, event);
 	await f.session.submit("user:first-answer", "First answer", "steer");
-	await f.session.conversation.waitForIdle(context);
+	await waitingQuestion(f, 2);
 	assert.equal(f.faux.state.callCount, 2);
+	assert.deepEqual(await f.session.submit("user:first-answer", "First answer", "steer", false, true), {
+		delivery: "delivered",
+	});
+	assert.equal(
+		(await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.questionPending,
+		true,
+		"a lost ACK retry cannot answer a different question",
+	);
 	assert.equal((await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context))?.items.length, 1);
 	assert.doesNotMatch(JSON.stringify((await f.session.conversation.context(context)).messages), /Deferred notice/);
 	await f.session.submit("user:second-answer", "Second answer", "steer");

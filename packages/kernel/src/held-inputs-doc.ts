@@ -15,6 +15,10 @@ export const HeldInputsDoc = defineDoc<{
 	paused?: boolean;
 	/** Automatic input cannot act as the reply to an interactive question. */
 	questionPending?: boolean;
+	/** Live ask identity and committed answer. An unanswered interrupted invocation becomes a legacy question. */
+	blockingQuestion?: { callId: string; answer?: string };
+	/** Replies remain visible immediately; their model contribution waits for the enclosing tool round. */
+	questionReplies?: string[];
 	/** Passive model-visible notices also wait, without starting a turn themselves. */
 	questionWrites?: Extract<InboxItem, { mode: "write" }>[];
 	/** Daemon-owned monotonic queue-control revision. Lost acknowledgements cannot undo newer controls. */
