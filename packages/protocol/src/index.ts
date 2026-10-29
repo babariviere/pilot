@@ -362,7 +362,10 @@ export interface SessionSummary {
 	pinned?: boolean;
 	/** Live worker-owned jobs. Omitted when none; never restored from stale metadata. */
 	runningJobs?: SessionJob[];
-	/** User-only attention (live jobs or stuck owned PRs). Does not change outcomes or coordinator admission. */
+	/**
+	 * User-only attention (live jobs, a question the live run awaits, or stuck owned PRs). Does not change outcomes,
+	 * state, working or coordinator admission.
+	 */
 	attentionReason?: NeedsYouReason;
 	/** Epoch ms when live job attention became due. Cleared with the job. */
 	attentionAt?: number;
@@ -1366,6 +1369,8 @@ export type NeedsYouReasonKind =
  * `limit`: a failed chat stopped by a subscription limit ("Limit reached · resumes at 18:00").
  * `mcp`: the chat reached for an MCP server that needs the user ("datadog needs sign-in"); live-only.
  * `tool_stall`: bounded evidence suspects an unfinished tool is not progressing; live-only and uncertain.
+ * `asks`: in a session summary, the live run is suspended in ask_user until the user replies; live-only. Elsewhere it
+ * also names a turn that ended on a question.
  * `no_pr`: cached workspace changes exist, but no pull request has been created or attached.
  */
 export interface NeedsYouReason {

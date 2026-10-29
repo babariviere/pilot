@@ -124,6 +124,7 @@ async function open(
 		}),
 	);
 	const completions: SessionCompletion[] = [];
+	const awaited: (string | undefined)[] = [];
 	const reopen = () =>
 		KernelSession.open(
 			{
@@ -134,6 +135,7 @@ async function open(
 			},
 			{
 				...(databases.callDatabase ? { callDatabase: databases.callDatabase } : {}),
+				onQuestionAwaited: (question) => awaited.push(question),
 				onWorking: (working, completion) => {
 					if (!working && completion && completion.outcomeAt !== completions.at(-1)?.outcomeAt)
 						completions.push(completion);
@@ -151,6 +153,7 @@ async function open(
 		},
 		faux,
 		completions,
+		awaited,
 		effects,
 		waiting,
 		async reopen() {
@@ -180,7 +183,7 @@ async function questionPublished(session: KernelSession, count = 1) {
 }
 
 test("a direct ask_user suspends until an explicit reply reaches its tool result", { timeout: 20_000 }, async (t) => {
-	const { session, faux, completions } = await open(t, "direct-question");
+	const { session, faux, completions, awaited } = await open(t, "direct-question");
 	let seen = "";
 	faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Where?" }), { stopReason: "toolUse" }),
@@ -200,7 +203,11 @@ test("a direct ask_user suspends until an explicit reply reaches its tool result
 	]);
 	await session.submit("ask", "Add retries", "followUp");
 	await questionPublished(session);
+	const deadline = Date.now() + 5000;
+	while (awaited.at(-1) !== "Where?" && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.deepEqual(awaited, ["Where?"], "the live run reports the question it awaits");
 	await session.submit("mission:send:auto", "Not an answer", "followUp");
+	assert.deepEqual(awaited, ["Where?"], "automatic input is not an answer");
 	assert.equal(faux.state.callCount, 1);
 	assert.equal(completions.length, 0, "the caller has not finished");
 	assert.ok(
@@ -208,6 +215,7 @@ test("a direct ask_user suspends until an explicit reply reaches its tool result
 	);
 	await session.submit("reply", "Sync worker", "steer");
 	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(awaited, ["Where?", undefined], "the reply clears it");
 	assert.match(seen, /Sync worker/);
 	const entries = (await session.conversation.context(BACKGROUND_CONTEXT)).entries;
 	assert.match(JSON.stringify(entries.filter((e) => e.kind === "pi.tool-result")), /Sync worker/);

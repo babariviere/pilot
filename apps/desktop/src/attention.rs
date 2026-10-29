@@ -47,7 +47,8 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
         return None;
     }
     let reason = value["attentionReason"]["kind"].as_str().unwrap_or("");
-    let live = matches!(reason, "long_job" | "mcp" | "tool_stall");
+    // `asks` in a summary: the live run awaits ask_user (pilotd sets it only then).
+    let live = matches!(reason, "long_job" | "mcp" | "tool_stall" | "asks");
     // Follow SessionSignal precedence. A job, pause or scheduled reply must not
     // resurrect a previous question/failure. Live public attention wins first.
     if !live
@@ -197,7 +198,9 @@ mod tests {
             assert!(attention(extra).is_none());
         }
         for guard in [
-            json!({"working":true}),
+            // A live run clears pilotd's outcome; only background work keeps
+            // it, and then the unanswered question outranks that work.
+            json!({"state":"working","working":true}),
             json!({"sleepPaused":true}),
             json!({"offlinePaused":true}),
             json!({"scheduledMessage":true}),
@@ -205,12 +208,23 @@ mod tests {
             json!({"continuedTo":"other"}),
             json!({"control":true}),
         ] {
-            let mut v = json!({"outcome":"question","attentionReason":{"kind":"asks"}});
+            let mut v = json!({"outcome":"question"});
             v.as_object_mut()
                 .unwrap()
                 .extend(guard.as_object().unwrap().clone());
             assert!(attention(v).is_none());
         }
+        // pilotd's live `asks`: the run awaits ask_user, so it outranks Working.
+        let live = attention(json!({"state":"working","working":true,"attentionReason":{"kind":"asks","detail":"Which?"}}))
+            .unwrap();
+        assert_eq!(
+            (live.kind, live.label.as_str()),
+            (Kind::Question, "Asks: Which?")
+        );
+        assert!(
+            attention(json!({"working":true,"archivedAt":1,"attentionReason":{"kind":"asks"}}))
+                .is_none()
+        );
         assert!(attention(json!({"working":true,"attentionReason":{"kind":"mcp"}})).is_some());
         let ready = json!({"pullRequest":{"state":"open","readiness":{"state":"ready"}}});
         assert_eq!(attention(ready.clone()).unwrap().kind, Kind::Ready);

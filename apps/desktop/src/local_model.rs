@@ -324,8 +324,8 @@ fn working(value: &Value) -> bool {
 /// An unanswered turn-ending question while only background jobs or subagents
 /// run. pilotd keeps that outcome (`session-outcomes.ts` applyActivity) and
 /// clears it as soon as a run starts, so it outranks background Working. A
-/// live run's own blocking ask has no summary evidence; only the open chat's
-/// transcript can show it (`Presentation::for_display`).
+/// live run suspended in ask_user is pilotd's live `attentionReason` `asks`
+/// instead, read with the other live reasons in `decoration`.
 pub(crate) fn question_outranks_work(value: &Value) -> bool {
     value["outcome"] == "question"
         && value["sleepPaused"] != true
@@ -376,7 +376,7 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
         && ["pullRequests", "boundPullRequests"]
             .iter()
             .all(|field| value[*field].as_array().is_none_or(Vec::is_empty));
-    let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall")
+    let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall" | "asks")
         || (working && question_outranks_work(value))
     {
         Some(Signal::NeedsYou)
@@ -1933,7 +1933,7 @@ mod tests {
                 c.background_work,
             )
         };
-        // 1. Run active: no summary evidence of a blocking ask, so Working.
+        // 1. Run active without an awaited ask: Working.
         assert_eq!(
             view(json!({"id":"a","state":"working","working":true,"runningJobs":jobs})),
             (
@@ -1944,6 +1944,22 @@ mod tests {
                 false
             )
         );
+        // The live run suspended in ask_user (pilotd's live `asks`): Needs
+        // you, while the run stays busy for Stop.
+        let live = json!({"id":"a","state":"working","working":true,"attentionReason":{"kind":"asks","detail":"Which region?"}});
+        assert_eq!(
+            view(live.clone()),
+            (
+                Some(Signal::NeedsYou),
+                Some(Mark::Question),
+                Some(Kind::Question),
+                true,
+                false
+            )
+        );
+        let c = chat(&live).unwrap();
+        assert_eq!(c.attention.unwrap().label, "Asks: Which region?");
+        assert_eq!(c.state, "working");
         // 2. Turn ended on a question while jobs keep running: Needs you,
         // with background work and jobs preserved for the composer strip.
         let asked = json!({"id":"a","state":"idle","working":true,"runningJobs":jobs,"outcome":"question","outcomeAt":9,"outcomeReason":"Pick a layout 日本語 👩‍💻"});

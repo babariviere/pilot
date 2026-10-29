@@ -77,10 +77,10 @@ remain unchanged. This applies equally to live updates and cold history.
   raw summaries unchanged, so an answered or unavailable question cannot leave
   a sticky override. Summary state, busy/run ownership and Stop stay unchanged.
 - `local_model.rs` (`decoration`, `question_outranks_work`): for every other
-  chat, a summary's unanswered turn-ending question outranks background-only
-  Working (jobs or subagents). pilotd clears that outcome once a run starts, and
-  a live run's blocking ask has no summary field, so a non-open chat whose run
-  awaits `ask_user` still reads Working until the daemon reports one.
+  chat, pilotd's live `attentionReason` `asks` (the kernel reports the
+  question its run awaits, cleared on reply, Stop or run end) and an unanswered
+  turn-ending question both outrank Working, including background-only jobs or
+  subagents. Summary state, `working` and busy stay unchanged.
 - `local_view.rs`: one final source-scoped composer sync beside activity. A
   Working chat is fresh for replies only while its stream reports that the live
   run awaits the projected ask (`question_awaited`); the summary state alone

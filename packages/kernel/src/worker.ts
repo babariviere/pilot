@@ -513,6 +513,8 @@ export function runKernelWorker(): void {
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
 					onToolActivity: (activity) => notify({ type: "tool.activity", activity }),
 					onToolsRunningChanged: (running) => notify({ type: "tools.running", running }),
+					onQuestionAwaited: (question) =>
+						notify({ type: "question.awaited", ...(question !== undefined ? { question } : {}) }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					reportUsageHistory: (row) => callDaemon((callId) => ({ type: "usage-history", callId, row })),

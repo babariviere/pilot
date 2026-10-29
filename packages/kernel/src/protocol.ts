@@ -324,6 +324,8 @@ export type KernelPacket =
 	| { type: "tool.activity"; activity: ToolActivitySnapshot }
 	/** Active top-level call, including its entire codemode script. Never gated by diagnostics. */
 	| { type: "tools.running"; running: boolean }
+	/** The live run awaits this blocking ask_user question; omitted once answered, stopped or ended. Presentation only. */
+	| { type: "question.awaited"; question?: string }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "usage-history"; callId: string; row: import("@pilot/protocol").UsageObservation }

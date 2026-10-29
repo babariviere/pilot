@@ -87,10 +87,11 @@ async function fixture(t: TestContext) {
 				},
 			})),
 	);
+	const awaited: (string | undefined)[] = [];
 	const open = () =>
 		KernelSession.open(
 			{ sessionId: "controls", cwd: root, storageDir: join(root, "durable"), agentDir: join(root, "agent") },
-			{ onWorking: () => {} },
+			{ onWorking: () => {}, onQuestionAwaited: (question) => awaited.push(question) },
 		);
 	let session = await open();
 	t.after(async () => {
@@ -102,6 +103,7 @@ async function fixture(t: TestContext) {
 		faux,
 		started,
 		finish,
+		awaited,
 		get session() {
 			return session;
 		},
@@ -296,8 +298,13 @@ test("Stop cancels the question gate without losing deferred work or starting it
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
 	await waitingQuestion(f);
+	const deadline = Date.now() + 5000;
+	while (f.awaited.at(-1) !== "Proceed?" && Date.now() < deadline)
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.equal(f.awaited.at(-1), "Proceed?");
 	await f.session.submit("watch-notice:first", "Retain this", "followUp");
 	assert.deepEqual(await f.session.abort(), []);
+	assert.equal(f.awaited.at(-1), undefined, "Stop clears the awaited question");
 	await f.session.submit("control:send:late", "Retain late input", "steer");
 	await f.reopen();
 	const held = await f.session.harness.snapshot(HeldInputsDoc, f.session.conversation.id, context);

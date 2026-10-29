@@ -325,6 +325,20 @@ impl Inbox {
             self.syncs,
         )
     }
+    /// Needs-you rows as (chat id, attention label), in display order.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_needs(&self, cx: &App) -> Vec<(String, String)> {
+        let d = self.list.read(cx).delegate();
+        d.rows
+            .needs
+            .iter()
+            .filter_map(|ix| d.all.get(*ix))
+            .map(|c| {
+                let label = c.attention.as_ref().map(|a| a.label.clone());
+                (c.id.clone(), label.unwrap_or_default())
+            })
+            .collect()
+    }
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let owner = cx.weak_entity();
         let list = cx.new(|cx| {

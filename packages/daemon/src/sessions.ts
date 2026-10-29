@@ -108,7 +108,7 @@ import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
-import { stuckPullRequestReason } from "./needs-you-reason.ts";
+import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -278,6 +278,8 @@ export interface SessionWorker {
 	toolStallKey?: string;
 	/** Committed chat todo count, supplied on ready and after every mutation. */
 	openTodoCount?: number;
+	/** The live run awaits this blocking ask_user question. Presentation only; cleared with the worker. */
+	awaitedQuestion?: { text: string; at: number };
 	/** Live-worker work continues between the last job ending and its result turn completing. */
 	awaitingJobFollowUp?: boolean;
 	/** A compaction is summarizing the conversation. Shown as work without starting a turn. */
@@ -750,6 +752,7 @@ export class Worker implements SessionWorker {
 	toolStallKey?: string;
 	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
+	awaitedQuestion?: { text: string; at: number };
 	compacting = false;
 	private readonly pending = new Map<
 		string,
@@ -8304,6 +8307,13 @@ export class SessionManager {
 			}
 			return;
 		}
+		if (packet.type === "question.awaited") {
+			if (this.workers.get(meta.id) !== worker) return;
+			if (packet.question === worker.awaitedQuestion?.text) return;
+			worker.awaitedQuestion = packet.question === undefined ? undefined : { text: packet.question, at: Date.now() };
+			this.emit(meta, worker);
+			return;
+		}
 		if (packet.type === "subagents") {
 			if (this.workers.get(meta.id) !== worker) return;
 			if (JSON.stringify(packet.subagents) === JSON.stringify(meta.subagents ?? [])) return;
@@ -8333,6 +8343,8 @@ export class SessionManager {
 			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
 			if (packet.execution) meta.executionEvidence = packet.execution;
+			// A run that ended (or a fresh worker) never keeps the previous run's question.
+			if (!packet.working) delete worker.awaitedQuestion;
 			const titleCompletionAt = packet.completion?.outcomeAt;
 			if (
 				this.workers.get(meta.id) === worker &&
@@ -8478,6 +8490,9 @@ export class SessionManager {
 			(kernelState === "working" || kernelState === "starting" || !!meta.working || !!meta.pending?.length);
 		// An unanswered ask_user question needs the user, so background jobs and subagents do not count as work.
 		const questionWaits = !mainActive && meta.outcome === "question";
+		// A run suspended in ask_user stays working; the question only outranks it for presentation.
+		const awaitedQuestion =
+			meta.archivedAt === undefined && mainActive && !meta.failure ? worker?.awaitedQuestion : undefined;
 		const mainBusy = mainActive || (!questionWaits && !!worker?.awaitingJobFollowUp);
 		// Auto-pauses hold the next admission, not a call already executing. In particular,
 		// a codemode script must finish all nested calls before its chat looks paused.
@@ -8575,6 +8590,15 @@ export class SessionManager {
 			...mcpAttention,
 			...(!longJob && !mcpAttention && toolStall
 				? { attentionReason: toolStall.reason, attentionAt: toolStall.at }
+				: {}),
+			...(awaitedQuestion
+				? {
+						attentionReason: {
+							kind: "asks" as const,
+							detail: reasonLine(awaitedQuestion.text) ?? "A question is waiting for your answer",
+						},
+						attentionAt: awaitedQuestion.at,
+					}
 				: {}),
 			...(meta.archivedAt === undefined && this.scheduledMessages.has(meta.id) ? { scheduledMessage: true } : {}),
 			...(meta.model ? { model: meta.model } : {}),

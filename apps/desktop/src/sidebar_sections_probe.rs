@@ -1097,6 +1097,11 @@ fn run_waiting_question(cx: &mut HeadlessAppContext, width: f32) {
                 json!({"id":"q-live","title":"Live run","projectId":"pilot","state":"working",
                 "working":true,"createdAt":940.,"lastUserMessageAt":940.}),
             ),
+            raw(
+                json!({"id":"q-await","title":"Awaiting ask","projectId":"pilot","state":"working",
+                "working":true,"attentionReason":{"kind":"asks","detail":"Which region?"},
+                "createdAt":935.,"lastUserMessageAt":935.}),
+            ),
             asked("q-bg", "Background asks", "pilot", 930., Value::Null),
             asked("q-hidden", "Hidden asks", "dotfiles", 800., Value::Null),
         ]
@@ -1139,7 +1144,13 @@ fn run_waiting_question(cx: &mut HeadlessAppContext, width: f32) {
     }
     assert!(
         spoken(cx, "Live run").contains("Working"),
-        "no summary evidence"
+        "a live run without an awaited ask stays Working"
+    );
+    // pilotd's live `asks`: the run awaits ask_user.
+    let label = spoken(cx, "Awaiting ask");
+    assert!(
+        label.contains("Asks: Which region?") && !label.contains("Working"),
+        "{label}"
     );
     // The roll-up counts members; the coordinator keeps its own mark.
     let expected = Rollup {
@@ -1182,6 +1193,86 @@ fn run_waiting_question(cx: &mut HeadlessAppContext, width: f32) {
         ..Default::default()
     };
     assert_eq!(thread(cx).0, expected);
+    // The live ask in a chat that was never opened: the sidebar and Inbox say
+    // Needs you from the summary alone, before any focus.
+    let (client, _reads) = crate::local_client::LocalClient::synthetic_commands();
+    cx.update(|cx| view.update(cx, |v, _| v.client = Some(client)));
+    rebuild(cx, chats(true), false);
+    let selected = |cx: &mut HeadlessAppContext| cx.update(|cx| view.read(cx).selected.clone());
+    assert_eq!(selected(cx), None, "never focused");
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| v.show_inbox(None, w, cx))
+    })
+    .unwrap();
+    settle(cx, h);
+    let inbox =
+        |cx: &mut HeadlessAppContext| cx.update(|cx| view.read(cx).inbox.read(cx).probe_needs(cx));
+    let needs = inbox(cx);
+    assert!(
+        needs.contains(&("q-await".into(), "Asks: Which region?".into())),
+        "{needs:?}"
+    );
+    assert!(!needs.iter().any(|(id, _)| id == "q-live"), "{needs:?}");
+    assert_eq!(selected(cx), None, "the Inbox does not open it either");
+    let awaiting = |cx: &mut HeadlessAppContext| {
+        let label = spoken(cx, "Awaiting ask");
+        label.contains("Asks: Which region?") && !label.contains("Working")
+    };
+    assert!(awaiting(cx));
+    // Focus it, then move away: the summary keeps it Needs you.
+    let open_chat = |cx: &mut HeadlessAppContext, id: &str| {
+        cx.update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                let chat = v.state.chats.iter().find(|c| c.id == id).unwrap().clone();
+                assert!(v.open(chat, w, cx), "{id} opens");
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    open_chat(cx, "q-await");
+    open_chat(cx, "q-live");
+    assert_eq!(selected(cx).as_deref(), Some("q-live"));
+    assert!(awaiting(cx), "focus away keeps Needs you");
+    let with_await = |value: Value| {
+        let mut all = chats(true);
+        let ix = all.iter().position(|c| c.id == "q-await").unwrap();
+        all[ix] = raw(value);
+        all
+    };
+    let base = json!({"id":"q-await","title":"Awaiting ask","projectId":"pilot",
+        "createdAt":935.,"lastUserMessageAt":935.});
+    // Answered: pilotd drops `asks` while the run continues.
+    let mut answered = base.clone();
+    answered["state"] = json!("working");
+    answered["working"] = json!(true);
+    // Cancelled: Stop ends the run.
+    let mut cancelled = base.clone();
+    cancelled["state"] = json!("idle");
+    cancelled["outcome"] = json!("stopped");
+    cancelled["outcomeAt"] = json!(960.);
+    for (case, value, word) in [
+        ("answered", answered, Some("Working")),
+        ("cancelled", cancelled, None),
+    ] {
+        rebuild(cx, with_await(value), false);
+        let label = spoken(cx, "Awaiting ask");
+        assert!(!label.contains("Asks:"), "{case}: {label}");
+        if let Some(word) = word {
+            assert!(label.contains(word), "{case}: {label}");
+        }
+        cx.update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| v.show_inbox(None, w, cx))
+        })
+        .unwrap();
+        settle(cx, h);
+        let needs = inbox(cx);
+        assert!(
+            !needs.iter().any(|(id, _)| id == "q-await"),
+            "{case}: {needs:?}"
+        );
+    }
+
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
 }

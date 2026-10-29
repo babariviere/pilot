@@ -169,6 +169,8 @@ export interface KernelSessionHooks {
 	onJobsChanged?(jobs: SessionJob[]): void;
 	onToolActivity?(activity: import("@pilot/protocol").ToolActivitySnapshot): void;
 	onToolsRunningChanged?(running: boolean): void;
+	/** Presentation only: the live run awaits this ask_user question (latest when several), or none. Not replayed. */
+	onQuestionAwaited?(question: string | undefined): void;
 	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
@@ -355,10 +357,25 @@ export class KernelSession {
 				);
 			});
 		};
+		const awaited = new Map<string, string>();
+		const reportAwaited = () => hooks.onQuestionAwaited?.([...awaited.values()].at(-1));
 		const questionTool = createQuestionTool(async (callId, question, signal) => {
 			signal?.throwIfAborted();
 			await publishQuestion(callId, { ...question, blocking: true }, signal);
-			return waitForQuestionAnswer(harness!, artifactConversation!.id, `question:${callId}`, context, signal);
+			awaited.set(callId, question.question);
+			reportAwaited();
+			try {
+				return await waitForQuestionAnswer(
+					harness!,
+					artifactConversation!.id,
+					`question:${callId}`,
+					context,
+					signal,
+				);
+			} finally {
+				awaited.delete(callId);
+				reportAwaited();
+			}
 		});
 		const callTodo: TodoCall = async (args, actor) => {
 			validateTodoArgs(args, actor);

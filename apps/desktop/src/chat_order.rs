@@ -112,8 +112,11 @@ pub(crate) fn read(value: &Value, working: bool) -> Order {
             && value["unpublishedWork"] != true
             && terminal(&value["pullRequest"])
             && linked.into_iter().all(terminal),
-        question: outcome == Some("question")
-            && (settled_view || crate::local_model::question_outranks_work(value)),
+        // A run suspended in ask_user (pilotd's live `asks`), or an unanswered
+        // turn-ending question.
+        question: value["attentionReason"]["kind"] == "asks"
+            || (outcome == Some("question")
+                && (settled_view || crate::local_model::question_outranks_work(value))),
         activity: Stamp(activity),
         created: Stamp(created),
         archived: Stamp(stamp(&value["archivedAt"]).unwrap_or(0.)),
