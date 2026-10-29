@@ -37,9 +37,9 @@ fn sentences_match_swift_and_unknown_or_failed_never_read_as_success() {
     assert_eq!(ok.branch.as_deref(), Some("feat/inline-events"));
     assert_eq!((ok.detail(), ok.uncertainty()), (None, None));
     let pr = event(opened("b", 1, json!(0)));
-    assert_eq!(pr.sentence(), "Agent opened PR #42");
+    assert_eq!(pr.sentence(), "Agent created PR #42");
     assert_eq!(pr.title.as_deref(), Some("Show pushes inline 👋"));
-    assert_eq!(pr.line(), "Agent opened PR #42 Show pushes inline 👋");
+    assert_eq!(pr.line(), "Agent created PR #42 Show pushes inline 👋");
 
     let failed = event(push("c", 1, json!(128)));
     assert_eq!(failed.sentence(), "Agent could not push");
@@ -49,7 +49,7 @@ fn sentences_match_swift_and_unknown_or_failed_never_read_as_success() {
         Some("Command exited with status 128.")
     );
     let unknown = event(push("d", 1, Value::Null));
-    assert_eq!(unknown.sentence(), "Agent may have pushed");
+    assert_eq!(unknown.sentence(), "Agent pushed · Outcome unknown");
     assert_eq!(
         unknown.uncertainty(),
         Some("The command's exit status is unknown.")
@@ -59,12 +59,15 @@ fn sentences_match_swift_and_unknown_or_failed_never_read_as_success() {
     missing.as_object_mut().unwrap().remove("exitCode");
     assert_eq!(event(missing).outcome, Outcome::Unknown);
     let pr_unknown = event(opened("f", 1, Value::Null));
-    assert_eq!(pr_unknown.sentence(), "Agent may have opened PR #42");
+    assert_eq!(
+        pr_unknown.sentence(),
+        "Agent created PR #42 · Outcome unknown"
+    );
     let pr_failed = event(opened("g", 1, json!(1)));
-    assert_eq!(pr_failed.sentence(), "Agent could not open PR #42");
+    assert_eq!(pr_failed.sentence(), "Agent could not create PR #42");
     let mut no_number = opened("h", 1, json!(0));
     no_number.as_object_mut().unwrap().remove("prNumber");
-    assert_eq!(event(no_number).sentence(), "Agent opened a PR");
+    assert_eq!(event(no_number).sentence(), "Agent created a PR");
     for (kind, text) in [
         ("pr_ready", "Agent marked PR #42 ready"),
         ("pr_draft", "Agent marked PR #42 draft"),
@@ -179,8 +182,8 @@ fn chat_rows_place_events_after_their_entry_and_collapse_like_swift() {
             "Pushing now",
             "[Agent pushed 2 times to feat/inline-events]",
             "Opening the PR",
-            "[Agent opened PR #42 Show pushes inline 👋]",
-            "[Agent may have pushed feat/inline-events]",
+            "[Agent created PR #42 Show pushes inline 👋]",
+            "[Agent pushed · Outcome unknown feat/inline-events]",
             "[Agent could not push feat/inline-events]",
             "Done",
         ]
@@ -229,7 +232,7 @@ fn mission_and_plain_chats_show_the_same_attribution_and_failures_do_not_merge()
             "Work",
             "[Agent pushed 2 times to feat/inline-events]",
             "[Agent could not push · 2 times feat/inline-events]",
-            "[Agent may have pushed feat/inline-events]",
+            "[Agent pushed · Outcome unknown feat/inline-events]",
         ]
     );
     // A different branch never joins the run.
@@ -342,7 +345,7 @@ fn assert_split(rows: &[Message]) {
         [
             "Finished background jobs",
             "work[push]",
-            "[Agent may have pushed main]",
+            "[Agent pushed · Outcome unknown main]",
             "work*[Pushed and confirmed., complete, memory-1, memory-2]",
         ]
     );
@@ -396,4 +399,46 @@ fn an_event_inside_a_grouped_run_splits_it_into_distinct_groups() {
         live.rows();
     }
     assert_split(&live.rows());
+}
+
+#[test]
+fn unknown_actions_and_grouped_rows_keep_visible_and_copyable_outcomes() {
+    for (kind, verb) in [
+        ("push", "Agent pushed"),
+        ("pr_opened", "Agent created PR #42"),
+        ("pr_ready", "Agent marked PR #42 ready"),
+        ("pr_draft", "Agent marked PR #42 draft"),
+        ("pr_edited", "Agent edited PR #42"),
+        ("pr_reopened", "Agent reopened PR #42"),
+        ("github_updated", "Agent updated GitHub"),
+    ] {
+        let mut value = opened("x", 1, Value::Null);
+        value["kind"] = json!(kind);
+        let e = event(value);
+        assert_eq!(e.sentence(), format!("{verb} · Outcome unknown"));
+        assert!(e.line().contains("Outcome unknown"));
+        assert!(e.help().contains("Outcome unknown"));
+        assert!(!e.help().contains("may have"));
+    }
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"snapshot","entries":[entry(1, "Work", 1_000)]}));
+    model.apply(&json!({"type":"github_actions_update","actions":[
+        push("a", 1, Value::Null), push("b", 1, Value::Null),
+        opened("c", 1, Value::Null), opened("d", 1, Value::Null),
+        opened("e", 1, json!(0)), opened("f", 1, json!(0))]}));
+    let rows = model.rows();
+    assert_eq!(
+        lines(&rows),
+        [
+            "Work",
+            "[Agent pushed 2 times · Outcome unknown feat/inline-events]",
+            "[Agent created PR #42 · 2 times · Outcome unknown Show pushes inline 👋]",
+            "[Agent created PR #42 · 2 times Show pushes inline 👋]"
+        ]
+    );
+    for row in &rows[1..3] {
+        let e = row.github_event().unwrap();
+        assert_eq!(e.outcome, Outcome::Unknown);
+        assert!(e.help().contains("Outcome unknown"));
+    }
 }

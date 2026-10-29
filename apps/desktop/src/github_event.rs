@@ -142,54 +142,39 @@ impl Event {
         let pr = action
             .pr
             .map_or_else(|| "a PR".to_owned(), |n| format!("PR #{n}"));
-        let [done, failed, unsure] = match action.kind {
-            Some(Kind::Push) => [
-                "Agent pushed".into(),
-                "Agent could not push".into(),
-                "Agent may have pushed".into(),
-            ],
+        let [done, failed] = match action.kind {
+            Some(Kind::Push) => ["Agent pushed".into(), "Agent could not push".into()],
             Some(Kind::PrOpened) => [
-                format!("Agent opened {pr}"),
-                format!("Agent could not open {pr}"),
-                format!("Agent may have opened {pr}"),
+                format!("Agent created {pr}"),
+                format!("Agent could not create {pr}"),
             ],
             Some(Kind::PrReady) => [
                 format!("Agent marked {pr} ready"),
                 format!("Agent could not mark {pr} ready"),
-                format!("Agent may have marked {pr} ready"),
             ],
             Some(Kind::PrDraft) => [
                 format!("Agent marked {pr} draft"),
                 format!("Agent could not mark {pr} draft"),
-                format!("Agent may have marked {pr} draft"),
             ],
             Some(Kind::PrEdited) => [
                 format!("Agent edited {pr}"),
                 format!("Agent could not edit {pr}"),
-                format!("Agent may have edited {pr}"),
             ],
             Some(Kind::PrReopened) => [
                 format!("Agent reopened {pr}"),
                 format!("Agent could not reopen {pr}"),
-                format!("Agent may have reopened {pr}"),
             ],
             Some(Kind::Updated) => [
                 "Agent updated GitHub".into(),
                 "Agent's GitHub update failed".into(),
-                "Agent may have updated GitHub".into(),
             ],
-            None => [
-                action.description.clone(),
-                "GitHub action failed".into(),
-                format!("{} (result unknown)", action.description),
-            ],
+            None => [action.description.clone(), "GitHub action failed".into()],
         };
         Self {
             kind: action.kind,
             text: match action.outcome {
-                Outcome::Succeeded => done,
+                Outcome::Succeeded | Outcome::Unknown => done,
                 Outcome::Failed(_) => failed,
-                Outcome::Unknown => unsure,
             },
             branch: action.branch.clone(),
             title: action.title.clone(),
@@ -205,19 +190,28 @@ impl Event {
         matches!(self.outcome, Outcome::Failed(_))
     }
     pub(crate) fn sentence(&self) -> String {
-        if self.count == 1 {
-            return self.text.clone();
-        }
-        match (self.kind, self.outcome) {
-            (Some(Kind::Push), Outcome::Succeeded) if self.branch.is_some() => {
-                format!("Agent pushed {} times to", self.count)
-            }
-            (Some(Kind::Push), Outcome::Unknown) if self.branch.is_some() => {
-                format!("Agent may have pushed {} times to", self.count)
-            }
-            _ => format!("{} · {} times", self.text, self.count),
+        let text = if self.count == 1 {
+            self.text.clone()
+        } else if self.kind == Some(Kind::Push) && !self.failed() && self.branch.is_some() {
+            format!(
+                "Agent pushed {} times{}",
+                self.count,
+                if self.outcome == Outcome::Unknown {
+                    ""
+                } else {
+                    " to"
+                }
+            )
+        } else {
+            format!("{} · {} times", self.text, self.count)
+        };
+        if self.outcome == Outcome::Unknown {
+            format!("{text} · Outcome unknown")
+        } else {
+            text
         }
     }
+
     /// Shown on request beside the sentence, like Swift's Show.
     pub(crate) fn detail(&self) -> Option<String> {
         match self.outcome {
