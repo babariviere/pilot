@@ -31,10 +31,12 @@ import type {
 	MissionResourceKind,
 	MissionResourceUpdate,
 	MissionResourceWrite,
+	MissionRole,
 	MissionStatus,
 	MissionTask,
 	MissionTaskStatus,
 	MissionTaskWrite,
+	MissionWorkerRole,
 	OperationHost,
 	SessionPullRequest,
 	SessionSummary,
@@ -632,6 +634,8 @@ export class MissionStore {
 		});
 		if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "planning_version"))
 			this.db.exec("ALTER TABLE missions ADD COLUMN planning_version INTEGER");
+		if (!this.all("PRAGMA table_info(members)").some((row) => row.name === "role"))
+			this.db.exec("ALTER TABLE members ADD COLUMN role TEXT");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "assignment"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN assignment TEXT");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
@@ -2240,6 +2244,8 @@ export class MissionStore {
 					throw new Error("coordinatorSessionId must be a string or null");
 				if (this.missionOf(patch.coordinatorSessionId) !== id)
 					throw new Conflict("The coordinator must be a chat in this mission");
+				if (this.membership(patch.coordinatorSessionId)?.role === "explorer")
+					throw new Conflict("An explorer cannot become coordinator; start a separate coordinator chat");
 			}
 			if (patch.coordinatorSessionId !== coordinator)
 				notes.push([
@@ -4908,9 +4914,11 @@ export class MissionStore {
 	}
 
 	/** Hot session-summary path: no attention counts, task bodies or mission detail. Always read current roles. */
-	membership(sessionId: string): { missionId: string; active: boolean; coordinator: boolean } | undefined {
+	membership(
+		sessionId: string,
+	): { missionId: string; active: boolean; coordinator: boolean; role?: MissionRole } | undefined {
 		const row = this.one(
-			`SELECT m.mission_id, mission.status, mission.coordinator_session_id
+			`SELECT m.mission_id, m.role, mission.status, mission.planning_version, mission.coordinator_session_id
 			FROM members m JOIN missions mission ON mission.id = m.mission_id WHERE m.session_id = ?`,
 			sessionId,
 		);
@@ -4919,6 +4927,14 @@ export class MissionStore {
 					missionId: str(row.mission_id!),
 					active: row.status === "active",
 					coordinator: row.coordinator_session_id === sessionId,
+					...(row.planning_version != null
+						? {
+								role:
+									row.coordinator_session_id === sessionId
+										? ("coordinator" as const)
+										: workerRole(num(row.planning_version), row.role ?? undefined),
+							}
+						: {}),
 				}
 			: undefined;
 	}
@@ -4940,24 +4956,35 @@ export class MissionStore {
 	}
 
 	/** Moving a chat from another mission releases its tasks there. */
-	join(sessionId: string, id: string, actor: MissionActor = USER): void {
+	join(sessionId: string, id: string, actor: MissionActor = USER, role?: MissionWorkerRole): void {
 		if (this.one("SELECT 1 FROM session_continuations WHERE from_session_id = ?", sessionId))
 			throw new Conflict("This chat continued elsewhere and cannot own mission work");
-		this.require(id);
+		this.assertPlanner(id, actor);
+		const selected = this.workerRole(id, role);
 		const previous = this.missionOf(sessionId);
-		if (previous === id) return;
+		if (previous === id) {
+			if (role !== undefined && this.membership(sessionId)?.role !== selected)
+				throw new Conflict("Mission roles cannot change in place; start a fresh chat");
+			return;
+		}
 		this.transaction(() => {
 			if (previous) this.detach(sessionId, previous, actor);
 			this.run(
-				"INSERT INTO members (session_id, mission_id, joined_at) VALUES (?, ?, ?)",
+				"INSERT INTO members (session_id, mission_id, joined_at, role) VALUES (?, ?, ?, ?)",
 				sessionId,
 				id,
 				Date.now(),
+				selected ?? null,
 			);
 			this.event(id, "member", "A chat joined the mission", { sessionId });
 		});
 		if (previous) this.changed(previous, []);
 		this.changed(id, [sessionId]);
+	}
+
+	/** Missing roles preserve existing opted-in admissions as builders; legacy missions stay unlabelled. */
+	workerRole(id: string, value: unknown): MissionWorkerRole | undefined {
+		return workerRole(this.require(id).planningVersion, value);
 	}
 
 	leave(sessionId: string, actor: MissionActor = USER): void {
@@ -4982,6 +5009,18 @@ export class MissionStore {
 		);
 		this.event(id, "member", "A chat left the mission", actor.sessionId ? actor : { sessionId });
 	}
+}
+
+function workerRole(version: number | undefined, value: unknown): MissionWorkerRole | undefined {
+	if (version === undefined) {
+		if (value !== undefined) throw new Conflict("Mission roles require planningVersion 1; adoption is not supported");
+		return undefined;
+	}
+	if (version !== 1) throw new Conflict("Unsupported mission planning version");
+	if (value === undefined) return "builder";
+	if (value !== "explorer" && value !== "builder" && value !== "reviewer")
+		throw new Error("role must be explorer, builder or reviewer");
+	return value;
 }
 
 function optionalAuthor(value: SQLInputValue | string | undefined): { authorSessionId?: string } {

@@ -2,7 +2,7 @@
 
 import type { Context } from "@earendil-works/chord";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
-import type { DiagnosticTargetReference, MissionDecision, OperationHost } from "@pilot/protocol";
+import type { DiagnosticTargetReference, MissionDecision, MissionRole, OperationHost } from "@pilot/protocol";
 
 import {
 	commandArguments,
@@ -65,6 +65,8 @@ export interface WorkspaceReset {
 
 /** What a mission chat needs in every prompt. Kept small and stable to preserve prompt caching. */
 export interface MissionContext {
+	/** Trusted persisted admission metadata, never a worker-selected prompt hint. */
+	role?: MissionRole;
 	/** Missing preserves legacy planning; unknown versions grant no planning writes. */
 	planningVersion?: number;
 	/** Opted-in planning context uses existing brief and assignment revisions, not a second plan store. */
@@ -122,9 +124,24 @@ export function missionPrompt(
 	localOnly = false,
 	requirePullRequest = true,
 ): string {
+	localOnly ||= mission.role === "explorer";
 	const stackLink =
 		"link dependent PRs bottom-to-top with gh stack link <bottom-pr-url> … <top-pr-url>. Pass existing PR URLs, not branch names (with branch arguments, the command pushes them itself), keep the existing stack order and members, and use only link and view. If the repository rejects stacks, keep the plain chained PRs and report it.";
 	const lines = [
+		...(mission.role
+			? [
+					`- Mission role: ${mission.role}. Roles do not isolate hostile full-access shells or unauthenticated loopback REST.`,
+				]
+			: []),
+		...(mission.role === "explorer"
+			? [
+					"- Explore only the coordinator-authorized research purpose, including before final brief approval when explicitly assigned. Use read/find/grep/ls and permitted web research. Report findings, sources and limitations with log; propose brief/plan changes or ask the coordinator for help with comment, and share session-local artifact proposals with attach. Do not write product code or own planning. No bash, arbitrary extensions/MCP or subagents are available; report capability gaps, never substitute unrestricted tools. Keep ask_user available for now; this does not change Ask/Stop semantics.",
+				]
+			: mission.role === "reviewer"
+				? [
+						"- Reviewer is responsibility metadata, not an independent-review engine or extra authority. Follow the assigned review scope and existing tool permissions; report findings to the coordinator.",
+					]
+				: []),
 		...(mission.sharedContext
 			? [
 					"- This is a durable shared-context replica. Your task is already granted. Continue only accepted scope and its children while disconnected; never claim/start siblings or coordinate. Pending proposals are locally useful, not binding decisions or scope. New authority, permissions or missing required context must wait for home reconciliation.",

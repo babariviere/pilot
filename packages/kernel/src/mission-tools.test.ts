@@ -20,6 +20,27 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
 
+test("only coordinator start schema exposes worker roles, never coordinator self-selection", () => {
+	const tool = createMissionTool(async () => ({}), true);
+	for (const role of ["explorer", "builder", "reviewer"])
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "role",
+			name: "mission",
+			arguments: { action: "start", id: "1", role },
+		});
+	assert.throws(() =>
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "role",
+			name: "mission",
+			arguments: { action: "start", id: "1", role: "coordinator" },
+		}),
+	);
+	assert.ok(!("role" in (createMissionTool(async () => ({})).parameters as { properties: object }).properties));
+	assert.match(tool.description, /Reviewer is metadata only/);
+});
+
 test("coordinator planning schema exposes only strict versioned assignment writes", () => {
 	const tool = createMissionTool(async () => ({}), true);
 	const args = {

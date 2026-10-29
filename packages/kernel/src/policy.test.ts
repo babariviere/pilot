@@ -23,6 +23,23 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("explorer guidance reports research and capability gaps without publication or planning authority", () => {
+	const prompt = missionPrompt({ ...mission, planningVersion: 1, role: "explorer", coordinator: "other" });
+	assert.match(prompt, /Mission role: explorer/);
+	assert.match(prompt, /before final brief approval when explicitly assigned/);
+	assert.match(prompt, /sources and limitations with log/);
+	assert.match(prompt, /help with comment/);
+	assert.match(prompt, /artifact proposals with attach/);
+	assert.match(prompt, /No bash, arbitrary extensions\/MCP or subagents/);
+	assert.match(prompt, /ask_user available/);
+	assert.match(prompt, /do not isolate hostile/);
+	assert.doesNotMatch(prompt, /gh pr create|deliver each finished task by pushing/);
+	assert.match(
+		missionPrompt({ ...mission, planningVersion: 1, role: "reviewer" }),
+		/not an independent-review engine/,
+	);
+});
+
 test("coordinator-owned planning prompt separates truthful reports from planning and completion", () => {
 	const prompt = missionPrompt({ ...mission, planningVersion: 1, coordinator: "other" });
 	assert.match(prompt, /propose follow-up work with comment/);

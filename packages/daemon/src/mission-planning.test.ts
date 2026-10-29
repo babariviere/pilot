@@ -6,6 +6,54 @@ import { test } from "node:test";
 import type { MissionAssignmentWrite, MissionTaskWrite } from "@pilot/protocol";
 import { MissionStore } from "./missions.ts";
 
+test("opted-in member roles survive reopen, continuation and coordinator handoff", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-roles-"));
+	t.after(() => rmSync(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	const store = new MissionStore(path);
+	const { id } = store.create({ projectId: "p", title: "Roles", planningVersion: 1 });
+	store.join("lead", id);
+	store.update(id, { coordinatorSessionId: "lead" });
+	for (const role of ["explorer", "builder", "reviewer"] as const) store.join(role, id, { sessionId: "lead" }, role);
+	store.join("old-member", id);
+	store["run"]("UPDATE members SET role = NULL WHERE session_id = ?", "old-member");
+	assert.equal(store.membership("old-member")?.role, "builder");
+	await store.durable();
+	store.close();
+	const reopened = new MissionStore(path);
+	t.after(() => reopened.close());
+	assert.equal(reopened.membership("lead")?.role, "coordinator");
+	assert.equal(reopened.membership("old-member")?.role, "builder");
+	for (const role of ["explorer", "builder", "reviewer"] as const) assert.equal(reopened.membership(role)?.role, role);
+	reopened.continueSession("explorer", "replacement");
+	assert.equal(reopened.membership("replacement")?.role, "explorer");
+	assert.equal(reopened.membership("explorer"), undefined);
+	assert.throws(
+		() => reopened.update(id, { coordinatorSessionId: "replacement" }),
+		/explorer cannot become coordinator/,
+	);
+	reopened.update(id, { coordinatorSessionId: "reviewer" });
+	assert.equal(reopened.membership("reviewer")?.role, "coordinator");
+	assert.equal(reopened.membership("lead")?.role, "builder");
+	reopened.update(id, { coordinatorSessionId: "lead" });
+	assert.equal(reopened.membership("reviewer")?.role, "reviewer");
+	await reopened.durable();
+});
+
+test("roles are trusted admission metadata, not worker-selectable authority or legacy adoption", (t) => {
+	const { store, id, worker, lead } = fixture(t, 1);
+	assert.throws(() => store.join("intruder", id, worker, "explorer"), /Coordinator-owned/);
+	assert.equal(store.missionOf("intruder"), undefined);
+	assert.throws(() => store.join("worker", id, lead, "explorer"), /cannot change in place/);
+	assert.throws(() => store.join("bad", id, lead, "coordinator" as never), /role must be/);
+	assert.equal(store.membership("worker")?.role, "builder");
+	const legacy = store.create({ projectId: "p", title: "Legacy" });
+	assert.throws(() => store.join("intruder", legacy.id, {}, "explorer"), /adoption is not supported/);
+	store.join("legacy", legacy.id);
+	assert.equal(store.membership("legacy")?.role, undefined);
+	assert.throws(() => store.update(legacy.id, { planningVersion: 1 } as never), /creation-only/);
+});
+
 const assignment: MissionAssignmentWrite = {
 	version: 1,
 	expectedRevision: 0,

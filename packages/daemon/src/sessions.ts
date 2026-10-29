@@ -189,6 +189,13 @@ export interface PullRequestBinding {
 	actor: { sessionId?: string };
 }
 
+/** Internal mission start selection, passed separately from untrusted request fields. */
+export interface MissionSpawnAdmission {
+	role?: import("@pilot/protocol").MissionWorkerRole;
+	/** Set only by mission tool dispatch from the caller's IPC identity, never request arguments. */
+	actorSessionId?: string;
+}
+
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
 	/** Idempotent, atomic ownership move, retaining task links and PR observation tombstones. */
@@ -198,11 +205,21 @@ export interface SessionMissionBridge {
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
 	/** Join and optionally claim all selected tasks after metadata is saved, before worker startup. */
-	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean, taskId?: string | string[]): void;
+	joinSpawn(
+		sessionId: string,
+		missionId: string,
+		coordinator?: boolean,
+		taskId?: string | string[],
+		admission?: MissionSpawnAdmission,
+	): void;
 	/** Roll back membership if saving/admission fails before a worker starts. */
 	leaveSpawn?(sessionId: string): void;
 	/** The chat's mission, its status and this member's coordinator role. */
-	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
+	membership(
+		sessionId: string,
+	):
+		| { missionId: string; active: boolean; coordinator?: boolean; role?: import("@pilot/protocol").MissionRole }
+		| undefined;
 	context(sessionId: string): MissionContext | undefined;
 	/** Canonical mission home/lineage, not the execution host or its display alias. */
 	usageAttribution?(
@@ -3431,11 +3448,12 @@ export class SessionManager {
 
 	private missionSummary(
 		id: string,
-	): Pick<SessionSummary, "missionId" | "activeMissionCoordinator" | "missionCoordinator"> {
+	): Pick<SessionSummary, "missionId" | "missionRole" | "activeMissionCoordinator" | "missionCoordinator"> {
 		const membership = this.missions?.membership(id);
 		return membership
 			? {
 					missionId: membership.missionId,
+					...(membership.role ? { missionRole: membership.role } : {}),
 					...(membership.active &&
 					membership.coordinator &&
 					!this.missions?.passiveMissionLifecycle?.(membership.missionId)
@@ -4490,10 +4508,15 @@ export class SessionManager {
 			throw new Error("Invalid Ask snapshot context");
 	}
 
-	async spawn(request: SpawnRequest, coordinator = false, taskId?: string | string[]): Promise<SessionSummary> {
+	async spawn(
+		request: SpawnRequest,
+		coordinator = false,
+		taskId?: string | string[],
+		missionAdmission?: MissionSpawnAdmission,
+	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
-			return await this.spawnAdmitted(request, coordinator, taskId);
+			return await this.spawnAdmitted(request, coordinator, taskId, undefined, missionAdmission);
 		} finally {
 			end();
 		}
@@ -4969,7 +4992,10 @@ export class SessionManager {
 		coordinator: boolean,
 		taskId?: string | string[],
 		admission?: { targetId: string; operationId: string },
+		missionAdmission?: MissionSpawnAdmission,
 	): Promise<SessionSummary> {
+		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
+			throw new Conflict("Explorer admission requires a non-coordinator Ask session");
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.role !== undefined && request.role !== "diagnostics") throw new Error("Unknown session role");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
@@ -5168,7 +5194,7 @@ export class SessionManager {
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
 			if (request.missionId !== undefined) {
-				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
+				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId, missionAdmission);
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
 			}

@@ -103,6 +103,127 @@ test("non-code delivery resolves pinned artifacts and cannot accept or retire wo
 	);
 });
 
+test("coordinator admits explorer research before a brief, preserving reports, proposals and Ask profile", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Research",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, {
+		title: "Investigate source",
+		body: "Find relevant behavior and report sources. No implementation.",
+	});
+	const explorer = (await f.service.call(lead.id, "start", { id: task.id, role: "explorer" })) as SessionSummary;
+	assert.equal(explorer.mode, "ask");
+	assert.equal(explorer.missionRole, "explorer");
+	assert.equal(f.sessions.get(lead.id)?.missionRole, "coordinator");
+	const worker = await until(() => f.workers.get(explorer.id));
+	assert.equal(worker.spec.mission?.role, "explorer");
+	assert.equal(worker.spec.mission?.briefRevision, 0);
+	assert.equal(worker.spec.pilot?.ask?.source, f.project.path);
+	assert.equal(worker.spec.pilot?.workspace, undefined);
+	assert.equal(((await f.service.call(explorer.id, "get", {})) as { role: string }).role, "explorer");
+	await f.service.call(explorer.id, "log", {
+		text: "Found current behavior; source: src/example.ts. Coverage incomplete.",
+	});
+	const comment = (await f.service.call(explorer.id, "comment", {
+		text: "Propose a narrower scope; may I inspect the external specification?",
+		targetSessionId: lead.id,
+	})) as { authorSessionId: string };
+	assert.equal(comment.authorSessionId, explorer.id);
+	const artifact = await f.sessions["artifactStore"](explorer.id).create({
+		title: "Findings proposal",
+		kind: "html",
+		source: "<p>Sources and limitations</p>",
+	});
+	await f.service.call(explorer.id, "attach", { artifactId: artifact.id, taskId: task.id });
+	assert.equal(f.store.detail(mission.id).artifacts[0]?.sessionId, explorer.id);
+	for (const [action, args] of [
+		["brief", { markdown: "Rewritten", expectedRevision: 0 }],
+		["decide", { text: "Own plan", actor: { sessionId: lead.id } }],
+		["task", { id: task.id, body: "New criteria" }],
+		["start", { id: task.id, role: "builder", actorSessionId: lead.id }],
+	] as const)
+		await assert.rejects(f.service.call(explorer.id, action, args), /Coordinator-owned|Only the mission coordinator/);
+	await f.service.call(explorer.id, "task", { id: task.id, status: "blocked" });
+	assert.equal(f.store.task(mission.id, task.id).status, "blocked");
+	assert.equal(f.store.require(mission.id).briefRevision, 0);
+	assert.equal(f.service.context(explorer.id)?.role, "explorer");
+});
+
+test("role admission refuses legacy adoption, Build conversion and incompatible task-holder reuse", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Roles", planningVersion: 1 });
+	assert.throws(() => f.service.join(member.id, { missionId: mission.id, role: "explorer" }), /existing Ask session/);
+	assert.equal(f.store.missionOf(member.id), undefined);
+	f.service.join(member.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Research" });
+	await assert.rejects(
+		f.service.startTask(mission.id, task.id, { role: "explorer", mode: "build" }),
+		/requires Ask mode/,
+	);
+	t.mock.method(f.sessions, "taskHolders", () => [f.sessions.get(member.id)!]);
+	await assert.rejects(f.service.startTask(mission.id, task.id, { role: "explorer" }), /different role\/profile/);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+	const legacy = await f.service.create({ projectId: f.project.id, title: "Legacy" });
+	const legacyTask = f.store.addTask(legacy.mission.id, { title: "Legacy work" });
+	await assert.rejects(
+		f.service.startTask(legacy.mission.id, legacyTask.id, { role: "explorer" }),
+		/adoption is not supported/,
+	);
+	await assert.rejects(f.service.startTask(mission.id, task.id, { role: "coordinator" as never }), /role must be/);
+});
+
+test("role selection rechecks trusted coordinator identity after asynchronous spawn preparation", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const replacement = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Recheck",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(replacement.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Do not start" });
+	const before = f.sessions.list().length;
+	const spawn = f.sessions.spawn.bind(f.sessions);
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<SessionManager["spawn"]>) => {
+		f.store.update(mission.id, { coordinatorSessionId: replacement.id });
+		return spawn(...args);
+	});
+	await assert.rejects(
+		f.service.call(lead.id, "start", { id: task.id, role: "explorer", actorSessionId: replacement.id }),
+		/current mission coordinator/,
+	);
+	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+	assert.equal(f.sessions.list().length, before);
+	assert.deepEqual(f.store.members(mission.id).sort(), [lead.id, replacement.id].sort());
+});
+
+test("reviewer is additive metadata and omitted roles preserve builder and legacy starts", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Metadata", planningVersion: 1 });
+	for (const role of ["reviewer", undefined] as const) {
+		const task = f.store.addTask(mission.id, { title: "Work" });
+		const member = await f.service.startTask(mission.id, task.id, { role });
+		assert.equal(member.mode, "build");
+		assert.equal(member.missionRole, role ?? "builder");
+		assert.equal(f.service.context(member.id)?.role, role ?? "builder");
+	}
+	const legacy = await f.service.create({ projectId: f.project.id, title: "Legacy" });
+	const task = f.store.addTask(legacy.mission.id, { title: "Work" });
+	const member = await f.service.startTask(legacy.mission.id, task.id);
+	assert.equal(member.mode, "build");
+	assert.equal(member.missionRole, undefined);
+});
+
 test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR completion usable", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
@@ -4583,6 +4704,7 @@ test("coordinator start reuses Start chat with task IDs or numbers and validates
 		"#1",
 		{ message: "Focus on login", model: "test/model", thinking: "high" },
 		"coordinator",
+		coordinator.id,
 	]);
 	assert.ok(f.store.events(mission.id).some((event) => event.text === "Started #1 on test/model, thinking high"));
 	assert.equal(first.missionId, mission.id);

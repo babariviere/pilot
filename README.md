@@ -134,6 +134,10 @@ unchanged; outstanding accounting memory and release verification is documented 
   of a chat's stored execution identity. Synced mission evidence retains its canonical identity; disconnected or
   replica-only summaries remain read-only until current details can be loaded from the mission's home.
   Coordinators track work through mission tasks, without a separate chat todo tool. Other chats retain their todos.
+  New opted-in missions (`planningVersion: 1`) support coordinator-selected explorer, builder and reviewer
+  responsibilities. Explorers reuse Ask's read-only source/search/web and session-local artifact tools;
+  they report findings and propose planning changes, never write product code. Reviewer is metadata only.
+  Existing missions are unchanged and are not adopted automatically. See [role admission](docs/mission-roles.md).
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Members may self-claim two additional
   tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not

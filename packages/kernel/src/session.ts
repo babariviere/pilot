@@ -295,6 +295,8 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		if (spec.mission?.role === "explorer" && !spec.pilot?.ask)
+			throw new Error("Explorer admission requires the read-only Ask runtime");
 		// Reject obsolete persisted start envelopes before opening storage or loading extensions.
 		if ((spec as { control?: unknown }).control) throw new Error("Retained conversation cannot execute");
 		if (spec.pilot?.executionPermission)
@@ -1203,6 +1205,8 @@ export class KernelSession {
 	/** Joining, leaving or a mission change. Applies from the next model request. */
 	setMission(context: MissionContext | undefined): Promise<void> | undefined {
 		if (this.#closing) return;
+		if (context?.role === "explorer" && !this.#ask)
+			throw new Error("Explorer admission requires the read-only Ask runtime");
 		if (this.#decisionWrites) {
 			this.#deferredMissions.push(context);
 			return;

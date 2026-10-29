@@ -51,6 +51,7 @@ function taskMessage(
 	artifacts: MissionArtifactLink[] = [],
 	links: Pick<MissionResource, "url" | "kind" | "title" | "externalId">[] = [],
 	continuing = false,
+	explorer = false,
 ): string {
 	const task = tasks[0]!;
 	const line = (value: string) => value.replace(/\s+/g, " ").trim();
@@ -64,7 +65,9 @@ function taskMessage(
 					"Work on these mission tasks in order:",
 					...tasks.flatMap((item) => ["", `#${item.number}: ${item.title}`, ...(item.body ? [item.body] : [])]),
 					"",
-					"Open one PR per task. Base the first on the requested starting branch, then each PR on the previous task's head with gh pr create --base <previous-head> --head <own-head>. Link PR URLs bottom-to-top with gh stack link. Attribute each PR with mission link + taskId. Keep plain chained PRs if stacks are unavailable.",
+					explorer
+						? "Report research findings, sources and limitations with mission log; propose planning changes with comment and share session-local artifacts with attach. Do not write product code."
+						: "Open one PR per task. Base the first on the requested starting branch, then each PR on the previous task's head with gh pr create --base <previous-head> --head <own-head>. Link PR URLs bottom-to-top with gh stack link. Attribute each PR with mission link + taskId. Keep plain chained PRs if stacks are unavailable.",
 				]),
 		...(extra?.trim() ? ["", extra.trim()] : []),
 		...(artifacts.length || links.length
@@ -176,13 +179,21 @@ export class MissionService {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				return mission.projectId;
 			},
-			joinSpawn: (sessionId, missionId, coordinator, taskId) => {
+			joinSpawn: (sessionId, missionId, coordinator, taskId, admission) => {
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
-				store.join(sessionId, missionId);
+				this.assertStartActor(missionId, admission?.actorSessionId);
+				if (admission?.role === "explorer" && this.session(sessionId).mode !== "ask")
+					throw new Conflict("Explorer admission requires an Ask session");
+				store.join(
+					sessionId,
+					missionId,
+					admission?.actorSessionId ? { sessionId: admission.actorSessionId } : {},
+					admission?.role,
+				);
 				// Keep claim conflicts inside spawn admission, where rejected metadata is removed.
 				if (taskId !== undefined) {
 					const refs = typeof taskId === "string" ? [taskId] : taskId;
@@ -407,8 +418,10 @@ export class MissionService {
 				.map((task) => [task.id, task.number]),
 		);
 		const selectedIds = new Set(selected.map((decision) => decision.id));
+		const role = this.store.membership(sessionId)?.role;
 		return {
 			id: mission.id,
+			...(role ? { role } : {}),
 			...(mission.planningVersion !== undefined
 				? { planningVersion: mission.planningVersion, briefRevision: mission.briefRevision }
 				: {}),
@@ -554,6 +567,9 @@ export class MissionService {
 	join(sessionId: string, request: JoinMissionRequest): SessionSummary {
 		if (!request || typeof request.missionId !== "string") throw new Error("missionId is required");
 		this.assertSameProject(sessionId, request.missionId);
+		const role = this.store.workerRole(request.missionId, request.role);
+		if (role === "explorer" && this.session(sessionId).mode !== "ask")
+			throw new Conflict("Explorer admission requires an existing Ask session; start a fresh explorer instead");
 		if (request.taskId !== undefined) {
 			const task = this.store.resolveTask(request.missionId, request.taskId);
 			// Joining can detach previous work. Reject stale task picks before any membership changes.
@@ -561,7 +577,7 @@ export class MissionService {
 			if (task.sessionId && task.sessionId !== sessionId)
 				throw new Conflict(`Task #${task.number} is already claimed by another chat`);
 		}
-		this.store.join(sessionId, request.missionId);
+		this.store.join(sessionId, request.missionId, {}, request.role);
 		if (request.taskId !== undefined) this.store.claimTask(request.missionId, request.taskId, sessionId, {});
 		return this.session(sessionId);
 	}
@@ -578,8 +594,9 @@ export class MissionService {
 		taskId: string,
 		request: StartMissionTaskRequest = {},
 		by: TaskStarter = "user",
+		actorSessionId?: string,
 	): Promise<SessionSummary> {
-		return this.startTasks(missionId, [taskId], request, by);
+		return this.startTasks(missionId, [taskId], request, by, actorSessionId);
 	}
 
 	/** Reserve all canonical keys synchronously, or none, before asynchronous preparation. */
@@ -588,10 +605,12 @@ export class MissionService {
 		refs: string[],
 		request: StartMissionTaskRequest = {},
 		by: TaskStarter = "user",
+		actorSessionId?: string,
 	): Promise<SessionSummary> {
 		if (request.overridePhaseGating !== undefined && typeof request.overridePhaseGating !== "boolean")
 			throw new Error("overridePhaseGating must be a boolean");
 		if (by !== "user" && request.overridePhaseGating) throw new Conflict("Only the user can override phase gating");
+		if (by === "coordinator") this.assertStartActor(missionId, actorSessionId, true);
 		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts, request.overridePhaseGating);
 		const keys = tasks.map((task) => `${missionId}:${task.id}`);
 		for (const key of keys) this.taskStarts.add(key);
@@ -602,6 +621,7 @@ export class MissionService {
 				tasks.map((task) => task.id),
 				request,
 				by,
+				actorSessionId,
 			);
 		} finally {
 			for (const key of keys) this.taskStarts.delete(key);
@@ -677,9 +697,14 @@ export class MissionService {
 		taskIds: string[],
 		request: StartMissionTaskRequest,
 		by: TaskStarter,
+		actorSessionId?: string,
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+		const role = this.store.workerRole(missionId, request.role);
+		if (role === "explorer" && request.mode !== undefined && request.mode !== "ask")
+			throw new Conflict("Explorer admission requires Ask mode");
+		const mode = role === "explorer" ? "ask" : request.mode;
 		let tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
@@ -688,7 +713,7 @@ export class MissionService {
 			throw new Error("mode must be build or ask");
 		const project = this.projects.require(mission.projectId);
 		if (request.baseBranch !== undefined) {
-			if ((request.mode ?? "build") === "build" && project.workspace === "direct")
+			if ((mode ?? "build") === "build" && project.workspace === "direct")
 				throw new Error("baseBranch requires a private-clone project");
 			await validateBaseBranch(request.baseBranch, project.path);
 		}
@@ -756,7 +781,7 @@ export class MissionService {
 			.concat(artifacts);
 		const taskLinks = detail.resources.filter((item) => item.taskId && selected.has(item.taskId));
 		const promptLinks = [...new Map([...links, ...taskLinks].map((item) => [item.url, item])).values()];
-		const message = taskMessage(tasks, request.message, taskArtifacts, promptLinks);
+		const message = taskMessage(tasks, request.message, taskArtifacts, promptLinks, false, role === "explorer");
 		// Recheck artifact membership after asynchronous reads, before writes.
 		for (const item of artifacts)
 			if (
@@ -764,12 +789,16 @@ export class MissionService {
 				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
+		this.assertStartActor(missionId, actorSessionId);
 		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
 		// A released task keeps its chat. Continuing there preserves the work it already did and avoids
 		// a second chat with the same title and the same opening message.
 		const holders = tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
 		if (holders.length === 1) {
 			const holder = holders[0]!;
+			this.assertStartActor(missionId, actorSessionId);
+			if (this.store.membership(holder.id)?.role !== role || (role === "explorer" && holder.mode !== "ask"))
+				throw new Conflict("Existing task holder has a different role/profile; start a fresh task/chat instead");
 			this.store.claimTask(
 				missionId,
 				tasks[0]!.id,
@@ -784,7 +813,7 @@ export class MissionService {
 			);
 			await this.sessions.send(
 				holder.id,
-				taskMessage(tasks, request.message, taskArtifacts, promptLinks, true),
+				taskMessage(tasks, request.message, taskArtifacts, promptLinks, true, role === "explorer"),
 				"followUp",
 			);
 			return holder;
@@ -796,14 +825,26 @@ export class MissionService {
 				message,
 				title: tasks[0]!.title,
 				...selection,
-				...(request.mode ? { mode: request.mode } : {}),
+				...(mode ? { mode } : {}),
 				...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
 			},
 			false,
 			tasks.map((task) => task.id),
+			{ role, ...(actorSessionId ? { actorSessionId } : {}) },
 		);
 		for (const task of tasks) this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
+	}
+
+	/** Repeat at final synchronous spawn admission: a former coordinator cannot borrow an earlier check. */
+	private assertStartActor(missionId: string, sessionId?: string, required = false): void {
+		if (!sessionId && !required) return; // Trusted user path, not a tool-supplied identity.
+		if (
+			!sessionId ||
+			this.store.missionOf(sessionId) !== missionId ||
+			this.store.require(missionId).coordinatorSessionId !== sessionId
+		)
+			throw new Conflict("Only the current mission coordinator can start workers");
 	}
 
 	async linkArtifact(missionId: string, write: MissionArtifactLinkWrite, actor: MissionActor = {}) {
@@ -946,10 +987,11 @@ export class MissionService {
 				const start =
 					args.ids === undefined
 						? (request: StartMissionTaskRequest) =>
-								this.startTask(missionId, args.id as string, request, "coordinator")
+								this.startTask(missionId, args.id as string, request, "coordinator", sessionId)
 						: (request: StartMissionTaskRequest) =>
-								this.startTasks(missionId, parseTaskRefs(args.ids, "start"), request, "coordinator");
+								this.startTasks(missionId, parseTaskRefs(args.ids, "start"), request, "coordinator", sessionId);
 				const started = await start({
+					...(args.role !== undefined ? { role: args.role as StartMissionTaskRequest["role"] } : {}),
 					...(args.message !== undefined ? { message: args.message as string } : {}),
 					...(args.model !== undefined ? { model: args.model as string } : {}),
 					...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),
@@ -1008,6 +1050,7 @@ export class MissionService {
 						id: member.id,
 						chatUrl: `pilot://chat/${member.id}`,
 						title: member.title,
+						...(member.missionRole ? { role: member.missionRole } : {}),
 						coordinator: member.id === mission.coordinatorSessionId,
 						state:
 							member.runningJobs?.length && member.state !== "working" && member.state !== "starting"
@@ -1058,6 +1101,7 @@ export class MissionService {
 				const detail = this.store.detail(missionId, false);
 				const view = new MissionAgentView(detail, sessionId, this.sessions);
 				const open = detail.tasks.filter(isOpen);
+				const role = this.store.membership(sessionId)?.role;
 				const mine = open.filter((task) => task.sessionId === sessionId);
 				const phaseTasks = new Map<string | undefined, MissionTask[]>();
 				for (const task of detail.tasks) {
@@ -1070,6 +1114,7 @@ export class MissionService {
 				}
 				return {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
+					...(role ? { role } : {}),
 					...(mission.planningVersion !== undefined ? { planningVersion: mission.planningVersion } : {}),
 					...(this.sharing ? { remoteAllocations: this.sharing.missionAllocations(missionId) } : {}),
 					phaseGating: mission.phaseGating ?? false,

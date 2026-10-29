@@ -418,6 +418,8 @@ export interface SessionSummary {
 	subagents?: SessionSubagent[];
 	/** Mission this chat belongs to. Omitted when it has none. */
 	missionId?: string;
+	/** Opted-in mission responsibility; reviewer does not grant an independent review engine. */
+	missionRole?: MissionRole;
 	/** Current coordinator of an active mission. Exempt from terminal-PR treatment and merge auto-archiving. */
 	activeMissionCoordinator?: boolean;
 	/** Current role, including a done or archived mission. */
@@ -1344,15 +1346,23 @@ export interface UpdateMissionRequest {
 	phaseGating?: boolean;
 }
 
+/** Responsibility metadata. Only explorer selects an enforced read-only runtime. */
+export type MissionRole = "coordinator" | "explorer" | "builder" | "reviewer";
+export type MissionWorkerRole = Exclude<MissionRole, "coordinator">;
+
 /** PUT /api/sessions/:id/mission. The session must belong to the mission's project. */
 export interface JoinMissionRequest {
 	missionId: string;
+	/** Opted-in missions only. Explorer requires an existing Ask session; roles cannot change in place. */
+	role?: MissionWorkerRole;
 	/** Task to claim for this chat. */
 	taskId?: string;
 }
 
 /** POST /api/missions/:id/tasks/:taskId/start: a new chat in the mission's project that claims the task. */
 export interface StartMissionTaskRequest {
+	/** Opted-in missions only. Omitted means builder; explorer uses the existing Ask runtime. */
+	role?: MissionWorkerRole;
 	/** User-only bypass. Not exposed by the coordinator tool. */
 	overridePhaseGating?: boolean;
 	/** References are saved on the task before the chat starts. */
