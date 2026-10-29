@@ -90,6 +90,11 @@ fn memory_round_trips_privately_and_a_bad_file_starts_fresh() {
     memory.observe(&[fresh.clone(), other.clone()]);
     memory.note_seen(&fresh);
     memory.note_sent("other", 200.);
+    let mut folders = crate::sidebar_folders::Folders::default();
+    folders.add("Work 仕事");
+    folders.assign("pilot", Some("Work 仕事"));
+    memory.set_folders(folders.clone());
+    memory.set_group_collapsed("project:pilot", true);
     let (target, bytes) = memory.take_save().unwrap();
     assert!(memory.take_save().is_none(), "one write per change");
     write(&target, &bytes).unwrap();
@@ -108,6 +113,8 @@ fn memory_round_trips_privately_and_a_bad_file_starts_fresh() {
     assert!(!reopened.unread(&fresh));
     assert!(reopened.unread(&other));
     assert_eq!(reopened.key(&other), 200.);
+    assert_eq!(reopened.folders(), &folders);
+    assert!(reopened.group_collapsed("project:pilot"));
     // A corrupt file is ignored, never trusted, and starts at its own baseline.
     std::fs::write(&path, b"{not json").unwrap();
     let mut fresh_start = Memory::at(path.clone());
@@ -132,4 +139,19 @@ fn maps_stay_bounded_and_keep_the_newest() {
         memory.sent(&format!("chat-{}", CAP + 9)),
         Some((CAP + 9) as f64)
     );
+}
+
+#[test]
+fn folder_edits_wait_for_the_saved_file() {
+    let mut memory = Memory::at(std::env::temp_dir().join("never-written.json"));
+    let mut folders = crate::sidebar_folders::Folders::default();
+    folders.add("Work");
+    memory.set_folders(folders.clone());
+    assert!(
+        memory.folders().names.is_empty(),
+        "the file would replace it"
+    );
+    memory.restore(None, 1.);
+    memory.set_folders(folders.clone());
+    assert_eq!(memory.folders(), &folders);
 }

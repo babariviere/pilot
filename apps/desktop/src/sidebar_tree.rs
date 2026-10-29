@@ -6,6 +6,12 @@
 //! one level: its parent is the mission's coordinator chat (else the mission
 //! alone), then its members in creation order. Finished members fold into
 //! "+N finished". A search lists matching chats flat, without threads.
+//!
+//! Across all projects, Chats is split into flat project sections (a label row
+//! each, then its rows), once there are two or more. A chat without a project
+//! goes in a section for its folder. A thread sits with its coordinator's
+//! project. Sections are ordered by your latest send to anything in them, the
+//! same order as rows, and a collapsed section is only its label.
 use crate::{
     chat_order::{SECTIONS, Section},
     local_model::{Chat, MissionAssociation},
@@ -24,6 +30,8 @@ pub(crate) enum Row {
     Member { chat: usize, thread: usize },
     /// "+N finished" or "Hide finished", closing an expanded thread.
     Fold(usize),
+    /// A project section's label (index into `Tree::groups`).
+    Group(usize),
 }
 
 /// What a collapsed parent summarizes about its members.
@@ -86,12 +94,39 @@ pub(crate) struct Thread {
     pub(crate) rollup: Rollup,
 }
 
+/// A project section of Chats.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Group {
+    /// `group_key` of its chats.
+    pub(crate) key: String,
+    pub(crate) collapsed: bool,
+    /// Every chat in it, thread members included.
+    pub(crate) chats: usize,
+    pub(crate) rollup: Rollup,
+}
+impl Group {
+    /// The most urgent mark in the section.
+    pub(crate) fn mark(&self) -> Option<Mark> {
+        self.rollup.counts().first().map(|(mark, _)| *mark)
+    }
+}
+
+/// The section a chat belongs to: its project, else its folder.
+pub(crate) fn group_key(chat: &Chat) -> String {
+    match &chat.project_id {
+        Some(id) => format!("project:{id}"),
+        None => format!("dir:{}", chat.cwd),
+    }
+}
+
 pub(crate) struct Input<'a> {
     pub(crate) chats: &'a [Chat],
     /// Project scope and the Archived filter.
     pub(crate) keep: &'a dyn Fn(&Chat) -> bool,
     /// Lowercased; empty shows threads.
     pub(crate) query: &'a str,
+    /// Split Chats into project sections (across all projects).
+    pub(crate) grouped: bool,
     pub(crate) collapsed: &'a HashSet<String>,
     pub(crate) show_finished: &'a HashSet<String>,
     pub(crate) opened: Option<&'a str>,
@@ -104,6 +139,8 @@ pub(crate) struct Tree {
     /// Start of each section in `rows`, plus the end.
     pub(crate) bounds: [usize; SECTIONS.len() + 1],
     pub(crate) threads: Vec<Thread>,
+    /// Project sections, when Chats is split into them.
+    pub(crate) groups: Vec<Group>,
 }
 impl Tree {
     #[cfg(test)]
@@ -120,7 +157,14 @@ impl Tree {
                 None => format!("mission:{}", self.threads[thread].mission),
             },
             Row::Fold(thread) => format!("fold:{}", self.threads[thread].mission),
+            Row::Group(group) => format!("group:{}", self.groups[group].key),
         }
+    }
+    /// The section key of a thread: its coordinator's, else its first member's.
+    pub(crate) fn thread_group(&self, thread: usize, chats: &[Chat]) -> Option<String> {
+        let t = &self.threads[thread];
+        let lead = t.coordinator.or(t.members.first().copied())?;
+        Some(group_key(&chats[lead]))
     }
     /// Where the row with `key` is now.
     pub(crate) fn find(&self, key: &str, chats: &[Chat]) -> Option<usize> {
@@ -140,6 +184,7 @@ pub(crate) fn build(input: &Input) -> Tree {
         chats,
         keep,
         query,
+        grouped: sectioned,
         collapsed,
         show_finished,
         opened,
@@ -175,6 +220,7 @@ pub(crate) fn build(input: &Input) -> Tree {
     sections[Section::Archived as usize] = archived.into_iter().map(Row::Chat).collect();
 
     let mut threads = Vec::new();
+    let mut groups = Vec::new();
     let mut top: Vec<(f64, f64, String, Row)> = Vec::new();
     if !query.is_empty() {
         let mut flat = chats_ix;
@@ -270,15 +316,14 @@ pub(crate) fn build(input: &Input) -> Tree {
                 .then(b.1.total_cmp(&a.1))
                 .then_with(|| a.2.cmp(&b.2))
         });
-        let rows = &mut sections[Section::Chats as usize];
-        for (_, _, _, row) in top {
+        let emit = |rows: &mut Vec<Row>, row: Row| {
             rows.push(row);
             let Row::Parent(t) = row else {
-                continue;
+                return;
             };
             let thread = &threads[t];
             if thread.collapsed {
-                continue;
+                return;
             }
             for member in &thread.members {
                 if thread.show_finished || !finished(&chats[*member], opened, memory) {
@@ -291,10 +336,72 @@ pub(crate) fn build(input: &Input) -> Tree {
             if thread.finished > 0 {
                 rows.push(Row::Fold(t));
             }
+        };
+        // Rows are already in your order, so each section first appears at its
+        // latest send.
+        let lead = |row: Row| match row {
+            Row::Parent(t) => {
+                let t = &threads[t];
+                &chats[t.coordinator.or(t.members.first().copied()).unwrap_or(0)]
+            }
+            Row::Chat(ix) | Row::Member { chat: ix, .. } => &chats[ix],
+            Row::Fold(_) | Row::Group(_) => unreachable!("top-level rows are chats and parents"),
+        };
+        let mut order: Vec<String> = Vec::new();
+        let mut by_group: HashMap<String, Vec<Row>> = HashMap::new();
+        for (_, _, _, row) in &top {
+            let key = group_key(lead(*row));
+            if !by_group.contains_key(&key) {
+                order.push(key.clone());
+            }
+            by_group.entry(key).or_default().push(*row);
+        }
+        let rows = &mut sections[Section::Chats as usize];
+        if sectioned && order.len() > 1 {
+            for key in order {
+                let members = by_group.remove(&key).unwrap_or_default();
+                let mut rollup = Rollup::default();
+                let mut count = 0;
+                let mut add = |chat: &Chat| {
+                    rollup.add(Mark::of(chat));
+                    rollup.unread |= memory.unread(chat);
+                    count += 1;
+                };
+                for row in &members {
+                    match *row {
+                        Row::Parent(t) => {
+                            let t = &threads[t];
+                            t.coordinator
+                                .iter()
+                                .chain(&t.members)
+                                .for_each(|c| add(&chats[*c]));
+                        }
+                        row => add(lead(row)),
+                    }
+                }
+                let collapsed = memory.group_collapsed(&key);
+                rows.push(Row::Group(groups.len()));
+                groups.push(Group {
+                    key,
+                    collapsed,
+                    chats: count,
+                    rollup,
+                });
+                if !collapsed {
+                    for row in members {
+                        emit(rows, row);
+                    }
+                }
+            }
+        } else {
+            for (_, _, _, row) in top {
+                emit(rows, row);
+            }
         }
     }
     let mut tree = Tree {
         threads,
+        groups,
         ..Default::default()
     };
     for (section, rows) in sections.into_iter().enumerate() {

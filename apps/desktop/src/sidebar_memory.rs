@@ -1,15 +1,15 @@
 //! Machine-local sidebar memory: when you last looked at each chat (for the
-//! "new reply" dot) and your own activity order. Stored privately on this
-//! machine only; never sent to the daemon, never a read-status write and never
-//! imported from Swift.
+//! "new reply" dot), your own activity order, your project folders and which
+//! project sections you collapsed. Stored privately on this machine only; never
+//! sent to the daemon, never a read-status write and never imported from Swift.
 //!
 //! Order: the daemon's `lastUserMessageAt` also moves on automatic notices, so
 //! it only seeds a chat's place the first time this app sees it. After that a
 //! chat moves only when you send to it from this app.
-use crate::local_model::Chat;
+use crate::{local_model::Chat, sidebar_folders::Folders};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -33,6 +33,12 @@ pub(crate) struct Saved {
     /// When you last sent to a chat from this app.
     #[serde(default)]
     pub(crate) sent: HashMap<String, f64>,
+    /// Your project folders.
+    #[serde(default)]
+    pub(crate) folders: Folders,
+    /// Collapsed project sections, by `sidebar_tree::group_key`.
+    #[serde(default)]
+    pub(crate) collapsed_projects: HashSet<String>,
 }
 
 pub(crate) struct Memory {
@@ -106,6 +112,30 @@ impl Memory {
     }
     pub(crate) fn sent(&self, id: &str) -> Option<f64> {
         self.saved.sent.get(id).copied()
+    }
+    /// Whether the saved file has been read, so folder edits can't be lost to it.
+    pub(crate) fn loaded(&self) -> bool {
+        self.loaded
+    }
+    pub(crate) fn folders(&self) -> &Folders {
+        &self.saved.folders
+    }
+    pub(crate) fn set_folders(&mut self, folders: Folders) {
+        if self.loaded && folders != self.saved.folders {
+            self.saved.folders = folders;
+            self.dirty = true;
+        }
+    }
+    pub(crate) fn group_collapsed(&self, key: &str) -> bool {
+        self.saved.collapsed_projects.contains(key)
+    }
+    pub(crate) fn set_group_collapsed(&mut self, key: &str, collapsed: bool) {
+        let changed = if collapsed {
+            self.saved.collapsed_projects.insert(key.to_owned())
+        } else {
+            self.saved.collapsed_projects.remove(key)
+        };
+        self.dirty |= changed;
     }
     pub(crate) fn note_sent(&mut self, id: &str, now: f64) {
         if self.sent(id).is_some_and(|sent| sent >= now) {

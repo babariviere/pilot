@@ -1,6 +1,11 @@
 //! The chat sidebar list: rows from `sidebar_tree`, drawn in the shared Kit
 //! list (search, keyboard selection, menus). Mission threads indent one level
 //! under their parent; state is a still trailing mark plus words, never dither.
+//!
+//! Two edges and a column: section and project labels, chat titles and a
+//! mission's Compass share the leading text edge (the navigation glyph's);
+//! mission names, members and "+N finished" share the second; every mark and
+//! collapsed count sits in one trailing column.
 use super::{
     LocalViewer, mission_link, mission_link_focus, mission_mark, mission_segment,
     sidebar_mission_title,
@@ -11,7 +16,7 @@ use crate::{
     chat_order::{self, SECTIONS, Section},
     local_model::{Chat, MissionAssociation, Project},
     sidebar_memory::Memory,
-    sidebar_tree::{self, Row, Tree},
+    sidebar_tree::{self, Row, Tree, group_key},
     state_mark::{self, Fade, Mark},
 };
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu};
@@ -37,13 +42,15 @@ type Observed = gpui_kit::base::ObservedElement<gpui_kit::Stateful<Div>>;
 pub(crate) const MEMBER_HEIGHT: f32 = 28.;
 pub(crate) const PARENT_HEIGHT: f32 = 32.;
 pub(crate) const FOLD_HEIGHT: f32 = 24.;
+/// A project section label, with a little air above its text.
+pub(crate) const GROUP_HEIGHT: f32 = 30.;
+const GROUP_AIR: f32 = 6.;
 const HEADER_HEIGHT: f32 = 26.;
 /// A header-less first section keeps a little air above its first row.
 const HEADER_GAP: f32 = 4.;
-/// Inside a row: the disclosure, a 2pt gap, the Compass, a 6pt gap. Member
-/// titles align with their parent's mission name.
-const DISCLOSURE: f32 = 12.;
-const THREAD_INDENT: f32 = DISCLOSURE + 2. + 12. + 6.;
+/// A mission's Compass then a 6pt gap: member titles align with its name.
+const GLYPH: f32 = 12.;
+const THREAD_INDENT: f32 = GLYPH + 6.;
 /// Titles align with the navigation glyph column.
 const ROW_INSET: f32 = 7.;
 /// A two-line row (title and caption); a row without a caption is one line.
@@ -62,6 +69,8 @@ pub(crate) struct ChatList {
     pub(crate) loaded: bool,
     pub(crate) project: Option<String>,
     pub(crate) projects: Arc<Vec<Project>>,
+    /// A folder scope from the project picker (across all projects only).
+    pub(crate) folder: Option<String>,
     /// Collapsed threads and threads showing their finished members, by mission.
     pub(crate) collapsed: HashSet<String>,
     pub(crate) show_finished: HashSet<String>,
@@ -90,6 +99,7 @@ impl ChatList {
             loaded: false,
             project: None,
             projects: Arc::new(Vec::new()),
+            folder: None,
             collapsed: HashSet::new(),
             show_finished: HashSet::new(),
             memory,
@@ -102,16 +112,23 @@ impl ChatList {
     pub(crate) fn filter(&mut self) {
         let archived = self.archived;
         let project = self.project.clone();
+        // A folder keeps its projects' chats; pinned chats always show.
+        let folder = self.folder.clone().filter(|_| project.is_none());
+        let folders = self.memory.folders();
         let keep = move |c: &Chat| {
             (archived || !c.archived)
                 && project
                     .as_ref()
                     .is_none_or(|id| c.project_id.as_ref() == Some(id))
+                && folder.as_ref().is_none_or(|f| {
+                    Section::of(c) == Section::Pinned || folders.holds(f, c.project_id.as_deref())
+                })
         };
         self.tree = sidebar_tree::build(&sidebar_tree::Input {
             chats: &self.all,
             keep: &keep,
             query: &self.query,
+            grouped: self.project.is_none(),
             collapsed: &self.collapsed,
             show_finished: &self.show_finished,
             opened: self.opened.as_deref(),
@@ -147,7 +164,7 @@ impl ChatList {
         match self.row(ix)? {
             Row::Chat(chat) | Row::Member { chat, .. } => self.all.get(chat),
             Row::Parent(thread) => self.all.get(self.tree.threads[thread].coordinator?),
-            Row::Fold(_) => None,
+            Row::Fold(_) | Row::Group(_) => None,
         }
     }
     /// Where a row appears, by key: a chat's canonical id or `mission:<id>`.
@@ -164,7 +181,7 @@ impl ChatList {
     pub(crate) fn thread_of(&self, row: Row) -> Option<usize> {
         match row {
             Row::Parent(t) | Row::Member { thread: t, .. } | Row::Fold(t) => Some(t),
-            Row::Chat(_) => None,
+            Row::Chat(_) | Row::Group(_) => None,
         }
     }
     pub(crate) fn set_collapsed(&mut self, mission: &str, collapsed: bool) {
@@ -181,24 +198,87 @@ impl ChatList {
         }
         self.filter();
     }
-    /// Opening a member expands its thread.
+    /// Collapse or expand a project section (saved with the sidebar memory).
+    pub(crate) fn set_group_collapsed(&mut self, key: &str, collapsed: bool) {
+        self.memory.set_group_collapsed(key, collapsed);
+        self.filter();
+    }
+    /// Opening a member expands its thread, and a chat its project section.
     pub(crate) fn reveal(&mut self, id: &str) -> bool {
         let Some(chat) = self.all.iter().find(|c| c.id == id) else {
             return false;
         };
-        match &chat.mission {
+        let mut sections = vec![group_key(chat)];
+        if let MissionAssociation::Linked(mission) = &chat.mission {
+            sections.extend(
+                self.all
+                    .iter()
+                    .filter(|c| {
+                        c.mission_coordinator
+                            && matches!(&c.mission, MissionAssociation::Linked(m) if m == mission)
+                    })
+                    .map(group_key),
+            );
+        }
+        let thread = match &chat.mission {
             MissionAssociation::Linked(mission) if !chat.mission_coordinator => {
                 self.collapsed.remove(mission.as_str())
             }
             _ => false,
+        };
+        let mut changed = thread;
+        for key in sections {
+            if self.memory.group_collapsed(&key) {
+                self.memory.set_group_collapsed(&key, false);
+                changed = true;
+            }
         }
+        changed
     }
-    /// Left/Right on the selected row: collapse or expand a parent, or move
-    /// between a member and its parent. None when the key does nothing here.
+    /// Left/Right on the selected row: collapse or expand a project section or
+    /// a parent, or move between a row and its parent or section label. None
+    /// when the key does nothing here.
     pub(crate) fn arrow(&mut self, right: bool) -> Option<IndexPath> {
         let ix = self.selected?;
         let row = self.row(ix)?;
-        let thread = self.thread_of(row)?;
+        let position = self.position(ix)?;
+        if let Row::Group(g) = row {
+            let group = self.tree.groups[g].clone();
+            let label = self.tree.key(row, &self.all);
+            return match (right, group.collapsed) {
+                (false, false) | (true, true) => {
+                    self.set_group_collapsed(&group.key, !right);
+                    self.index(&label)
+                }
+                (true, false) => (!matches!(self.tree.rows.get(position + 1), Some(Row::Group(_))))
+                    .then(|| self.path(position + 1))
+                    .flatten()
+                    .filter(|next| next.section == ix.section),
+                (false, true) => None,
+            };
+        }
+        if let Some(thread) = self.thread_of(row)
+            && let Some(next) = self.thread_arrow(ix, row, thread, right)
+        {
+            return Some(next);
+        }
+        // Left from any other row in a section moves to its label.
+        if right || SECTIONS[ix.section] != Section::Chats {
+            return None;
+        }
+        let start = self.tree.bounds[ix.section];
+        let label = (start..position)
+            .rev()
+            .find(|p| matches!(self.tree.rows[*p], Row::Group(_)))?;
+        self.path(label)
+    }
+    fn thread_arrow(
+        &mut self,
+        ix: IndexPath,
+        row: Row,
+        thread: usize,
+        right: bool,
+    ) -> Option<IndexPath> {
         let mission = self.tree.threads[thread].mission.clone();
         let parent_key = self.tree.key(Row::Parent(thread), &self.all);
         match (row, right) {
@@ -240,24 +320,49 @@ impl ChatList {
         )
         .filter(|(title, _)| !title.trim().is_empty())
     }
-    fn project_name(&self, chat: Option<&Chat>) -> Option<String> {
-        self.project.is_none().then_some(())?;
+    /// Rows inside project sections don't repeat their project.
+    fn in_groups(&self, section: usize) -> bool {
+        !self.tree.groups.is_empty() && SECTIONS[section] == Section::Chats
+    }
+    /// A row's project caption: across all projects, outside project sections.
+    fn project_name(&self, chat: Option<&Chat>, section: usize) -> Option<String> {
+        (self.project.is_none() && !self.in_groups(section)).then_some(())?;
         let id = chat?.project_id.as_ref()?;
         self.projects
             .iter()
             .find(|p| &p.id == id)
             .map(|p| p.name.clone())
     }
+    /// A project section's label: the project's name, else its folder as ~/path.
+    pub(crate) fn group_name(&self, key: &str) -> (String, bool) {
+        if let Some(id) = key.strip_prefix("project:") {
+            let name = self
+                .projects
+                .iter()
+                .find(|p| p.id == id)
+                .map_or_else(|| "Project unavailable".to_owned(), |p| p.name.clone());
+            return (name, false);
+        }
+        let path = key.strip_prefix("dir:").unwrap_or(key);
+        (
+            if path.is_empty() {
+                "No folder".to_owned()
+            } else {
+                tilde(path)
+            },
+            true,
+        )
+    }
     /// Whether a standalone row has a caption: project, state or mission.
-    fn chat_caption(&self, chat: &Chat) -> bool {
-        self.project_name(Some(chat)).is_some()
+    fn chat_caption(&self, chat: &Chat, section: usize) -> bool {
+        self.project_name(Some(chat), section).is_some()
             || !chat_order::row_state(chat).is_empty()
             || mission_mark(chat, |_| None).is_some()
     }
-    fn parent_caption(&self, thread: usize) -> bool {
+    fn parent_caption(&self, thread: usize, section: usize) -> bool {
         let t = &self.tree.threads[thread];
         let lead = t.coordinator.or(t.members.first().copied());
-        self.project_name(lead.and_then(|c| self.all.get(c)))
+        self.project_name(lead.and_then(|c| self.all.get(c)), section)
             .is_some()
             || (t.collapsed && !t.rollup.counts().is_empty())
     }
@@ -303,8 +408,15 @@ impl ChatList {
             .relative()
             .flex_none()
             // One-line thread rows keep a narrower slot; the 2rem button
-            // overhangs into their state word, which hides with it.
-            .map(|d| if narrow { d.w_5() } else { d.w_8() })
+            // overhangs into their state word, which hides with it. Its margin
+            // keeps the mark centered in the same column as wide slots'.
+            .map(|d| {
+                if narrow {
+                    d.w_5().mr(gpui_kit::rems(0.375))
+                } else {
+                    d.w_8()
+                }
+            })
             .h(px(TextRole::BODY))
             .flex()
             .items_center()
@@ -450,7 +562,7 @@ impl ChatList {
         let unread = self.memory.unread(&chat);
         // RowLine: project (only across all projects), then the state reason.
         // Quiet chats say nothing rather than a raw "idle".
-        let project = self.project_name(Some(&chat));
+        let project = self.project_name(Some(&chat), ix.section);
         let state = chat_order::row_state(&chat);
         // Named from the session socket's mission list, else the cached
         // catalog; no row reads.
@@ -486,9 +598,9 @@ impl ChatList {
             .join(" · ");
         let spoken = label(
             &chat.title,
-            project
-                .iter()
-                .cloned()
+            // Inside a project section the project is still spoken.
+            self.project_name(Some(&chat), Section::Pinned as usize)
+                .into_iter()
                 .chain((!state.is_empty()).then(|| state.clone()))
                 .chain(mark.as_ref().map(|m| m.label.clone())),
             unread,
@@ -497,7 +609,7 @@ impl ChatList {
             .filter(|m| m.bucket() != Mark::Working)
             .map_or(cx.theme().muted_foreground, |m| m.color(cx));
         let trailing = self.trailing(ix, &chat.id, Some(&chat), mark_state, false, window, cx);
-        let height = if self.chat_caption(&chat) {
+        let height = if self.chat_caption(&chat, ix.section) {
             TWO_LINE_HEIGHT
         } else {
             ONE_LINE_HEIGHT
@@ -606,7 +718,7 @@ impl ChatList {
         let mark = coordinator.as_ref().and_then(Mark::of);
         let unread = coordinator.as_ref().is_some_and(|c| self.memory.unread(c))
             || (t.collapsed && t.rollup.unread);
-        let project = self.project_name(lead.as_ref());
+        let project = self.project_name(lead.as_ref(), ix.section);
         let counts = if t.collapsed {
             t.rollup.counts()
         } else {
@@ -629,7 +741,7 @@ impl ChatList {
         if coordinator.is_none() {
             spoken.push("No coordinator chat; opens the mission".into());
         }
-        spoken.extend(project.clone());
+        spoken.extend(self.project_name(lead.as_ref(), Section::Pinned as usize));
         if expandable {
             spoken.push(format!(
                 "{} · {} member{}",
@@ -646,6 +758,7 @@ impl ChatList {
         let accent_color = appearance::accent_mark(cx);
         let trailing = self.trailing(ix, &key, coordinator.as_ref(), mark, true, window, cx);
         let menu = coordinator.is_some().then(|| self.menu_shown(ix, window));
+        let keyboard = self.menu_shown(ix, window);
         let caption = project.is_some() || !counts.is_empty();
         let height = if caption {
             TWO_LINE_HEIGHT
@@ -669,20 +782,50 @@ impl ChatList {
                     .items_center()
                     .child(
                         div()
-                            .id(SharedString::from(format!(
-                                "mission-disclosure-{}",
-                                t.mission
-                            )))
+                            .id("sidebar-mission-glyph")
                             .test_support()
                             .flex_none()
-                            .size(px(DISCLOSURE))
-                            .mr(px(2.))
+                            .w(px(GLYPH))
+                            .mr(px(THREAD_INDENT - GLYPH))
                             .flex()
-                            .items_center()
                             .justify_center()
-                            .text_color(cx.theme().muted_foreground)
-                            .when(expandable, |d| {
-                                d.cursor_pointer()
+                            .text_color(accent_color)
+                            .child(AppIcon::Coordinator.inline().size_3()),
+                    )
+                    .child(
+                        lane(
+                            div()
+                                .id("sidebar-mission-title")
+                                .test_support()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(TextRole::BODY))
+                                .font_medium()
+                                .when(accent, |d| d.text_color(accent_color))
+                                .child(SharedString::from(title)),
+                            unread.then(|| reply(&key, cx)),
+                        )
+                        // The chevron follows the name: always while collapsed,
+                        // else on hover or keyboard selection. It toggles the
+                        // thread; the row itself opens the chat.
+                        .when(expandable, |lane| {
+                            lane.child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "mission-disclosure-{}",
+                                        t.mission
+                                    )))
+                                    .test_support()
+                                    .flex_none()
+                                    .size(px(GLYPH))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .when(!t.collapsed && !keyboard, |d| {
+                                        d.opacity(0.).group_hover("chat-row", |s| s.opacity(1.))
+                                    })
                                     .child(
                                         gpui_kit::component::Icon::new(if t.collapsed {
                                             IconName::ChevronRight
@@ -691,7 +834,6 @@ impl ChatList {
                                         })
                                         .size_3(),
                                     )
-                                    // The disclosure toggles; it never opens the chat.
                                     .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
                                         w.prevent_default();
                                         cx.stop_propagation();
@@ -704,30 +846,10 @@ impl ChatList {
                                             list.delegate_mut().set_collapsed(&mission, collapsed);
                                             cx.notify();
                                         });
-                                    })
-                            }),
+                                    }),
+                            )
+                        }),
                     )
-                    .child(
-                        div()
-                            .id("sidebar-mission-glyph")
-                            .test_support()
-                            .flex_none()
-                            .mr(px(6.))
-                            .text_color(accent_color)
-                            .child(AppIcon::Coordinator.inline().size_3()),
-                    )
-                    .child(lane(
-                        div()
-                            .id("sidebar-mission-title")
-                            .test_support()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(TextRole::BODY))
-                            .font_medium()
-                            .when(accent, |d| d.text_color(accent_color))
-                            .child(SharedString::from(title)),
-                        unread.then(|| reply(&key, cx)),
-                    ))
                     .children(word.map(|(word, mark)| state_word(word, mark, menu, cx)))
                     .child(trailing),
             )
@@ -782,6 +904,10 @@ impl ChatList {
         let mark = Mark::of(&chat);
         let unread = self.memory.unread(&chat);
         let state = chat_order::row_state(&chat);
+        // A member from another project than its thread's section names it.
+        let elsewhere = (!self.tree.groups.is_empty()
+            && self.tree.thread_group(thread, &self.all).as_deref() != Some(&group_key(&chat)))
+        .then(|| self.group_name(&group_key(&chat)).0);
         let mission = self.tree.threads[thread].mission.clone();
         let mission = self
             .mission_name(&mission, cx)
@@ -793,6 +919,7 @@ impl ChatList {
             (!state.is_empty())
                 .then_some(state)
                 .into_iter()
+                .chain(elsewhere.clone())
                 .chain([mission]),
             unread,
         );
@@ -805,19 +932,36 @@ impl ChatList {
             .items_center()
             .child(guide(cx))
             .child(div().flex_none().w(px(THREAD_INDENT)))
-            .child(lane(
+            .child(
+                lane(
+                    div()
+                        .id("sidebar-chat-title")
+                        .test_support()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(TextRole::BODY))
+                        .when(quiet && !unread, |d| {
+                            d.text_color(cx.theme().muted_foreground)
+                        })
+                        .child(SharedString::from(chat.title.clone())),
+                    unread.then(|| reply(&chat.id, cx)),
+                )
+                // The title keeps its room; another project's name yields first.
+                .flex_auto(),
+            )
+            .children(elsewhere.map(|project| {
                 div()
-                    .id("sidebar-chat-title")
+                    .id("sidebar-member-project")
                     .test_support()
-                    .min_w_0()
+                    .min_w(px(36.))
+                    .max_w(gpui_kit::relative(0.35))
+                    .flex_shrink(16.)
+                    .pl_1()
                     .truncate()
-                    .text_size(px(TextRole::BODY))
-                    .when(quiet && !unread, |d| {
-                        d.text_color(cx.theme().muted_foreground)
-                    })
-                    .child(SharedString::from(chat.title.clone())),
-                unread.then(|| reply(&chat.id, cx)),
-            ))
+                    .text_size(px(TextRole::CAPTION))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(SharedString::from(project))
+            }))
             .children(mark.map(|m| state_word(m.word(), m, menu, cx)))
             .child(trailing);
         item(&chat.id, spoken, self.opened.as_ref() == Some(&chat.id))
@@ -921,7 +1065,7 @@ fn guide(cx: &App) -> Div {
         .absolute()
         .top_0()
         .bottom_0()
-        .left(px(ROW_INSET + DISCLOSURE + 2. + 5.5))
+        .left(px(ROW_INSET + GLYPH / 2. - 0.5))
         .w(px(1.))
         .bg(cx.theme().border)
 }
@@ -936,12 +1080,15 @@ impl ListDelegate for ChatList {
     }
     fn item_height(&self, ix: IndexPath, _: &App) -> Option<Pixels> {
         Some(px(match self.row(ix)? {
-            Row::Chat(chat) if self.chat_caption(self.all.get(chat)?) => TWO_LINE_HEIGHT,
+            Row::Chat(chat) if self.chat_caption(self.all.get(chat)?, ix.section) => {
+                TWO_LINE_HEIGHT
+            }
             Row::Chat(_) => ONE_LINE_HEIGHT,
-            Row::Parent(t) if self.parent_caption(t) => TWO_LINE_HEIGHT,
+            Row::Parent(t) if self.parent_caption(t, ix.section) => TWO_LINE_HEIGHT,
             Row::Parent(_) => PARENT_HEIGHT,
             Row::Member { .. } => MEMBER_HEIGHT,
             Row::Fold(_) => FOLD_HEIGHT,
+            Row::Group(_) => GROUP_HEIGHT,
         }))
     }
     fn section_header_height(&self, section: usize, _: &App) -> Option<Pixels> {
@@ -952,7 +1099,7 @@ impl ListDelegate for ChatList {
         }))
     }
     /// Caption headings for Drafts, Pinned and Archived; Chats is named only
-    /// when something sits above it.
+    /// when something sits above it and it has no project sections.
     fn render_section_header(
         &mut self,
         section: usize,
@@ -976,7 +1123,17 @@ impl ListDelegate for ChatList {
                 .text_size(px(TextRole::CAPTION))
                 .font_semibold()
                 .text_color(cx.theme().muted_foreground)
-                .when(shown, |d| d.child(kind.title())),
+                .when(shown, |d| {
+                    d.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "sidebar-section-title-{}",
+                                kind.key()
+                            )))
+                            .test_support()
+                            .child(kind.title()),
+                    )
+                }),
         )
     }
     fn render_item(
@@ -996,6 +1153,7 @@ impl ListDelegate for ChatList {
                 self.render_member(ix, chat, thread, window, cx)
             }
             Row::Fold(thread) => self.render_fold(ix, thread, cx),
+            Row::Group(group) => self.render_group(ix, group, window, cx),
         })
     }
     fn set_selected_index(
@@ -1043,6 +1201,258 @@ impl ListDelegate for ChatList {
 }
 impl ChatList {
     fn header_shown(&self, section: usize) -> bool {
-        SECTIONS[section] != Section::Chats || self.tree.bounds[section] > 0
+        SECTIONS[section] != Section::Chats
+            || (self.tree.bounds[section] > 0 && self.tree.groups.is_empty())
+    }
+    /// A project section's label: the name with its chevron right after it,
+    /// then, while collapsed, its chat count and most urgent mark in the
+    /// trailing column. Enter or a click toggles it; its … and right-click
+    /// menus reach collapse and the project's folder.
+    fn render_group(
+        &mut self,
+        ix: IndexPath,
+        g: usize,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> ListItem {
+        let group = self.tree.groups[g].clone();
+        let key = self.tree.key(Row::Group(g), &self.all);
+        let (name, folder) = self.group_name(&group.key);
+        let mark = group.collapsed.then(|| group.mark()).flatten();
+        let mut spoken = vec![
+            if folder { "Folder" } else { "Project" }.to_owned(),
+            format!(
+                "{} · {} chat{}",
+                if group.collapsed {
+                    "Collapsed"
+                } else {
+                    "Expanded"
+                },
+                group.chats,
+                if group.chats == 1 { "" } else { "s" }
+            ),
+        ];
+        if group.collapsed {
+            spoken.push(group.rollup.words());
+        }
+        let spoken = label(&name, spoken.into_iter(), false);
+        let (shown, previous, t) = self.fade(&key, mark, window, cx);
+        let menu_shown = self.menu_shown(ix, window);
+        let menu_built = self.selected == Some(ix)
+            || self.hovered.as_deref() == Some(key.as_str())
+            || self.menu_row.as_deref() == Some(key.as_str());
+        let owner = self.action_owner.clone();
+        let list = cx.entity().downgrade();
+        let open_id = key.clone();
+        let section = group.key.clone();
+        let collapsed = group.collapsed;
+        let muted = cx.theme().muted_foreground;
+        let frame = self.frame(ix, &key, None, GROUP_HEIGHT, cx);
+        let row = frame
+            .h_flex()
+            .items_center()
+            .pt(px(GROUP_AIR))
+            .child(
+                div()
+                    .id("sidebar-group-label")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .h_flex()
+                    .items_center()
+                    .gap_1()
+                    .text_size(px(TextRole::CAPTION))
+                    .font_semibold()
+                    .text_color(muted)
+                    .when(folder, |d| {
+                        d.child(
+                            div()
+                                .id("sidebar-group-folder")
+                                .test_support()
+                                .flex_none()
+                                .child(AppIcon::Project.inline().size_3()),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("sidebar-group-name")
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from(name)),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("sidebar-group-chevron-{key}")))
+                            .test_support()
+                            .flex_none()
+                            .child(
+                                gpui_kit::component::Icon::new(if collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                })
+                                .size_3(),
+                            ),
+                    ),
+            )
+            .when(collapsed, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("sidebar-group-count-{key}")))
+                        .test_support()
+                        .flex_none()
+                        .pl_1()
+                        .text_size(px(TextRole::CAPTION))
+                        .text_color(muted)
+                        .child(SharedString::from(group.chats.to_string())),
+                )
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!("chat-menu-slot-{key}")))
+                    .relative()
+                    .flex_none()
+                    .w_8()
+                    .h(px(TextRole::BODY))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("chat-mark-{key}")))
+                            .test_support()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(menu_shown, |d| d.opacity(0.))
+                            .group_hover("chat-row", |s| s.opacity(0.))
+                            .child(state_mark::slot(shown, previous, t, cx)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .opacity(if menu_shown { 1. } else { 0. })
+                            .group_hover("chat-row", |s| s.opacity(1.))
+                            .when(menu_built, |d| {
+                                let (owner, section) = (owner.clone(), section.clone());
+                                d.child(
+                                    crate::ui::icon_action(
+                                        SharedString::from(format!("group-menu-{key}")),
+                                        "Section actions",
+                                        AppIcon::More,
+                                        crate::ui::Action::Quiet,
+                                    )
+                                    .size_8()
+                                    .dropdown_menu(move |menu, _, cx| {
+                                        group_menu(owner.clone(), &section, collapsed, menu, cx)
+                                    })
+                                    .on_open_change(
+                                        move |open, _, cx| {
+                                            if *open {
+                                                let _ = list.update(cx, |list, cx| {
+                                                    list.delegate_mut().menu_row =
+                                                        Some(open_id.clone());
+                                                    cx.notify();
+                                                });
+                                            }
+                                        },
+                                    ),
+                                )
+                            }),
+                    ),
+            );
+        let (owner, section) = (self.action_owner.clone(), group.key.clone());
+        item(&key, spoken, false).child(
+            row.context_menu(move |menu, _, cx| {
+                group_menu(owner.clone(), &section, collapsed, menu, cx)
+            })
+            .into_any_element(),
+        )
+    }
+}
+
+/// A project section's actions: collapse or expand it, and file its project
+/// in one of your folders.
+fn group_menu(
+    owner: WeakEntity<LocalViewer>,
+    section: &str,
+    collapsed: bool,
+    menu: gpui_kit::component::menu::PopupMenu,
+    cx: &mut App,
+) -> gpui_kit::component::menu::PopupMenu {
+    use gpui_kit::component::menu::PopupMenuItem;
+    let toggle = {
+        let (owner, section) = (owner.clone(), section.to_owned());
+        move |_: &gpui_kit::ClickEvent, w: &mut Window, cx: &mut App| {
+            let _ = owner.update(cx, |v, cx| v.toggle_sidebar_group(&section, w, cx));
+        }
+    };
+    let menu = menu
+        .item(PopupMenuItem::new(if collapsed { "Expand" } else { "Collapse" }).on_click(toggle));
+    let Some(project) = section.strip_prefix("project:").map(str::to_owned) else {
+        return menu;
+    };
+    let Some(viewer) = owner.upgrade() else {
+        return menu;
+    };
+    let folders = viewer
+        .read(cx)
+        .chats
+        .read(cx)
+        .delegate()
+        .memory
+        .folders()
+        .clone();
+    let current = folders.folder_of(&project).map(str::to_owned);
+    let file = |folder: Option<String>| {
+        let (owner, project) = (owner.clone(), project.clone());
+        move |_: &gpui_kit::ClickEvent, w: &mut Window, cx: &mut App| {
+            let _ = owner.update(cx, |v, cx| v.file_project(&project, folder.clone(), w, cx));
+        }
+    };
+    let mut menu = menu.separator().label("Folder");
+    for name in &folders.names {
+        menu = menu.item(
+            PopupMenuItem::new(SharedString::from(name.clone()))
+                .checked(current.as_deref() == Some(name.as_str()))
+                .on_click(file(Some(name.clone()))),
+        );
+    }
+    let (edit, settings) = (owner.clone(), owner.clone());
+    menu.item(
+        PopupMenuItem::new("No folder")
+            .checked(current.is_none())
+            .on_click(file(None)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Edit folders…").on_click(move |_, w, cx| {
+            let _ = edit.update(cx, |v, cx| v.open_folder_editor(w, cx));
+        }),
+    )
+    .item(
+        PopupMenuItem::new("Project settings…").on_click(move |_, w, cx| {
+            let _ = settings.update(cx, |v, cx| v.open_project_settings(project.clone(), w, cx));
+        }),
+    )
+}
+
+/// A folder as ~/path when it is under your home folder.
+fn tilde(path: &str) -> String {
+    static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let home = HOME.get_or_init(|| {
+        std::env::var("HOME")
+            .ok()
+            .filter(|h| h.len() > 1)
+            .map(|h| h.trim_end_matches('/').to_owned())
+    });
+    match home.as_deref().and_then(|h| path.strip_prefix(h)) {
+        Some("") => "~".to_owned(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_owned(),
     }
 }

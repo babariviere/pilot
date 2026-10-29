@@ -305,6 +305,8 @@ pub use local_view::side_panel_probe::run_side_panel_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::sidebar_sections_probe::run_sidebar_sections_probe;
+#[cfg(feature = "native-probes")]
 mod scrollbar_track_probe;
 #[cfg(feature = "native-probes")]
 pub use scrollbar_track_probe::run_scrollbar_track_probe;
@@ -339,6 +341,7 @@ mod markdown_mermaid;
 mod markdown_service_links;
 mod native_mermaid;
 mod native_mermaid_view;
+mod sidebar_folders;
 mod sidebar_memory;
 mod sidebar_tree;
 mod state_mark;

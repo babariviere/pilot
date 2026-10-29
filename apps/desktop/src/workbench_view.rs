@@ -63,7 +63,6 @@ impl LocalViewer {
     }
     /// Opens Settings on one exact project ID, for a project menu's Settings item. The page
     /// stays on that ID even if the project is renamed or removed; it never falls back to another.
-    #[allow(dead_code)]
     pub(crate) fn open_project_settings(
         &mut self,
         project_id: String,
@@ -192,6 +191,8 @@ impl LocalViewer {
             232.
         });
         let archived = self.chats.read(cx).delegate().archived;
+        let folder = self.chats.read(cx).delegate().folder.clone();
+        let folders_ready = self.chats.read(cx).delegate().memory.loaded();
         let scope = self
             .project_scope
             .as_ref()
@@ -203,7 +204,9 @@ impl LocalViewer {
                     .map(|p| p.name.clone())
                     .unwrap_or_else(|| "Project unavailable".into())
             })
+            .or_else(|| folder.clone())
             .unwrap_or_else(|| "All projects".into());
+        let choices_height = self.projects.read(cx).delegate().content_height();
         let healthy = self.state.status.starts_with("Connected")
             || self.state.status.starts_with("Synthetic")
             || self.state.status.starts_with("Read-only captured");
@@ -233,7 +236,7 @@ impl LocalViewer {
                         .child(gpui_kit::component::Icon::new(if self.projects_open{IconName::ChevronUp}else{IconName::ChevronDown}).small().flex_shrink_0()))
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_projects(w,cx))))
                 .when(self.projects_open,|this|this.child(div().id("project-choices").test_support().v_flex().min_w_0().py_1()
-                    .child(div().h(px((self.state.projects.len().min(5)as f32*28.).min(f32::from(w.viewport_size().height)*0.22).max(30.))).min_h_0().w_full().child(List::new(&self.projects).scrollbar_visible(false)))
+                    .child(div().h(px(choices_height.min(f32::from(w.viewport_size().height)*0.3).max(30.))).min_h_0().w_full().child(List::new(&self.projects).scrollbar_visible(false)))
                     .child(sidebar_row("add-project","Add project…",AppIcon::AddProject)
                         .tooltip("Add a folder as a project")
                         .disabled(self.writer.is_none()).on_click(cx.listener(|v,_,w,cx|{
@@ -242,6 +245,14 @@ impl LocalViewer {
                             // Capture a mounted return target for the existing flow.
                             v.chats.update(cx,|l,cx|l.focus(w,cx));
                             v.open_add_project(w,cx);
+                        })))
+                    // Folders are yours, on this machine: group projects, then choose one above.
+                    .child(sidebar_row("edit-folders","Edit folders…",AppIcon::Projects)
+                        .tooltip("Group your projects into folders")
+                        .disabled(!folders_ready).on_click(cx.listener(|v,_,w,cx|{
+                            if !v.project_choices_ready(w,cx){return;}
+                            v.chats.update(cx,|l,cx|l.focus(w,cx));
+                            v.open_folder_editor(w,cx);
                         })))))
                 // The one place a failed project refresh is reported.
                 .when(self.state.projects_error.is_some()&&!self.state.projects.is_empty(),|this|this.child(div().id("projects-refresh-problem").h_flex().gap_1().px_2().py_1().min_w_0()

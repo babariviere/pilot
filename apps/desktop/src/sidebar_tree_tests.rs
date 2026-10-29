@@ -23,6 +23,7 @@ struct Fixture {
     opened: Option<String>,
     query: String,
     archived: bool,
+    grouped: bool,
 }
 impl Fixture {
     fn new(values: Vec<Value>) -> Self {
@@ -37,6 +38,7 @@ impl Fixture {
             opened: None,
             query: String::new(),
             archived: false,
+            grouped: false,
         }
     }
     fn tree(&self) -> Tree {
@@ -45,6 +47,7 @@ impl Fixture {
             chats: &self.chats,
             keep: &move |c: &Chat| archived || !c.archived,
             query: &self.query,
+            grouped: self.grouped,
             collapsed: &self.collapsed,
             show_finished: &self.show_finished,
             opened: self.opened.as_deref(),
@@ -68,6 +71,7 @@ impl Fixture {
                         format!("  +{}", thread.finished)
                     }
                 }
+                Row::Group(g) => format!("# {}", tree.groups[g].key),
             })
             .collect()
     }
@@ -240,4 +244,84 @@ fn selection_keys_survive_rebuilds() {
         tree.find("fold:o", &f.chats).is_some(),
         "the orphan thread folds its finished member"
     );
+}
+
+fn in_project(mut v: Value, project: &str) -> Value {
+    v["projectId"] = json!(project);
+    v
+}
+fn in_dir(mut v: Value, dir: &str) -> Value {
+    v["cwd"] = json!(dir);
+    v
+}
+
+#[test]
+fn chats_split_into_project_sections_in_your_send_order() {
+    let mut f = Fixture::new(vec![
+        in_project(plain("p-old", 1.), "pilot"),
+        in_project(plain("d-new", 30.), "dotfiles"),
+        in_project(coord("coord", "m", 10.), "pilot"),
+        // A member from another project stays in its coordinator's section.
+        in_project(member("m-x", "m", 11.), "dotfiles"),
+        in_dir(plain("scratch", 20.), "/tmp/scratch"),
+        json!({"id":"pinned","title":"pinned","createdAt":40,"pinned":true,"projectId":"pilot"}),
+    ]);
+    f.set(in_project(
+        json!({"id":"m-x","title":"m-x","missionId":"m","createdAt":11,"state":"working"}),
+        "dotfiles",
+    ));
+    f.grouped = true;
+    assert_eq!(
+        f.rows(),
+        [
+            "pinned",
+            "# project:dotfiles",
+            "d-new",
+            "# dir:/tmp/scratch",
+            "scratch",
+            "# project:pilot",
+            "> coord",
+            "  m-x",
+            "p-old",
+        ]
+    );
+    let tree = f.tree();
+    let pilot = &tree.groups[2];
+    assert_eq!((pilot.chats, pilot.mark()), (3, Some(Mark::Working)));
+    assert_eq!(
+        tree.thread_group(0, &f.chats).as_deref(),
+        Some("project:pilot")
+    );
+    // Your send moves its whole section to the top; agent activity never does.
+    f.memory.note_sent("p-old", 5000.);
+    assert_eq!(f.rows()[1], "# project:pilot");
+    assert_eq!(f.rows()[2], "p-old", "the sent chat leads its section");
+    f.set(in_dir(
+        json!({"id":"scratch","title":"scratch","createdAt":20,"state":"failed","lastUserMessageAt":9000}),
+        "/tmp/scratch",
+    ));
+    assert_eq!(f.rows()[1], "# project:pilot");
+    // Collapsing a section leaves only its label, with its count and mark.
+    f.memory.set_group_collapsed("dir:/tmp/scratch", true);
+    let rows = f.rows();
+    assert!(rows.contains(&"# dir:/tmp/scratch".to_owned()));
+    assert!(!rows.contains(&"scratch".to_owned()));
+    let tree = f.tree();
+    let scratch = tree
+        .groups
+        .iter()
+        .find(|g| g.key == "dir:/tmp/scratch")
+        .unwrap();
+    assert!(scratch.collapsed);
+    assert_eq!((scratch.chats, scratch.mark()), (1, Some(Mark::Failed)));
+    assert!(tree.find("group:dir:/tmp/scratch", &f.chats).is_some());
+    // Search, and a single section, stay flat.
+    f.query = "p-".into();
+    assert_eq!(f.rows(), ["p-old"]);
+    assert!(f.tree().groups.is_empty());
+    f.query.clear();
+    f.chats.retain(|c| c.project_id.as_deref() == Some("pilot"));
+    assert!(f.tree().groups.is_empty(), "one project needs no label");
+    f.grouped = false;
+    assert!(f.tree().groups.is_empty());
 }

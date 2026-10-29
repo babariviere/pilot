@@ -14,4 +14,5 @@ fn main() {
         pilot_desktop::LocalViewer::bind_keys(cx);
     });
     pilot_desktop::run_style_probe(&mut cx);
+    pilot_desktop::run_sidebar_sections_probe(&mut cx);
 }

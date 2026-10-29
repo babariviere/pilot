@@ -1257,7 +1257,6 @@ fn sidebar_new_chat_admission(cx: &mut HeadlessAppContext) {
             let list = w.within("chat-list-pane");
             for (id, label) in [
                 ("New-Second", "Second new chat · Synthetic Atlas"),
-                ("New-B", "Boreal new chat · Synthetic Boreal"),
                 ("New-Canonical", "New chat renamed · Synthetic Atlas"),
             ] {
                 let row = list.find(id);
@@ -1266,6 +1265,12 @@ fn sidebar_new_chat_admission(cx: &mut HeadlessAppContext) {
             }
         })
         .unwrap();
+        // Another project's new chat leads its own project section.
+        cx.update(|cx| {
+            let d = v.read(cx).chats.read(cx).delegate();
+            let label = d.tree.find("group:project:b", &d.all).unwrap();
+            assert_eq!(d.tree.find("New-B", &d.all), Some(label + 1));
+        });
         cx.update_window(h, |_, w, cx| {
             composer.update(cx, |input, cx| input.unmark_text(w, cx))
         })

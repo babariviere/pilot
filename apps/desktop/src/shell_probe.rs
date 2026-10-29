@@ -166,7 +166,8 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 let sidebar = window.find("chat-sidebar").bounds();
                 assert!(main.left() >= sidebar.right() && f32::from(main.size.width) > 350.);
                 assert_eq!(view.read(cx).page, Page::Home);
-                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 3);
+                // Three chats under their three project labels.
+                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 3 + 3);
                 assert!(window.try_find("home-project-project-a").is_some());
                 assert!(window.try_find("home-project-project-b").is_some());
                 let button = window.find("home-project-project-a").bounds();
@@ -612,7 +613,8 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                     assert_eq!(view.read(cx).state.chats.len(), 1000);
                     assert_eq!(
                         view.read(cx).chats.read(cx).delegate().tree.rows.len(),
-                        1001
+                        // Every chat plus one label per project section.
+                        1001 + 256
                     );
                     let title = window
                         .within("home-project-p000")

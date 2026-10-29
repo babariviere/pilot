@@ -291,18 +291,50 @@ Usage, Settings and connection/recovery state keep their existing owners.
 The sidebar list (`sidebar_list.rs`, rows built by `sidebar_tree.rs`) has
 four sections: Drafts, Pinned, Chats and, with the Archived filter, Archived.
 Chats holds mission threads and standalone chats in the user's own order
-(below). A standalone chat row is its title, then at most one quiet caption line
+(below). Across all projects, once two or more projects (or project-less
+folders, labelled `~/path` with a folder glyph) have chats, Chats splits into
+flat project sections: a caption-style label like Pinned, its chevron right
+after the name, then its rows; the Chats heading gives way to them. Sections
+are ordered by the user's latest send to anything in them, rows inside keep
+the same order, and agent activity never moves either. A thread sits with its
+coordinator's project; a member from another project names it in a quiet
+caption before its state word. Rows inside a section don't repeat the project;
+Pinned, Archived and search results stay flat with their project caption, and a
+chosen project shows no labels. A collapsed section is only its label, with its
+chat count and most urgent mark in the trailing column. Enter, a click,
+Left/Right or the label's … and right-click menus collapse and expand it; Left
+from any row in a section returns to its label, Right from an expanded label
+enters it. Opening a chat expands its section, and a collapse keeps the
+selection on the label. Collapsed sections are remembered in `sidebar-v1.json`.
+One text edge holds navigation glyphs, section and project labels, chat titles
+and a mission's Compass; mission names, members and "+N finished" share a second
+edge; every mark and collapsed count shares one trailing column (one-line rows
+keep a narrower slot with a margin that centers their mark in the same column).
+
+Project folders (for example Work and Personal) are the user's own grouping,
+stored with the sidebar memory on this machine only (`sidebar_folders.rs`). The
+project picker lists All projects, then Folders with their project counts,
+then Projects, then Add project… and Edit folders…. Choosing a folder narrows
+the sidebar to its projects' chats (pinned chats always show) without becoming
+a navigation scope; choosing a project or All projects replaces it. Edit
+folders… (also in a section's … menu, beside the folder choices) adds, renames
+and removes folders and files projects in them; Save applies the edits
+together and is enabled only when they differ and every name is unique;
+Cancel or Escape keeps the saved folders.
+
+A standalone chat row is its title, then at most one quiet caption line
 right under it (a row with nothing to caption is one line): the project (across all projects) and the state reason, coloured
 only for amber, red or green states. Its still mark sits in the trailing slot on
 the title line. The accessible name keeps the full state, mission and "new
 reply". A thread's parent is the coordinator chat titled with the mission name
-(disclosure chevron, Compass and name in the accent, state word and mark on the
-right); its second line holds the project and, while collapsed, the roll-up of
+(Compass and name in the accent, then its disclosure chevron, shown while
+collapsed or on hover and keyboard selection, state word and mark on the
+right); its second line holds the project (outside project sections) and, while collapsed, the roll-up of
 member marks. Members are one-line 28pt rows indented to the mission name under a
 hairline guide, then "+N finished" for quiet, seen members. Rows have fixed
 heights per kind through the patched Kit list's `ListDelegate::item_height`
 (48pt two-line, 32pt for a chat or parent without a caption, 28pt member,
-24pt fold). Left/Right
+24pt fold, 30pt project label). Left/Right
 (`SidebarCollapse`/`SidebarExpand`, bound ahead of the search field's caret
 moves and passed on when they do nothing) collapse, expand or move between a
 member and its parent; Enter opens a row's chat, opens a coordinator-less
@@ -363,7 +395,11 @@ app. A thread sorts by its coordinator, or by the user's sends to its members.
 Members sort by creation. The same file records the latest reply (`outcomeAt`
 of a done, question or failed result, never `updatedAt`) seen in each chat for
 the "new reply" dot; replies older than the file's first baseline never light
-up. Selection follows the row's key (chat id, `mission:<id>`, `fold:<id>`).
+up. Selection follows the row's key (chat id, `mission:<id>`, `fold:<id>`,
+`group:<section>`). The `style` native target also runs
+`sidebar_sections_probe`: both edges and the mark column, chevrons, captions,
+keyboard collapse, folder editing, the picker's folder scope and 132 rows at
+680/1100 light/dark.
 
 The `workbench` native target measures these columns/hit bounds and glyph paint,
 including long Unicode, empty/loading/unavailable and retained-error states at

@@ -141,6 +141,9 @@ pub(crate) mod side_panel_probe;
 #[path = "sidebar_scroll_native.rs"]
 pub(crate) mod sidebar_scroll_native;
 #[cfg(feature = "native-probes")]
+#[path = "sidebar_sections_probe.rs"]
+pub(crate) mod sidebar_sections_probe;
+#[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 #[path = "submit_visibility.rs"]
@@ -199,6 +202,8 @@ pub use workspace_changes_view::session_file_view_probe::run_session_file_view_p
 #[path = "sidebar_list.rs"]
 mod sidebar_list;
 use sidebar_list::ChatList;
+#[path = "sidebar_folders_view.rs"]
+mod sidebar_folders_view;
 
 gpui_kit::actions!(
     desktop,
@@ -989,11 +994,19 @@ impl LocalViewer {
             if !view.projects_open || !view.project_choices_ready(window, cx) {
                 return;
             }
-            if let ListEvent::Confirm(ix) = event
-                && let Some(id) = list.read(cx).delegate().at(*ix).map(|p| p.id.clone())
-            {
+            let choice = match event {
+                ListEvent::Confirm(ix) => list.read(cx).delegate().choice(*ix),
+                _ => None,
+            };
+            if let Some(crate::app_shell::ScopeChoice::All) = choice {
+                view.choose_folder(None, window, cx);
+            } else if let Some(crate::app_shell::ScopeChoice::Folder(name)) = choice {
+                view.choose_folder(Some(name), window, cx);
+            } else if let Some(crate::app_shell::ScopeChoice::Project(id)) = choice {
                 view.focus_scope(id.clone(), window, cx);
                 if view.project_scope.as_ref() == Some(&id) {
+                    // A project replaces a folder scope.
+                    view.chats.update(cx, |l, _| l.delegate_mut().folder = None);
                     view.projects_open = false;
                     view.chats.update(cx, |l, cx| l.focus(window, cx));
                     cx.notify();
@@ -1964,8 +1977,29 @@ impl LocalViewer {
         } else {
             "No projects yet"
         };
+        // The picker's folders: yours, with how many listed projects each holds.
+        let (folders, folder) = {
+            let list = self.chats.read(cx).delegate();
+            let saved = list.memory.folders();
+            let folders: Vec<(String, usize)> = saved
+                .names
+                .iter()
+                .map(|name| {
+                    let n = self
+                        .state
+                        .projects
+                        .iter()
+                        .filter(|p| saved.holds(name, Some(&p.id)))
+                        .count();
+                    (name.clone(), n)
+                })
+                .collect();
+            (folders, list.folder.clone())
+        };
         let projects_changed = !Arc::ptr_eq(&self.nav_projects, &self.state.projects)
-            || self.projects.read(cx).delegate().selected != self.project_scope;
+            || self.projects.read(cx).delegate().selected != self.project_scope
+            || self.projects.read(cx).delegate().folder != folder
+            || self.projects.read(cx).delegate().folders != folders;
         if projects_changed || self.projects.read(cx).delegate().empty_label != empty_label {
             self.nav_projects = self.state.projects.clone();
             self.projects.update(cx, |list, cx| {
@@ -1973,12 +2007,10 @@ impl LocalViewer {
                 d.all = self.state.projects.clone();
                 d.empty_label = empty_label;
                 d.selected = self.project_scope.clone();
+                d.folders = folders;
+                d.folder = folder;
                 if projects_changed {
-                    let index = self
-                        .project_scope
-                        .as_ref()
-                        .and_then(|id| self.state.projects.iter().position(|p| &p.id == id))
-                        .map(IndexPath::new);
+                    let index = list.delegate().current();
                     list.set_selected_index(index, window, cx);
                 }
                 cx.notify();
@@ -2101,6 +2133,11 @@ impl LocalViewer {
         };
         let key = delegate.key_at(ix);
         let chat = delegate.at(ix).cloned();
+        if let Row::Group(g) = row {
+            let section = delegate.tree.groups[g].key.clone();
+            self.toggle_sidebar_group(&section, window, cx);
+            return;
+        }
         match (row, mission) {
             (Row::Fold(_), Some(mission)) => {
                 list.update(cx, |list, cx| {
@@ -2131,7 +2168,7 @@ impl LocalViewer {
         if !self.chats.read(cx).delegate().query.is_empty() {
             return false;
         }
-        self.chats.update(cx, |list, cx| {
+        let moved = self.chats.update(cx, |list, cx| {
             let Some(ix) = list.delegate_mut().arrow(right) else {
                 return false;
             };
@@ -2139,7 +2176,10 @@ impl LocalViewer {
             list.scroll_to_selected_item(window, cx);
             cx.notify();
             true
-        })
+        });
+        // A project section's collapse is saved.
+        self.save_sidebar_memory(cx);
+        moved
     }
     /// Read the machine-local sidebar memory off the UI thread, then apply it.
     fn load_sidebar_memory(

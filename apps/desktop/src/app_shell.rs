@@ -88,29 +88,141 @@ fn project_row_context(
     (detail.into(), label)
 }
 
+/// The sidebar's project picker: All projects, then your folders (with how
+/// many projects each holds), then every project.
 pub(crate) struct ProjectList {
     pub(crate) all: Arc<Vec<Project>>,
     pub(crate) empty_label: &'static str,
     pub(crate) selected: Option<String>,
+    /// Your folders and their project counts, and the folder scope.
+    pub(crate) folders: Vec<(String, usize)>,
+    pub(crate) folder: Option<String>,
     index: Option<IndexPath>,
 }
+/// A picker row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ScopeChoice {
+    All,
+    Folder(String),
+    Project(String),
+}
+/// Picker sections: All projects, Folders, Projects.
+const SCOPE_ALL: usize = 0;
+const SCOPE_FOLDERS: usize = 1;
+pub(crate) const SCOPE_PROJECTS: usize = 2;
+const SCOPE_ROW: f32 = 28.;
+const SCOPE_HEADER: f32 = 24.;
 impl ProjectList {
     pub(crate) fn new() -> Self {
         Self {
             all: Arc::new(Vec::new()),
             empty_label: "Loading projects…",
             selected: None,
+            folders: Vec::new(),
+            folder: None,
             index: None,
         }
     }
     pub(crate) fn at(&self, ix: IndexPath) -> Option<&Project> {
-        self.all.get(ix.row)
+        (ix.section == SCOPE_PROJECTS).then(|| self.all.get(ix.row))?
+    }
+    pub(crate) fn choice(&self, ix: IndexPath) -> Option<ScopeChoice> {
+        match ix.section {
+            SCOPE_ALL => (ix.row == 0 && !self.all.is_empty()).then_some(ScopeChoice::All),
+            SCOPE_FOLDERS => self
+                .folders
+                .get(ix.row)
+                .map(|(name, _)| ScopeChoice::Folder(name.clone())),
+            _ => self.at(ix).map(|p| ScopeChoice::Project(p.id.clone())),
+        }
+    }
+    /// Where the current scope is in the list.
+    pub(crate) fn current(&self) -> Option<IndexPath> {
+        if self.all.is_empty() {
+            return None;
+        }
+        if let Some(id) = &self.selected {
+            return self
+                .all
+                .iter()
+                .position(|p| &p.id == id)
+                .map(|row| IndexPath::new(row).section(SCOPE_PROJECTS));
+        }
+        if let Some(folder) = &self.folder {
+            return self
+                .folders
+                .iter()
+                .position(|(name, _)| name == folder)
+                .map(|row| IndexPath::new(row).section(SCOPE_FOLDERS));
+        }
+        Some(IndexPath::new(0).section(SCOPE_ALL))
+    }
+    fn headers(&self) -> bool {
+        !self.folders.is_empty() && !self.all.is_empty()
+    }
+    /// The height its rows need.
+    pub(crate) fn content_height(&self) -> f32 {
+        if self.all.is_empty() {
+            return SCOPE_ROW;
+        }
+        let rows = 1 + self.folders.len() + self.all.len();
+        rows as f32 * SCOPE_ROW
+            + if self.headers() {
+                2. * SCOPE_HEADER
+            } else {
+                0.
+            }
     }
 }
 impl ListDelegate for ProjectList {
     type Item = ListItem;
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        self.all.len()
+    fn sections_count(&self, _: &App) -> usize {
+        3
+    }
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        if self.all.is_empty() {
+            return 0;
+        }
+        match section {
+            SCOPE_ALL => 1,
+            SCOPE_FOLDERS => self.folders.len(),
+            _ => self.all.len(),
+        }
+    }
+    fn item_height(&self, _: IndexPath, _: &App) -> Option<gpui_kit::Pixels> {
+        Some(px(SCOPE_ROW))
+    }
+    fn section_header_height(&self, section: usize, _: &App) -> Option<gpui_kit::Pixels> {
+        Some(px(if section != SCOPE_ALL && self.headers() {
+            SCOPE_HEADER
+        } else {
+            0.
+        }))
+    }
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        (section != SCOPE_ALL && self.headers()).then(|| {
+            div()
+                .id(SharedString::from(format!("scope-section-{section}")))
+                .test_support()
+                .h(px(SCOPE_HEADER))
+                .h_flex()
+                .items_end()
+                .px_2()
+                .pb_1()
+                .text_size(px(crate::appearance::TextRole::CAPTION))
+                .font_semibold()
+                .text_color(cx.theme().muted_foreground)
+                .child(if section == SCOPE_FOLDERS {
+                    "Folders"
+                } else {
+                    "Projects"
+                })
+        })
     }
     fn render_item(
         &mut self,
@@ -118,14 +230,46 @@ impl ListDelegate for ProjectList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
-        let p = self.at(ix)?;
+        let (id, name, icon, count, chosen) = match self.choice(ix)? {
+            ScopeChoice::All => (
+                "scope-all".to_owned(),
+                "All projects".to_owned(),
+                AppIcon::Projects,
+                None,
+                self.selected.is_none() && self.folder.is_none(),
+            ),
+            ScopeChoice::Folder(name) => (
+                format!("scope-folder-{name}"),
+                name.clone(),
+                AppIcon::Projects,
+                self.folders.get(ix.row).map(|(_, n)| *n),
+                self.selected.is_none() && self.folder.as_ref() == Some(&name),
+            ),
+            ScopeChoice::Project(id) => {
+                let p = self.at(ix)?;
+                (
+                    format!("project-{id}"),
+                    p.name.clone(),
+                    AppIcon::Project,
+                    None,
+                    self.selected.as_ref() == Some(&id),
+                )
+            }
+        };
+        let spoken = match count {
+            Some(n) => format!(
+                "{name} · folder · {n} project{}",
+                if n == 1 { "" } else { "s" }
+            ),
+            None => name.clone(),
+        };
         Some(
-            ListItem::new(SharedString::from(format!("project-{}", p.id)))
+            ListItem::new(SharedString::from(id))
                 .px_2()
                 .py_0()
                 .min_h_8()
-                .accessibility_label(SharedString::from(p.name.clone()))
-                .confirmed(self.selected.as_ref() == Some(&p.id))
+                .accessibility_label(SharedString::from(spoken))
+                .confirmed(chosen)
                 .child(
                     div()
                         .h_flex()
@@ -141,7 +285,7 @@ impl ListDelegate for ProjectList {
                                 .test_support()
                                 .size_4()
                                 .flex_shrink_0()
-                                .child(AppIcon::Project.icon()),
+                                .child(icon.icon()),
                         )
                         .child(
                             div()
@@ -150,8 +294,17 @@ impl ListDelegate for ProjectList {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .child(SharedString::from(p.name.clone())),
-                        ),
+                                .child(SharedString::from(name)),
+                        )
+                        .children(count.map(|n| {
+                            div()
+                                .id("scope-folder-count")
+                                .test_support()
+                                .flex_none()
+                                .text_size(px(crate::appearance::TextRole::CAPTION))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(n.to_string()))
+                        })),
                 ),
         )
     }
