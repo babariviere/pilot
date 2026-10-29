@@ -139,6 +139,28 @@ test("atomic unit publication is idempotent but never replaces a different concu
 	}
 });
 
+test("retained service pins profile and policies, needs no linger, and writes outside immutable runtime", () => {
+	const unit = serviceUnit("/retained/payload/runtime", "/home/u", {
+		profile: "/data/profile",
+		port: 4320,
+		policy: { PILOT_MODEL_SCOPE_READ_ONLY: "1" },
+	});
+	assert.match(unit, /PILOT_HOME=\/data\/profile/);
+	assert.match(unit, /PILOT_PORT=4320/);
+	assert.match(unit, /PILOT_MODEL_SCOPE_READ_ONLY=1/);
+	assert.match(unit, /\/data\/profile\/coordinator-preflight.json/);
+	assert.doesNotMatch(unit, /--bundled-runtime/);
+	assert.throws(() => serviceUnit("/runtime", "/home/u", { profile: "relative", port: 0 }));
+	const result = probe({
+		requireLinger: false,
+		platform: "linux",
+		arch: "x64",
+		uid: 1000,
+		check: (command) => ({ ok: ["git", "bash", "systemctl", "dnf"].includes(command), output: "" }),
+	});
+	assert.equal(result.ok, true);
+});
+
 test("initial service installation fails closed, never overwrites foreign units and does not start implicitly", {
 	skip: process.platform !== "linux" || process.getuid() === 0,
 }, () => {

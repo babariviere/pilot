@@ -33,7 +33,13 @@ after checking the configured daemon/lineage identity and protocol/capabilities,
 without starting or changing a daemon. Its chat actions are the same as `--local`,
 not read-only. The session is marked externally managed; daemon changes and app
 installation are unavailable. No automatic fallback weakens bundled proof.
-See [bundled Local runtime](docs/bundled-runtime.md) for the exact boundary.
+Packaged startup now verifies/connects only. **Register or start service…** asks
+separately to enable login startup and start the selected immutable runtime.
+The service, not the GUI, owns daemon lifetime. **Settings → Updates → Daemon →
+Upgrade daemon…** uses a separate safe handoff, including supported Swift launch
+agent replacement, and defers while independent work remains active.
+See [bundled Local runtime](docs/bundled-runtime.md) and
+[daemon upgrades](docs/daemon-upgrades.md) for the exact boundary and native limits.
 
 ### Chat actions
 

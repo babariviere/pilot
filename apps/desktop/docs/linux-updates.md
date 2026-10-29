@@ -90,8 +90,9 @@ probe succeeds, the helper starts through `systemd-run --user --scope`, which mo
 into its own scope and execs it in place (same parent, same inherited descriptors), so
 the helper and the relaunched app survive. Otherwise it starts directly. Startup
 ACK releases the reservation, not a daemon replacement. There is no automatic
-daemon-upgrade retry. Explicit daemon upgrade currently supports only the scoped
-[macOS launch-agent handoff](daemon-upgrades.md); Linux owners remain unchanged.
+daemon-upgrade retry. Explicit daemon upgrades use the separate
+[user-service handoff](daemon-upgrades.md), never this GUI update transaction.
+Its Linux native systemd/cgroup qualification is separate from updater evidence.
 
 Relaunch uses the new native executable directly, preserving the desktop-session
 environment and the receipt-bound profile/policy. Spawn success is not startup

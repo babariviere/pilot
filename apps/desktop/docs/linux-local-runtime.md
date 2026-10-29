@@ -50,21 +50,26 @@ a replaceable GUI path is not a retained-runtime match. This optional predicate
 does not change existing external callers or prevent an idle managed profile
 from acquiring a new owner after process death.
 
-The GUI owns a launcher lifetime pipe. Cancellation before activation reaps only
-that launcher's actual child. Once activation may have arrived, timeout/lost ACK
-is unconfirmed and preserves the daemon. GUI exit after activation leaves work
-running. A later launch checks the same owner instead of replacing it. Daemon
-proof PIDs never authorize a signal.
+Packaged GUI startup now only verifies/connects. First registration/login
+enablement is explicit. A systemd user service executes normal `main.ts` on exact
+retained paths, without `--bundled-runtime` or GUI-owned IPC. The selected version
+survives GUI close/replacement and is the version restarted after a crash.
+Version activation is a separately confirmed [service handoff](daemon-upgrades.md)
+requiring the daemon-safe reservation and native loaded-unit/MainPID/executable,
+separate cgroup, pidfd exit and exact new-boot proofs. No user manager/D-Bus means
+unsupported, never detached fallback, sudo or linger changes.
 
 ## Native fixture qualification
 
-`scripts/linux_local_native.py` requires an explicit disposable package copy and
+The pre-service `scripts/linux_local_native.py` harness requires an explicit disposable package copy and
 same-user Wayland socket. It uses a private HOME/config/data/cache/profile, actual
 bundled startup, source-owned live proof, retained path and rendered Wayland
 buffer checks. It renames only that supplied disposable package, checks exact
 owner reuse and history marker preservation, and cleans up only its actual GUI
 handle and Linux subreaper-adopted descendants through pidfds. It never discovers
-or signals a daemon from a profile PID. Run it only on authorized fixture hosts.
+or signals a daemon from a profile PID. Run it only on authorized fixture hosts. It predates explicit service registration
+and is not evidence for the new systemd service adapter. That adapter still needs
+a genuine isolated user-manager/cgroup qualification, not a container compile.
 
 The focused daemon owner/launcher suites additionally cover lease contention,
 identity mismatch, unknown profiles, preactivation EOF cleanup and postactivation

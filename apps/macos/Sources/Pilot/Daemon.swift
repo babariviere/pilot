@@ -34,6 +34,36 @@ final class DaemonController: ObservableObject {
     var logURL: URL { home.appending(path: "Library/Logs/Pilot/pilotd.log") }
     private var domain: String { "gui/\(getuid())" }
 
+    /// A Next handoff claims this existing label before it may stop anything.
+    /// Unknown/incomplete claims are inspect-only, never legacy repair permission.
+    static func isNextManaged(plist: URL) -> Bool {
+        if FileManager.default.fileExists(atPath: plist.path + ".next-owner") { return true }
+        guard let data = try? Data(contentsOf: plist),
+              let value = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return false }
+        return value["PilotNextManaged"] as? Bool == true
+    }
+    private func requireLegacyOwnership() throws {
+        if Self.isNextManaged(plist: plistURL) {
+            throw DaemonError("The daemon is managed by Pilot Next. Use its Settings to change the service.")
+        }
+    }
+    private func lifecycleLease() throws -> Int32 {
+        let env = ProcessInfo.processInfo.environment
+        let data = env["XDG_DATA_HOME"].map { URL(filePath: $0) } ?? home.appending(path: ".local/share")
+        let profile = env["PILOT_HOME"].map { URL(filePath: $0) } ?? data.appending(path: "pilot")
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let fd = Darwin.open(profile.appending(path: ".daemon-upgrade.lock").path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw DaemonError("Could not inspect daemon lifecycle ownership.") }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(fd)
+            throw DaemonError("A daemon handoff is in progress. Inspect it in Pilot Next.")
+        }
+        do { try requireLegacyOwnership() }
+        catch { Darwin.close(fd); throw error }
+        return fd
+    }
+
     /// The Pilot checkout that provides pilotd. Set by the bundle script; falls back to this source tree.
     var repoURL: URL {
         if ProcessInfo.processInfo.environment["PILOT_REPO"] == nil,
@@ -63,6 +93,8 @@ final class DaemonController: ObservableObject {
         }
         status = .starting
         do {
+            let lease = try lifecycleLease()
+            defer { Darwin.close(lease) }
             try await install()
             try await launch(restart: false)
             status = await waitUntilHealthy() ? .running : .failed("pilotd did not become healthy. See \(logURL.path).")
@@ -78,6 +110,8 @@ final class DaemonController: ObservableObject {
         defer { lifecycleBusy = false }
         status = .starting
         do {
+            let lease = try lifecycleLease()
+            defer { Darwin.close(lease) }
             try await install()
             try await launch(restart: true)
             status = await waitUntilHealthy() ? .running : .failed("pilotd did not become healthy. See \(logURL.path).")
@@ -89,6 +123,9 @@ final class DaemonController: ObservableObject {
     /// Unloads the agent until the next login or the next app launch. Running sessions pause durably.
     func stop() async {
         guard !lifecycleBusy else { return }
+        guard !Self.isNextManaged(plist: plistURL) else { return }
+        guard let lease = try? lifecycleLease() else { return }
+        defer { Darwin.close(lease) }
         lifecycleGeneration += 1
         lifecycleBusy = true
         defer { lifecycleBusy = false }
@@ -99,7 +136,10 @@ final class DaemonController: ObservableObject {
     /// Hold lifecycle ownership from preparation through verified process exit. A menu restart
     /// cannot replace the daemon between granting its lease and shutting down that leased process.
     func pauseAndStopForUpdate() async throws -> Bool {
+        try requireLegacyOwnership()
         guard !lifecycleBusy else { return false }
+        let lease = try lifecycleLease()
+        defer { Darwin.close(lease) }
         lifecycleBusy = true
         defer { lifecycleBusy = false }
         guard let pid = try await pauseForUpdate() else { return false }
@@ -132,6 +172,7 @@ final class DaemonController: ObservableObject {
     }
 
     private func stopForUpdate(expectedPID: Int32) async throws {
+        try requireLegacyOwnership()
         // Never terminate an unmanaged foreground daemon or ignore a failed bootout.
         let definition = try await run("/bin/launchctl", ["print", "\(domain)/\(Self.label)"])
         guard let line = definition.split(separator: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ") }),
@@ -166,6 +207,7 @@ final class DaemonController: ObservableObject {
     }
 
     private func launch(restart: Bool) async throws {
+        try requireLegacyOwnership()
         let loaded = (try? await run("/bin/launchctl", ["print", "\(domain)/\(Self.label)"])) != nil
         if loaded {
             if restart { try await run("/bin/launchctl", ["kickstart", "-k", "\(domain)/\(Self.label)"]) }
@@ -178,6 +220,7 @@ final class DaemonController: ObservableObject {
     /// Writes the launch agent. GUI apps do not inherit the shell's PATH, so capture it from a login
     /// shell: pi extensions shell out to node, jj, gh, fnox and friends.
     private func install() async throws {
+        try requireLegacyOwnership()
         let bundledNode = repoURL.appending(path: "node/bin/node").path
         let hasBundledNode = FileManager.default.isExecutableFile(atPath: bundledNode)
         let environment = try await loginShellEnvironment(requiresNode: !hasBundledNode)
@@ -201,6 +244,7 @@ final class DaemonController: ObservableObject {
                                                logURL: logURL, environment: variables)
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         if (try? Data(contentsOf: plistURL)) != data {
+            try requireLegacyOwnership()
             // A changed definition only applies after reloading the agent.
             _ = try? await run("/bin/launchctl", ["bootout", "\(domain)/\(Self.label)"])
             try data.write(to: plistURL, options: .atomic)

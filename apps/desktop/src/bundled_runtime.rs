@@ -2,19 +2,21 @@
 //! Integrity hashes are not publisher authentication. Production update trust remains separate.
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::process::Stdio;
 use std::{
     collections::BTreeSet,
     fs::{self, File},
     io::Read,
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
-    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
+#[cfg(test)]
 use tokio::io::AsyncReadExt;
 
 const CAP: u64 = 8 * 1024 * 1024;
@@ -354,6 +356,7 @@ fn version(value: &str) -> bool {
             .iter()
             .all(|p| !p.is_empty() && p.len() < 9 && p.bytes().all(|b| b.is_ascii_digit()))
 }
+#[cfg(test)]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Reply {
@@ -362,6 +365,7 @@ struct Reply {
     error: Option<String>,
     cleanup: Cleanup,
 }
+#[cfg(test)]
 #[derive(Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum Cleanup {
@@ -370,6 +374,7 @@ enum Cleanup {
     ActivationPossible,
     Unconfirmed,
 }
+#[cfg(test)]
 fn failure(code: &str) -> Failure {
     match code {
         "runtime_profile_unproven" => {
@@ -443,99 +448,62 @@ fn start_runtime(
             return crate::LocalOptions::discover_at(location.clone())?.verify_running();
         }
     }
-    let runtime_root = root.to_path_buf();
+    let trust = pilot_desktop_updater::helper::compiled_trust()
+        .map_err(|_| "Service runtime trust is unconfigured. No daemon was started.")?;
     #[cfg(target_os = "macos")]
-    let runtime_root = if let Some((root, _, _)) = &pinned {
-        root.clone()
-    } else if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
-        let capsule =
-            own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
-        let location = runtime_location()?;
-        pilot_desktop_updater::coordination::selected(&location, &capsule, &trust)
-            .map_err(|_| RETAINED_OWNER_REFUSED)?
-    } else {
-        runtime_root
-    };
+    let capsule = own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
     #[cfg(target_os = "linux")]
-    let runtime_root = if let Some((root, _, _)) = &pinned {
-        root.clone()
-    } else {
-        let capsule = own_capsule(&runtime_root, &cancel, deadline)?;
-        if let Ok(trust) = pilot_desktop_updater::helper::compiled_trust() {
-            pilot_desktop_updater::coordination::selected(&runtime_location()?, &capsule, &trust)
-                .map_err(|_| "The running daemon has no exact supported retained runtime. It was left running; startup was refused.")?
+    let capsule = own_capsule(root, &cancel, deadline)?;
+    let location = runtime_location()?;
+    check(&cancel, deadline)?;
+    pilot_desktop_updater::daemon_upgrade::connect(&location, &capsule, &trust).map_err(|_| {
+        if location.home.join(".daemon-owner.json").exists() {
+            RETAINED_OWNER_REFUSED
         } else {
-            capsule
+            SERVICE_REQUIRED
         }
-    };
-    #[cfg(target_os = "linux")]
-    let runtime = runtime_root.join("runtime");
-    #[cfg(not(target_os = "linux"))]
-    let runtime = runtime_root.join("Contents/Resources/runtime");
-    let home = std::env::var_os("HOME").ok_or("HOME is unavailable.")?;
-    let mut command = tokio::process::Command::new(runtime.join("node/bin/node"));
-    command
-        .arg(runtime.join("packages/daemon/src/runtime-launch.ts"))
-        .current_dir(&runtime)
-        .env_clear()
-        .env("HOME", home)
-        .env(
-            "PATH",
-            format!(
-                "{}:/usr/bin:/bin:/usr/sbin:/sbin",
-                runtime.join("node/bin").display()
-            ),
-        )
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(false);
-    for (name, mut value) in configured_environment(|name| std::env::var_os(name)) {
-        if name.ends_with("HOME") || name.ends_with("DIR") {
-            if value.is_empty() {
-                return Err("Configured Local path is empty; no runtime was started.");
-            }
-            let path = PathBuf::from(&value);
-            if path.is_relative() {
-                value = std::env::current_dir()
-                    .map_err(|_| "Cannot resolve configured runtime path.")?
-                    .join(path)
-                    .into_os_string();
-            }
-        }
-        command.env(name, value);
-    }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    if let Some(location) = PROFILE.get() {
-        // A relaunch receipt, not the launch-service environment, owns the exact
-        // configured profile and denial policies. Never silently retarget Local.
-        command
-            .env("PILOT_HOME", &location.home)
-            .env("PILOT_PORT", location.port.to_string());
-        for name in pilot_desktop_updater::coordination::POLICY_NAMES {
-            command.env_remove(name);
-        }
-        for (name, value) in &location.policy {
-            command.env(name, value);
-        }
-    }
-    let executor = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| "Cannot start runtime worker.")?;
-    executor.block_on(async {
-        check(&cancel, deadline)?;
-        let mut child = command
-            .spawn()
-            .map_err(|_| "Cannot launch bundled Node runtime.")?;
-        supervise(&mut child, &cancel, deadline).await?;
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        if let Some(location) = PROFILE.get() {
-            return crate::LocalOptions::discover_at(location.clone());
-        }
-        crate::LocalOptions::discover()
-    })
+    })?;
+    crate::LocalOptions::discover_at(location)?.verify_running()
 }
+
+pub(crate) const SERVICE_REQUIRED: &str =
+    "Local needs an explicitly registered background service. No daemon was started.";
+pub(crate) const SERVICE_UNKNOWN: &str =
+    "Service outcome unknown. Inspect the retained handoff and service state; do not retry.";
+
+/// User-confirmed startup action. Registration includes login enablement and one start.
+pub(crate) fn register_service_explicit(
+    cancel: Arc<AtomicBool>,
+) -> Result<crate::LocalOptions, Failure> {
+    let executable = std::env::current_exe().map_err(|_| "Cannot locate this app.")?;
+    let root = package_root(&executable)?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let trust = pilot_desktop_updater::helper::compiled_trust()
+        .map_err(|_| "Service runtime trust is unconfigured.")?;
+    #[cfg(target_os = "macos")]
+    let capsule = own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
+    #[cfg(target_os = "linux")]
+    let capsule = own_capsule(root, &cancel, deadline)?;
+    let mut location = runtime_location()?;
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&location.home)
+        .map_err(|_| "Cannot create the configured profile.")?;
+    location.home = location
+        .home
+        .canonicalize()
+        .map_err(|_| "Cannot resolve the configured profile.")?;
+    pilot_desktop_updater::daemon_upgrade::register(location.clone(), &capsule, &trust, &cancel)
+        .map_err(|failure| match failure {
+            pilot_desktop_updater::daemon_upgrade::Failure::Unknown => SERVICE_UNKNOWN,
+            pilot_desktop_updater::daemon_upgrade::Failure::Busy => "A daemon or other work already owns this profile. Nothing was stopped.",
+            _ => "Service registration was refused. Inspect the configured profile, user manager and existing service; nothing was stopped.",
+        })?;
+    crate::LocalOptions::discover_at(location)?.verify_running()
+}
+
 /// The profile an update relaunch receipt pinned. Later runtime starts in this
 /// process (moving the daemon to this app's runtime) keep using it.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -674,14 +642,16 @@ pub(crate) fn upgrade_daemon_explicit(
     cancel: Arc<AtomicBool>,
 ) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
     use pilot_desktop_updater::daemon_upgrade::Failure;
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let executable = std::env::current_exe().map_err(|_| Failure::Unverified)?;
         let root = package_root(&executable).map_err(|_| Failure::Unverified)?;
         let deadline = Instant::now() + Duration::from_secs(45);
+        #[cfg(target_os = "macos")]
         validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
         let trust =
             pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
+        #[cfg(target_os = "macos")]
         let capsule = own_capsule(root, &trust, &cancel, deadline)
             .map_err(|_| {
                 if cancel.load(Ordering::Acquire) {
@@ -691,6 +661,8 @@ pub(crate) fn upgrade_daemon_explicit(
                 }
             })?
             .map_err(|error| upgrade_publish_failure(error, cancel.load(Ordering::Acquire)))?;
+        #[cfg(target_os = "linux")]
+        let capsule = own_capsule(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
         pilot_desktop_updater::daemon_upgrade::upgrade(
             location,
             &capsule,
@@ -700,7 +672,7 @@ pub(crate) fn upgrade_daemon_explicit(
             &cancel,
         )
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = (location, daemon_id, lineage_id, cancel);
         Err(Failure::Unsupported)
@@ -709,6 +681,7 @@ pub(crate) fn upgrade_daemon_explicit(
 
 // Preserve explicit denial and retention policy without forwarding broker authority,
 // Node injection, provider credentials or arbitrary PILOT_* environment variables.
+#[cfg(test)]
 fn configured_environment(
     get: impl Fn(&str) -> Option<std::ffi::OsString>,
 ) -> Vec<(&'static str, std::ffi::OsString)> {
@@ -728,6 +701,7 @@ fn configured_environment(
     .filter_map(|name| get(name).map(|value| (name, value)))
     .collect()
 }
+#[cfg(test)]
 async fn receive_reply(
     reader: &mut tokio::task::JoinHandle<Result<Reply, Failure>>,
     received: &mut bool,
@@ -738,6 +712,7 @@ async fn receive_reply(
     *wire = Some(result.map_err(|_| "Runtime result reader stopped.")??);
     Ok(())
 }
+#[cfg(test)]
 async fn supervise(
     child: &mut tokio::process::Child,
     cancel: &AtomicBool,

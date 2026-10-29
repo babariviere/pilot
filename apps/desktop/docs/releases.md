@@ -62,9 +62,12 @@ Missing prerequisites fail, leaving the release draft unpublished:
 Build versions use this workflow's monotonically increasing run number/attempt,
 independently of Sparkle. The app still requires explicit **Install and restart**,
 fresh durability/admission receipts and retained-runtime verification. Ordinary
-Quit never installs. After an update starts, the app moves a daemon running an
-earlier app runtime to its own runtime once that daemon's tools pause; other
-daemons are never stopped, migrated or replaced.
+Quit never installs. GUI startup, close and update ACK never activate a daemon.
+First user-service registration and selected-version changes require separate
+explicit consent. The [service handoff](daemon-upgrades.md) requires an exact
+daemon-safe reservation and native ownership/exit/new-boot proofs; active or
+uninspectable work defers it. Bundling remains the offline seed, not a new
+independent daemon update feed.
 The Linux updater's native evidence and limits are in [Linux updates](linux-updates.md);
 user install steps are in [Install Pilot Next on Linux](linux-install.md).
 

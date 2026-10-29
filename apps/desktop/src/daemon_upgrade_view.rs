@@ -445,7 +445,7 @@ impl Render for DaemonUpgrade {
                         }))
                         .child(
                             Notice::new("Upgrade the daemon now?")
-                                .detail("Running tools finish first, then agents pause. Jobs and terminal processes started by agents end when the daemon stops. Cancel before shutdown begins.")
+                                .detail("Running tools finish first. Active jobs, terminals or child work defer the upgrade. The existing service, profile and login settings stay in place. Cancel before shutdown begins.")
                                 .tone(Tone::Warning),
                         )
                         .child(

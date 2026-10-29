@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, linkSync, mkdirSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const unitName = "pilotd.service";
@@ -35,6 +35,7 @@ export function probe({
 	arch = process.arch,
 	user = userInfo().username,
 	uid = process.getuid?.(),
+	requireLinger = true,
 } = {}) {
 	const requirements = [
 		{ id: "platform", ok: platform === "linux" && arch === "x64", detail: "Linux x86-64 required" },
@@ -54,7 +55,7 @@ export function probe({
 	];
 	return {
 		schemaVersion: 1,
-		ok: requirements.every((item) => item.ok),
+		ok: requirements.every((item) => item.ok || (item.id === "linger" && !requireLinger)),
 		requirements,
 		packagePlan: packagePlan(check),
 		lingerSetup: { requiresPrivilege: true, command: ["sudo", "loginctl", "enable-linger", user] },
@@ -66,14 +67,40 @@ function safe(value) {
 	return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%");
 }
 
-export function serviceUnit(root, home) {
+export function serviceUnit(root, home, retained) {
+	if (!isAbsolute(root) || !isAbsolute(home)) throw new Error("Absolute service paths required");
+	const profile = retained?.profile ?? join(home, ".local/share/pilot");
+	const policy = retained?.policy ?? {};
+	if (
+		retained &&
+		(!isAbsolute(profile) || !Number.isInteger(retained.port) || retained.port < 1 || retained.port > 65535)
+	)
+		throw new Error("Invalid retained profile/port");
+	const names = [
+		"PILOT_AGENT_DIR",
+		"PILOT_MODEL_SCOPE_READ_ONLY",
+		"PILOT_MCP_SETUP_READ_ONLY",
+		"PILOT_IDLE_PARK_MS",
+		"PILOT_WORKSPACE_RETENTION_DAYS",
+		"PILOT_ENVIRONMENT_SETUP",
+		"XDG_CONFIG_HOME",
+	];
+	if (Object.entries(policy).some(([k, v]) => !names.includes(k) || typeof v !== "string"))
+		throw new Error("Invalid retained policy");
 	if (root.includes(":") || home.includes(":")) throw new Error("Service paths cannot contain PATH separators");
 	const quote = (value) => `"${safe(value)}"`;
 	const execQuote = (value) => quote(value.replaceAll("$", () => "$$"));
 	// Same user, environment, namespaces and administrator drop-ins as pilotd, not an SSH-shell probe.
 	// Failure is recorded but does not equate service readiness with coordinator availability.
-	const preflight = `ExecStartPre=-${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/linux-coordinator-probe.ts"))} --output ${execQuote(join(root, "coordinator-preflight.json"))}`;
-	return `${marker}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\n${preflight}\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${join(home, ".local/share/pilot")}`)}\nEnvironment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
+	const preflight = `ExecStartPre=-${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/linux-coordinator-probe.ts"))} --output ${execQuote(join(retained ? profile : root, "coordinator-preflight.json"))}`;
+	return `${marker}${retained ? "\n# Retained profile service v1" : ""}\n[Unit]\nDescription=Pilot background agents\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=%h\n${preflight}\nExecStart=${execQuote(join(root, "node/bin/node"))} ${execQuote(join(root, "packages/daemon/src/main.ts"))}\nEnvironment=${quote(`HOME=${home}`)}\nEnvironment=${quote(`PILOT_HOME=${profile}`)}\n${
+		retained
+			? `Environment=${quote(`PILOT_PORT=${retained.port}`)}\n${Object.entries(policy)
+					.sort(([a], [b]) => a.localeCompare(b))
+					.map(([k, v]) => `Environment=${quote(`${k}=${v}`)}\n`)
+					.join("")}`
+			: ""
+	}Environment=${quote(`PATH=${join(root, "bin")}:${join(root, "node/bin")}:${join(home, ".local/bin")}:/usr/local/bin:/usr/bin:/bin`)}\nUMask=0077\nRestart=on-failure\nRestartSec=5\nKillSignal=SIGTERM\nKillMode=mixed\nTimeoutStopSec=120\nStandardOutput=journal\nStandardError=journal\n\n[Install]\nWantedBy=default.target\n`;
 }
 
 function requireCommand(command, args, timeout) {

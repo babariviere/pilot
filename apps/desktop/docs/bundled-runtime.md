@@ -118,9 +118,8 @@ their unproven profiles/listeners are refused, never stopped or adopted.
 Startup and GUI update ACKs never request a daemon replacement or schedule an
 upgrade retry. Only the separately confirmed [daemon upgrade](daemon-upgrades.md)
 may hand off a supported, proven owner. A tool-boundary `pause.ready` is not proof
-that jobs, PTYs or child work are absent. The daemon-safe reservation prerequisite
-and the service adapter's required exact ACK/Unknown handling are documented
-there; the adapter integration is separate from the backend gate.
+that jobs, PTYs or child work are absent. Both service adapters require the daemon-safe reservation
+and exact ACK/Unknown handling documented there.
 
 A private0600 owner record contains a per-boot random proof key, nonce, profile
 hash, port and build. A bounded read-only challenge proves live possession of that
@@ -131,40 +130,23 @@ same-user private-profile ownership proof, not authentication against a maliciou
 process that can already read/replace that user's private files, and not a native
 action, credential or general lifecycle-control capability.
 
-## Activation, cancellation and resource bounds
+## Service registration and activation
 
-One app-owned worker validates files and starts one short-lived bundled-Node
-launcher, off the GUI thread. Its environment does not inherit Node injection,
-SDK broker authority or unrelated credentials. Only configured Local/profile
-paths, HOME, explicit read-only/retention/idle/environment-setup policy and fixed
-system/bundled-node PATH reach the startup process. In particular,
-`PILOT_MODEL_SCOPE_READ_ONLY` and `PILOT_MCP_SETUP_READ_ONLY` are preserved exactly;
-sanitizing credentials must never remove these denial policies.
-The result pipe is capped at4096bytes; daemon stdout/stderr are discarded rather
-than retained or shown. Existing bounded daemon diagnostics remain independent.
+Packaged startup verifies the bundle/retained capsule off the GUI thread and
+connects to the exact compatible live boot. It never launches a detached daemon,
+registers a service or activates a version, including during GUI update relaunch.
+A fresh/stopped service requires explicit **Register or start service…** consent,
+including login enablement. Existing external/Swift owners can be connected
+without management; switching a proven service is a separate confirmed action.
+See [daemon upgrades](daemon-upgrades.md) for registration, selected-version crash
+restart, exact daemon-safe reservation and Unknown handling.
 
-The owned child first claims its lease/listener, then waits on its inherited
-parent IPC channel. Only an explicit activation commits to importing services.
-Before that boundary, cancellation/disconnect/timeout may close/reap the exact
-owned child. **After activation might have been delivered, never kill it for a
-startup timeout:** it may already be restoring durable work. Report Unconfirmed
-and leave it running; a later launch checks the existing owner rather than
-starting a competitor. The app's lifetime pipe also closes on abrupt app exit.
-The daemon is independent of the GUI after activation; closing the app is not a
-request to stop active work, install a service or restart/update anything.
-
-Validation and launch together have a45second cancellation/deadline budget.
-On failure the app closes the launcher's lifetime pipe, allowing its `finally`
-path to reap its exact preactivation child. A bounded structured receipt reports
-no owned child, preactivation reaped, or activation possible. The app joins the
-helper with a separate2second cleanup bound. It does not force-kill a cleanup
-owner or a process group: missing receipts/timeouts stay unconfirmed, and the
-helper is left to finish its owned-child cleanup. No independently activated
-daemon or PID read from a record is signaled.
-The Node launcher waits at most20seconds, with a10second preactivation handshake,
-100ms readiness spacing and1second/16KiB read-only probes. Existing owned but
-unready/incompatible/corrupt profiles fail truthfully. Startup has no background
-retry timer, idle polling, service installation or PID cleanup.
+The service executes normal bootstrap on immutable retained Node/main.ts paths,
+without parent IPC or `--bundled-runtime`. The full closure includes workers,
+imports and PilotPower. GUI close/quit/replacement never stops or switches it.
+The old parent-bound launcher remains a daemon-layer fixture/legacy entry, not
+the packaged GUI's product startup path. No daemon distribution/feed/signing
+split, power-setting change, root service or linger policy is introduced.
 
 ## Verification and limits
 

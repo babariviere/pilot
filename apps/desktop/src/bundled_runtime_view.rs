@@ -19,7 +19,10 @@ pub struct BundledRuntimeView {
     error: Option<&'static str>,
     connection_error: Option<&'static str>,
     connecting: bool,
+    registration_confirming: bool,
+    registration_unknown: bool,
     connector: fn() -> Result<LocalOptions, &'static str>,
+    registrar: fn(Arc<AtomicBool>) -> Result<LocalOptions, &'static str>,
     connection: Option<Task<()>>,
     make_local: fn(LocalOptions, &mut Window, &mut Context<LocalViewer>) -> LocalViewer,
     cancel: Arc<AtomicBool>,
@@ -96,7 +99,10 @@ impl BundledRuntimeView {
             error,
             connection_error: None,
             connecting: false,
+            registration_confirming: false,
+            registration_unknown: false,
             connector: LocalOptions::connect_existing,
+            registrar: bundled_runtime::register_service_explicit,
             connection: None,
             make_local,
             cancel,
@@ -105,9 +111,64 @@ impl BundledRuntimeView {
         }
     }
     fn existing_available(&self) -> bool {
-        cfg!(target_os = "macos")
-            && self.error == Some(bundled_runtime::RETAINED_OWNER_REFUSED)
+        self.error == Some(bundled_runtime::RETAINED_OWNER_REFUSED)
             && bundled_runtime::update_receipt().is_none()
+    }
+    fn registration_available(&self) -> bool {
+        matches!(
+            self.error,
+            Some(bundled_runtime::SERVICE_REQUIRED | bundled_runtime::RETAINED_OWNER_REFUSED)
+        ) && !self.registration_unknown
+            && bundled_runtime::update_receipt().is_none()
+    }
+    fn register_service(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.registration_available() || !self.registration_confirming || self.connecting {
+            return;
+        }
+        self.registration_confirming = false;
+        self.connecting = true;
+        self.connection_error = None;
+        let (send, result) = async_channel::bounded(1);
+        let cancel = self.cancel.clone();
+        let register = self.registrar;
+        if std::thread::Builder::new()
+            .name("register-daemon-service".into())
+            .spawn(move || {
+                let _ = send.send_blocking(register(cancel));
+            })
+            .is_err()
+        {
+            self.connecting = false;
+            self.connection_error = Some("Cannot start the service registration worker.");
+        } else {
+            self.connection = Some(cx.spawn_in(window, async move |view, cx| {
+                let reply = result
+                    .recv()
+                    .await
+                    .unwrap_or(Err(bundled_runtime::SERVICE_UNKNOWN));
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.connecting = false;
+                    // Registration does not replay automatically after any unknown result.
+                    match reply {
+                        Ok(options) => {
+                            window.set_window_title("Pilot Next · Local");
+                            let make_local = view.make_local;
+                            let local = cx.new(|cx| make_local(options, window, cx));
+                            if let Some(url) = view.pending_chat_url.take() {
+                                local.update(cx, |v, cx| v.open_chat_url(&url, window, cx));
+                            }
+                            view.local = Some(local);
+                        }
+                        Err(error) => {
+                            view.registration_unknown = error == bundled_runtime::SERVICE_UNKNOWN;
+                            view.connection_error = Some(error);
+                        }
+                    }
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
     }
     fn connect_existing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.existing_available() || self.connecting {
@@ -163,7 +224,8 @@ impl Render for BundledRuntimeView {
             .child(ui::heading("runtime-title", "Pilot Next", Text::Title))
             .child(gpui_kit::div().id("runtime-status").test_support().child(
                 Notice::new(self.error.unwrap_or("Starting Local…")).tone(
-                    if self.error.is_some() {
+                    if self.error.is_some() && self.error != Some(bundled_runtime::SERVICE_REQUIRED)
+                    {
                         Tone::Error
                     } else {
                         Tone::Quiet
@@ -181,9 +243,30 @@ impl Render for BundledRuntimeView {
         if self.existing_available() {
             content = content
                 .child(ui::text(Text::Body, "Connect without managing the daemon. Local chat actions, including Send and Stop, remain available as in --local. Daemon changes and app installation are unavailable."))
-                .child(ui::action("runtime-connect-existing", "Connect to existing daemon", ui::Action::Primary)
+                .child(gpui_kit::div().h_flex().child(ui::action("runtime-connect-existing", "Connect to existing daemon", ui::Action::Primary)
                     .disabled(self.connecting)
-                    .on_click(cx.listener(|view, _, window, cx| view.connect_existing(window, cx))));
+                    .on_click(cx.listener(|view, _, window, cx| view.connect_existing(window, cx)))));
+        }
+        if self.registration_available() && !self.connecting && !self.registration_confirming {
+            content = content.child(
+                gpui_kit::div().h_flex().child(
+                    ui::action(
+                        "runtime-register-service",
+                        "Register or start service…",
+                        ui::Action::Secondary,
+                    )
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.registration_confirming = true;
+                        cx.notify();
+                    })),
+                ),
+            );
+        }
+        if self.registration_confirming {
+            content = content.child(ui::text(Text::Body, "Enable the background daemon at login and start its selected runtime? Existing Swift services require Upgrade daemon in Settings instead. Closing Pilot Next will not stop the service."))
+                .child(gpui_kit::div().h_flex().flex_wrap().gap_2()
+                    .child(ui::action("runtime-register-cancel", "Cancel", ui::Action::Quiet).on_click(cx.listener(|v, _, _, cx| {v.registration_confirming = false; cx.notify();})))
+                    .child(ui::action("runtime-register-confirm", "Enable and start", ui::Action::Primary).on_click(cx.listener(|v, _, w, cx| v.register_service(w,cx)))));
         }
         if self.connecting {
             content = content.child(Notice::new("Checking Local identity…").tone(Tone::Quiet));
@@ -292,7 +375,7 @@ impl BundledRuntimeView {
                     assert!(view.read(cx).error.is_none());
                     assert!(view.read(cx).local.is_none());
                 });
-                for state in ["loading", "unconfirmed", "existing"] {
+                for state in ["loading", "unconfirmed", "existing", "registration"] {
                     if state == "unconfirmed" {
                         send.send_blocking(Err("Local startup is unconfirmed. An activated daemon may still be starting. It was left running to preserve work.")).unwrap();
                         settle(cx, handle);
@@ -314,6 +397,21 @@ impl BundledRuntimeView {
                             );
                             let button = window.find("runtime-connect-existing").bounds();
                             assert!(button.left() >= px(0.) && button.right() <= px(width));
+                        })
+                        .unwrap();
+                    }
+                    if state == "registration" {
+                        view.update(cx, |v, cx| {
+                            v.error = Some(bundled_runtime::SERVICE_REQUIRED);
+                            v.registration_confirming = true;
+                            cx.notify();
+                        });
+                        settle(cx, handle);
+                        cx.update_window(handle, |_, window, _| {
+                            for id in ["runtime-register-cancel", "runtime-register-confirm"] {
+                                let b = window.find(id).bounds();
+                                assert!(b.left() >= px(0.) && b.right() <= px(width));
+                            }
                         })
                         .unwrap();
                     }
@@ -349,6 +447,12 @@ impl BundledRuntimeView {
                             .unwrap();
                     }
                 }
+                view.update(cx, |v, cx| {
+                    v.error = Some(bundled_runtime::RETAINED_OWNER_REFUSED);
+                    v.registration_confirming = false;
+                    cx.notify();
+                });
+                settle(cx, handle);
                 static CHECKS: std::sync::atomic::AtomicUsize =
                     std::sync::atomic::AtomicUsize::new(0);
                 view.update(cx, |view, _| {
@@ -382,8 +486,56 @@ impl BundledRuntimeView {
                     );
                 });
                 view.update(cx, |view, _| {
+                    view.error = Some(bundled_runtime::SERVICE_REQUIRED);
+                    view.registrar = |_| {
+                        CHECKS.fetch_add(1, Ordering::SeqCst);
+                        Err("Synthetic unsupported user manager. No service was registered.")
+                    };
+                });
+                settle(cx, handle);
+                let before_register = CHECKS.load(Ordering::SeqCst);
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-register-service", cx)
+                })
+                .unwrap();
+                settle(cx, handle);
+                assert_eq!(
+                    CHECKS.load(Ordering::SeqCst),
+                    before_register,
+                    "opening never registers"
+                );
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-register-cancel", cx)
+                })
+                .unwrap();
+                settle(cx, handle);
+                assert_eq!(
+                    CHECKS.load(Ordering::SeqCst),
+                    before_register,
+                    "cancel never registers"
+                );
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-register-service", cx)
+                })
+                .unwrap();
+                settle(cx, handle);
+                cx.update_window(handle, |_, window, cx| {
+                    window.click("runtime-register-confirm", cx)
+                })
+                .unwrap();
+                finish_connection(cx, handle, &view);
+                assert_eq!(CHECKS.load(Ordering::SeqCst), before_register + 1);
+                assert!(cx.update(|cx| {
+                    view.read(cx)
+                        .connection_error
+                        .unwrap()
+                        .contains("unsupported user manager")
+                }));
+                view.update(cx, |view, _| {
+                    view.error = Some(bundled_runtime::RETAINED_OWNER_REFUSED);
                     view.connector = || Ok(LocalOptions::synthetic(1))
                 });
+                settle(cx, handle);
                 cx.update_window(handle, |_, window, cx| {
                     window.click("runtime-connect-existing", cx)
                 })

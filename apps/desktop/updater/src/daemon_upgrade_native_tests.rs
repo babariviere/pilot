@@ -6,12 +6,30 @@ use std::{net::TcpListener, os::unix::fs::PermissionsExt};
 const OWNER: &str = include_str!("../../../../packages/daemon/src/runtime-owner.ts");
 const MAIN: &str = r#"
 import { ownRuntime } from './runtime-owner.ts';
-import { readFileSync, existsSync } from 'node:fs';
+import { UpdateReservation } from './update-reservation.ts';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const root=fileURLToPath(new URL('../../../',import.meta.url)).replace(/\/$/,'');
 const stamp=root+'/runtime-build.json';
 const build=existsSync(stamp)?JSON.parse(readFileSync(stamp,'utf8')):null;
 const owner=await ownRuntime(process.env.PILOT_HOME,Number(process.env.PILOT_PORT),false,build,build?root:undefined);
+writeFileSync(process.env.PILOT_HOME+'/daemon-id','fixture-daemon',{mode:0o600});
+writeFileSync(process.env.PILOT_HOME+'/storage-lineage','fixture-lineage',{mode:0o600});
+const resources={freezeAdmissions:()=>()=>{},blockers:async()=>existsSync(process.env.PILOT_HOME+'/blocker')?[{kind:readFileSync(process.env.PILOT_HOME+'/blocker','utf8'),id:'fixture'}]:[]};
+const reservation=new UpdateReservation(resources,undefined,180000,resources);
+owner.updates(async(action,value)=>{
+ if(action==='prepare'){
+   const exact=await reservation.prepare(value.operationId,value.purpose);
+   if(existsSync(process.env.PILOT_HOME+'/lost-prepare')){
+     writeFileSync(process.env.PILOT_HOME+'/fixture-receipt',JSON.stringify(exact),{mode:0o600});
+     await new Promise(()=>{});
+   }
+   return exact;
+ }
+ if(action==='verify')return reservation.verify(value);
+ if(action==='cancel'){reservation.cancel(value);return null}
+ return null;
+});
 owner.install((req,res)=>{
   if(req.url==='/api/update/pause' && req.method==='POST') {
     res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,processId:process.pid}));
@@ -21,7 +39,7 @@ owner.ready({daemonId:'fixture-daemon',lineageId:'fixture-lineage',daemonVersion
 process.on('SIGTERM',async()=>{await owner.close();process.exit(0)});
 "#;
 
-fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, new: bool) -> PathBuf {
+fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: bool) -> PathBuf {
     let app = root.join(name);
     let runtime = app.join(crate::layout::RUNTIME);
     fs::create_dir_all(runtime.join("node/bin")).unwrap();
@@ -35,9 +53,19 @@ fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, new: bool
     )
     .unwrap();
     fs::write(runtime.join("package.json"), b"{\"type\":\"module\"}").unwrap();
+    fs::write(
+        app.join(crate::layout::POLICY),
+        b"{\"schema\":1,\"accepted_capsules\":[]}",
+    )
+    .unwrap();
     fs::write(runtime.join("packages/daemon/src/main.ts"), MAIN).unwrap();
     fs::write(runtime.join("packages/daemon/src/runtime-owner.ts"), OWNER).unwrap();
-    if new {
+    fs::write(
+        runtime.join("packages/daemon/src/update-reservation.ts"),
+        include_str!("../../../../packages/daemon/src/update-reservation.ts"),
+    )
+    .unwrap();
+    {
         let version = command(
             node.to_str().unwrap(),
             &["-p".as_ref(), "process.versions.node".as_ref()],
@@ -75,6 +103,99 @@ impl Drop for Service {
     fn drop(&mut self) {
         let _ = command("/bin/launchctl", &["bootout".as_ref(), self.0.as_ref()]);
     }
+}
+
+#[test]
+#[ignore = "explicit private synthetic launchd registration; no login/global service"]
+fn native_launchd_registration_offline_seed_and_singleton() {
+    let node = PathBuf::from(
+        std::env::var_os("PILOT_DAEMON_UPGRADE_FIXTURE_NODE").expect("explicit fixture Node"),
+    );
+    let temp = crate::owned_tests::Temp::new();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let home = home.canonicalize().unwrap();
+    let profile = home.join("profile");
+    let seed = bundle(
+        temp.path(),
+        "Pilot Next.app",
+        "com.example.synthetic.next",
+        "101.1",
+        &node,
+        true,
+    );
+    let trust = Trust {
+        application_id: "com.example.synthetic.next".into(),
+        channel: "desktop-stable".into(),
+        repository: "synthetic/fixture-only".into(),
+        public_key: [42; 32],
+        code_requirement: "identifier \"com.example.synthetic.next\"".into(),
+        current_build: "101.1".into(),
+        bundle_name: "Pilot Next.app".into(),
+    };
+    let store = temp.path().join(runtime::STORE_NAME);
+    let current = runtime::publish(&seed, &store, &trust, &installer::MacPlatform).unwrap();
+    fs::remove_dir_all(seed).unwrap();
+    let label = format!(
+        "com.example.pilot-next-registration-{}",
+        coordination::random_hex().unwrap()
+    );
+    let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
+    let _cleanup = Service(service.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let location = Location {
+        home: profile.clone(),
+        port,
+        policy: Default::default(),
+    };
+    let cancel = AtomicBool::new(false);
+    register_at(
+        &home,
+        &label,
+        location.clone(),
+        &current,
+        &trust,
+        &cancel,
+        false,
+    )
+    .unwrap();
+    let owner = super::super::native::running(&location, &current).unwrap();
+    assert_eq!(
+        register_at(
+            &home,
+            &label,
+            location.clone(),
+            &current,
+            &trust,
+            &cancel,
+            false
+        ),
+        Err(Failure::Busy),
+        "never start a second daemon"
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"]
+    );
+    let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
+    assert_eq!(journal["phase"], "complete");
+    let file = home
+        .join("Library/LaunchAgents")
+        .join(format!("{label}.plist"));
+    let definition = plist(&file).unwrap();
+    assert_eq!(definition["PilotNextManaged"], true);
+    assert_eq!(definition["ProgramArguments"].as_array().unwrap().len(), 2);
+    assert!(file.with_extension("plist.next-owner").exists());
+    command("/bin/launchctl", &["bootout".as_ref(), service.as_ref()]).unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while coordination::owner_live(&profile) {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // A normal explicit start reuses the selected immutable version after GUI removal.
+    register_at(&home, &label, location, &current, &trust, &cancel, false).unwrap();
 }
 
 #[test]
@@ -176,6 +297,8 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+    fs::write(profile.join("daemon-id"), "fixture-daemon").unwrap();
+    fs::write(profile.join("storage-lineage"), "fixture-lineage").unwrap();
     fs::write(profile.join("preserved-draft"), "still here 🐦").unwrap();
     let cancel = AtomicBool::new(false);
     let mut host = LaunchAgent {
@@ -195,9 +318,72 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         watch: None,
         lock: None,
         plist_stamp: None,
-        pause_until: None,
+        reservation: None,
     };
+    // Full daemon reservation refuses independent work, not merely tool pause.
+    for kind in [
+        "job", "terminal", "child", "transfer", "mutation", "unknown",
+    ] {
+        fs::write(profile.join("blocker"), kind).unwrap();
+        assert_eq!(execute(&mut host, &cancel), Err(Failure::Busy), "{kind}");
+        assert!(!profile.join(JOURNAL).exists(), "no stop intent on busy");
+        host.lock.take();
+    }
+    fs::remove_file(profile.join("blocker")).unwrap();
+    host.prepare().unwrap();
+    assert!(host.drained().unwrap());
+    host.reserve().unwrap();
+    let exact = host.reservation.as_ref().unwrap().receipt.clone();
+    host.cancel_reservation();
+    assert!(
+        coordination::signed_update(&host.location, &host.owner, &exact, "verify").is_err(),
+        "exact cancellation releases hold"
+    );
+    host.lock.take();
+    fs::write(profile.join("lost-prepare"), "1").unwrap();
+    assert_eq!(execute(&mut host, &cancel), Err(Failure::Unverified));
+    assert!(
+        !profile.join(JOURNAL).exists(),
+        "lost prepare ACK forbids stop"
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        host.owner["boot"]
+    );
+    host.lock.take();
+    let lost: Value =
+        serde_json::from_slice(&fs::read(profile.join("fixture-receipt")).unwrap()).unwrap();
+    coordination::signed_update(&location, &host.owner, &lost, "cancel").unwrap();
+    fs::remove_file(profile.join("lost-prepare")).unwrap();
+    // Replacing/removing the bundled seed cannot affect retained execution.
+    fs::remove_dir_all(&new).unwrap();
     execute(&mut host, &cancel).expect("verified synthetic launchd handoff");
+    host.lock.take();
+    host.prepare()
+        .expect("prior Next service remains verifiable, not mistaken for Swift");
+    host.lock.take();
+    fs::remove_dir_all(&old).unwrap();
+    let initial = coordination::record(&location).unwrap();
+    command(
+        "/bin/launchctl",
+        &["kill".as_ref(), "SIGKILL".as_ref(), host.service.as_ref()],
+    )
+    .unwrap();
+    let end = Instant::now() + Duration::from_secs(25);
+    loop {
+        if let Ok(record) = coordination::record(&location)
+            && record["boot"] != initial["boot"]
+            && prove(&location, &record, "fixture-daemon", "fixture-lineage").is_ok()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "launchd restarts selected retained runtime after crash without GUI/seed"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(host.plist.with_extension("plist.next-owner").exists());
     assert_eq!(
         fs::read_to_string(profile.join("preserved-draft")).unwrap(),
         "still here 🐦"

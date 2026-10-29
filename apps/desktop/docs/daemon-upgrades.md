@@ -6,8 +6,8 @@ daemon automatically.
 
 **Settings → Updates → Daemon → Upgrade daemon…** asks for explicit confirmation.
 Agents pause after their current tool calls finish. Chats, queued work and drafts
-are retained, but running jobs and terminal processes end when the daemon exits.
-Busy tools defer the upgrade, rather than being interrupted. Cancel is effective
+are retained. Active jobs, terminals, child work, transfers or mutations defer the
+upgrade, as does missing or failed resource inspection. Work is not interrupted. Cancel is effective
 before shutdown begins; once shutdown may have begun, the handoff finishes or
 reports an unknown outcome instead of attempting rollback.
 
@@ -21,11 +21,45 @@ verified runtime paths change; the profile is pinned explicitly and Node is firs
 on PATH. The profile's `managed` flag is not changed, and the replacement is not
 started with `--bundled-runtime`. This is not enrollment or profile migration.
 
-Foreground/custom services, unknown definitions, unverified payloads, and Linux
-owners refuse. This feature does not acquire a general service-management or
+Linux uses the known `pilotd.service` user unit with exact retained runtime, profile,
+policy, loaded fragment, MainPID, command line, native executable and separate
+cgroup proof. A reachable systemd user manager/D-Bus is required; there is no
+foreground fallback, sudo or linger change. Custom services, drop-ins, unknown
+definitions and unverified payloads refuse. Linux service lifecycle native
+qualification must be reported separately from source/contract checks. This feature does not acquire a general service-management or
 PID-signaling capability. The existing external Local connection remains usable
-without upgrading its daemon. The Swift app remains installed; explicitly using
-its own Restart command may restore its own runtime definition.
+without upgrading its daemon. The Swift app remains installed. A private `.plist.next-owner` claim is persisted
+before stop intent and the replacement plist carries `PilotNextManaged=true`.
+Updated Swift lifecycle/update paths take the same permanent handoff lock and
+refuse writes or signals after that claim, even when its contents are incomplete.
+This source guard cannot patch previously installed Swift binaries. Those older
+binaries must not be used to restart/repair the service during coexistence.
+
+
+## Explicit registration and GUI independence
+
+A packaged GUI startup only verifies/connects. It never registers, starts,
+restarts or activates a daemon, including after an update ACK. On a fresh/stopped
+profile the startup view offers **Register or start service…**, with a separate
+**Enable and start** confirmation that includes login enablement. Registration
+publishes the complete verified immutable bundled seed and executes normal
+`main.ts`, without `--bundled-runtime` or parent IPC. The profile managed flag is
+preserved (fresh normal service profiles are not auto-enrolled).
+
+macOS uses the established label/logs/Interactive QoS/backoff and Linux renders
+`scripts/linux/service.mjs` with the selected retained runtime, explicit profile,
+port and restrictive policy. Linux's preflight report is outside the immutable
+runtime. Crash restart remains on the selected version, independent of GUI
+close/quit/replacement. A stopped selected version is not replaced by the newest
+GUI seed. Existing Swift definitions are never overwritten by first registration;
+connect externally, then use the separately confirmed safe upgrade instead.
+
+Registration has its own durable `registering` intent in the existing journal.
+Missing startup ACK is Unknown and blocks another start. Inspect first; neither
+startup nor registration replays an incomplete handoff. LaunchAgents are scoped
+to the GUI login session. Linux logout/reboot survival depends on existing host
+policy, not a new linger or power-setting grant. Bundling remains the offline
+seed; no daemon feed, signing or self-update activation is introduced.
 
 ## Verified handoff
 
@@ -40,7 +74,10 @@ its own Restart command may restore its own runtime definition.
    exit watch before any shutdown. A `build:null` HMAC proof establishes live
    identity only, not retained-runtime proof or private updater authority.
 4. Use the existing tool-boundary pause API and check its exact process response.
-   Refresh after potentially slow code verification. Refuse an expired lease.
+   Prepare the signed daemon-safe reservation described below, then revalidate
+   native ownership. Verify the complete exact receipt immediately before durable
+   stop intent. A local 175-second deadline is measured before prepare and never
+   renewed. Missing backend support is a refusal, not a weaker fallback.
 5. Under a permanent per-profile handoff lock, durably record `stopping` before
    `launchctl bootout`. Require the watched OS process exit and released permanent
    profile lease before replacing the definition. Never unlink either lock.
@@ -68,10 +105,8 @@ installer in this slice.
 ## Daemon-safe admission prerequisite (service adapter contract)
 
 `pause.ready` proves a tool boundary, not the absence of jobs, PTYs or child
-processes. The existing macOS adapter above still uses only that pause lease.
-The backend now provides the stronger **opt-in** reservation below for the
-service-adapter follow-up. Until that adapter is wired, do not describe the
-existing upgrade action as preserving active jobs or terminals.
+processes. Both service adapters require the stronger **opt-in** reservation
+below. Their journals retain the exact receipt, without the private boot key.
 
 After the exact process has acknowledged `POST /api/update/pause`, use the
 existing private `POST /__pilot_runtime_update/v1` channel, not a new restart API:
@@ -142,16 +177,36 @@ uses a random synthetic launchd label, private temporary signed old/new apps,
 copied Node, the actual source-owned runtime lease/proof, native process exit,
 definition replacement/bootstrap and verified new boot. It checks unchanged
 `managed=0`, retained service label, two arguments (no enrollment) and a retained
-draft marker. Run only this fixture with an explicit Node executable:
+draft marker. It also checks the actual backend reservation against synthetic
+job/terminal/child/transfer/mutation/Unknown blockers despite `pause.ready`, exact
+cancellation, lost prepare ACK (no stop), prior-Next verification, and selected
+runtime crash restart after removing both GUI seeds.
+
+`native_launchd_registration_offline_seed_and_singleton` covers explicit fresh
+registration, normal bootstrap, offline seed removal, singleton refusal and
+explicit restart of the selected retained version. Both use private definitions
+and random labels. The registration fixture deliberately skips `launchctl enable`
+so it never changes the user's login-domain override database; production's
+separately confirmed registration enables the established label.
+Run these fixtures with an explicit Node executable:
 
 ```sh
 PILOT_DAEMON_UPGRADE_FIXTURE_NODE="$(node -p 'process.execPath')" \
   bash apps/desktop/scripts/cargo.sh test --locked --manifest-path updater/Cargo.toml \
-  --features native-macos native_launchd_handoff_preserves_external_profile_and_service \
-  -- --ignored --nocapture
+  --features native-macos daemon_upgrade::macos::native_tests:: \
+  -- --ignored --nocapture --test-threads=1
 ```
 
 This is genuine synthetic launchd handoff evidence, not a live user upgrade or
 production full-runtime acceptance. The small fixture's tool-drain response is
 injected; actual kernel durability/tool-boundary tests remain separate. Neither
 the user's installed app/service nor their profile is modified.
+
+Linux source was compiled and its reservation/coordination contracts tested in a
+CPU2/4GiB unprivileged ARM64 Linux container using Rust1.98.1/mbx1.26 and private
+target/cache paths. This is not x86-64 systemd user-service, cgroup, login or
+crash/GUI-close qualification. No reachable user manager/D-Bus was available for
+that native evidence. The older detached-launch native harness is not evidence
+for this adapter. A separate opt-in absent-manager fixture proves refusal before
+profile/service changes. The broad Linux updater suite's ACL fixture additionally
+needs `setfacl`, absent from that container; focused service checks are separate.

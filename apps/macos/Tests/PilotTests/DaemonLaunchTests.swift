@@ -2,6 +2,21 @@ import Foundation
 import Testing
 @testable import Pilot
 
+@Test @MainActor func retainedServiceOwnershipPreventsLegacyReclamation() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let plist = root.appending(path: "daemon.plist")
+    let claim = root.appending(path: "daemon.plist.next-owner")
+    #expect(!DaemonController.isNextManaged(plist: plist))
+    try Data("{}".utf8).write(to: claim)
+    #expect(DaemonController.isNextManaged(plist: plist), "Even incomplete claims must block legacy writes/signals")
+    try FileManager.default.removeItem(at: claim)
+    let data = try PropertyListSerialization.data(fromPropertyList: ["PilotNextManaged": true], format: .xml, options: 0)
+    try data.write(to: plist)
+    #expect(DaemonController.isNextManaged(plist: plist))
+}
+
 @Test @MainActor func daemonLaunchUsesAbsoluteSourcesAndStableWorkingDirectory() throws {
     let home = URL(filePath: "/Users/pilot user")
     let log = home.appending(path: "Library/Logs/Pilot/pilotd.log")

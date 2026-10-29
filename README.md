@@ -209,6 +209,11 @@ The experimental Rust desktop in `apps/desktop` also implements guarded bundled
 Local startup for x86-64 Wayland Linux. Its [runtime contract and qualification
 boundaries](apps/desktop/docs/linux-local-runtime.md) are separate from Swift and
 from Linux installer, updater and native visual confinement qualification.
+Pilot Next's packaged startup only connects. First registration/login enablement is explicit;
+launchd or systemd --user executes the verified immutable retained runtime independently of
+GUI lifetime. Separately confirmed [daemon upgrades](apps/desktop/docs/daemon-upgrades.md)
+can replace a proven Swift launch agent while preserving its label, profile and PilotPower.
+Active work or failed inspection defers the switch; GUI updates never activate it.
 To install it on Linux, follow [Install Pilot Next on Linux](apps/desktop/docs/linux-install.md).
 
 ### Headless Linux runtime (development)

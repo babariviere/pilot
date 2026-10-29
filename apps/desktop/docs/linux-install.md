@@ -89,13 +89,19 @@ and check anonymously.
 
 ### Changing versions and the background daemon
 
-The Pilot daemon keeps running after you close the window. When a newer app
-finds a daemon from an earlier version, it connects to it first (each Linux
-release accepts the runtimes of the few releases before it), then updates it:
-it waits for running tools to pause, stops that daemon and starts its own.
-Chats continue on the new daemon; the window reconnects by itself. While tools
-keep running, it retries every few minutes. v1.78.0 and earlier leave the daemon
-on its old version until it stops, for example after a reboot.
+The background daemon is a separately confirmed systemd **user service**.
+On first setup choose **Register or start service… → Enable and start**. A
+reachable user manager/D-Bus is required. No sudo or linger changes are made.
+The service uses an immutable retained copy of the bundled runtime, not files in
+the replaceable GUI folder, and crash restart uses that selected version.
+
+Launching/closing/updating the GUI only connects; it never activates a daemon
+version. Use **Settings → Updates → Daemon → Upgrade daemon…** for an explicit
+safe switch. Active work or failed inspection defers it. Unknown outcomes require
+inspection, never an automatic retry or rollback. The separate cgroup keeps GUI
+close from owning the daemon lifetime. Logout/reboot survival is still the host's
+existing user-service policy. See [daemon upgrades](daemon-upgrades.md) for native
+qualification boundaries and supported ownership.
 
 v1.77.0 and earlier accept no earlier runtime. If one of them refuses to start
 because another version's daemon is running ("The running daemon has no exact

@@ -279,7 +279,7 @@ pub fn pause_agents(location: &Location) -> Result<bool, Error> {
         .ok_or(Error::RuntimeUnverified)? as i32;
     request_pause(location, pid)
 }
-fn request_pause(location: &Location, pid: i32) -> Result<bool, Error> {
+pub(crate) fn request_pause(location: &Location, pid: i32) -> Result<bool, Error> {
     let client = reqwest::blocking::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -488,77 +488,9 @@ impl Guard {
         Ok(())
     }
     fn request(&self, action: &str) -> Result<Value, Error> {
-        use ring::hmac;
         let r = record(&self.location)?;
         self.verify_process(&r)?;
-        let secret = r["secret"].as_str().ok_or(Error::Identity)?;
-        let key: Vec<u8> = (0..64)
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&secret[i..i + 2], 16).map_err(|_| Error::Identity))
-            .collect::<Result<_, _>>()?;
-        let nonce = random_hex()?;
-        let body = serde_json::to_string(
-            &json!({"boot":self.boot,"nonce":nonce,"action":action,"receipt":self.receipt}),
-        )
-        .map_err(|_| Error::Identity)?;
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
-        let proof = crate::transport::hex(
-            hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref(),
-        );
-        let client = reqwest::blocking::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(1))
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|_| Error::Native)?;
-        let mut response = client
-            .post(format!(
-                "http://127.0.0.1:{}/__pilot_runtime_update/v1",
-                self.location.port
-            ))
-            .header("x-pilot-update-proof", proof)
-            .body(body)
-            .send()
-            .map_err(|_| Error::RuntimeUnverified)?;
-        if response.status() != reqwest::StatusCode::OK {
-            return Err(Error::ActiveWork);
-        }
-        let mut bytes = Vec::new();
-        response
-            .by_ref()
-            .take(16_385)
-            .read_to_end(&mut bytes)
-            .map_err(|_| Error::RuntimeUnverified)?;
-        if bytes.len() > 16_384 {
-            return Err(Error::RuntimeUnverified);
-        }
-        let envelope: Value =
-            serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)?;
-        let body = envelope["body"].as_str().ok_or(Error::Identity)?;
-        let signature = envelope["mac"]
-            .as_str()
-            .filter(|v| hex(Some(v)))
-            .ok_or(Error::Identity)?;
-        let signature: Vec<u8> = (0..64)
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&signature[i..i + 2], 16).map_err(|_| Error::Identity))
-            .collect::<Result<_, _>>()?;
-        hmac::verify(&key, format!("update/v1\n{body}").as_bytes(), &signature)
-            .map_err(|_| Error::Signature)?;
-        let value: Value = serde_json::from_str(body).map_err(|_| Error::Identity)?;
-        if value["schema"] != 1
-            || value["boot"] != self.boot
-            || value["nonce"] != nonce
-            || value["build"] != self.build
-            || value["runtimeRoot"] != r["runtimeRoot"]
-            || value["port"] != self.location.port
-            || value["home"] != r["home"]
-            || record(&self.location)?["boot"] != self.boot
-        {
-            return Err(Error::Identity);
-        }
-        Ok(value["receipt"].clone())
+        signed_update(&self.location, &r, &self.receipt, action)
     }
     pub fn verify(&self) -> Result<(), Error> {
         if self.ui_only {
@@ -712,8 +644,15 @@ pub(crate) fn configuration(trust: &Trust) -> String {
     crate::transport::hex(&Sha256::digest(bytes))
 }
 
-fn random_operation() -> Result<String, Error> {
-    let s = random_hex()?;
+pub(crate) fn random_operation() -> Result<String, Error> {
+    use ring::rand::SecureRandom;
+    let mut bytes = [0; 16];
+    ring::rand::SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| Error::Native)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let s = crate::transport::hex(&bytes);
     Ok(format!(
         "{}-{}-{}-{}-{}",
         &s[..8],
@@ -727,6 +666,16 @@ fn random_operation() -> Result<String, Error> {
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
+
+    #[test]
+    fn operation_ids_are_fresh_v4_uuids() {
+        let a = random_operation().unwrap();
+        let b = random_operation().unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 36);
+        assert_eq!(&a[14..15], "4");
+        assert!(matches!(&a[19..20], "8" | "9" | "a" | "b"));
+    }
 
     #[test]
     fn archived_runtime_guard_keeps_original_receipt_and_capsule_paths() {
@@ -907,4 +856,84 @@ mod tests {
             "existing ACL must not be stripped"
         );
     }
+}
+
+// Shared private boot-bound channel. Callers separately prove native service ownership.
+pub(crate) fn signed_update(
+    location: &Location,
+    expected: &Value,
+    receipt: &Value,
+    action: &str,
+) -> Result<Value, Error> {
+    use ring::hmac;
+    let r = record(location)?;
+    if &r != expected {
+        return Err(Error::Identity);
+    }
+    let secret = r["secret"].as_str().ok_or(Error::Identity)?;
+    let key: Vec<u8> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&secret[i..i + 2], 16).map_err(|_| Error::Identity))
+        .collect::<Result<_, _>>()?;
+    let nonce = random_hex()?;
+    let body = serde_json::to_string(
+        &json!({"boot":expected["boot"],"nonce":nonce,"action":action,"receipt":receipt}),
+    )
+    .map_err(|_| Error::Identity)?;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
+    let proof =
+        crate::transport::hex(hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref());
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| Error::Native)?;
+    let mut response = client
+        .post(format!(
+            "http://127.0.0.1:{}/__pilot_runtime_update/v1",
+            location.port
+        ))
+        .header("x-pilot-update-proof", proof)
+        .body(body)
+        .send()
+        .map_err(|_| Error::RuntimeUnverified)?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(Error::ActiveWork);
+    }
+    let mut bytes = Vec::new();
+    response
+        .by_ref()
+        .take(16_385)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::RuntimeUnverified)?;
+    if bytes.len() > 16_384 {
+        return Err(Error::RuntimeUnverified);
+    }
+    let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)?;
+    let body = envelope["body"].as_str().ok_or(Error::Identity)?;
+    let signature = envelope["mac"]
+        .as_str()
+        .filter(|v| hex(Some(v)))
+        .ok_or(Error::Identity)?;
+    let signature: Vec<u8> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&signature[i..i + 2], 16).map_err(|_| Error::Identity))
+        .collect::<Result<_, _>>()?;
+    hmac::verify(&key, format!("update/v1\n{body}").as_bytes(), &signature)
+        .map_err(|_| Error::Signature)?;
+    let value: Value = serde_json::from_str(body).map_err(|_| Error::Identity)?;
+    if value["schema"] != 1
+        || value["boot"] != expected["boot"]
+        || value["nonce"] != nonce
+        || value["build"] != expected["build"]
+        || value["runtimeRoot"] != r["runtimeRoot"]
+        || value["port"] != location.port
+        || value["home"] != r["home"]
+        || record(location)? != *expected
+    {
+        return Err(Error::Identity);
+    }
+    Ok(value["receipt"].clone())
 }

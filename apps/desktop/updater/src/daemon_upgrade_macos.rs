@@ -1,3 +1,4 @@
+use super::native::{command, plist, private_regular, prove};
 use super::{Failure, Handoff, execute};
 use crate::{
     coordination::{self, Location},
@@ -5,7 +6,6 @@ use crate::{
     manifest::Trust,
     runtime,
 };
-use ring::hmac;
 use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
@@ -15,7 +15,6 @@ use std::{
         unix::fs::{MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -60,7 +59,7 @@ pub fn upgrade(
         watch: None,
         lock: None,
         plist_stamp: None,
-        pause_until: None,
+        reservation: None,
     };
     execute(&mut host, cancel)
 }
@@ -81,80 +80,9 @@ struct LaunchAgent<'a> {
     watch: Option<helper::ParentWatch>,
     lock: Option<File>,
     plist_stamp: Option<(u64, u64)>,
-    pause_until: Option<Instant>,
+    reservation: Option<super::reservation::Reservation>,
 }
 
-fn command(program: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>, Failure> {
-    let mut child = io(Command::new(program)
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn())?;
-    let timeout = if program == "/bin/launchctl"
-        && args
-            .first()
-            .is_some_and(|a| *a == std::ffi::OsStr::new("bootout"))
-    {
-        150
-    } else {
-        15
-    };
-    let end = Instant::now() + Duration::from_secs(timeout);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
-                let mut bytes = Vec::new();
-                io(child
-                    .stdout
-                    .take()
-                    .ok_or(Failure::Unverified)?
-                    .take(65537)
-                    .read_to_end(&mut bytes))?;
-                return if bytes.len() <= 65536 {
-                    Ok(bytes)
-                } else {
-                    Err(Failure::Unverified)
-                };
-            }
-            Ok(None) if Instant::now() < end => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Failure::Unverified);
-            }
-        }
-    }
-}
-fn plist(path: &Path) -> Result<Value, Failure> {
-    let data = command(
-        "/usr/bin/plutil",
-        &[
-            "-convert".as_ref(),
-            "json".as_ref(),
-            "-o".as_ref(),
-            "-".as_ref(),
-            path.as_os_str(),
-        ],
-    )?;
-    serde_json::from_slice(&data).map_err(|_| Failure::Unverified)
-}
-fn private_regular(path: &Path) -> Result<fs::Metadata, Failure> {
-    let meta = io(fs::symlink_metadata(path))?;
-    // SAFETY: current identity query only. No other user's service is admitted.
-    if !meta.is_file()
-        || meta.nlink() != 1
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.mode() & 0o022 != 0
-        || meta.len() > 65536
-    {
-        return Err(Failure::Unverified);
-    }
-    verified(installer::acl_policy(path, 2))?;
-    Ok(meta)
-}
 fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Failure> {
     let mut pid = None;
     let mut actual = Vec::new();
@@ -191,86 +119,6 @@ fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Fail
     }
     pid.filter(|pid| *pid > 1).ok_or(Failure::Unverified)
 }
-// Ordinary runtime attestation binds the live boot/profile/hello, even for build:null.
-// It is NOT retained-runtime proof and does not grant the private updater endpoint.
-fn prove(
-    location: &Location,
-    expected: &Value,
-    daemon: &str,
-    lineage: &str,
-) -> Result<(), Failure> {
-    let fresh = verified(coordination::record(location))?;
-    if &fresh != expected {
-        return Err(Failure::Unverified);
-    }
-    let nonce = verified(coordination::random_hex())?;
-    let secret = fresh["secret"].as_str().ok_or(Failure::Unverified)?;
-    let key = (0..64)
-        .step_by(2)
-        .map(|ix| u8::from_str_radix(&secret[ix..ix + 2], 16).map_err(|_| Failure::Unverified))
-        .collect::<Result<Vec<_>, _>>()?;
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| Failure::Unverified)?;
-    let mut response = client
-        .get(format!(
-            "http://127.0.0.1:{}/__pilot_runtime/v1?challenge={nonce}",
-            location.port
-        ))
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|_| Failure::Unverified)?;
-    let mut bytes = Vec::new();
-    io(response.by_ref().take(16385).read_to_end(&mut bytes))?;
-    if bytes.len() > 16384 {
-        return Err(Failure::Unverified);
-    }
-    let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Unverified)?;
-    let body = envelope["body"].as_str().ok_or(Failure::Unverified)?;
-    let mac = envelope["mac"]
-        .as_str()
-        .filter(|v| v.len() == 64 && v.is_ascii())
-        .ok_or(Failure::Unverified)?;
-    let signature = (0..64)
-        .step_by(2)
-        .map(|ix| u8::from_str_radix(&mac[ix..ix + 2], 16).map_err(|_| Failure::Unverified))
-        .collect::<Result<Vec<_>, _>>()?;
-    hmac::verify(
-        &hmac::Key::new(hmac::HMAC_SHA256, &key),
-        body.as_bytes(),
-        &signature,
-    )
-    .map_err(|_| Failure::Unverified)?;
-    let body: Value = serde_json::from_str(body).map_err(|_| Failure::Unverified)?;
-    if body["schema"] != 1
-        || body["challenge"] != nonce
-        || body["ready"] != true
-        || body["hello"]["daemonId"] != daemon
-        || body["hello"]["lineageId"] != lineage
-        || body["hello"]["capabilities"]["independentExecution"] != true
-        || body["hello"]["protocolVersion"]
-            .as_u64()
-            .is_none_or(|v| v < 1)
-        || body["hello"]["minimumClientProtocolVersion"]
-            .as_u64()
-            .is_none_or(|v| v != 1)
-    {
-        return Err(Failure::Unverified);
-    }
-    for field in ["boot", "home", "port", "pid", "build", "runtimeRoot"] {
-        if body[field] != expected[field] {
-            return Err(Failure::Unverified);
-        }
-    }
-    if verified(coordination::record(location))? != fresh {
-        return Err(Failure::Unverified);
-    }
-    Ok(())
-}
-
 impl LaunchAgent<'_> {
     fn verify_target(&self) -> Result<(), Failure> {
         let id = verified(runtime::identity(&self.current))?;
@@ -308,16 +156,9 @@ impl LaunchAgent<'_> {
                 .as_str()
                 .ok_or(Failure::Unsupported)?,
         );
-        let root = node.ancestors().nth(4).ok_or(Failure::Unsupported)?;
-        if root.file_name().is_some_and(|n| n == "Resources") {
+        let app = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
+        if app.file_name().is_some_and(|n| n == "Pilot.app") {
             // Swift's sole supported bundle layout. Source-checkout/custom services refuse.
-            let app = root
-                .parent()
-                .and_then(Path::parent)
-                .ok_or(Failure::Unsupported)?;
-            if app.file_name().is_none_or(|n| n != "Pilot.app") {
-                return Err(Failure::Unsupported);
-            }
             command(
                 "/usr/bin/codesign",
                 &[
@@ -331,14 +172,17 @@ impl LaunchAgent<'_> {
             )?;
         } else {
             // A prior explicit handoff may already use a Next capsule, still launchd-owned.
-            let capsule = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
-            let id = verified(runtime::identity(capsule))?;
+            let id = verified(runtime::identity(&self.current))?;
+            let (accepted, _) = verified(coordination::policy(&self.current))?;
             verified(coordination::validate_capsule(
-                capsule,
+                app,
                 self.trust,
-                &[],
+                &accepted,
                 Some(&id),
             ))?;
+        }
+        if super::native::running(&self.location, app)? != self.owner {
+            return Err(Failure::Unverified);
         }
         if verified(helper::process_executable(self.pid()?))? != io(node.canonicalize())? {
             return Err(Failure::Unverified);
@@ -356,6 +200,24 @@ impl LaunchAgent<'_> {
     }
 }
 impl Handoff for LaunchAgent<'_> {
+    fn reserve(&mut self) -> Result<(), Failure> {
+        self.reservation = Some(super::reservation::Reservation::prepare(
+            &self.location,
+            &self.owner,
+        )?);
+        Ok(())
+    }
+    fn verify_reservation(&mut self) -> Result<(), Failure> {
+        self.reservation
+            .as_ref()
+            .ok_or(Failure::Unverified)?
+            .verify(&self.location, &self.owner)
+    }
+    fn cancel_reservation(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            reservation.cancel(&self.location, &self.owner);
+        }
+    }
     fn prepare(&mut self) -> Result<(), Failure> {
         // Canonical private profile and its HMAC owner record, not merely /api/hello.
         self.owner = verified(coordination::record(&self.location))?;
@@ -402,6 +264,7 @@ impl Handoff for LaunchAgent<'_> {
         }
         self.verify_target()?;
         self.replacement = self.original.clone();
+        self.replacement["PilotNextManaged"] = json!(true);
         let runtime = self.current.join(crate::layout::RUNTIME);
         self.replacement["ProgramArguments"] = json!([
             runtime.join("node/bin/node"),
@@ -429,7 +292,6 @@ impl Handoff for LaunchAgent<'_> {
                 return Err(Failure::Cancelled);
             }
             prove(&self.location, &self.owner, self.daemon, self.lineage)?;
-            let requested = Instant::now();
             let mut response = client
                 .post(format!(
                     "http://127.0.0.1:{}/api/update/pause",
@@ -450,7 +312,6 @@ impl Handoff for LaunchAgent<'_> {
                 return Err(Failure::Unverified);
             }
             if value["ready"] == true {
-                self.pause_until = Some(requested + Duration::from_secs(25));
                 return Ok(true);
             }
             if Instant::now() >= until {
@@ -469,15 +330,13 @@ impl Handoff for LaunchAgent<'_> {
         }
         self.verify_old_payload()?;
         prove(&self.location, &self.owner, self.daemon, self.lineage)?;
-        // Refresh after potentially slow code verification, not before it. The 25s
-        // local deadline is shorter than the daemon's 30s lease, measured pre-request.
-        if !self.drained()? {
-            return Err(Failure::Busy);
-        }
         Ok(())
     }
     fn journal(&mut self, phase: &str) -> Result<(), Failure> {
-        let value = json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"capsule":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement});
+        if phase == "stopping" {
+            claim(&self.plist, &self.location)?;
+        }
+        let value = json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"capsule":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement,"receipt":self.reservation.as_ref().map(|r|&r.receipt)});
         let temp = self.location.home.join(format!(
             ".daemon-upgrade-{}.pending",
             verified(coordination::random_hex())?
@@ -491,11 +350,13 @@ impl Handoff for LaunchAgent<'_> {
     }
     fn stop(&mut self) -> Result<(), Failure> {
         prove(&self.location, &self.owner, self.daemon, self.lineage)?;
-        if self.live_definition()? != self.pid()?
-            || self.pause_until.is_none_or(|until| Instant::now() >= until)
-        {
+        if self.live_definition()? != self.pid()? {
             return Err(Failure::Unverified);
         }
+        self.reservation
+            .as_ref()
+            .ok_or(Failure::Unverified)?
+            .fresh()?;
         command(
             "/bin/launchctl",
             &["bootout".as_ref(), self.service.as_ref()],
@@ -632,8 +493,11 @@ fn validate_definition(
         "StandardErrorPath",
     ];
     let object = value.as_object().ok_or(Failure::Unsupported)?;
-    if object.len() != FIELDS.len()
-        || object.keys().any(|k| !FIELDS.contains(&k.as_str()))
+    if object.len() < FIELDS.len()
+        || object
+            .keys()
+            .any(|k| !FIELDS.contains(&k.as_str()) && k != "PilotNextManaged")
+        || object.get("PilotNextManaged").is_some_and(|v| v != true)
         || value["Label"] != label
         || value["ProgramArguments"].as_array().is_none_or(|a| {
             a.len() != 2
@@ -653,10 +517,10 @@ fn validate_definition(
     let env = value["EnvironmentVariables"]
         .as_object()
         .ok_or(Failure::Unsupported)?;
-    if env
-        .keys()
-        .any(|k| !["PATH", "PILOT_HOME", "PILOT_PORT", "PILOT_AGENT_DIR"].contains(&k.as_str()))
-        || env.values().any(|v| !v.is_string())
+    if env.keys().any(|k| {
+        !["PATH", "PILOT_HOME", "PILOT_PORT"].contains(&k.as_str())
+            && !coordination::POLICY_NAMES.contains(&k.as_str())
+    }) || env.values().any(|v| !v.is_string())
         || env.get("PILOT_PORT").and_then(Value::as_str) != Some(location.port.to_string().as_str())
     {
         return Err(Failure::Unsupported);
@@ -678,9 +542,166 @@ fn validate_definition(
     Ok(())
 }
 
+// Retained Swift builds consult this claim before every lifecycle mutation.
+// Publish before stop intent. An incomplete claim is deliberately inspect-only.
+fn claim(path: &Path, location: &Location) -> Result<(), Failure> {
+    let file = path.with_extension("plist.next-owner");
+    let expected = json!({"schema":1,"profile":location.home,"port":location.port});
+    if file.try_exists().map_err(|_| Failure::Unverified)? {
+        if verified(coordination::private_json(&file, 4096))? != expected {
+            return Err(Failure::Unverified);
+        }
+        return Ok(());
+    }
+    verified(installer::write_new(
+        &file,
+        &serde_json::to_vec(&expected).map_err(|_| Failure::Unverified)?,
+    ))?;
+    io(io(File::open(path.parent().ok_or(Failure::Unverified)?))?.sync_all())
+}
+
+/// Explicit first registration, or start the already selected Next runtime.
+/// No existing Swift/custom definition is rewritten here: that requires safe upgrade.
+pub(super) fn register(
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    cancel: &AtomicBool,
+) -> Result<(), Failure> {
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or(Failure::Unverified)?);
+    register_at(&home, LABEL, location, current, trust, cancel, true)
+}
+fn register_at(
+    home: &Path,
+    label: &str,
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    cancel: &AtomicBool,
+    enable_login: bool,
+) -> Result<(), Failure> {
+    let file = home
+        .join("Library/LaunchAgents")
+        .join(format!("{label}.plist"));
+    let _lock = super::native::lock(&location)?;
+    if coordination::owner_live(&location.home) {
+        return Err(Failure::Busy);
+    }
+    super::native::no_incomplete_handoff(&location)?;
+    let root = if file.try_exists().map_err(|_| Failure::Unverified)? {
+        private_regular(&file)?;
+        let value = plist(&file)?;
+        validate_definition(&value, home, &location, label)?;
+        if value["PilotNextManaged"] != true {
+            return Err(Failure::Unsupported);
+        }
+        let node = value["ProgramArguments"][0]
+            .as_str()
+            .ok_or(Failure::Unverified)?;
+        let root = Path::new(node)
+            .ancestors()
+            .nth(6)
+            .ok_or(Failure::Unverified)?
+            .to_owned();
+        if value["ProgramArguments"]
+            != json!([
+                root.join(crate::layout::RUNTIME).join("node/bin/node"),
+                root.join(crate::layout::RUNTIME)
+                    .join("packages/daemon/src/main.ts")
+            ])
+        {
+            return Err(Failure::Unsupported);
+        }
+        let (accepted, _) = verified(coordination::policy(current))?;
+        let id = verified(runtime::identity(current))?;
+        verified(coordination::validate_capsule(
+            &root,
+            trust,
+            &accepted,
+            Some(&id),
+        ))?;
+        root
+    } else {
+        super::native::fresh_profile(&location)?;
+        let id = verified(runtime::identity(current))?;
+        verified(coordination::validate_capsule(
+            current,
+            trust,
+            &[],
+            Some(&id),
+        ))?;
+        current.to_owned()
+    };
+    let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
+    if command("/bin/launchctl", &["print".as_ref(), service.as_ref()]).is_ok() {
+        return Err(Failure::Busy);
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err(Failure::Cancelled);
+    }
+    let log = home.join("Library/Logs/Pilot/pilotd.log");
+    if !file.try_exists().map_err(|_| Failure::Unverified)? {
+        for directory in [
+            file.parent().ok_or(Failure::Unverified)?,
+            log.parent().ok_or(Failure::Unverified)?,
+        ] {
+            io(fs::create_dir_all(directory))?;
+            verified(installer::validate_parents(directory))?;
+        }
+        let runtime = root.join(crate::layout::RUNTIME);
+        let mut env = json!({"PATH":format!("{}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",runtime.join("node/bin").display()),"PILOT_HOME":location.home,"PILOT_PORT":location.port.to_string()});
+        for (name, value) in &location.policy {
+            env[name] = json!(value);
+        }
+        let value = json!({"Label":label,"PilotNextManaged":true,"ProgramArguments":[runtime.join("node/bin/node"),runtime.join("packages/daemon/src/main.ts")],"WorkingDirectory":home,"EnvironmentVariables":env,"RunAtLoad":true,"KeepAlive":true,"ThrottleInterval":10,"ProcessType":"Interactive","StandardOutPath":log,"StandardErrorPath":log});
+        claim(&file, &location)?;
+        verified(installer::write_new(
+            &file,
+            &serde_json::to_vec(&value).map_err(|_| Failure::Unverified)?,
+        ))?;
+        command(
+            "/usr/bin/plutil",
+            &["-convert".as_ref(), "xml1".as_ref(), file.as_os_str()],
+        )?;
+        io(io(File::open(&file))?.sync_all())?;
+    }
+    claim(&file, &location)?;
+    // From here any failed/lost acknowledgement is inspect-only, never re-bootstrap.
+    super::native::registration_intent(&location, &root)?;
+    let domain = format!("gui/{}", unsafe { libc::geteuid() });
+    // Isolated fixtures never touch the login-domain disabled-service database.
+    if enable_login {
+        command("/bin/launchctl", &["enable".as_ref(), service.as_ref()])
+            .map_err(|_| Failure::Unknown)?;
+    }
+    command(
+        "/bin/launchctl",
+        &["bootstrap".as_ref(), domain.as_ref(), file.as_os_str()],
+    )
+    .map_err(|_| Failure::Unknown)?;
+    let owner = super::native::wait_registered(&location, &root).map_err(|_| Failure::Unknown)?;
+    let output = command("/bin/launchctl", &["print".as_ref(), service.as_ref()])
+        .map_err(|_| Failure::Unknown)?;
+    let definition = plist(&file).map_err(|_| Failure::Unknown)?;
+    let pid = service_pid(
+        std::str::from_utf8(&output).map_err(|_| Failure::Unknown)?,
+        &file,
+        definition["ProgramArguments"]
+            .as_array()
+            .ok_or(Failure::Unknown)?,
+    )
+    .map_err(|_| Failure::Unknown)?;
+    if owner["pid"] != pid {
+        return Err(Failure::Unknown);
+    }
+    super::native::registration_complete(&location).map_err(|_| Failure::Unknown)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ring::hmac;
+    use std::io::Read;
     use std::{net::TcpListener, os::unix::fs::PermissionsExt};
     #[test]
     fn loaded_service_must_match_definition_and_exact_pid() {
