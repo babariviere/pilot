@@ -234,6 +234,96 @@ for (const busy of [false, true]) {
 	});
 }
 
+test("coordinator decision acknowledgements suppress only exact own additions", async (t) => {
+	const f = await fixture(t);
+	const open = NativeAdapter.open;
+	let adapter!: NativeAdapter;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+		adapter = await open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+		});
+		return adapter;
+	});
+	const mission: MissionContext = {
+		id: "m",
+		title: "M",
+		goal: "G",
+		status: "active",
+		coordinator: "self",
+		tasks: [],
+		decisions: [],
+		decisionEntries: [],
+		decisionVersion: "0",
+		decisionState: [],
+	};
+	let resolve!: (value: never) => void;
+	let reject!: (error: Error) => void;
+	const session = await KernelSession.open(
+		{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
+		{
+			onWorking: () => {},
+			callMission: async () =>
+				new Promise((yes, no) => {
+					resolve = yes;
+					reject = no;
+				}),
+		},
+	);
+	f.cleanup.push(() => session.close());
+	const call = () =>
+		(
+			session as unknown as { callMission: (action: "decide", args: { text: string }) => Promise<unknown> }
+		).callMission("decide", { text: "Own" });
+	const own = { id: "own", number: 1, text: "Own", audience: "all" as const, selected: true };
+	const external = { id: "external", number: 2, text: "User rule", audience: "reference" as const, selected: false };
+	const pending = call();
+	while (!resolve) await new Promise((r) => setImmediate(r));
+	const mixed = {
+		...mission,
+		decisionVersion: "1",
+		decisionState: [own, external],
+		decisions: ["D1: Own"],
+		decisionEntries: [{ id: "own", text: "Own" }],
+	};
+	session.setMission(mixed);
+	resolve({ ...own } as never);
+	assert.deepEqual(await pending, own);
+	await session.setMission({
+		...mixed,
+		decisionVersion: "2",
+		decisionState: [{ ...own, text: "User edited" }, external],
+	});
+	let entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+		(entry) => entry.kind === "pilot.activity",
+	);
+	assert.equal(entries.length, 2);
+	const mixedNotice = entries.find((entry) => JSON.stringify(entry.data).includes("User rule"));
+	assert.ok(mixedNotice);
+	assert.doesNotMatch(JSON.stringify(mixedNotice.data), /D1 added/);
+	assert.ok(entries.some((entry) => JSON.stringify(entry.data).includes("User edited")));
+	resolve = undefined as never;
+	const failed = call();
+	while (!reject || !resolve) await new Promise((r) => setImmediate(r));
+	session.setMission({
+		...mixed,
+		decisionVersion: "3",
+		decisionState: [own, { ...external, text: "User revised" }, { ...own, id: "unknown", number: 3 }],
+	});
+	reject(new Error("unknown outcome"));
+	await assert.rejects(failed, /unknown outcome/);
+	await session.setMission({
+		...mixed,
+		decisionVersion: "4",
+		decisionState: [own, external, { ...own, id: "unknown", number: 3 }],
+	});
+	entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+		(entry) => entry.kind === "pilot.activity",
+	);
+	assert.ok(entries.some((entry) => JSON.stringify(entry.data).includes("D3 added")));
+});
+
 test("the mission tool forwards actions with only the supplied arguments", async () => {
 	const calls: unknown[] = [];
 	const tool = createMissionTool(async (action, args) => {

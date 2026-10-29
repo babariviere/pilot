@@ -4,6 +4,7 @@ import type { MissionContext } from "./policy.ts";
 export function decisionNotice(
 	previous: MissionContext,
 	current: MissionContext,
+	ownAdditions: ReadonlyMap<string, { number: number; text: string; audience: string }> = new Map(),
 ): { summary: string; detail: string } | undefined {
 	const before = previous.decisionState;
 	const after = current.decisionState;
@@ -25,6 +26,9 @@ export function decisionNotice(
 		old.delete(decision.id);
 		const label = `D${decision.number}`;
 		if (!prior) {
+			const own = ownAdditions.get(decision.id);
+			if (own && own.number === decision.number && own.text === decision.text && own.audience === decision.audience)
+				continue;
 			changes.push({
 				summary: `${label} added: ${decision.text}`,
 				detail: `### ${label} added\n\n${quote(decision.text)}`,

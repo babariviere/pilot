@@ -217,6 +217,9 @@ export class KernelSession {
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
 	#latestMission?: MissionContext;
+	#decisionWrites = 0;
+	#deferredMissions: Array<MissionContext | undefined> = [];
+	#ownDecisionAdditions = new Map<string, { number: number; text: string; audience: string }>();
 	/** Last UI-published run state. Current work is read from the adapter's activity source. */
 	#reportedWorking = false;
 	/** Live compaction tasks, which can summarize an idle conversation without a run. */
@@ -334,11 +337,41 @@ export class KernelSession {
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
 		const callMission: MissionCall | undefined = hooks.callMission
-			? (action, args) =>
-					hooks.callMission!(
-						action,
-						action === "decisions" ? { ...args, _promptDecisions: mission.current?.decisionEntries ?? [] } : args,
-					)
+			? async (action, args) => {
+					const owner = openedSession;
+					const missionId = mission.current?.id;
+					const track = action === "decide" && mission.current?.coordinator === "self" && owner && missionId;
+					if (track) owner.#decisionWrites++;
+					try {
+						const result = await hooks.callMission!(
+							action,
+							action === "decisions"
+								? { ...args, _promptDecisions: mission.current?.decisionEntries ?? [] }
+								: args,
+						);
+						if (
+							track &&
+							mission.current?.id === missionId &&
+							result &&
+							typeof result === "object" &&
+							!Array.isArray(result)
+						) {
+							const { id, number, text, audience } = result;
+							if (
+								typeof id === "string" &&
+								typeof number === "number" &&
+								typeof text === "string" &&
+								typeof audience === "string"
+							)
+								owner.#ownDecisionAdditions.set(id, { number, text, audience });
+						}
+						return result;
+					} finally {
+						if (track && --owner.#decisionWrites === 0) {
+							for (const context of owner.#deferredMissions.splice(0)) owner.setMission(context);
+						}
+					}
+				}
 			: undefined;
 		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
@@ -1170,6 +1203,10 @@ export class KernelSession {
 	/** Joining, leaving or a mission change. Applies from the next model request. */
 	setMission(context: MissionContext | undefined): Promise<void> | undefined {
 		if (this.#closing) return;
+		if (this.#decisionWrites) {
+			this.#deferredMissions.push(context);
+			return;
+		}
 		void this.publishSystemMessageStates().catch((error) =>
 			console.warn("pilot: could not replay message states", error),
 		);
@@ -1181,8 +1218,9 @@ export class KernelSession {
 		if (previous && context && previous.id === context.id && !coordinatorChanged) {
 			const notice =
 				latest && previous.decisionVersion !== context.decisionVersion
-					? decisionNotice(latest, context)
+					? decisionNotice(latest, context, this.#ownDecisionAdditions)
 					: undefined;
+			for (const decision of context.decisionState ?? []) this.#ownDecisionAdditions.delete(decision.id);
 			if (notice) {
 				const text = notice.detail;
 				const requestId = `mission-decisions:${randomUUID()}`;
@@ -1203,7 +1241,10 @@ export class KernelSession {
 				decisionEntries: previous.decisionEntries,
 				remainingDecisions: previous.remainingDecisions,
 			};
-		} else this.#mission.current = context;
+		} else {
+			this.#ownDecisionAdditions.clear();
+			this.#mission.current = context;
+		}
 		try {
 			if (!this.#ask) this.adapter.setToolActive("todo", context?.coordinator !== "self");
 			if (coordinatorChanged && this.callMission)

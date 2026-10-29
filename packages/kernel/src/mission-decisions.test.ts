@@ -46,6 +46,16 @@ test("unchanged decision snapshots do not produce notices for unrelated replica 
 	assert.equal(decisionNotice(context([]), context([])), undefined);
 });
 
+test("only an exact acknowledged addition is suppressed, not later external edits", () => {
+	const own = new Map([[decision.id, { number: decision.number, text: decision.text, audience: decision.audience }]]);
+	assert.equal(decisionNotice(context([]), context([decision]), own), undefined);
+	assert.match(decisionNotice(context([]), context([{ ...decision, text: "User edit" }]), own)!.detail, /User edit/);
+	assert.match(
+		decisionNotice(context([decision]), context([{ ...decision, text: "User edit" }]), own)!.detail,
+		/User edit/,
+	);
+});
+
 test("summary is bounded while disclosure keeps the full decision", () => {
 	const text = "Long rule ".repeat(1000);
 	const notice = decisionNotice(context([]), context([{ ...decision, text }]))!;
