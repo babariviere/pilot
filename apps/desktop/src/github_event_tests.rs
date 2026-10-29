@@ -274,3 +274,126 @@ fn tool_call_fallback_and_legacy_time_placement() {
     let second = text.iter().position(|t| t == "Second").unwrap();
     assert!(call < second && old < second && call > 0);
 }
+
+/// Chat ee4aeca7's shape: a push script, then a note with a script and two
+/// identical memory calls (the first failing), with the push audit placed
+/// after the push call's entry.
+fn split_run() -> Vec<Value> {
+    let call = |id: u64, text: Option<&str>, call: &str, name: &str, args: Value| {
+        let mut content = Vec::new();
+        if let Some(text) = text {
+            content.push(json!({"type":"text","text":text}));
+        }
+        content.push(json!({"type":"toolCall","id":call,"name":name,"arguments":args}));
+        json!({"id":id,"kind":"pi.assistant","model":[{"role":"assistant","timestamp":id,"content":content}]})
+    };
+    let result = |id: u64, call: &str, name: &str, error: bool| {
+        json!({"id":id,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":call,
+            "toolName":name,"isError":error,"content":[{"type":"text","text":"out"}]}]})
+    };
+    let note = json!({"action":"note","text":"same"});
+    vec![
+        json!({"id":275,"kind":"pi.user","model":[{"role":"user","content":"Finished background jobs"}]}),
+        call(286, None, "push", "codemode", json!({"code":"jj git push"})),
+        result(288, "push", "codemode", false),
+        call(
+            290,
+            Some("Pushed and confirmed."),
+            "complete",
+            "codemode",
+            json!({"code":"mission complete"}),
+        ),
+        result(292, "complete", "codemode", false),
+        call(295, None, "memory-1", "memory", note.clone()),
+        result(297, "memory-1", "memory", true),
+        call(299, None, "memory-2", "memory", note),
+        result(301, "memory-2", "memory", false),
+    ]
+}
+fn audit() -> Value {
+    json!({"type":"github_actions_update","actions":[{"id":"push/1:0","toolCallId":"push",
+        "summary":"jj git push","description":"pushed branch main","kind":"push","target":"main",
+        "branch":"main","at":1,"exitCode":null,"afterEntryId":286}]})
+}
+/// Each row as text; a work group lists its steps once, by call ID or note.
+fn shape(rows: &[Message]) -> Vec<String> {
+    use crate::tool_presentation::Step;
+    rows.iter()
+        .map(|row| match row.work_data() {
+            Some(work) => format!(
+                "work{}[{}]",
+                if work.active { "*" } else { "" },
+                work.steps
+                    .iter()
+                    .map(|step| match step {
+                        Step::Tool(tool) => tool.id.clone(),
+                        Step::Note { text, .. } => text.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => lines(std::slice::from_ref(row)).remove(0),
+        })
+        .collect()
+}
+fn assert_split(rows: &[Message]) {
+    assert_eq!(
+        shape(rows),
+        [
+            "Finished background jobs",
+            "work[push]",
+            "[Agent may have pushed main]",
+            "work*[Pushed and confirmed., complete, memory-1, memory-2]",
+        ]
+    );
+    let ids: std::collections::BTreeSet<_> = rows.iter().map(Message::id).collect();
+    assert_eq!(ids.len(), rows.len(), "every row has its own identity");
+}
+
+#[test]
+fn an_event_inside_a_grouped_run_splits_it_into_distinct_groups() {
+    // Reopen or reconnect: the kernel sends history, then its audit.
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"snapshot","run":{},"entries":split_run()}));
+    let whole = model.rows();
+    assert_eq!(
+        shape(&whole)[1],
+        "work*[push, Pushed and confirmed., complete, memory-1, memory-2]"
+    );
+    let whole_id = whole[1].id();
+    model.apply(&audit());
+    let rows = model.rows();
+    assert_split(&rows);
+    assert_eq!(
+        rows[1].id(),
+        whole_id,
+        "the first part keeps its disclosure"
+    );
+    let lower = rows[3].id();
+    assert_eq!(
+        model.rows().iter().map(Message::id).collect::<Vec<_>>(),
+        rows.iter().map(Message::id).collect::<Vec<_>>(),
+        "stable while unchanged"
+    );
+    // The run settles: same groups, same identities.
+    model.apply(&json!({"type":"run_end"}));
+    let settled = model.rows();
+    assert_eq!(
+        shape(&settled)[3],
+        "work[Pushed and confirmed., complete, memory-1, memory-2]"
+    );
+    assert_eq!((settled[1].id(), settled[3].id()), (whole_id, lower));
+
+    // Live order: the audit lands mid-run, before the later calls.
+    let mut live = LiveTranscript::default();
+    let entries = split_run();
+    live.apply(&json!({"type":"snapshot","run":{},"entries":entries[..3]}));
+    live.rows();
+    live.apply(&audit());
+    live.rows();
+    for entry in &entries[3..] {
+        live.apply(&json!({"type":"entry_appended","entry":entry}));
+        live.rows();
+    }
+    assert_split(&live.rows());
+}

@@ -3,11 +3,11 @@
 use super::*;
 use crate::local_model::LiveTranscript;
 use crate::model::Message;
-use gpui_kit::AppContext;
 use gpui_kit::{
     AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions, point, size,
     test::{TestEventExt, TestWindowExt},
 };
+use gpui_kit::{AppContext, SharedString};
 use serde_json::json;
 use std::time::Duration;
 
@@ -60,6 +60,7 @@ fn painted(image: &image::RgbaImage, b: Bounds<gpui_kit::Pixels>, width: f32) ->
 }
 
 pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
+    run_split_work_probe(cx);
     let captures = std::env::var_os("PILOT_NEXT_GITHUB_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();
@@ -250,4 +251,98 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
         backgrounds[0], backgrounds[1],
         "light and dark both rendered"
     );
+}
+
+/// Chat ee4aeca7: the push audit lands inside a grouped run (reopen order:
+/// history, then audit). Each part renders its own steps once, the event sits
+/// between them, and the first part keeps the group's disclosure.
+fn run_split_work_probe(cx: &mut HeadlessAppContext) {
+    let call = |id: u64, call: &str, name: &str, args: serde_json::Value| {
+        json!({"id":id,"kind":"pi.assistant","model":[{"role":"assistant","timestamp":id,
+            "content":[{"type":"toolCall","id":call,"name":name,"arguments":args}]}]})
+    };
+    let result = |id: u64, call: &str, error: bool| {
+        json!({"id":id,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":call,
+            "toolName":"memory","isError":error,"content":[{"type":"text","text":"out"}]}]})
+    };
+    let note = json!({"action":"note","text":"same"});
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"snapshot","run":{},"entries":[
+        {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Finished background jobs"}]},
+        call(2, "push", "codemode", json!({"code":"jj git push"})), result(3, "push", false),
+        call(4, "complete", "codemode", json!({"code":"mission complete"})), result(5, "complete", false),
+        call(6, "memory-1", "memory", note.clone()), result(7, "memory-1", true),
+        call(8, "memory-2", "memory", note), result(9, "memory-2", false)]}));
+    let whole = model.rows();
+    model.apply(&json!({"type":"github_actions_update","actions":[
+        action("pushed", "push", 2, serde_json::Value::Null)]}));
+    let split = model.rows();
+    let (upper, event, lower) = (split[1].id(), split[2].id(), split[3].id());
+    assert_eq!(whole[1].id(), upper);
+    let (h, t) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(900.), px(900.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| cx.new(|cx| TranscriptView::readonly(w, cx)),
+            )
+        })
+        .unwrap();
+    cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(whole, true, cx)));
+    settle(cx, h);
+    let open = |cx: &mut HeadlessAppContext, id: u64| {
+        // A live group shows its tail: the first click folds it, the next opens it.
+        for _ in 0..2 {
+            if cx.update(|cx| t.read(cx).work_ui.group_open(id, cx)) {
+                break;
+            }
+            cx.update_window(h, |_, w, cx| {
+                w.click(SharedString::from(format!("work-toggle-{id}")), cx)
+            })
+            .unwrap();
+            settle(cx, h);
+        }
+        assert!(cx.update(|cx| t.read(cx).work_ui.group_open(id, cx)));
+    };
+    open(cx, upper);
+    cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(split, false, cx)));
+    settle(cx, h);
+    assert!(
+        cx.update(|cx| t.read(cx).work_ui.group_open(upper, cx)),
+        "the first part keeps its disclosure"
+    );
+    open(cx, lower);
+    cx.update_window(h, |_, w, _| {
+        for id in [upper, lower] {
+            let toggle = SharedString::from(format!("work-toggle-{id}"));
+            assert_eq!(w.find_all(toggle).len(), 1, "one header per group");
+        }
+        assert_eq!(w.find_all(("github-event", event)).len(), 1);
+        let mut previous = px(0.);
+        for (ix, call) in ["push", "event", "complete", "memory-1", "memory-2"]
+            .into_iter()
+            .enumerate()
+        {
+            let top = if call == "event" {
+                w.find(("github-event", event)).bounds().top()
+            } else {
+                let step = SharedString::from(format!("step-toggle-call:{call}"));
+                assert_eq!(w.find_all(step.clone()).len(), 1, "{call} renders once");
+                w.find(step).bounds().top()
+            };
+            assert!(ix == 0 || top > previous, "{call} in order");
+            previous = top;
+        }
+    })
+    .unwrap();
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
 }

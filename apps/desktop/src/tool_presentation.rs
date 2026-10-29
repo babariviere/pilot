@@ -788,15 +788,16 @@ impl Tools {
         let mut rows = Vec::new();
         let mut run = Vec::new();
         let mut seen = BTreeSet::new();
+        let mut used = BTreeSet::new();
         for row in raw {
             if row.is_assistant() || row.tool_ids().is_some() {
                 run.push(row);
             } else {
-                self.flush(&mut run, &mut rows, &mut seen);
+                self.flush(&mut run, &mut rows, &mut seen, &mut used);
                 rows.push(row);
             }
         }
-        self.flush(&mut run, &mut rows, &mut seen);
+        self.flush(&mut run, &mut rows, &mut seen, &mut used);
         if run_live
             && let Some(index) = rows.iter().rposition(|row| row.work_data().is_some())
             && rows[index + 1..].iter().all(|row| {
@@ -816,6 +817,7 @@ impl Tools {
         run: &mut Vec<Message>,
         rows: &mut Vec<Message>,
         seen: &mut BTreeSet<String>,
+        used: &mut BTreeSet<u64>,
     ) {
         let Some(last) = run
             .iter()
@@ -859,7 +861,14 @@ impl Tools {
             }
         }
         if !steps.is_empty() {
-            let id = anchor.or(first).expect("nonempty work");
+            // A row placed inside an earlier group (an event arriving after
+            // its calls) splits it; only the first part keeps the old ID, so
+            // each group keeps its own row, view and disclosure state.
+            let id = anchor
+                .filter(|id| !used.contains(id))
+                .or(first)
+                .expect("nonempty work");
+            used.insert(id);
             for step in &steps {
                 if let Step::Tool(tool) = step {
                     self.groups.insert(tool.id.clone(), id);
