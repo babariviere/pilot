@@ -316,10 +316,7 @@ fn answered_replies(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
                     let toggle = w.find(("question-toggle", QUESTION)).bounds();
                     assert!(toggle.size.height < px(40.));
                     let text = t.read(cx).history_probe_row(192);
-                    assert_eq!(
-                        text.read(cx).rendered_text().source(),
-                        answer_row.display_source()
-                    );
+                    assert_eq!(text.read(cx).rendered_text().source(), answer_row.source());
                     let bounds = text.read(cx).bounds();
                     assert!(bounds.top() > toggle.bottom());
                     assert!(bounds.left() >= px(0.) && bounds.right() <= px(width));

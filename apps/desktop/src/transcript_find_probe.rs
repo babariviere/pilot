@@ -2,7 +2,8 @@
 use super::*;
 use gpui_kit::{
     AnyWindowHandle, Bounds, EntityInputHandler, HeadlessAppContext, WindowBounds, WindowOptions,
-    point, size, test::TestWindowExt,
+    point, size,
+    test::{TestEventExt, TestWindowExt},
 };
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..6 {
@@ -16,9 +17,9 @@ fn row(id: u64) -> Message {
         id,
         "assistant".into(),
         if id == 2 {
-            "Find 日本 日本 e\u{301} 👩‍💻 literal .*".into()
+            "Find **日本** `日本` e\u{301} 👩‍💻 literal .*".into()
         } else if id == 38 {
-            "Another 日本 in a distant message".into()
+            "```rust\n// Another 日本 in a distant message\nlet ok = true;\n```".into()
         } else {
             format!(
                 "Loaded message {id}.\n\n{}",
@@ -156,20 +157,64 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
                     Some(selection.clone())
                 );
                 assert!(!t.read(cx).reading_mark(cx).unwrap().following);
-                w.press("enter", cx);
+                let ranges = t.read(cx).find_probe_highlights(2);
+                assert_eq!(ranges.len(), 2);
+                assert_ne!(ranges[0].background(), ranges[1].background());
+                let text = t.read(cx).history_probe_row(2).read(cx).rendered_text();
+                for range in ranges {
+                    assert_eq!(&text.as_str()[range.range()], "日本");
+                }
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                assert_eq!(w.find("find-status").label(), Some("2 of 3"));
-                assert!(w.find(("find-target", 2u64)).visible());
-                w.click("find-next", cx);
-            })
-            .unwrap();
+            let first_match = cx.capture_screenshot(h).unwrap();
+            let (match_bounds, match_scale) = cx
+                .update_window(h, |_, w, cx| {
+                    (
+                        t.read(cx).history_probe_row(2).read(cx).bounds(),
+                        w.scale_factor(),
+                    )
+                })
+                .unwrap();
+            cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("find-status").label(), Some("2 of 3"));
+                assert!(w.find(("find-target", 2u64)).visible());
+            })
+            .unwrap();
+            let second_match = cx.capture_screenshot(h).unwrap();
+            let mut changed = 0;
+            for y in (f32::from(match_bounds.top()) * match_scale) as u32
+                ..(f32::from(match_bounds.bottom()) * match_scale) as u32
+            {
+                for x in (f32::from(match_bounds.left()) * match_scale) as u32
+                    ..(f32::from(match_bounds.right()) * match_scale) as u32
+                {
+                    changed +=
+                        usize::from(first_match.get_pixel(x, y) != second_match.get_pixel(x, y));
+                }
+            }
+            assert!(
+                changed > 80,
+                "Next must repaint the actual matched words, changed={changed}"
+            );
+            if let Some(p) = &captures {
+                second_match
+                    .save(p.join(format!("words-{width}-{dark}.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.click("find-next", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("find-status").label(), Some("3 of 3"));
                 assert!(w.find(("find-target", 38u64)).visible());
+                let ranges = t.read(cx).find_probe_highlights(38);
+                assert_eq!(ranges.len(), 1);
+                let text = t.read(cx).history_probe_row(38).read(cx).rendered_text();
+                assert_eq!(&text.as_str()[ranges[0].range()], "日本");
             })
             .unwrap();
             if let Some(p) = &captures {
@@ -197,6 +242,35 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
                 })
             });
             settle(cx, h);
+            // A committed source append reparses Markdown. Highlight ranges
+            // refresh against that parse without scrolling the held reader.
+            cx.update(|cx| {
+                t.update(cx, |t, cx| {
+                    let mut rows = t.rows().to_vec();
+                    let ix = rows.iter().position(|r| r.id() == 2).unwrap();
+                    rows[ix] = Message::live(
+                        2,
+                        "assistant".into(),
+                        format!("{}\n\nAppended **日本**", row(2).source()),
+                    )
+                    .anchored(crate::model::ReaderKey::model(2, 0, Some(0)));
+                    t.replace_readonly(rows, false, cx);
+                })
+            });
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("find-status").label(), Some("4 of 4"));
+                assert_eq!(t.read(cx).find_probe_highlights(2).len(), 3);
+                assert_eq!(t.read(cx).reading_mark(cx).unwrap().message, before.message);
+                t.update(cx, |t, cx| {
+                    let mut rows = t.rows().to_vec();
+                    let ix = rows.iter().position(|r| r.id() == 2).unwrap();
+                    rows[ix] = row(2);
+                    t.replace_readonly(rows, false, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("find-status").label(), Some("3 of 3"));
                 assert_eq!(t.read(cx).reading_mark(cx).unwrap().message, before.message);
@@ -216,6 +290,10 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("find-status").label(), Some("1 of 1"));
+                let ranges = t.read(cx).find_probe_highlights(2);
+                assert_eq!(ranges.len(), 1);
+                let text = t.read(cx).history_probe_row(2).read(cx).rendered_text();
+                assert_eq!(&text.as_str()[ranges[0].range()], "👩‍💻");
                 w.press("secondary-a", cx);
                 w.press("backspace", cx);
             })
@@ -224,12 +302,14 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("find-status").label(), Some(""));
                 assert!(w.try_find(("find-target", 2u64)).is_none());
+                assert!(t.read(cx).find_probe_highlights(2).is_empty());
                 w.input("not-loaded", cx);
             })
             .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("find-status").label(), Some("No matches"));
+                assert!(t.read(cx).find_probe_highlights(2).is_empty());
                 w.press("escape", cx);
             })
             .unwrap();
@@ -279,6 +359,15 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    w.find("find-status").label(),
+                    Some("1 of 3"),
+                    "Committed input-handler text refreshes Find after preedit"
+                );
+                assert_eq!(t.read(cx).find_probe_highlights(2).len(), 2);
+            })
+            .unwrap();
             // A replacement while a scan is pending invalidates the old result and
             // unmounts the query only after mounted fallback focus is restored.
             cx.update(|cx| {
@@ -336,6 +425,140 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            // Literal user text uses the same range painter, not HTML mark
+            // insertion. Native source mapping and exact source Copy stay intact.
+            let plain = "Plain 日本 日本 <tag> **literal** e\u{301} 👩‍💻\nSecond line";
+            cx.update(|cx| {
+                t.update(cx, |t, cx| {
+                    t.replace_readonly(
+                        vec![
+                            Message::live(201, "You".into(), plain.into())
+                                .anchored(crate::model::ReaderKey::model(201, 0, None)),
+                        ],
+                        false,
+                        cx,
+                    );
+                })
+            });
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-f", cx);
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("日本".into()));
+                w.press("secondary-v", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let first_plain = cx.capture_screenshot(h).unwrap();
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("find-status").label(), Some("1 of 2"));
+                let ranges = t.read(cx).find_probe_highlights(201);
+                assert_eq!(ranges.len(), 2);
+                let text = t.read(cx).history_probe_row(201).read(cx).rendered_text();
+                assert_eq!(text.source(), plain);
+                assert_eq!(text.as_str(), format!("{plain}\n"));
+                for range in ranges {
+                    assert_eq!(&text.as_str()[range.range()], "日本");
+                }
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let second_plain = cx.capture_screenshot(h).unwrap();
+            let (b, scale) = cx
+                .update_window(h, |_, w, cx| {
+                    (
+                        t.read(cx).history_probe_row(201).read(cx).bounds(),
+                        w.scale_factor(),
+                    )
+                })
+                .unwrap();
+            let changed = ((f32::from(b.top()) * scale) as u32
+                ..(f32::from(b.bottom()) * scale) as u32)
+                .flat_map(|y| {
+                    ((f32::from(b.left()) * scale) as u32..(f32::from(b.right()) * scale) as u32)
+                        .map(move |x| (x, y))
+                })
+                .filter(|(x, y)| first_plain.get_pixel(*x, *y) != second_plain.get_pixel(*x, *y))
+                .count();
+            assert!(
+                changed > 80,
+                "Plain word highlight must actually paint, changed={changed}"
+            );
+            if let Some(p) = &captures {
+                second_plain
+                    .save(p.join(format!("plain-{width}-{dark}.png")))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                let at = w.find(("copy-source", 201u64)).bounds().center();
+                w.pointer_move(at, None, cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                w.click(("copy-source", 201u64), cx);
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().as_deref(),
+                    Some(plain)
+                );
+                w.click("transcript-find-query", cx);
+                w.press("secondary-a", cx);
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("e\u{301}".into()));
+                w.press("secondary-v", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("find-status").label(), Some("1 of 1"));
+                let ranges = t.read(cx).find_probe_highlights(201);
+                let text = t.read(cx).history_probe_row(201).read(cx).rendered_text();
+                assert_eq!(&text.as_str()[ranges[0].range()], "e\u{301}");
+                let b = t.read(cx).history_probe_row(201).read(cx).bounds();
+                let from = b.origin + point(px(2.), px(10.));
+                w.drag(from, from + point(px(90.), px(0.)), cx);
+                w.press("secondary-c", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let (plain_range, plain_copy) = cx.update(|cx| {
+                (
+                    t.read(cx)
+                        .history_probe_row(201)
+                        .read(cx)
+                        .selected_source_range()
+                        .unwrap(),
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                )
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-f", cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    t.read(cx)
+                        .history_probe_row(201)
+                        .read(cx)
+                        .selected_source_range(),
+                    Some(plain_range)
+                );
+                w.press("secondary-c", cx);
+                // Find owns focus, so close first before copying the retained reader selection.
+                w.press("escape", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(t.read(cx).find_probe_highlights(201).is_empty());
+                w.press("secondary-c", cx);
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    plain_copy
+                );
+            })
+            .unwrap();
             assert!(writes.try_recv().is_err(), "No send/submit bleed");
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

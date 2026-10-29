@@ -14,7 +14,8 @@ use gpui_kit::{
     TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
-        input::{Input, InputEvent, InputState},
+        input::{Input, InputState},
+        text::{RangeHighlight, RenderedText},
     },
     div, px,
 };
@@ -39,6 +40,8 @@ pub(super) struct Find {
     sources: Vec<(crate::model::ReaderKey, Arc<String>)>,
     scanned_query: String,
     _change: Subscription,
+    _theme: Subscription,
+    painted: std::collections::HashMap<gpui_kit::EntityId, (RenderedText, Vec<RangeHighlight>)>,
 }
 impl Drop for Find {
     fn drop(&mut self) {
@@ -48,10 +51,13 @@ impl Drop for Find {
 impl Find {
     pub(super) fn new(w: &mut Window, cx: &mut Context<TranscriptView>) -> Self {
         let input = cx.new(|cx| InputState::new(w, cx).placeholder("Find source (case-sensitive)"));
-        let change = cx.subscribe_in(&input, w, |v, _, event, w, cx| {
-            if matches!(event, InputEvent::Change) && v.find.open && !v.find_marked(w, cx) {
+        let change = cx.observe_in(&input, w, |v, _, w, cx| {
+            if v.find.open && !v.find_marked(w, cx) {
                 v.refresh_find(true, cx);
             }
+        });
+        let theme = cx.observe_global::<gpui_kit::component::Theme>(|v, cx| {
+            v.sync_find_highlights(cx);
         });
         Self {
             focus: cx.focus_handle().tab_stop(false),
@@ -69,6 +75,8 @@ impl Find {
             sources: Vec::new(),
             scanned_query: String::new(),
             _change: change,
+            _theme: theme,
+            painted: Default::default(),
         }
     }
 }
@@ -80,6 +88,18 @@ impl TranscriptView {
     #[cfg(feature = "native-probes")]
     pub(crate) fn find_probe_input(&self) -> Entity<InputState> {
         self.find.input.clone()
+    }
+
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn find_probe_highlights(&self, id: u64) -> Vec<RangeHighlight> {
+        self.transcript
+            .messages()
+            .iter()
+            .zip(&self.text_states)
+            .find(|(row, _)| row.id() == id)
+            .and_then(|(_, state)| state.as_ref())
+            .and_then(|state| self.find.painted.get(&state.entity_id()))
+            .map_or_else(Vec::new, |(_, ranges)| ranges.clone())
     }
 
     pub(crate) fn find_focused(&self, w: &Window, cx: &gpui_kit::App) -> bool {
@@ -101,7 +121,7 @@ impl TranscriptView {
             .input
             .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())
     }
-    pub(super) fn invalidate_find(&mut self) {
+    pub(super) fn invalidate_find(&mut self, cx: &mut Context<Self>) {
         self.find.cancel.store(true, Ordering::Relaxed);
         self.find.task = None;
         self.find.generation += 1;
@@ -111,6 +131,7 @@ impl TranscriptView {
         self.find.scanned_query.clear();
         self.find.busy = false;
         self.find.reset = true;
+        self.sync_find_highlights(cx);
     }
     pub(super) fn finish_find_reset(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.find.reset {
@@ -150,6 +171,7 @@ impl TranscriptView {
                 .zip(&self.find.sources)
                 .all(|((a, s), (b, t))| a == b && Arc::ptr_eq(s, t))
         {
+            self.sync_find_highlights(cx);
             return;
         }
         self.find.sources = sources;
@@ -167,6 +189,7 @@ impl TranscriptView {
         self.find.query_too_long = query.len() > transcript_find::QUERY_BYTES;
         self.find.results = Results::default();
         self.find.active = 0;
+        self.sync_find_highlights(cx);
         self.find.busy = !query.is_empty() && !self.find.query_too_long;
         if !self.find.busy {
             cx.notify();
@@ -198,6 +221,7 @@ impl TranscriptView {
                 view.find.selected = result.hits.get(view.find.active).cloned();
                 view.find.results = result;
                 view.find.busy = false;
+                view.sync_find_highlights(cx);
                 // Only explicit query edits or navigation scroll. Receiving data
                 // cannot move the reader or enable tail-following.
                 if navigate {
@@ -231,6 +255,7 @@ impl TranscriptView {
         self.find.active =
             transcript_find::step(self.find.active, self.find.results.hits.len(), previous);
         self.find.selected = self.find.results.hits.get(self.find.active).cloned();
+        self.sync_find_highlights(cx);
         self.navigate_find(cx);
     }
     fn close_find(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -242,10 +267,63 @@ impl TranscriptView {
         w.defer(cx, move |w, cx| {
             let _ = view.update(cx, |v, cx| {
                 v.find.focus.focus(w, cx);
-                v.invalidate_find();
+                v.invalidate_find(cx);
                 v.finish_find_reset(w, cx);
                 cx.notify();
             });
+        });
+    }
+    /// Paint-only ranges, separate from the retained native selection. Recompute
+    /// after a parser commit, never against offsets from a different source.
+    pub(super) fn sync_find_highlights(&mut self, cx: &mut Context<Self>) {
+        let active = crate::appearance::accent_mark(cx).opacity(0.40);
+        let other = cx.theme().selection.opacity(0.65);
+        for (row, state) in self.transcript.messages().iter().zip(&self.text_states) {
+            let Some(state) = state else { continue };
+            let snapshot = state.read(cx).rendered_text();
+            let mut highlights = Vec::new();
+            if self.find.open && !self.find.reset && snapshot.source() == self.fold_source(row) {
+                for (ix, hit) in self.find.results.hits.iter().enumerate() {
+                    if row.reader_key().as_ref() == Some(&hit.key)
+                        && row.source() == hit.source.as_str()
+                        && let Some(range) = snapshot.range_for_source(hit.range.clone())
+                    {
+                        highlights.push(RangeHighlight::new(
+                            range,
+                            if ix == self.find.active {
+                                active
+                            } else {
+                                other
+                            },
+                        ));
+                    }
+                }
+            }
+            let id = state.entity_id();
+            if highlights.is_empty() {
+                if self.find.painted.remove(&id).is_some() {
+                    state.update(cx, |s, cx| s.clear_range_highlights(cx));
+                }
+            } else if self
+                .find
+                .painted
+                .get(&id)
+                .is_none_or(|(text, ranges)| *text != snapshot || *ranges != highlights)
+            {
+                self.find.painted.insert(id, (snapshot, highlights.clone()));
+                state.update(cx, |s, cx| {
+                    // The ranges were converted from this exact parsed snapshot.
+                    if let Err(error) = s.set_range_highlights(highlights, cx) {
+                        tracing::warn!(%error, "Find range could not be painted");
+                    }
+                });
+            }
+        }
+        self.find.painted.retain(|id, _| {
+            self.text_states
+                .iter()
+                .flatten()
+                .any(|s| s.entity_id() == *id)
         });
     }
     pub(super) fn find_context(&self, row: &Message) -> Option<SharedString> {

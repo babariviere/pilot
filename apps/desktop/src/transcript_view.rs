@@ -287,7 +287,7 @@ impl TranscriptView {
         }
         let text = cx.new(|cx| {
             let state = if row.is_plain() || self.folds.collapsed(row) {
-                TextViewState::html(self.fold_source(row), cx)
+                TextViewState::plain(self.fold_source(row), cx)
             } else {
                 TextViewState::markdown(row.source(), cx)
             };
@@ -308,6 +308,7 @@ impl TranscriptView {
                         state.remeasure_items(ix..ix + 1, cx);
                     });
                 }
+                this.sync_find_highlights(cx);
             }),
         );
         Some(text)
@@ -330,7 +331,7 @@ impl TranscriptView {
             self.retain_images(&rows, cx);
         }
         if reset {
-            self.invalidate_find();
+            self.invalidate_find(cx);
             self.history_slack = px(0.);
         }
         if !reset && self.transcript.messages() == rows.as_slice() {

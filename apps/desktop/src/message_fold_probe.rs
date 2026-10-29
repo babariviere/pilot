@@ -153,7 +153,7 @@ fn automatic_section(
                 .read(cx)
                 .rendered_text()
                 .source(),
-            crate::message_fold::plain(&job_source())
+            job_source()
         );
         assert!(!t.read(cx).reading_mark(cx).unwrap().following);
     });
@@ -294,7 +294,7 @@ pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
                         .read(cx)
                         .rendered_text()
                         .source(),
-                    crate::message_fold::plain(&source())
+                    source()
                 );
                 assert!(
                     w.find(("message-fold", 1u64)).bounds().top()

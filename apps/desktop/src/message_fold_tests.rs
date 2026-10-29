@@ -41,7 +41,7 @@ fn source_identity_stream_prepend_and_reset() {
     let reset = row(1, &"different\n".repeat(100));
     f.sync(std::slice::from_ref(&reset));
     assert!(f.collapsed(&reset));
-    assert_eq!(plain("<>&\r\n"), "<pre>&lt;&gt;&amp;\r\n</pre>");
+    assert_eq!(preview("<>&\r\n").text, "<>&\r\n");
 }
 #[test]
 fn scopes_do_not_alias_or_forget_on_reconnect() {
@@ -83,13 +83,13 @@ fn assistants_never_fold_including_streaming_and_commit() {
     f.sync(std::slice::from_ref(&committed));
     f.toggle(&committed);
     assert!(!f.long(&committed) && !f.collapsed(&committed));
-    assert!(f.html(&committed).is_none());
+    assert!(f.source(&committed).is_none());
     // Even a previously cached user row cannot fold an assistant at the same key.
     let user = row(901, committed.source());
     f.sync(std::slice::from_ref(&user));
     assert!(f.collapsed(&user));
     f.sync(std::slice::from_ref(&committed));
-    assert!(!f.long(&committed) && f.html(&committed).is_none());
+    assert!(!f.long(&committed) && f.source(&committed).is_none());
 }
 
 #[test]
@@ -136,10 +136,10 @@ fn automatic_input_folds_by_default_whatever_its_length() {
     f.sync(std::slice::from_ref(&short));
     assert!(f.long(&short) && f.collapsed(&short));
     // Collapsed automatic input shows no source prefix; the row says what it is.
-    assert_eq!(f.html(&short), Some(""));
+    assert_eq!(f.source(&short), Some(""));
     f.toggle(&short);
     assert!(f.long(&short) && !f.collapsed(&short));
-    assert_eq!(f.html(&short), None);
+    assert_eq!(f.source(&short), None);
     f.toggle(&short);
     assert!(f.collapsed(&short));
     // A typed message with the same words and key never folds while short.

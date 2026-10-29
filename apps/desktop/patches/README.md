@@ -1,5 +1,13 @@
 # Scoped dependency patches
 
+The opt-in `TextViewState::plain` constructor uses the existing paragraph,
+selection, range-highlight and reveal primitives with literal UTF-8 source
+positions. It interprets neither HTML nor Markdown. Next's user/automatic
+message text uses this instead of generated `<pre>` HTML, which has no source
+mapping and cannot use range highlights. Markdown and HTML defaults stay
+unchanged. Plain updates and reparses share the existing source/revision
+tracking; no alternate selection or paint layer is added.
+
 These are isolated desktop-prototype edits to published, pinned sources, not registry/cache
 edits, an upstream fork or a framework upgrade. The application still imports
 GPUI exclusively through Kit 0.8.0 re-exports, with baseline GPUI 0.3.9.

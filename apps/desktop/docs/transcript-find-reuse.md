@@ -47,8 +47,26 @@ truthfully. A cancellation token plus query/source generation and history scope
 fence discarded results. Clearing or replacing the conversation cancels the
 old work. A stable selected occurrence survives prepends. Data/stream updates
 refresh counts without scrolling or enabling follow; only explicit query edits
-and navigation move the reader. The actual mounted row shows a short source
-context for its occurrence, rather than changing the user's text selection.
+and navigation move the reader. The mounted row keeps a short source context
+for its occurrence. Visible matching text also has a sky-tinted background,
+stronger for the current occurrence, separate from native text selection.
+
+Find converts each source byte range through the current TextView parsed
+snapshot (`RenderedText::range_for_source`) and uses the shared
+`RangeHighlight` painter. It does not insert `<mark>`, rewrite Markdown or
+alter Copy source. Markdown syntax and link destinations that render no
+text remain source-only matches, identified by the context line. Tool bodies
+remain excluded. Literal user/automatic messages use a source-mapped plain
+TextView paragraph, not generated HTML, so the same painter supports them
+without interpreting their Markdown-looking text. A folded user message only
+paints matches in its visible prefix; Find does not expand it automatically.
+
+Ranges refresh on query, next/previous, history, parser commit and theme
+changes. The captured canonical key, exact row source and parsed source must
+agree before conversion; close, empty query or a chat reset clears paint.
+An unchanged parsed snapshot/range set does not notify the text view again.
+Query observation includes native input-handler edits; marked composition
+still blocks navigation and dismissal until committed.
 
 ## Verification scope
 
@@ -65,6 +83,10 @@ repeated/Unicode matches, previous/next/Enter/Shift-Enter, prepend and streaming
 publication, retained reader selection, clear/no-match, close/focus, source
 replacement, marked composition and an unchanged composer/no send. Captures
 come from GPUI's real offscreen renderer, not a SwiftUI mock or web view.
+Word-paint regressions compare actual message pixels while advancing between
+repeated matches, in both Markdown and literal plain text. They also check
+Markdown/code source-to-rendered ranges, emoji/combining text and exact source
+Copy, independently of count and accessibility assertions.
 This is not OS IME candidate-window, screen-reader, Linux/Wayland, visible motion,
 performance, full-suite or production-app acceptance. No animation was added.
 

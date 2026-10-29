@@ -21,7 +21,13 @@ impl TranscriptView {
         }
     }
     pub(super) fn fold_source<'a>(&'a self, row: &'a Message) -> &'a str {
-        self.folds.html(row).unwrap_or_else(|| row.display_source())
+        self.folds.source(row).unwrap_or_else(|| {
+            if row.is_plain() {
+                row.source()
+            } else {
+                row.display_source()
+            }
+        })
     }
     fn toggle_fold(
         &mut self,
@@ -56,6 +62,7 @@ impl TranscriptView {
         self.folds.toggle(&row);
         self.text_subscriptions.remove(&id);
         self.text_states[ix] = self.create_text_state(ix, cx);
+        self.sync_find_highlights(cx);
         self.scroller
             .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
         cx.notify();

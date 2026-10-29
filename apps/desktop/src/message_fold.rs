@@ -63,15 +63,6 @@ pub(crate) fn preview(source: &str) -> Preview {
         },
     }
 }
-pub(crate) fn plain(source: &str) -> String {
-    format!(
-        "<pre>{}</pre>",
-        source
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    )
-}
 fn eligible(row: &Message) -> bool {
     (row.label().starts_with("You") || row.automatic().is_some())
         && row.work_data().is_none()
@@ -85,7 +76,6 @@ struct Entry {
     key: ReaderKey,
     source: Arc<String>,
     preview: Preview,
-    html: String,
     /// Automatic input folds whatever its length; collapsed it shows no source.
     automatic: bool,
     expanded: bool,
@@ -154,11 +144,6 @@ impl Folds {
                 scope: self.scope.clone(),
                 key: row.reader_key().unwrap(),
                 source: row.shared_source(),
-                html: if preview.long {
-                    plain(&preview.text)
-                } else {
-                    String::new()
-                },
                 preview,
                 automatic,
                 expanded,
@@ -167,7 +152,7 @@ impl Folds {
                 || self
                     .entries
                     .iter()
-                    .map(|e| e.source.len() + e.html.len())
+                    .map(|e| e.source.len() + e.preview.text.len())
                     .sum::<usize>()
                     > CACHE_BYTES
             {
@@ -183,9 +168,15 @@ impl Folds {
         self.index(row)
             .is_some_and(|i| self.entries[i].foldable() && !self.entries[i].expanded)
     }
-    pub(crate) fn html(&self, row: &Message) -> Option<&str> {
-        self.collapsed(row)
-            .then(|| self.entries[self.index(row).unwrap()].html.as_str())
+    pub(crate) fn source(&self, row: &Message) -> Option<&str> {
+        self.collapsed(row).then(|| {
+            let entry = &self.entries[self.index(row).unwrap()];
+            if entry.automatic {
+                ""
+            } else {
+                entry.preview.text.as_str()
+            }
+        })
     }
     pub(crate) fn toggle(&mut self, row: &Message) {
         if let Some(i) = self.index(row) {

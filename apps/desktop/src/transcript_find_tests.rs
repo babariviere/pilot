@@ -66,3 +66,90 @@ fn limits_empty_query_and_cancellation_are_honest() {
             .is_empty()
     );
 }
+
+#[gpui_kit::test]
+fn plain_ranges_preserve_literal_text_and_selection(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::{
+        AppContext,
+        component::text::{RangeHighlight, TextViewState},
+    };
+    cx.update(gpui_kit::init);
+    let source = "\n👩‍💻 e\u{301} **literal** <tag>&\r\nnext";
+    let state = cx.update(|cx| cx.new(|cx| TextViewState::plain(source, cx)));
+    cx.run_until_parked();
+    state.update(cx, |state, cx| {
+        let text = state.rendered_text();
+        assert_eq!(text.source(), source);
+        assert_eq!(text.as_str(), format!("{source}\n"));
+        let ranges: Vec<_> = ["👩‍💻", "e\u{301}", "**literal**", "<tag>&\r\nnext"]
+            .into_iter()
+            .map(|q| {
+                let start = source.find(q).unwrap();
+                let range = text.range_for_source(start..start + q.len()).unwrap();
+                assert_eq!(&text.as_str()[range.clone()], q);
+                RangeHighlight::new(range, gpui_kit::hsla(0.6, 0.5, 0.5, 0.3))
+            })
+            .collect();
+        state.select_all(cx);
+        let copied = state.selected_text();
+        state.set_range_highlights(ranges, cx).unwrap();
+        assert_eq!(state.selected_source_range(), Some(0..source.len()));
+        assert_eq!(state.selected_text(), copied);
+        state.clear_range_highlights(cx);
+        assert_eq!(state.selected_text(), copied);
+        state.push_str(" tail 👩‍💻", cx);
+    });
+    cx.run_until_parked();
+    state.update(cx, |state, cx| {
+        let text = state.rendered_text();
+        assert_eq!(text.source(), format!("{source} tail 👩‍💻"));
+        let start = text.source().rfind("👩‍💻").unwrap();
+        let range = text.range_for_source(start..text.source().len()).unwrap();
+        assert_eq!(&text.as_str()[range], "👩‍💻");
+        state.set_text("replaced 日本", cx);
+    });
+    cx.run_until_parked();
+    state.read_with(cx, |state, _| {
+        let text = state.rendered_text();
+        assert_eq!(text.source(), "replaced 日本");
+        assert!(
+            text.range_for_source(source.len()..source.len() + 1)
+                .is_none()
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn markdown_source_ranges_cover_code_multiline_and_unicode(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::{
+        AppContext,
+        component::text::{RangeHighlight, TextViewState},
+    };
+    cx.update(gpui_kit::init);
+    let source = "👩‍💻 **日本** `e\u{301}`\n\n```txt\nfirst 日本\nsecond 日本\n```\n\n[日本](https://example.com/hidden)";
+    let state = cx.update(|cx| cx.new(|cx| TextViewState::markdown(source, cx)));
+    cx.run_until_parked();
+    state.update(cx, |state, cx| {
+        let text = state.rendered_text();
+        for q in ["日本", "e\u{301}", "👩‍💻", "first 日本\nsecond 日本"] {
+            for (start, _) in source.match_indices(q) {
+                let range = text.range_for_source(start..start + q.len()).unwrap();
+                assert_eq!(&text.as_str()[range.clone()], q);
+                state
+                    .set_range_highlights(
+                        [RangeHighlight::new(
+                            range,
+                            gpui_kit::hsla(0.6, 0.5, 0.5, 0.3),
+                        )],
+                        cx,
+                    )
+                    .unwrap();
+            }
+        }
+        let start = source.find("https://").unwrap();
+        assert!(
+            text.range_for_source(start..start + 5).is_none(),
+            "hidden destinations aren't painted"
+        );
+    });
+}
