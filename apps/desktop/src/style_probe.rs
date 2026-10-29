@@ -596,6 +596,16 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
             assert!(window.try_find("mission-rollup-NeedsYou").is_none());
             assert!(window.try_find("mission-rollup-Failed").is_some());
             assert!(window.try_find("mission-rollup-Working").is_some());
+            // A short title keeps its roll-up right beside it, on one line.
+            let row = window.find("chat-row-big-coord").bounds();
+            let title = window
+                .within("chat-row-big-coord")
+                .find("sidebar-mission-title")
+                .bounds();
+            let rollup = window.find("sidebar-mission-rollup").bounds();
+            assert_eq!(row.size.height, px(super::sidebar_list::PARENT_HEIGHT));
+            assert!(title.right() <= rollup.left() && rollup.left() - title.right() < px(8.));
+            assert!((rollup.center().y - title.center().y).abs() < px(1.));
             // Working rolls up in words, without a hollow glyph.
             assert!(
                 window

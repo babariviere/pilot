@@ -336,8 +336,9 @@ reply". A thread's parent is the coordinator chat titled with the mission name
 chevron sits in the row's 7pt leading gutter before the Compass (the Compass
 stays on the text edge), shown while collapsed or on hover and keyboard
 selection; its target spans the gutter and the Compass, and the rest of the row
-opens the chat. Its second line holds the project (outside project sections) and, while collapsed, the roll-up of
-member marks. Members are one-line 28pt rows indented to the mission name. A
+opens the chat. While collapsed, the roll-up of member marks follows the mission
+name on its line (the name truncates first, the roll-up stays whole); a second
+line holds only the project, outside project sections. Members are one-line 28pt rows indented to the mission name. A
 faint `border` stem runs down from the Compass's center, with a short branch
 (4pt radius) to each member's title line that stops 4pt short of the title; it
 ends with the last member's branch, and "+N finished" hangs off nothing. The

@@ -371,7 +371,6 @@ impl ChatList {
         let lead = t.coordinator.or(t.members.first().copied());
         self.project_name(lead.and_then(|c| self.all.get(c)), section)
             .is_some()
-            || (t.collapsed && !t.rollup.counts().is_empty())
     }
     fn fade(
         &mut self,
@@ -780,7 +779,53 @@ impl ChatList {
         let trailing = self.trailing(ix, &key, coordinator.as_ref(), mark, true, window, cx);
         let menu = coordinator.is_some().then(|| self.menu_shown(ix, window));
         let keyboard = self.menu_shown(ix, window);
-        let caption = project.is_some() || !counts.is_empty();
+        // A collapsed thread's roll-up follows the title; only the project
+        // takes a second line. The title truncates first, down to a few
+        // letters; then counts that no longer fit wrap onto a hidden second
+        // line, so a count shows whole or not at all. The accessible name
+        // keeps every count, and the state word and mark stay put.
+        let caption = project.is_some();
+        let keep_title = title.chars().count() > 4;
+        let tally = (!counts.is_empty()).then(|| {
+            div()
+                .id("sidebar-mission-rollup")
+                .test_support()
+                .min_w_0()
+                .h(px(state_mark::SLOT))
+                .line_height(px(state_mark::SLOT))
+                .overflow_hidden()
+                .h_flex()
+                .flex_wrap()
+                .items_center()
+                .gap_x_1()
+                .text_size(px(TextRole::CAPTION))
+                .text_color(cx.theme().muted_foreground)
+                .children(counts.iter().enumerate().map(|(i, &(mark, n))| {
+                    // Working is counted in words; it has no glyph.
+                    let working = mark == Mark::Working;
+                    div()
+                        .id(SharedString::from(format!("mission-rollup-{:?}", mark)))
+                        .test_support()
+                        .flex_none()
+                        .h_flex()
+                        .items_center()
+                        .gap_0p5()
+                        .text_color(if working {
+                            cx.theme().muted_foreground
+                        } else {
+                            mark.color(cx)
+                        })
+                        .when(!working, |d| {
+                            d.child(state_mark::slot(Some(mark), None, 1., cx))
+                        })
+                        .child(if working {
+                            // A dot keeps it apart from a glyph's count.
+                            format!("{}{n} working", if i > 0 { "· " } else { "" })
+                        } else {
+                            n.to_string()
+                        })
+                }))
+        });
         let height = if caption {
             TWO_LINE_HEIGHT
         } else {
@@ -828,18 +873,27 @@ impl ChatList {
                                 )
                             }),
                     )
-                    .child(lane(
-                        div()
-                            .id("sidebar-mission-title")
-                            .test_support()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(TextRole::BODY))
-                            .font_medium()
-                            .when(accent, |d| d.text_color(accent_color))
-                            .child(SharedString::from(title)),
-                        unread.then(|| reply(&key, cx)),
-                    ))
+                    // The title truncates first; the roll-up and the reply
+                    // dot after it stay whole.
+                    .child(
+                        lane(
+                            div()
+                                .id("sidebar-mission-title")
+                                .test_support()
+                                .min_w_0()
+                                .when(keep_title, |d| d.min_w(gpui_kit::rems(2.5)))
+                                // Shrinks well ahead of the roll-up after it.
+                                .flex_shrink(100.)
+                                .truncate()
+                                .text_size(px(TextRole::BODY))
+                                .font_medium()
+                                .when(accent, |d| d.text_color(accent_color))
+                                .child(SharedString::from(title)),
+                            None,
+                        )
+                        .children(tally)
+                        .children(unread.then(|| reply(&key, cx))),
+                    )
                     .children(word.map(|(word, mark)| state_word(word, mark, menu, cx)))
                     .child(trailing)
                     // The chevron sits in the leading gutter before the
@@ -916,38 +970,10 @@ impl ChatList {
                         .pr_2()
                         .text_size(px(TextRole::CAPTION))
                         .text_color(cx.theme().muted_foreground)
-                        .children(project.map(|p| {
-                            div()
-                                .min_w_0()
-                                .flex_shrink(16.)
-                                .truncate()
-                                .child(SharedString::from(p))
-                        }))
-                        .children(counts.iter().enumerate().map(|(i, &(mark, n))| {
-                            // Working is counted in words; it has no glyph.
-                            let working = mark == Mark::Working;
-                            div()
-                                .id(SharedString::from(format!("mission-rollup-{:?}", mark)))
-                                .test_support()
-                                .flex_none()
-                                .h_flex()
-                                .items_center()
-                                .gap_0p5()
-                                .text_color(if working {
-                                    cx.theme().muted_foreground
-                                } else {
-                                    mark.color(cx)
-                                })
-                                .when(!working, |d| {
-                                    d.child(state_mark::slot(Some(mark), None, 1., cx))
-                                })
-                                .child(if working {
-                                    // A dot keeps it apart from a glyph's count.
-                                    format!("{}{n} working", if i > 0 { "· " } else { "" })
-                                } else {
-                                    n.to_string()
-                                })
-                        })),
+                        .children(
+                            project
+                                .map(|p| div().min_w_0().truncate().child(SharedString::from(p))),
+                        ),
                 )
             });
         item(&key, spoken, open).child(self.menu(row, coordinator.as_ref()))

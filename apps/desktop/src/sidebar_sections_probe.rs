@@ -777,6 +777,42 @@ fn check_thread(
             .find("sidebar-mission-glyph")
             .bounds();
         assert!(w.find("sidebar-mission-chevron").bounds().right() <= compass.left() + px(0.5));
+        // The roll-up follows the title on its line, clear of the state word
+        // and mark, and the row stays one line. The long title truncates
+        // first but keeps a few letters; the most urgent count stays whole.
+        let row = w.find("chat-row-coord").bounds();
+        let title = w.within("chat-row-coord").find("sidebar-mission-title").bounds();
+        let rollup = w.find("sidebar-mission-rollup").bounds();
+        let urgent = w.find("mission-rollup-NeedsYou").bounds();
+        assert!(w.within("chat-row-coord").try_find("sidebar-mission-detail").is_none());
+        assert_eq!(row.size.height, px(super::sidebar_list::PARENT_HEIGHT));
+        assert!(title.size.width >= w.rem_size() * 2.5 - px(0.5), "{title:?}");
+        assert!(urgent.left() >= rollup.left() && urgent.right() <= rollup.right() + px(0.5));
+        // A count shows whole or wraps out of sight, never cut in half.
+        for mark in ["NeedsYou", "Failed", "Ready", "Working"] {
+            if let Some(item) = w.try_find(format!("mission-rollup-{mark}")) {
+                let b = item.bounds();
+                assert!(
+                    b.top() >= rollup.bottom() || b.right() <= rollup.right() + px(0.5),
+                    "{mark} {b:?} cut by {rollup:?}"
+                );
+            }
+        }
+        assert!(title.right() <= rollup.left() && rollup.left() - title.right() < px(8.));
+        assert!((rollup.center().y - title.center().y).abs() < px(1.));
+        println!(
+            "{}",
+            json!({"row":f32::from(row.size.width),"title":f32::from(title.size.width),"rollup":f32::from(rollup.size.width)})
+        );
+        for id in ["sidebar-state-word", "chat-mark-coord"] {
+            if let Some(right) = w.within("chat-row-coord").try_find(id) {
+                assert!(
+                    rollup.right() <= right.bounds().left(),
+                    "{id} overlaps the roll-up: row {row:?} title {title:?} rollup {rollup:?} {id} {:?}",
+                    right.bounds()
+                );
+            }
+        }
         // The roll-up's amber dot stands in for its members' new replies.
         assert!(w.try_find("chat-reply-coord").is_none());
         assert!(
