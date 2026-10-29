@@ -216,6 +216,8 @@ and the existing message draft stays separate. Unknown replies retain their
 original operation for explicit Check/Retry. Database-access decisions remain
 unavailable here. See [structured questions](docs/questions.md) for the existing
 steering contract, identity guards and recovery.
+Answered questions retain the compact question disclosure and one exact inline
+reply block; internal reply/context edits do not appear as extra messages.
 
 ```sh
 cd apps/desktop

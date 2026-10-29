@@ -10,6 +10,43 @@ pub(crate) const KIND: &str = "pilot.question";
 const OPTIONS: usize = 9;
 const PREVIEW: usize = 160;
 
+/// Kernel-only model edits, not messages or reply acknowledgments. Keep the
+/// original user bubble; never apply these edits to the visible transcript.
+/// Unrecognized shapes still use the viewer's unsupported-entry presentation.
+pub(crate) fn is_reply_bookkeeping(entry: &Value) -> bool {
+    if !matches!(
+        entry["kind"].as_str(),
+        Some("pilot.question-reply" | "pilot.question-reply-context")
+    ) || !entry["model"].as_array().is_some_and(Vec::is_empty)
+        || !entry["data"].is_null()
+    {
+        return false;
+    }
+    let Some(edits) = entry["edits"].as_array().filter(|edits| edits.len() == 1) else {
+        return false;
+    };
+    let edit = &edits[0];
+    if !edit["target"]
+        .as_u64()
+        .is_some_and(|id| id > 0 && id < 1 << 53)
+    {
+        return false;
+    }
+    match entry["kind"].as_str() {
+        Some("pilot.question-reply") => edit["action"] == "omit" && edit["messages"].is_null(),
+        Some("pilot.question-reply-context") => {
+            edit["action"] == "replace"
+                && edit["messages"]
+                    .as_array()
+                    .and_then(|messages| messages.last())
+                    .is_some_and(|message| {
+                        message["role"] == "user" && message["content"].is_string()
+                    })
+        }
+        _ => false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Choice {
     pub(crate) label: String,
@@ -109,3 +146,28 @@ impl Record {
 #[cfg(test)]
 #[path = "question_entry_tests.rs"]
 mod tests;
+
+#[cfg(any(test, feature = "native-probes"))]
+pub(crate) mod fixture {
+    use serde_json::{Value, json};
+
+    /// The exact empty-model edit pair emitted by held-inputs.ts. The context
+    /// target may be outside the loaded history window; it is never UI content.
+    pub(crate) fn answered(answer: &str) -> Vec<Value> {
+        vec![
+            json!({"id":2,"head":1,"kind":"pilot.question","model":[],"data":{
+                "question":"Should this apply only to new chats, or everywhere?",
+                "context":"Choose the scope before I continue.","blocking":true,
+                "options":[{"label":"New chats"},{"label":"Everywhere"}]
+            }}),
+            json!({"id":3,"head":1,"kind":"pi.user","model":[{"role":"user","content":answer,"timestamp":1}]}),
+            json!({"id":4,"head":1,"kind":"pilot.question-reply","model":[],"edits":[{"target":3,"action":"omit"}]}),
+            json!({"id":6,"head":1,"kind":"pilot.question-reply-context","model":[],"edits":[{
+                "target":5,"action":"replace","messages":[
+                    {"role":"toolResult","toolCallId":"ask-call","toolName":"codemode","content":[{"type":"text","text":"Everywhere"}]},
+                    {"role":"user","content":answer,"timestamp":2}
+                ]
+            }]}),
+        ]
+    }
+}

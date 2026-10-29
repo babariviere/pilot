@@ -50,6 +50,21 @@ later run never presents it again. Explicit Retry of an Unknown reply accepts a
 working turn only with the exact fresh awaited question it answered, so a lost
 first reply cannot answer a newer question.
 
+## Transcript history
+
+The historical question stays in its compact **Agent asked** disclosure; the
+custom inline reply block shows the exact answer once, with ordinary selection
+and Copy, without a chat bubble. Its canonical user row and reader identity are
+retained. Only the explicit omit edit's target gets this presentation, never a
+content match or a delivery-status guess. The known empty-model
+`pilot.question-reply` omit edit and
+`pilot.question-reply-context` replacement edit are agent-context bookkeeping,
+not visible messages or delivery acknowledgments. The viewer does not apply
+those edits to the transcript or treat them as evidence of acceptance.
+Malformed edit records and genuinely unsupported events keep the existing
+unsupported-entry presentation; tool failures and Unknown delivery evidence
+remain unchanged. This applies equally to live updates and cold history.
+
 ## Ownership, bounds and recovery
 
 - `question.rs`: bounded typed metadata, exact entry ID plus canonical-content
@@ -92,6 +107,12 @@ covers this feature's pure/reducer/private-store/faux-courier/mounted cases and
 four actual offscreen native 680/1100 light/dark cases. The native target has
 no LocalOptions or real worker; it uses an isolated temporary private Book and
 command recorder. Set `PILOT_NEXT_QUESTIONS_DIR` for synthetic captures.
+
+`scripts/check-scoped.py --unit question --test question_entry --lint` also
+covers the raw reply/context edit pair, live-to-answered and cold replay,
+Unicode/multiline answers, cancelled tool results and malformed records. The
+`question_entry` native target exercises disclosure, selection and exact Copy
+in hidden 680/1100 light/dark windows; `PILOT_NEXT_QUESTION_DIR` saves captures.
 
 See [evidence](../evidence/questions.md) for exact sources and results.
 Offscreen GPUI evidence does not establish OS IME/accessibility, visible motion,

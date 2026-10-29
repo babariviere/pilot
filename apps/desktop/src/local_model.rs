@@ -389,6 +389,8 @@ pub(crate) struct LiveTranscript {
     /// while this holds; tool events alone never decide it.
     run_live: bool,
     entries: BTreeMap<u64, Vec<Message>>,
+    /// Original user entry -> marker entry. Presentation only, never an ACK.
+    question_replies: BTreeMap<u64, u64>,
     aliases: HashMap<(u64, usize), u64>,
     live: Option<Value>,
     // Presentation-only activity. Never retain reasoning
@@ -441,6 +443,7 @@ struct SavedHistory {
     head: Option<u64>,
     cursor: Option<u64>,
     entries: BTreeMap<u64, Vec<Message>>,
+    question_replies: BTreeMap<u64, u64>,
 }
 
 impl LiveTranscript {
@@ -476,7 +479,20 @@ impl LiveTranscript {
 
     pub(crate) fn rows(&mut self) -> Vec<Message> {
         self.presentation_dirty = false;
-        let mut rows: Vec<_> = self.entries.values().flatten().cloned().collect();
+        let mut rows: Vec<_> = self
+            .entries
+            .iter()
+            .flat_map(|(id, rows)| {
+                let reply = self.question_replies.contains_key(id);
+                rows.iter().cloned().map(move |row| {
+                    if reply && row.label().starts_with("You") && row.automatic().is_none() {
+                        row.with_question_reply()
+                    } else {
+                        row
+                    }
+                })
+            })
+            .collect();
         rows = crate::github_event::place(
             rows,
             &self.github,
@@ -698,7 +714,15 @@ impl LiveTranscript {
         }
         let kind = bounded(entry["kind"].as_str().unwrap_or("unknown"), 80);
         let mut rows = Vec::new();
-        if kind == "pilot.artifact" {
+        if crate::question_entry::is_reply_bookkeeping(entry) {
+            // The reply is already an ordinary user row. These records only
+            // edit agent context, including after Stop/crash, without replay.
+            if kind == "pilot.question-reply"
+                && let Some(target) = entry["edits"][0]["target"].as_u64()
+            {
+                self.question_replies.insert(target, id);
+            }
+        } else if kind == "pilot.artifact" {
             if let Some(reference) =
                 crate::artifact_model::Reference::pinned(&entry["data"]["artifact"])
             {
@@ -968,8 +992,10 @@ impl LiveTranscript {
                     head: self.active_head,
                     cursor: self.cursor,
                     entries: std::mem::take(&mut self.entries),
+                    question_replies: std::mem::take(&mut self.question_replies),
                 });
                 self.entries.clear();
+                self.question_replies.clear();
                 self.question_pending = crate::question::Pending::default();
                 self.question_run_active =
                     event["run"].is_object() || event["generation"].is_object();
@@ -1130,6 +1156,8 @@ impl LiveTranscript {
         }
         // Aliases exist only for retained entries, never one per lifetime event.
         if !self.prefix_pending {
+            self.question_replies
+                .retain(|_, marker| self.entries.contains_key(marker));
             self.aliases
                 .retain(|(id, _), _| self.entries.contains_key(id));
             self.block_aliases
@@ -1170,6 +1198,7 @@ impl LiveTranscript {
             && kept.head == self.active_head
         {
             self.question_pending.merge(kept.question_pending);
+            self.question_replies.extend(kept.question_replies);
             self.cursor = kept.cursor;
             for (id, rows) in kept.entries {
                 if Some(id) >= self.active_head {

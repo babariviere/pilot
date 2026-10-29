@@ -245,4 +245,151 @@ pub fn run_question_entry_probe(cx: &mut HeadlessAppContext) {
         backgrounds[0], backgrounds[1],
         "light and dark both rendered"
     );
+    answered_replies(cx, captures.as_deref());
+}
+
+fn answered_replies(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {
+    use crate::{local_model::LiveTranscript, question_entry::fixture};
+    use serde_json::json;
+    for dark in [false, true] {
+        cx.update(|cx| {
+            crate::appearance::commit_appearance(
+                if dark {
+                    crate::settings_state::AppearancePreference::Dark
+                } else {
+                    crate::settings_state::AppearancePreference::Light
+                },
+                cx,
+            )
+        });
+        for width in [680., 1100.] {
+            for (name, answer) in [
+                ("short", "Everywhere"),
+                (
+                    "unicode",
+                    "東京 👨‍👩‍👧 e\u{301}\n\nKeep <exact> & **literal** text.\n",
+                ),
+            ] {
+                let (h, t) = open_reader(cx, width);
+                let entries = fixture::answered(answer);
+                let mut model = LiveTranscript::default();
+                model.apply(
+                    &json!({"type":"snapshot","entries":[entries[0]],"run":{"startedAt":1}}),
+                );
+                cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(model.rows(), true, cx)));
+                settle(cx, h);
+                assert!(model.question_awaited());
+                // A real disclosure choice survives the live -> answered update.
+                cx.update_window(h, |_, w, cx| w.click(("question-toggle", QUESTION), cx))
+                    .unwrap();
+                settle(cx, h);
+                for entry in &entries[1..] {
+                    model.apply(&json!({"type":"entry_appended","entry":entry}));
+                    let rows = model.rows();
+                    assert_eq!(rows.len(), 2, "bookkeeping adds no UI rows");
+                    cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(rows, false, cx)));
+                    settle(cx, h);
+                    assert!(detail_shown(cx, h), "answer does not reset disclosure");
+                }
+                // Cold history must yield the same two rows and default disclosure.
+                let mut cold = LiveTranscript::default();
+                cold.apply(&json!({"type":"snapshot","entries":entries}));
+                assert!(model.rows() == cold.rows());
+                let answer_row = cold.rows()[1].clone();
+                cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+                cx.run_until_parked();
+                let (h, t) = open_reader(cx, width);
+                cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(cold.rows(), true, cx)));
+                settle(cx, h);
+                assert!(!detail_shown(cx, h));
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.find(("question-reply", 192_u64)).visible());
+                })
+                .unwrap();
+                if let Some(path) = captures {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(path.join(format!("answered-{name}-{width}-{dark}.png")))
+                        .unwrap();
+                }
+                cx.update_window(h, |_, w, cx| {
+                    let toggle = w.find(("question-toggle", QUESTION)).bounds();
+                    assert!(toggle.size.height < px(40.));
+                    let text = t.read(cx).history_probe_row(192);
+                    assert_eq!(
+                        text.read(cx).rendered_text().source(),
+                        answer_row.display_source()
+                    );
+                    let bounds = text.read(cx).bounds();
+                    assert!(bounds.top() > toggle.bottom());
+                    assert!(bounds.left() >= px(0.) && bounds.right() <= px(width));
+                    assert!(
+                        bounds.bottom() < px(600.),
+                        "answer fits without placeholder rows"
+                    );
+                    crate::transcript_view::click_copy(w, 192, cx);
+                    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), answer);
+                    let start = point(bounds.left() + px(2.), bounds.top() + px(8.));
+                    w.drag(start, start + point(px(70.), px(0.)), cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    let text = t.read(cx).history_probe_row(192);
+                    let selected = text.read(cx).selected_text();
+                    assert!(!selected.is_empty() && answer.contains(selected.trim()));
+                    w.press("secondary-c", cx);
+                    assert!(
+                        answer.contains(cx.read_from_clipboard().unwrap().text().unwrap().trim())
+                    );
+                    w.pointer_move(point(px(1.), px(1.)), None, cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                let mut copy_focused = false;
+                for _ in 0..16 {
+                    copy_focused = cx
+                        .update_window(h, |_, w, cx| {
+                            w.press("tab", cx);
+                            w.find(("copy-source", 192_u64)).focused() == Some(true)
+                        })
+                        .unwrap();
+                    settle(cx, h);
+                    if copy_focused {
+                        break;
+                    }
+                }
+                assert!(copy_focused, "Tab reaches the inline reply Copy action");
+                cx.update_window(h, |_, w, cx| {
+                    w.press("enter", cx);
+                    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), answer);
+                })
+                .unwrap();
+                cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+                cx.run_until_parked();
+            }
+        }
+    }
+}
+
+fn open_reader(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+) -> (AnyWindowHandle, gpui_kit::Entity<TranscriptView>) {
+    cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(width), px(600.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| cx.new(|cx| TranscriptView::readonly(w, cx)),
+        )
+    })
+    .unwrap()
 }

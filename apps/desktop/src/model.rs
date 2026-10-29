@@ -127,6 +127,13 @@ impl Message {
     pub(crate) fn label(&self) -> &str {
         &self.label
     }
+    pub(crate) fn with_question_reply(mut self) -> Self {
+        self.label = "You replied".into();
+        self
+    }
+    pub(crate) fn is_question_reply(&self) -> bool {
+        self.label == "You replied"
+    }
     pub(crate) fn display_label(&self) -> &str {
         let label = self
             .label

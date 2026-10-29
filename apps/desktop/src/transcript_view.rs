@@ -1039,7 +1039,7 @@ impl TranscriptView {
             .test_support()
             .h_flex()
             .h(px(20.))
-            .when(user, |f| f.justify_end())
+            .when(user && !row.is_question_reply(), |f| f.justify_end())
             .child(
                 // Hugs its content: the focus scope that holds the copy action.
                 div()
@@ -1058,6 +1058,9 @@ impl TranscriptView {
                         .flatten(),
                     ),
             );
+        if row.is_question_reply() {
+            return self.question_reply_row(ix, cx, owner, footer.into_any_element());
+        }
         let body = div()
             .v_flex()
             .gap_2()

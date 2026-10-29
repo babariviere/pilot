@@ -10,7 +10,7 @@ use crate::{
 };
 use gpui_kit::{
     App, ClipboardItem, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Styled, TestSupportExt, Window,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Icon, IconName, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -46,6 +46,52 @@ impl Disclosures {
 }
 
 impl TranscriptView {
+    /// An accepted historical reply retains its own reader/source identity,
+    /// but reads with the question rather than as another chat bubble.
+    pub(super) fn question_reply_row(
+        &self,
+        ix: usize,
+        cx: &App,
+        owner: gpui_kit::WeakEntity<Self>,
+        footer: gpui_kit::AnyElement,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let row = &self.transcript.messages()[ix];
+        div()
+            .id(("message", row.id()))
+            .group("message")
+            .w_full()
+            .min_w_0()
+            .child(
+                div()
+                    .id(("question-reply", row.id()))
+                    .test_support()
+                    .v_flex()
+                    .gap_1()
+                    .ml(px(15.))
+                    .pl_4()
+                    .border_l_1()
+                    .border_color(cx.theme().border)
+                    .min_w_0()
+                    .children(self.find_context(row).map(|text| {
+                        div()
+                            .id(("find-target", row.id()))
+                            .test_support()
+                            .aria_label(text.clone())
+                            .child(
+                                crate::ui::text(crate::ui::Text::Caption, text)
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                    }))
+                    .child(
+                        crate::ui::text(crate::ui::Text::Caption, "You replied")
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(self.render_text(ix, row, true, cx, owner.clone()))
+                    .children(self.fold_controls(row, cx, owner))
+                    .child(footer),
+            )
+    }
+
     fn toggle_question(
         &mut self,
         id: u64,
