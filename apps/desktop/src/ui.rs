@@ -201,12 +201,57 @@ fn task_status_icon(status: &str) -> Option<crate::app_icon::AppIcon> {
     (status == "dropped").then_some(crate::app_icon::AppIcon::Dropped)
 }
 pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
-    if let Some(icon) = task_status_icon(status) {
-        div()
-            .size(px(14.))
-            .flex_none()
-            .text_color(color)
-            .child(icon.inline().size(px(14.)))
+    if task_status_icon(status).is_some() {
+        use gpui_kit::{PathBuilder, canvas, point};
+        div().size(px(14.)).flex_none().child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, (), window, _| {
+                    let center = bounds.center();
+                    let mut path = PathBuilder::fill();
+                    for i in 0..48 {
+                        let a = std::f32::consts::TAU * i as f32 / 48.;
+                        let p = center + point(px(a.cos() * 6.), px(a.sin() * 6.));
+                        if i == 0 {
+                            path.move_to(p)
+                        } else {
+                            path.line_to(p)
+                        }
+                    }
+                    path.close();
+                    // The X is a transparent cutout, so it contrasts on selected rows too.
+                    for (i, (x, y)) in [
+                        (-3., -2.),
+                        (-2., -3.),
+                        (0., -1.),
+                        (2., -3.),
+                        (3., -2.),
+                        (1., 0.),
+                        (3., 2.),
+                        (2., 3.),
+                        (0., 1.),
+                        (-2., 3.),
+                        (-3., 2.),
+                        (-1., 0.),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let p = center + point(px(x), px(y));
+                        if i == 0 {
+                            path.move_to(p)
+                        } else {
+                            path.line_to(p)
+                        }
+                    }
+                    path.close();
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, color);
+                    }
+                },
+            )
+            .size_full(),
+        )
     } else {
         status_pie(fill, color)
     }
