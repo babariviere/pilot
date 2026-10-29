@@ -1391,13 +1391,7 @@ fn slim_message(value: &Value) -> Value {
                 continue;
             }
             if kind == "toolCall" {
-                let encoded = serde_json::to_string(&block["arguments"]).unwrap_or_default();
-                let args = if encoded.len() <= crate::tool_presentation::ARG_CAP {
-                    block["arguments"].clone()
-                } else {
-                    serde_json::json!({"viewerOmitted":"Arguments exceed the 12 KiB viewer limit"})
-                };
-                content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":args}));
+                content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":block["arguments"]}));
                 continue;
             }
             content.push(serde_json::json!({"type":kind,field:text}));
@@ -1525,9 +1519,7 @@ fn change_message(message: &mut Value, change: &Value) {
             }
             if let Some(old) = target.as_str() {
                 let delta = change["delta"].as_str().unwrap_or("");
-                if old.len() + delta.len() <= crate::tool_presentation::ARG_CAP {
-                    *target = Value::String(format!("{old}{delta}"));
-                }
+                *target = Value::String(format!("{old}{delta}"));
             }
         }
         _ => {}
@@ -2193,14 +2185,12 @@ mod tests {
     }
 
     #[test]
-    fn live_state_bounds_tool_arguments_but_retains_all_text_blocks() {
+    fn live_state_retains_full_tool_arguments_and_text_blocks() {
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"message_start","message":{"content":[{"type":"toolCall","arguments":{"secret":"x".repeat(2*1024*1024)}}]}}));
-        assert!(
-            serde_json::to_vec(model.live.as_ref().unwrap())
-                .unwrap()
-                .len()
-                < 1024
+        assert_eq!(
+            model.live.as_ref().unwrap()["content"][0]["arguments"]["secret"],
+            "x".repeat(2 * 1024 * 1024)
         );
         model.apply(&json!({"type":"message_update","changes":[{"type":"block","contentIndex":1,"block":{"type":"text","text":"x".repeat(1024*1024)}},{"type":"block","contentIndex":2,"block":{"type":"text","text":"y".repeat(1024*1024)}}]}));
         let rows = model.rows();

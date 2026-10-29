@@ -11,7 +11,6 @@ use script::script_label;
 
 pub(crate) const TOOL_CAP: usize = 256;
 pub(crate) const DETAIL_CAP: usize = 2 * 1024 * 1024;
-pub(crate) const ARG_CAP: usize = 12 * 1024;
 pub(crate) const OUTPUT_CAP: usize = 40 * 1024;
 const DIFF_CAP: usize = 12 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -95,6 +94,8 @@ impl Tool {
             limited: false,
         }
     }
+    // Arguments and their prepared command/code are already-received source,
+    // not disposable previews. Only derived metadata/output/diff use this reserve.
     fn bytes(&self) -> usize {
         self.id.len()
             + self.name.len()
@@ -102,8 +103,6 @@ impl Tool {
             + self.subject.len()
             + self.meta.len()
             + self.paths.iter().map(String::len).sum::<usize>()
-            + self.arguments.len()
-            + self.input.as_ref().map_or(0, |(_, source)| source.len())
             + self.output.len()
             + self.diff.len()
     }
@@ -117,14 +116,7 @@ impl Tool {
         self.additions = 0;
         self.deletions = 0;
         self.name = cut(name, 160);
-        let encoded = serde_json::to_string_pretty(args).unwrap_or_default();
-        if encoded.len() > ARG_CAP {
-            self.arguments = Arc::new("[Arguments exceed the 12 KiB viewer limit]".into());
-            self.limited = true;
-            self.title = format!("Used {}", self.name);
-            return;
-        }
-        self.arguments = Arc::new(encoded);
+        self.arguments = Arc::new(serde_json::to_string_pretty(args).unwrap_or_default());
         let string = |key: &str| args[key].as_str().unwrap_or("");
         let input = match name {
             "bash" => Some(("Command", string("command"))),
@@ -618,11 +610,8 @@ impl Tools {
             .map(|(_, t)| t.bytes())
             .sum::<usize>();
         if other + next.bytes() > DETAIL_CAP {
-            next.arguments =
-                Arc::new("[Tool detail capacity reached. Open the full result in Swift.]".into());
             next.output = Arc::new(String::new());
             next.diff = Arc::new(String::new());
-            next.input = None;
             next.limited = true;
         }
         if other + next.bytes() > DETAIL_CAP {

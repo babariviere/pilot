@@ -88,13 +88,41 @@ No tool or group entity is duplicated or replaced to make the preview.
 
 Expanded bash/codemode calls lead with the complete original command/code;
 arguments have their own intentional disclosure, with exact Copy for both.
-Preparation happens with bounded argument projection, not per output render.
-The extra retained source is counted inside the existing 2 MiB detail budget and
-cleared when admission omits the arguments. The 12 KiB argument, 40 KiB output
-and 256-tool limits are unchanged. Hidden bodies do not create/update parsers;
+Preparation happens with argument projection, not per output render.
+Full already-received arguments and prepared command/code are retained outside the
+2 MiB metadata/output/diff preview reserve. There is no argument byte cutoff in
+live capture, partial string deltas or cold-history projection. The 40 KiB output
+and 256-tool limits are unchanged. Upstream omissions remain inspectable as received.
+Hidden bodies do not create/update parsers;
 cached parser entities, selection and disclosure anchor callbacks remain owned by
 the original canonical step. No animation or performance improvement is inferred
 from static comparison images.
+
+## Full received arguments
+
+The former 12 KiB omission was client-only in three places: live
+`local_model::slim_message`, partial `toolcall_delta` string application, and
+`Tool::describe` (pretty JSON could cross the threshold even when compact JSON
+did not). Those cutoffs are removed. The aggregate preview reserve also no
+longer clears arguments or prepared command/code.
+
+The Local history reader passes the decoded JSON through after its existing
+hello identity checks. Daemon `chat-streams.ts` splits snapshot frames by entries,
+not argument strings. Neither path introduced this 12 KiB omission. No backend,
+protocol, image, transport/backpressure or identity guard changes are needed.
+Missing/null arguments and upstream `viewerOmitted` evidence remain as received;
+the client cannot reconstruct bytes upstream never supplied. JSON argument copy
+uses the full pretty serialization of the received value; command/code copy uses
+the exact received string, including Unicode and newlines.
+
+Existing call disclosure, source preparation, shared selectable code text,
+nested scrolling and clipboard handlers are unchanged. Hidden fixture:
+`PILOT_NEXT_TOOL_ARGUMENTS_DIR=/tmp/tool-args python3 scripts/check-scoped.py --test disclosure --lint`.
+It renders the production root at 680/1100 widths in light/dark, checks bounded
+pane geometry and exact clipboard equality after history and live delta updates,
+and captures only synthetic content. Pure tests cover small, >12 KiB and >2 MiB
+arguments, paging, commit/reconnect, preview pressure and missing/omitted payloads.
+This does not claim arbitrary-source virtualization or an RSS ceiling.
 
 ## Baseline provenance
 

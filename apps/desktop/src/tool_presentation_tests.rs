@@ -400,7 +400,7 @@ fn tool_detail_budget_and_unicode_trim_are_bounded_without_terminal_regression()
     let mut tools = Tools::default();
     for n in 0..400 {
         let id = format!("call-{n}");
-        tools.call(&id, n, "unknown", &json!({"value":"x".repeat(ARG_CAP*2)}));
+        tools.call(&id, n, "unknown", &json!({"value":"x".repeat(24 * 1024)}));
         tools.start(&id, n, "unknown");
         tools.update(&id, n, &json!({"set":"日".repeat(OUTPUT_CAP)}));
         tools.end_unknown(&id, n, false);
@@ -499,7 +499,7 @@ fn command_captions_are_conservative_display_only_and_keep_original_source() {
 }
 
 #[test]
-fn executable_input_is_prepared_once_budgeted_and_cleared_on_omission() {
+fn executable_input_is_prepared_once_and_survives_preview_pressure() {
     let mut tools = Tools::default();
     let source = "return '<日本語 👩‍💻>';";
     tools.call("a", 1, "codemode", &json!({"code":source}));
@@ -510,15 +510,16 @@ fn executable_input_is_prepared_once_budgeted_and_cleared_on_omission() {
     let input = input.clone();
     let mut without_input = tool.as_ref().clone();
     without_input.input = None;
-    assert_eq!(tool.bytes(), without_input.bytes() + source.len());
+    assert_eq!(tool.bytes(), without_input.bytes());
     tools.update("a", 1, &json!({"set":"progress"}));
     assert!(Arc::ptr_eq(
         &input,
         &tools.items["a"].input.as_ref().unwrap().1
     ));
-    tools.call("a", 1, "codemode", &json!({"code":"x".repeat(ARG_CAP)}));
-    assert!(tools.items["a"].input.is_none());
-    assert!(tools.items["a"].limited);
+    let large = "x".repeat(3 * 1024 * 1024);
+    tools.call("a", 1, "codemode", &json!({"code":large}));
+    assert_eq!(tools.items["a"].input.as_ref().unwrap().1.as_str(), large);
+    assert!(!tools.items["a"].limited);
     for key in 0..300 {
         let id = format!("bounded-{key}");
         tools.call(&id, key, "bash", &json!({"command":"日".repeat(2000)}));
@@ -526,6 +527,11 @@ fn executable_input_is_prepared_once_budgeted_and_cleared_on_omission() {
         tools.end_unknown(&id, key, false);
         assert!(tools.items.values().map(|tool| tool.bytes()).sum::<usize>() <= DETAIL_CAP);
     }
+    assert_eq!(tools.items["a"].input.as_ref().unwrap().1.as_str(), large);
+    assert_eq!(
+        serde_json::from_str::<Value>(&tools.items["a"].arguments).unwrap()["code"],
+        large
+    );
 }
 
 #[test]
@@ -545,5 +551,81 @@ fn codemode_output_splits_only_its_exact_header() {
         "Ran it\nWall time 0.1 seconds\nOutput:\n",
     ] {
         assert!(script_output(other).is_none(), "{other}");
+    }
+}
+
+#[test]
+fn full_arguments_survive_history_live_deltas_commit_and_reconnect() {
+    // Above both former thresholds, including the aggregate preview reserve.
+    for source in [
+        "small 日本語".to_owned(),
+        "行 👩‍💻 e\u{301} <>&\n".repeat(1200),
+        "行 👩‍💻 e\u{301} <>&\n".repeat(100_000),
+    ] {
+        let args = json!({"code":source,"options":{"timeout":60000}});
+        let entry = call_entry(20, vec![call("full", "codemode", args.clone())]);
+        let check = |model: &mut LiveTranscript, expected: &Value| {
+            let rows = model.rows();
+            let tool = rows
+                .iter()
+                .filter_map(|r| r.work_data())
+                .flat_map(|w| w.calls())
+                .find(|t| t.id == "full")
+                .unwrap();
+            assert_eq!(
+                tool.arguments.as_str(),
+                serde_json::to_string_pretty(expected).unwrap()
+            );
+            assert_eq!(
+                tool.input.as_ref().unwrap().1.as_str(),
+                expected["code"].as_str().unwrap()
+            );
+            assert!(!tool.limited);
+        };
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[entry.clone()]}));
+        check(&mut model, &args);
+        let mut tail = call_entry(21, vec![]);
+        tail["head"] = json!(21);
+        model.apply(&json!({"type":"snapshot","entries":[tail]}));
+        assert_eq!(model.cursor, Some(21));
+        model.page(21, &json!({"entries":[entry.clone()],"more":false}));
+        check(&mut model, &args);
+
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"run_start"}));
+        model.apply(&json!({"type":"message_start","message":{"role":"assistant","content":[call("full", "codemode", json!({"code":"","options":{"timeout":60000}}))]}}));
+        model.apply(&json!({"type":"message_update","changes":[{"type":"toolcall_delta","contentIndex":0,"path":["code"],"delta":source}]}));
+        check(&mut model, &args);
+        // Output-only updates must not erase the retained input.
+        model.apply(
+            &json!({"type":"tool_execution_update","toolCallId":"full","output":{"set":"ok"}}),
+        );
+        check(&mut model, &args);
+        model.apply(&json!({"type":"message_end","entry":entry.clone()}));
+        check(&mut model, &args);
+        model.apply(&json!({"type":"snapshot","entries":[entry]}));
+        check(&mut model, &args);
+    }
+}
+
+#[test]
+fn absent_or_upstream_omitted_arguments_are_not_fabricated() {
+    for args in [
+        Value::Null,
+        json!({"viewerOmitted":"Arguments omitted upstream"}),
+        json!({"code":"available prefix","truncated":true}),
+    ] {
+        let mut tools = Tools::default();
+        tools.call("source", 1, "codemode", &args);
+        let tool = &tools.items["source"];
+        assert_eq!(
+            serde_json::from_str::<Value>(&tool.arguments).unwrap(),
+            args
+        );
+        assert_eq!(tool.limited, !args["viewerOmitted"].is_null());
+        if args["code"].is_null() {
+            assert!(tool.input.is_none());
+        }
     }
 }

@@ -8,7 +8,14 @@ use gpui_kit::{
 use serde_json::json;
 use std::time::Duration;
 
+#[path = "tool_arguments_probe.rs"]
+mod arguments;
+
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_TOOL_ARGUMENTS_DIR").is_some() {
+        arguments::run(cx);
+        return;
+    }
     run_final_reply_follow_probe(cx);
     run_working_stability_probe(cx);
     if std::env::var_os("PILOT_NEXT_TOOL_PRESENTATION_DIR").is_some() {
@@ -351,9 +358,12 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                     }
                 }).unwrap();
                 cx.run_until_parked();
-                if phase=="call" {
+                if phase == "call" {
                     // Bring the opened call's output into view, as a reader would.
-                    cx.update_window(handle,|_,_,cx| view.update(cx,|v,cx|v.transcript.update(cx,|t,cx|t.latest(cx)))).unwrap();
+                    cx.update_window(handle, |_, _, cx| {
+                        view.update(cx, |v, cx| v.transcript.update(cx, |t, cx| t.latest(cx)))
+                    })
+                    .unwrap();
                     cx.run_until_parked();
                 }
                 cx.update_window(handle,|_,window,cx| {

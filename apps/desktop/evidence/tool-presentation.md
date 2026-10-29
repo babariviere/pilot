@@ -55,8 +55,9 @@ pane, a minimal-diff algorithm or an arbitrary repository diff read.
 ## Bounds and protocol audit
 
 At most 256 retained call identities share a 2 MiB detail reserve. Per call:
-12 KiB arguments, 40 KiB output, 12 KiB diff; metadata also counts against the
-reserve. Existing 8 MiB transcript source and 512-row admission bounds remain.
+40 KiB output, 12 KiB diff; metadata also counts against the
+reserve. Full received arguments and prepared command/code now live outside that
+preview reserve, without a presentation byte cutoff. Existing 8 MiB transcript source and 512-row admission bounds remain.
 Large details show explicit omissions. Expanded panes scroll within 256 px;
 this is not virtualized arbitrary-output layout or a solved giant-message path.
 

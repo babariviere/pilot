@@ -629,9 +629,12 @@ history, queued projections and GPU allocations are additional memory. Memory
 scales with retained source; no RSS ceiling is claimed. One retained parser per
 admitted row is count-bounded, but not an LRU solution for arbitrary history.
 
-Tool detail reserve: at most 256 retained call identities and 2 MiB aggregate,
-including 12 KiB arguments, 40 KiB output and 12 KiB diff per call plus metadata.
-Oversize/capacity cases are explicit. Incomplete output prefixes do not receive
+Tool presentation retains at most 256 call identities. Already-received arguments
+and prepared command/code sources have no presentation byte limit; memory scales
+with retained source. Metadata, output and diff previews share a separate 2 MiB
+reserve, with 40 KiB output and 12 KiB diff per call. Preview capacity never replaces
+arguments or command/code with sentinel data. Upstream omission evidence is retained.
+Oversize/capacity preview cases are explicit. Incomplete output prefixes do not receive
 later deltas as if complete; full updates/results can replace them. Wire output
 trim uses UTF-16, not scalar/grapheme counts. Expanded panes are bounded, not a
 claim of arbitrary-output virtualization or syntax-highlighting parity.
