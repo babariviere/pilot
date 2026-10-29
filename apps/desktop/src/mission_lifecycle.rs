@@ -17,10 +17,7 @@ pub(crate) fn parse(s: &Source, v: &Value) -> Result<Snapshot, &'static str> {
         .as_str()
         .filter(|s| ["active", "done", "archived"].contains(s))
         .ok_or("Invalid mission status.")?;
-    let title = v["title"]
-        .as_str()
-        .filter(|s| s.encode_utf16().count() <= 200)
-        .ok_or("Invalid mission title.")?;
+    let title = v["title"].as_str().ok_or("Invalid mission title.")?;
     Ok(Snapshot {
         title: title.into(),
         status: status.into(),

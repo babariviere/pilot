@@ -4,8 +4,6 @@ use crate::{local_model::valid_id, mission_browser::Key};
 use serde_json::Value;
 use std::{collections::HashSet, sync::Arc};
 
-pub(crate) const BODY_BYTES: usize = 128 * 1024;
-
 #[derive(Clone, Debug)]
 pub(crate) struct Task {
     pub(crate) id: String,
@@ -60,6 +58,11 @@ impl Snapshot {
 fn text(v: &Value, cap: usize) -> Result<String, &'static str> {
     v.as_str().filter(|s| s.len() <= cap).map(str::to_owned)
         .ok_or("Task text is missing or exceeds the viewer limit. No partial description was admitted.")
+}
+fn content(v: &Value) -> Result<String, &'static str> {
+    v.as_str()
+        .map(str::to_owned)
+        .ok_or("Task text is malformed.")
 }
 pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     if !key.valid() || v["mission"]["id"] != key.id {
@@ -120,7 +123,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
         tasks.push(Task {
             id: id.into(),
             number,
-            title: text(&t["title"], 800)?,
+            title: content(&t["title"])?,
             status: text(&t["status"], 40)?,
             work_status: text(
                 if t["storedStatus"].is_null() {
@@ -133,7 +136,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             body: if t["body"].is_null() {
                 String::new()
             } else {
-                text(&t["body"], BODY_BYTES)?
+                content(&t["body"])?
             },
             context: String::new(),
             order,

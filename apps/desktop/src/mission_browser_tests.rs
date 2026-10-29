@@ -51,7 +51,7 @@ fn catalog_empty_partial_unsupported_and_malformed_are_not_interchangeable() {
     assert!(catalog(&v).is_err());
 }
 #[test]
-fn detail_is_canonical_bounded_and_plain_text_never_a_program_or_image() {
+fn detail_is_canonical_exact_and_plain_text_never_a_program_or_image() {
     let key = f::key("mission-A");
     let mut v = f::detail(&key.id);
     let d = detail(&key, &v).unwrap();
@@ -66,7 +66,14 @@ fn detail_is_canonical_bounded_and_plain_text_never_a_program_or_image() {
     v["mission"]["goal"] = json!("日本語👩‍💻".repeat(4000));
     v["brief"]["markdown"] = json!("私".repeat(40000));
     let d = detail(&key, &v).unwrap();
-    assert!(d.clipped && d.goal.len() <= 8192 && d.brief.unwrap().len() <= 32768);
+    assert!(!d.clipped);
+    assert_eq!(d.goal, v["mission"]["goal"]);
+    assert_eq!(d.brief.unwrap(), v["brief"]["markdown"]);
+    v["mission"]["title"] = json!(" Legacy 😀 ".repeat(801));
+    v["tasks"][0]["title"] = v["mission"]["title"].clone();
+    let d = detail(&key, &v).unwrap();
+    assert_eq!(d.title, v["mission"]["title"]);
+    assert!(d.tasks.iter().any(|t| t.title == v["tasks"][0]["title"]));
     v["mission"]["id"] = json!("mission-a");
     assert!(detail(&key, &v).is_err());
     let mut v = f::detail(&key.id);

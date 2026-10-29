@@ -23,7 +23,7 @@ fn same_title_tasks_keep_exact_identity_body_order_and_unicode() {
     assert!(s.task("1").is_none());
 }
 #[test]
-fn invalid_duplicate_foreign_overlimit_never_admit_partial_rows_or_bodies() {
+fn invalid_duplicate_foreign_never_admit_partial_rows_or_bodies() {
     let key = f::key("mission-A");
     let mut v = value();
     v["mission"]["id"] = json!("mission-B");
@@ -35,8 +35,13 @@ fn invalid_duplicate_foreign_overlimit_never_admit_partial_rows_or_bodies() {
     v["tasks"][1]["number"] = v["tasks"][0]["number"].clone();
     assert!(parse(&key, &v).is_err());
     let mut v = value();
-    v["tasks"][0]["body"] = json!("語".repeat(BODY_BYTES / 3 + 1));
-    assert!(parse(&key, &v).unwrap_err().contains("No partial"));
+    v["tasks"][0]["body"] = json!("語".repeat(128 * 1024 / 3 + 1));
+    v["tasks"][0]["title"] = json!(" Legacy 😀 ".repeat(801));
+    let loaded = parse(&key, &v).unwrap();
+    let task = loaded.task(v["tasks"][0]["id"].as_str().unwrap()).unwrap();
+    assert_eq!(task.body, v["tasks"][0]["body"]);
+    assert_eq!(task.title, v["tasks"][0]["title"]);
+    assert!(crate::mission_task_create::validate(&task.title, &task.body).is_err());
     let mut v = value();
     v["tasks"][0]["id"] = json!("bad/id");
     assert!(parse(&key, &v).is_err());

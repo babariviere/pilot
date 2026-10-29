@@ -108,6 +108,96 @@ test("agent authoring limits validate supplied writes without restricting legacy
 	await f.store.durable();
 });
 
+test("oversized imported mission text survives tool and HTTP reads without rewriting storage", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Legacy",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Task", body: "Body" });
+	const decision = f.store.addDecision(mission.id, "Decision");
+	f.store.writeBrief(mission.id, "Brief", 0);
+	const title = " Legacy 😀 ".repeat(201);
+	const body = " Body 語😀\n".repeat(20000);
+	const brief = " Brief 語😀\n".repeat(40000);
+	const text = " Decision 語😀\n".repeat(2000);
+	// Import directly, above both agent and user write limits, without a live-data migration.
+	f.store["run"]("UPDATE tasks SET title = ?, body = ? WHERE id = ?", title, body, task.id);
+	f.store["run"]("UPDATE decisions SET text = ? WHERE id = ?", text, decision.id);
+	f.store["run"]("UPDATE brief_revisions SET markdown = ? WHERE mission_id = ?", brief, mission.id);
+	f.store["run"]("UPDATE missions SET title = ?, goal = ? WHERE id = ?", title, body, mission.id);
+	const before = f.store.detail(mission.id);
+	assert.equal(((await f.service.call(lead.id, "get", { id: task.id })) as { body: string }).body, body);
+	assert.equal(((await f.service.call(lead.id, "brief", {})) as { markdown: string }).markdown, brief);
+	const decisions = (await f.service.call(lead.id, "decisions", {})) as { decisions: { text: string }[] };
+	assert.equal(decisions.decisions[0]?.text, text);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const response = await fetch(base);
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), before);
+	for (const path of ["/brief", "/brief?revision=1"]) {
+		const response = await fetch(`${base}${path}`);
+		assert.equal(response.status, 200);
+		assert.equal((await response.json()).markdown, brief);
+	}
+	assert.deepEqual(f.store.detail(mission.id), before, "reads must not normalize or rewrite legacy content");
+	// Only the supplied field is validated on partial writes.
+	await f.service.call(lead.id, "task", { id: task.id, status: "blocked" });
+	assert.equal(f.store.task(mission.id, task.id).body, body);
+	assert.equal(f.store.task(mission.id, task.id).title, title);
+	const audience = await fetch(`${base}/decisions/${decision.id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ audience: "reference" }),
+	});
+	assert.equal(audience.status, 200);
+	assert.equal((await audience.json()).text, text);
+	f.store.update(mission.id, { goal: "Updated goal" });
+	assert.equal(f.store.require(mission.id).title, title);
+	for (const [action, args] of [
+		["task", { id: task.id, title }],
+		["task", { id: task.id, body }],
+		["brief", { markdown: brief, expectedRevision: 1 }],
+		["decide", { text }],
+	] as const) {
+		await assert.rejects(f.service.call(lead.id, action, args), /characters; limit is/);
+	}
+	// HTTP/user writes retain their separate existing capacities too.
+	for (const [path, method, value] of [
+		["/brief", "PUT", { markdown: brief, expectedRevision: 1 }],
+		[`/tasks/${task.id}`, "PATCH", { title }],
+		[`/tasks/${task.id}`, "PATCH", { body }],
+		["/decisions", "POST", { text }],
+		[`/decisions/${decision.id}`, "PATCH", { text }],
+	] as const) {
+		const response = await fetch(`${base}${path}`, {
+			method,
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(value),
+		});
+		assert.equal(response.status, 400, await response.text());
+	}
+});
+
 test("coordinator tools associate, explicitly upgrade and split Linear ticket work with live context", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn(),

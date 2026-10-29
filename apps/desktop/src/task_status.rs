@@ -51,7 +51,6 @@ pub(crate) fn valid(t: &Target, chosen: &str) -> bool {
     t.key.valid()
         && valid_id(&t.task)
         && t.number > 0
-        && t.title.len() <= 800
         && STATUSES.contains(&t.current.as_str())
         && STATUSES.contains(&chosen)
         && t.current != chosen

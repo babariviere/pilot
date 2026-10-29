@@ -11,6 +11,15 @@ fn phases() -> Value {
     ])
 }
 #[test]
+fn legacy_phase_and_milestone_names_are_not_clipped_on_read() {
+    let name = " Legacy 語😀 ".repeat(201);
+    let raw = json!([{"id":"legacy","name":name,"order":0}]);
+    let index = Index::new(&raw, std::iter::empty()).unwrap();
+    assert_eq!(index.name(0), Some(name.as_str()));
+    let index = Index::new(&Value::Null, [Some(name.as_str())].into_iter()).unwrap();
+    assert_eq!(index.name(0), Some(name.trim()));
+}
+#[test]
 fn first_class_phases_order_by_order_then_id_and_count_without_dropped() {
     let index = Index::new(&phases(), std::iter::empty()).unwrap();
     let build = index.of(Some("p-build"), None);

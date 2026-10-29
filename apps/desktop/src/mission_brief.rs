@@ -8,7 +8,6 @@ use std::{collections::BTreeSet, sync::Arc};
 
 pub(crate) const WIRE_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const SOURCE_BYTES: usize = 1024 * 1024;
-pub(crate) const SOURCE_UTF16: usize = 256 * 1024;
 pub(crate) const EDIT_BYTES: usize = 64 * 1024;
 pub(crate) const DISPLAY_BYTES: usize = 32 * 1024;
 pub(crate) const HISTORY_BYTES: usize = 128 * 1024;
@@ -99,10 +98,7 @@ pub(crate) fn parse(
     if requested.is_some_and(|n| n != revision.number) {
         return Err("Brief belongs to another immutable revision.");
     }
-    let markdown = v["markdown"]
-        .as_str()
-        .filter(|s| s.len() <= SOURCE_BYTES && s.encode_utf16().count() <= SOURCE_UTF16)
-        .ok_or("Brief source exceeds the admitted limit or is invalid.")?;
+    let markdown = v["markdown"].as_str().ok_or("Brief source is invalid.")?;
     Ok(Brief {
         source: source.clone(),
         revision,

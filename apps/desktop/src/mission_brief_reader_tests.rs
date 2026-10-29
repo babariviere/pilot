@@ -26,6 +26,23 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 #[tokio::test]
+async fn oversized_legacy_current_and_revision_reads_preserve_exact_source_without_writes() {
+    let text = " Legacy 語😀\n".repeat(40000);
+    let s = Server::start(Some(&text));
+    let c = client();
+    for kind in [Kind::Current, Kind::Revision(1)] {
+        let data = fetch(&c, &s.options, &request(kind)).await.unwrap();
+        let markdown = match data {
+            Data::Current(current) => current.text().to_owned(),
+            Data::Revision(brief) => brief.markdown.to_string(),
+            _ => panic!("expected brief content"),
+        };
+        assert_eq!(markdown, text);
+    }
+    assert_eq!(s.puts(), 0);
+    assert!(Save::capture(source(), 1, "old", &text).is_err());
+}
+#[tokio::test]
 async fn existing_current_history_revision_and_exact_put_cas_contracts() {
     let s = Server::start(Some("one"));
     let c = client();

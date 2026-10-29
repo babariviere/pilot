@@ -39,8 +39,11 @@ fn bounds_reject_whole_page_and_ignore_unknown_private_fields() {
         .is_err()
     );
     let mut large = entry(1);
-    large["text"] = json!("a".repeat(TEXT_CAP + 1));
-    assert!(page(&json!([large]), None).is_err());
+    let text = " Legacy 語😀\n".repeat(32 * 1024);
+    large["text"] = json!(text);
+    let loaded = page(&json!([large]), None).unwrap();
+    assert_eq!(loaded[0].text, text);
+    assert!(loaded[0].preview.len() <= 200);
     let mut unknown = entry(1);
     unknown["thinking"] = json!("never project this field");
     unknown["kind"] = json!("future");

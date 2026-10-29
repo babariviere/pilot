@@ -58,7 +58,7 @@ async fn exact_local_get_only_no_task_endpoint_paging_redirect_or_identity_fallb
     assert!(s.all_gets());
 }
 #[tokio::test]
-async fn large_details_load_whole_while_malformed_foreign_and_body_caps_fail_closed() {
+async fn large_legacy_details_load_whole_while_malformed_and_foreign_fail_closed() {
     let s = Server::start();
     let c = client();
     let route = Route(f::key("mission-A"));
@@ -95,15 +95,16 @@ async fn large_details_load_whole_while_malformed_foreign_and_body_caps_fail_clo
     );
     assert!(fetch(&c, &s.options, &route).await.is_err());
     let mut d = f::detail("mission-A");
-    d["tasks"][0]["body"] = json!("x".repeat(model::BODY_BYTES + 1));
+    let body = " 語😀\n".repeat(128 * 1024 / 3 + 1);
+    let title = " Legacy 😀 ".repeat(801);
+    d["tasks"][0]["body"] = json!(body);
+    d["tasks"][0]["title"] = json!(title);
+    let id = d["tasks"][0]["id"].as_str().unwrap().to_owned();
     s.reply("/api/missions/mission-A", Reply::json(200, d));
-    assert!(
-        fetch(&c, &s.options, &route)
-            .await
-            .err()
-            .unwrap()
-            .contains("No partial")
-    );
+    let loaded = fetch(&c, &s.options, &route).await.unwrap();
+    let task = loaded.task(&id).unwrap();
+    assert_eq!(task.body, body);
+    assert_eq!(task.title, title);
     assert!(s.all_gets());
 }
 #[tokio::test]

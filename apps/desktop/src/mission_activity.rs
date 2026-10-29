@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 pub(crate) const PAGE_CAP: usize = 50;
 pub(crate) const ROW_CAP: usize = 250;
 pub(crate) const WIRE_CAP: usize = 2 * 1024 * 1024;
-pub(crate) const TEXT_CAP: usize = 32 * 1024;
 const SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,8 +71,7 @@ pub(crate) fn page(v: &Value, before: Option<u64>) -> Result<Vec<Entry>, &'stati
         }
         let text = v["text"]
             .as_str()
-            .filter(|s| s.len() <= TEXT_CAP)
-            .ok_or("Activity text exceeds the 32 KiB per-event limit or is malformed.")?
+            .ok_or("Activity text is malformed.")?
             .to_owned();
         let kind = v["kind"]
             .as_str()

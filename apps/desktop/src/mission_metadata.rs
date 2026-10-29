@@ -35,10 +35,11 @@ pub(crate) fn parse(source: &Source, v: &Value) -> Result<Metadata, &'static str
     {
         return Err("Metadata response belongs to another canonical mission.");
     }
-    Metadata::capture(
-        v["title"].as_str().ok_or("Invalid mission title.")?,
-        v["goal"].as_str().ok_or("Invalid mission goal.")?,
-    )
+    // Persisted reads are not new authoring. Preserve legacy text verbatim.
+    Ok(Metadata {
+        title: v["title"].as_str().ok_or("Invalid mission title.")?.into(),
+        goal: v["goal"].as_str().ok_or("Invalid mission goal.")?.into(),
+    })
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Save {

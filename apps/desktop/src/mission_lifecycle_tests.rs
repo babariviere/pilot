@@ -16,6 +16,9 @@ fn transition_matrix_and_response_identity() {
     assert!(!Action::Reopen.allowed("unknown"));
     assert!(parse(&source(), &f::detail("mission-A")["mission"]).is_ok());
     assert!(parse(&source(), &f::detail("mission-B")["mission"]).is_err());
+    let mut legacy = f::detail("mission-A")["mission"].clone();
+    legacy["title"] = " Legacy 😀 ".repeat(201).into();
+    assert_eq!(parse(&source(), &legacy).unwrap().title, legacy["title"]);
 }
 #[test]
 fn exact_capture_fences_late_results_and_all_replays() {

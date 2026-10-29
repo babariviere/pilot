@@ -56,19 +56,14 @@ fn current_and_immutable_revision_values_validate_exact_wire_identity() {
     assert!(parse(&invalid_owner, &value, None).is_err());
 }
 #[test]
-fn supported_source_budget_counts_utf16_before_normalization() {
+fn legacy_source_is_exact_without_applying_write_limits() {
     let s = source();
-    let text = "🧪".repeat(SOURCE_UTF16 / 2);
-    assert!(text.len() <= SOURCE_BYTES);
+    let text = " 🧪".repeat(256 * 1024 / 2 + 1);
     assert_eq!(
         parse(&s, &wire(1, &text), None).unwrap().markdown.as_ref(),
         text
     );
-    assert!(parse(&s, &wire(1, &(text + "🧪")), None).is_err());
-    assert!(
-        parse(&s, &wire(1, &" ".repeat(SOURCE_UTF16 + 1)), None).is_err(),
-        "limits apply before trim"
-    );
+    assert!(Save::capture(s, 1, "old", &text).is_err());
 }
 #[test]
 fn visible_copy_is_an_exact_unicode_prefix_not_full_or_editable_content() {

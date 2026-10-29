@@ -140,7 +140,7 @@ pub(crate) fn catalog(v: &Value) -> Result<Catalog, &'static str> {
         }
         rows.push(Row {
             key,
-            title: optional_text(&v["title"], 512)?
+            title: optional_content(&v["title"])?
                 .unwrap_or_else(|| "Mission title unavailable".into()),
             status: optional_text(&v["status"], 40)?.unwrap_or_else(|| "Status unavailable".into()),
             counts: counts(v)?,
@@ -391,7 +391,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         tasks.push(Task {
             id,
             number,
-            title: text(&t["title"], 512)?,
+            title: content(&t["title"])?,
             work_status: if t["storedStatus"].is_null() {
                 status.clone()
             } else {
@@ -437,15 +437,14 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         phases.clear();
     }
     let summary = Summary::new(&tasks);
-    let mut clipped = false;
-    let goal = clip_text(&m["goal"], 8192, &mut clipped)?;
+    let goal = content(&m["goal"])?;
     let brief = if v["brief"].is_null() {
         None
     } else {
         if id(&v["brief"]["missionId"])? != key.id {
             return Err("Brief belongs to another mission.");
         }
-        Some(clip_text(&v["brief"]["markdown"], 32768, &mut clipped)?)
+        Some(content(&v["brief"]["markdown"])?)
     };
     let decisions = crate::mission_decisions::project(v);
     let comments = crate::mission_comments::project(v);
@@ -455,12 +454,12 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         comments,
         decisions,
         key: key.clone(),
-        title: text(&m["title"], 800)?,
+        title: content(&m["title"])?,
         status: text(&m["status"], 40)?,
         project: id(&m["projectId"])?,
         goal,
         brief,
-        clipped,
+        clipped: false,
         coordinator,
         task_count: tasks.len(),
         tasks: tasks.into_iter().take(DISPLAY_TASKS).collect(),
@@ -542,10 +541,15 @@ fn optional_text(v: &Value, cap: usize) -> Result<Option<String>, &'static str> 
         text(v, cap).map(Some)
     }
 }
-fn clip_text(v: &Value, cap: usize, clipped: &mut bool) -> Result<String, &'static str> {
-    let s = v.as_str().ok_or("Invalid mission text.")?;
-    *clipped |= s.len() > cap;
-    Ok(bounded(s, cap))
+fn content(v: &Value) -> Result<String, &'static str> {
+    v.as_str().map(str::to_owned).ok_or("Invalid mission text.")
+}
+fn optional_content(v: &Value) -> Result<Option<String>, &'static str> {
+    if v.is_null() {
+        Ok(None)
+    } else {
+        content(v).map(Some)
+    }
 }
 pub(crate) fn bounded(s: &str, cap: usize) -> String {
     if s.len() <= cap {

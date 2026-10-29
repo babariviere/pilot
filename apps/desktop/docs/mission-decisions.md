@@ -32,11 +32,11 @@ Old callbacks cannot copy or expand a replacement snapshot. No foreign-home or
 project fallback. The source disclosure names mission, project and home and states
 that the snapshot generation is not a decision revision/CAS token.
 
-The existing detail wire limit remains 2MiB. Each collection scans at most128
+The existing mission-detail transport reads the whole snapshot. Each collection scans at most128
 records, retains at most128 decisions/pending proposals and reveals8 more at a
-time. Decision/proposed text is capped at16KiB, reason at4KiB, with a shared256KiB
-retained-text budget. UTF-8 clipping is explicit; Copy copies the exact bounded
-display payload, never the preview or hidden tail. Missing, empty, capped,
+time. Decision/proposed text and reasons retain exact received content, including legacy
+values above current authoring limits. Copy copies the full received text, never
+the preview. Write limits are not reused by read decoding. Missing, empty, capped,
 malformed and retained/offline/refresh-failed states have different explanations.
 No load-all endpoint or pagination is invented. A missing/removed/unreceived target
 is unknown rather than reassigned by decision number.

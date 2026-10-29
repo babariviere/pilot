@@ -53,7 +53,7 @@ impl Index {
             let mut names: Vec<(String, String)> = Vec::new();
             for m in milestones.filter_map(milestone) {
                 if !names.iter().any(|(id, _)| id == m) {
-                    names.push((m.into(), crate::mission_browser::bounded(m, 200)));
+                    names.push((m.into(), m.into()));
                 }
             }
             return Ok(Self {
@@ -76,11 +76,7 @@ impl Index {
             if sorted.iter().any(|(_, i, _)| i == id) {
                 return Err(MALFORMED);
             }
-            sorted.push((
-                order,
-                id.to_owned(),
-                crate::mission_browser::bounded(name, 200),
-            ));
+            sorted.push((order, id.to_owned(), name.to_owned()));
         }
         sorted.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         Ok(Self {

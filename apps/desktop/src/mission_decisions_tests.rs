@@ -60,24 +60,30 @@ fn untrusted_rows_do_not_infer_author_time_revision_or_target() {
     assert!(project(&json!({"decisions":[decision("same"),decision("same")]})).is_err());
 }
 #[test]
-fn items_text_and_aggregate_memory_are_bounded_on_utf8_boundaries() {
+fn collection_coverage_limit_is_independent_of_content_limits() {
     let rows: Vec<_> = (0..ITEM_CAP + 1)
-        .map(|i| {
-            let mut d = decision(&format!("d{i}"));
-            d["text"] = json!("私👩‍💻".repeat(TEXT_CAP));
-            d
-        })
+        .map(|i| decision(&format!("d{i}")))
         .collect();
     let s = project(&json!({"decisions":rows})).unwrap();
     assert!(s.decisions.capped);
     assert_eq!(s.decisions.received, ITEM_CAP + 1);
+    assert_eq!(s.decisions.rows.unwrap().len(), ITEM_CAP);
+}
+#[test]
+fn legacy_decision_and_proposal_text_is_exact_without_write_limits() {
+    let content = " Legacy 私👩‍💻\n".repeat(32 * 1024);
+    let mut d = decision("d1");
+    d["text"] = json!(content);
+    let mut p = proposal("p1");
+    p["text"] = json!(content);
+    p["reason"] = json!(content);
+    let s = project(&json!({"decisions":[d],"decisionProposals":[p]})).unwrap();
     let rows = s.decisions.rows.unwrap();
-    assert_eq!(rows.len(), ITEM_CAP);
-    assert!(
-        rows.iter()
-            .all(|d| d.text.clipped && d.text.value.len() <= TEXT_CAP)
-    );
-    assert!(rows.iter().map(|d| d.text.value.len()).sum::<usize>() <= TOTAL_TEXT_CAP);
+    assert_eq!(rows[0].text.value, content);
+    assert!(!rows[0].text.clipped);
+    let rows = s.proposals.rows.unwrap();
+    assert_eq!(rows[0].text.as_ref().unwrap().value, content);
+    assert_eq!(rows[0].reason.value, content);
 }
 #[tokio::test]
 async fn existing_actual_reader_projects_decisions_without_new_endpoints() {
@@ -87,7 +93,10 @@ async fn existing_actual_reader_projects_decisions_without_new_endpoints() {
     };
     let server = Server::start();
     let mut detail = f::detail("mission-A");
-    detail["decisions"] = json!([decision("d1")]);
+    let content = " Legacy 私👩‍💻\n".repeat(2000);
+    let mut d = decision("d1");
+    d["text"] = json!(content);
+    detail["decisions"] = json!([d]);
     detail["decisionProposals"] = json!([proposal("p1")]);
     server.reply("/api/missions/mission-A", Reply::json(200, detail));
     let Data::Detail(d, _) = mission_reader::fetch(
@@ -101,6 +110,7 @@ async fn existing_actual_reader_projects_decisions_without_new_endpoints() {
     };
     let s = d.decisions.as_ref().unwrap();
     assert_eq!(s.decisions.rows.as_ref().unwrap()[0].id, "d1");
+    assert_eq!(s.decisions.rows.as_ref().unwrap()[0].text.value, content);
     assert_eq!(s.proposals.rows.as_ref().unwrap()[0].id, "p1");
     assert!(server.all_gets());
     assert_eq!(

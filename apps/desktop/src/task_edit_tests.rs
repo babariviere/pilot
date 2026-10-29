@@ -69,5 +69,9 @@ fn source_and_response_are_not_guessed_or_clipped() {
     assert!(parse(&source(), &v).is_err());
     v["number"] = 1.into();
     v["body"] = serde_json::Value::String("😀".repeat(4001));
-    assert!(parse(&source(), &v).is_err());
+    v["title"] = serde_json::Value::String(" Legacy 😀 ".repeat(201));
+    let loaded = parse(&source(), &v).unwrap();
+    assert_eq!(loaded.body, v["body"]);
+    assert_eq!(loaded.title, v["title"]);
+    assert!(Content::capture(&loaded.title, &loaded.body).is_err());
 }

@@ -85,6 +85,21 @@ test("mission authoring boundaries match runtime schema and reject before IPC", 
 	}
 });
 
+test("mission tool returns legacy read content exactly without applying authoring limits", async () => {
+	const legacy = {
+		brief: { markdown: " Brief 😀\n".repeat(40000) },
+		decisions: [{ id: "decision", text: " Decision 😀\n".repeat(2000) }],
+		tasks: [{ id: "task", title: " Title 😀 ".repeat(201), body: " Body 😀\n".repeat(20000) }],
+	};
+	const tool = createMissionTool(async () => legacy, true);
+	for (const action of ["get", "brief", "decisions", "tasks"]) {
+		const result = await tool.execute("legacy", { action } as never, undefined, undefined, {} as never);
+		assert.deepEqual(result.structuredContent, legacy);
+		assert.deepEqual(result.details, legacy);
+		assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(legacy) }]);
+	}
+});
+
 test("ticket tool declarations expose explicit role upgrades and bounded local splits only to coordinators", () => {
 	const member = createMissionTool(async () => null);
 	const lead = createMissionTool(async () => null, true);

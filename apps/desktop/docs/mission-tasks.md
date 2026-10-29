@@ -34,6 +34,14 @@ text; Markdown images, links and scripts are not executed.
 
 ## Contract and limits
 
+Content limits apply to supplied write fields, not persisted reads. Shared
+protocol interfaces are read shapes, and the store/API/tool serializers return
+legacy content unchanged. Native read decoders must not reuse write-capture
+validation or clip stored title/body, brief, decision or metadata text. Identity,
+type and transport validation remain separate; reading never rewrites data or
+permits resubmitting oversized content as a new write. Partial mutations validate
+only their supplied text fields, not unrelated legacy content.
+
 - `packages/daemon/src/server.ts::missionRoute` exposes task data only in
   `GET /api/missions/:id`, via `missions.ts::detail` and `tasks`. There is no
   HTTP GET task-list/detail subroute or task paging contract. The pane never
@@ -47,8 +55,8 @@ text; Markdown images, links and scripts are not executed.
   transport retries or host fallback. Bounds: 2-second connect / 5-second request,
   then JSON decoding off the UI thread. The detail carries every task, so it has
   no byte or row ceiling; a mission with hundreds or thousands of tasks loads whole.
-- `src/mission_tasks.rs` admits every received row, at most 128 KiB per
-  description and 800 bytes per title. Oversized/malformed/duplicate/foreign data
+- `src/mission_tasks.rs` admits every received row and exact legacy title/body text
+  without applying current write limits. Malformed/duplicate/foreign data
   rejects the snapshot, never silently truncates a description or pretends a
   partial list is complete. Empty means no tasks received, not a loading state.
 - The virtual list keeps every received task reachable by wheel and Up/Down;

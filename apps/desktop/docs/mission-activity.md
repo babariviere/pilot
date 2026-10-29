@@ -38,8 +38,8 @@ automatic retries are disabled. Only known event fields reach the model.
 ## Bounds and state
 
 `mission_activity` admits at most 50 events per response, 2 MiB wire JSON,
-32 KiB UTF-8 text per event and 250 retained events (under 8 MiB retained event
-text). Oversized/malformed responses fail as a whole, never as an apparently
+and 250 retained events. Event text retains the full persisted value without
+applying write-content limits. Oversized/malformed wire responses fail as a whole, never as an apparently
 complete clipped page. Equal event IDs deduplicate only when their fields
 agree; conflicts are errors. ID order is stable even when timestamps agree or
 arrive out of order. Exact timestamps and optional source context are disclosed

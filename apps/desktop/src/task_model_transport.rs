@@ -134,11 +134,7 @@ pub(crate) async fn load(
         return Err("Duplicate task identity.");
     }
     let value = model::parse(t, task)?;
-    let title = task["title"]
-        .as_str()
-        .filter(|s| s.len() <= 800)
-        .ok_or("Invalid task title.")?
-        .into();
+    let title = task["title"].as_str().ok_or("Invalid task title.")?.into();
     let r = c
         .get(format!("{}/api/models", o.loopback()))
         .query(&[("projectId", project), ("purpose", "task-start")])

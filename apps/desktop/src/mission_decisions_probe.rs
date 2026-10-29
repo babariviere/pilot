@@ -333,7 +333,7 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
                     .as_ref()
                     .unwrap();
                 let text = &snapshot.decisions.rows.as_ref().unwrap()[0].text;
-                assert!(snapshot.decisions.capped && text.clipped);
+                assert!(snapshot.decisions.capped && !text.clipped);
                 assert_eq!(snapshot.decisions.rows.as_ref().unwrap().len(), 128);
                 assert_eq!(
                     cx.read_from_clipboard().unwrap().text().unwrap(),

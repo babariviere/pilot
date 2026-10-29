@@ -50,14 +50,16 @@ pub(crate) fn parse(source: &Target, v: &Value) -> Result<Content, &'static str>
     {
         return Err("Response belongs to another exact mission task.");
     }
-    Content::capture(
-        v["title"].as_str().ok_or("Invalid task title.")?,
-        if v["body"].is_null() {
+    // Reads must not reuse capture's write limits or normalize stored text.
+    Ok(Content {
+        title: v["title"].as_str().ok_or("Invalid task title.")?.into(),
+        body: if v["body"].is_null() {
             ""
         } else {
             v["body"].as_str().ok_or("Invalid task body.")?
-        },
-    )
+        }
+        .into(),
+    })
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Save {

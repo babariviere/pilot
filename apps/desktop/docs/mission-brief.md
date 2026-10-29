@@ -38,7 +38,7 @@ acknowledgments; restart requires an explicit read action.
 
 | Item | Supported bound |
 | --- | --- |
-| Received Markdown source | 1 MiB UTF-8, within the daemon's 256 Ki UTF-16-unit bound |
+| Received Markdown source | Exact persisted text within the brief JSON transport budget; no write-length validation |
 | Brief JSON response | 2 MiB |
 | Native editable draft | 64 KiB UTF-8 |
 | Selectable source excerpt | 32 KiB, clipped only on a Unicode boundary |
@@ -46,7 +46,7 @@ acknowledgments; restart requires an explicit read action.
 | Retained qualified sources | 16 per workspace/window |
 | Unconfirmed Save attempts | Four per source, counting the current attempt |
 
-Full Copy copies the admitted received source, not the excerpt. An over-limit source
+Full Copy copies the admitted received source, not the excerpt. A source above the native edit cap
 remains read/copy-only; Swift remains available for larger edits. An already retained
 small private draft remains recoverable even if a newer source exceeds the edit cap.
 A native edit exceeding 64 KiB is rejected **in full**, restoring the prior draft

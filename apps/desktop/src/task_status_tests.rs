@@ -40,6 +40,9 @@ fn immutable_intent_and_receipt_fences() {
     assert!(backward("done", "todo"));
     assert!(backward("in_review", "blocked"));
     assert!(!backward("todo", "done"));
+    let mut legacy = target();
+    legacy.title = " Legacy 😀 ".repeat(801);
+    assert!(State::default().begin(&legacy, "todo").is_ok());
 }
 #[test]
 fn validates_exact_ack_including_projected_stored_status() {

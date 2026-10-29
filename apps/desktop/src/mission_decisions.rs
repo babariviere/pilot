@@ -3,8 +3,6 @@ use serde_json::Value;
 use std::collections::HashSet;
 
 pub(crate) const ITEM_CAP: usize = 128;
-pub(crate) const TEXT_CAP: usize = 16 * 1024;
-const TOTAL_TEXT_CAP: usize = 256 * 1024;
 #[derive(Clone, Debug)]
 pub(crate) struct Text {
     pub(crate) value: String,
@@ -43,18 +41,13 @@ fn identifier(v: &Value) -> Result<String, &'static str> {
         .map(str::to_owned)
         .ok_or("Invalid decision or proposal identity.")
 }
-fn text(v: &Value, cap: usize, budget: &mut usize) -> Result<Text, &'static str> {
+fn text(v: &Value) -> Result<Text, &'static str> {
     let s = v
         .as_str()
         .ok_or("Decision text is unavailable or malformed.")?;
-    let mut end = s.len().min(cap).min(*budget);
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    *budget -= end;
     Ok(Text {
-        value: s[..end].into(),
-        clipped: end < s.len(),
+        value: s.into(),
+        clipped: false,
     })
 }
 fn section<T>(
@@ -88,7 +81,6 @@ fn section<T>(
     })
 }
 pub(crate) fn project(v: &Value) -> Result<Snapshot, &'static str> {
-    let mut budget = TOTAL_TEXT_CAP;
     let decisions = section(v.get("decisions"), |d| {
         Ok(Some(Decision {
             id: identifier(&d["id"])?,
@@ -103,7 +95,7 @@ pub(crate) fn project(v: &Value) -> Result<Snapshot, &'static str> {
                 None if d.get("audience").is_none() => "Unknown (not supplied)",
                 _ => return Err("Unsupported decision audience."),
             },
-            text: text(&d["text"], TEXT_CAP, &mut budget)?,
+            text: text(&d["text"])?,
         }))
     })?;
     let proposals = section(v.get("decisionProposals"), |p| {
@@ -120,11 +112,8 @@ pub(crate) fn project(v: &Value) -> Result<Snapshot, &'static str> {
                 Some("remove") => "Remove",
                 _ => return Err("Unsupported decision proposal kind."),
             },
-            text: p
-                .get("text")
-                .map(|v| text(v, TEXT_CAP, &mut budget))
-                .transpose()?,
-            reason: text(&p["reason"], 4096, &mut budget)?,
+            text: p.get("text").map(text).transpose()?,
+            reason: text(&p["reason"])?,
         }))
     })?;
     Ok(Snapshot {
