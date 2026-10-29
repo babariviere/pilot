@@ -1050,6 +1050,12 @@ impl ChatEditor {
             }))
     }
     fn visible_model_restriction(&self) -> Option<&'static str> {
+        // Sending/recovery already explains a pending chat action. Keep the
+        // admission restriction and contextual picker explanation, not a second
+        // "Wait for the pending…" sentence above the composer.
+        if self.waiting() {
+            return None;
+        }
         let is_new = self
             .selected
             .as_ref()

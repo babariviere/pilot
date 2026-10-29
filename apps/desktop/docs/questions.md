@@ -71,7 +71,11 @@ remain unchanged. This applies equally to live updates and cold history.
   SHA-256, two canonical markers, Foundation trimming and reply formatting.
 - `local_model.rs`: snapshot/prefix/run/user boundaries, head-qualified history
   restoration and metadata observed even when visual row admission is full.
-- `local_client.rs`: one coalesced, fenced question projection.
+- `local_client.rs`: one coalesced, fenced question projection. A fresh pending
+  question overrides the selected chat's display signal to Needs you for every
+  consumer (sidebar/rollups, Inbox, Home, missions and palette). The reader keeps
+  raw summaries unchanged, so an answered or unavailable question cannot leave
+  a sticky override. Summary state, busy/run ownership and Stop stay unchanged.
 - `local_view.rs`: one final source-scoped composer sync beside activity. A
   Working chat is fresh for replies only while its stream reports that the live
   run awaits the projected ask (`question_awaited`); the summary state alone
@@ -86,7 +90,9 @@ One admitted question is at most 20 KiB, with conservative 300/600/120/240
 UTF-16 admission bounds and at most nine choices. Oversized/legacy metadata
 is explicitly unavailable, never silently truncated. The UI retains only current and
 coalesced deferred question handles, one reply input, and a bounded 280pt
-question scroll region. Own words/reply admission stays at 32 KiB. Saved reply
+question scroll region. The panel is content-sized, with Stop and trailing Reply
+in one Kit action row, not a second reserved composer/footer. Own words/reply
+admission stays at 32 KiB. Saved reply
 drafts retain only identity, selection, bounded captured labels and exact own
 words, not full question source. Existing 32 pending, 128 draft, eight recovery
 entries per draft and 16 MiB private snapshot bounds remain unchanged.
@@ -107,6 +113,18 @@ covers this feature's pure/reducer/private-store/faux-courier/mounted cases and
 four actual offscreen native 680/1100 light/dark cases. The native target has
 no LocalOptions or real worker; it uses an isolated temporary private Book and
 command recorder. Set `PILOT_NEXT_QUESTIONS_DIR` for synthetic captures.
+The matrix checks exact content/input/action bounds, Stop/Reply alignment and
+unique Stop ownership, native pointer and Tab/Space Stop, Reply, Unicode/preedit,
+long-question scrolling and reduced motion. Add `--test composer_controls` to
+cover the unchanged ordinary composer geometry and actions.
+
+The redundant composer model notice was traced to
+`chat_model_picker::model_restriction`: "Wait for the pending chat action before
+changing its model or thinking." Exact and fuzzy `wait…pending`, `wait for` and
+`pending tasks` searches covered desktop source, patched shared Kit/Base crates,
+Swift sources and TypeScript packages. Only its composer notice is suppressed
+while waiting; picker context, pending/busy admission and real error/Unknown
+notices remain. `--unit model_picker` covers this presentation-only suppression.
 
 `scripts/check-scoped.py --unit question --test question_entry --lint` also
 covers the raw reply/context edit pair, live-to-answered and cold replay,

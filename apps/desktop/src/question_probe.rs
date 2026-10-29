@@ -8,10 +8,10 @@ use crate::{
 };
 use gpui_kit::InputEvent as _;
 use gpui_kit::{
-    AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
+    AnyWindowHandle, Bounds, ElementInputHandler, HeadlessAppContext, WindowBounds, WindowOptions,
     component::ThemeMode,
     size,
-    test::{TestQueryExt, TestWindowExt},
+    test::{TestInput, TestQueryExt, TestWindowExt},
 };
 use std::{sync::Arc, time::Duration};
 struct Fixture {
@@ -129,6 +129,7 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
             };
             let (writer, commands) = Interaction::recording();
             cx.update(|cx| {
+                cx.set_reduce_motion(mode == ThemeMode::Dark);
                 crate::appearance::commit_appearance(
                     if mode == ThemeMode::Dark {
                         crate::settings_state::AppearancePreference::Dark
@@ -241,6 +242,27 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 let tray = w.find("composer-tray").bounds();
                 let question = w.find("question-composer").bounds();
                 let content = w.find("question-content").bounds();
+                let own = w.find_by_label("Your question reply").bounds();
+                let actions = w.find("question-actions").bounds();
+                let stop = w.find("question-stop").bounds();
+                let reply = w.find("answer-question").bounds();
+                let gap = w.rem_size() * 0.5;
+                assert!((stop.center().y - reply.center().y).abs() < px(1.));
+                assert!(stop.right() < reply.left());
+                assert_eq!(w.find_all("question-stop").len(), 1);
+                assert!(w.try_find("local-stop").is_none());
+                assert!((actions.top() - own.bottom() - gap).abs() < px(1.));
+                assert!((reply.right() - actions.right()).abs() < px(1.));
+                assert!(
+                    (question.size.height
+                        - content.size.height
+                        - own.size.height
+                        - actions.size.height
+                        - gap * 4.)
+                        .abs()
+                        < px(1.),
+                    "Question height contains only content, input, actions and Kit spacing"
+                );
                 assert!(question.top() >= tray.top() && question.bottom() <= tray.bottom());
                 assert!(content.size.height <= px(280.5));
                 assert!(tray.bottom() <= w.viewport_size().height);
@@ -353,19 +375,86 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             assert!(commands.try_recv().is_err());
+            // A marked reply blocks both actions without losing native preedit.
+            cx.update_window(h, |_, w, cx| {
+                let handler = ElementInputHandler::new(
+                    w.find_by_label("Your question reply").bounds(),
+                    editor.read(cx).questions.input.clone(),
+                );
+                TestInput::new(handler, w).compose_text(None, "にほん", Some(3..3), cx);
+                w.click("question-stop", cx);
+                w.click("answer-question", cx);
+                editor.update(cx, |e, cx| {
+                    assert!(e.question_marked(w, cx));
+                    assert_eq!(e.cache["chat:a"].text, initial.text);
+                    e.questions.input.update(cx, |s, cx| {
+                        s.unmark_text(w, cx);
+                        s.set_value("My own words 日本語 👩‍💻 e\u{301}", w, cx);
+                    });
+                });
+            })
+            .unwrap();
+            frame(cx, h);
+            assert!(commands.try_recv().is_err(), "Preedit cannot send or Stop");
+            // Pointer and native Tab/Space use the same existing Stop owner.
+            for keyboard in [false, true] {
+                cx.update_window(h, |_, w, cx| {
+                    if keyboard {
+                        editor.update(cx, |e, cx| e.focus(w, cx));
+                        w.render_frame(cx);
+                        for _ in 0..q.content.options.len() + 12 {
+                            if w.find("question-stop").focused() == Some(true) {
+                                break;
+                            }
+                            control_key(w, "tab", cx);
+                            w.render_frame(cx);
+                        }
+                        assert_eq!(w.find("question-stop").focused(), Some(true));
+                        control_key(w, "space", cx);
+                    } else {
+                        w.click("question-stop", cx);
+                    }
+                })
+                .unwrap();
+                frame(cx, h);
+                match commands.try_recv().unwrap() {
+                    WriteCommand::Submit {
+                        stop: true, draft, ..
+                    } => assert_eq!(draft.text, initial.text),
+                    _ => panic!("Stop never becomes a reply"),
+                }
+                cx.update_window(h, |_, w, cx| {
+                    assert_eq!(w.find("question-stop").disabled(), Some(true));
+                    assert_eq!(w.find("answer-question").disabled(), Some(true));
+                    w.click("question-stop", cx);
+                    editor.update(cx, |e, cx| {
+                        e.pending.clear();
+                        cx.notify();
+                    });
+                })
+                .unwrap();
+                frame(cx, h);
+                assert!(
+                    commands.try_recv().is_err(),
+                    "Pending Stop cannot duplicate"
+                );
+            }
+            cx.update_window(h, |_, w, cx| editor.update(cx, |e, cx| e.focus(w, cx)))
+                .unwrap();
+            frame(cx, h);
             cx.update_window(h, |_, w, cx| w.press("enter", cx))
                 .unwrap();
             frame(cx, h);
-            let captured = match commands.try_recv().unwrap() {
+            let (captured, request) = match commands.try_recv().unwrap() {
                 WriteCommand::Answer {
                     key,
                     draft,
                     question,
-                    ..
+                    request,
                 } => {
                     assert_eq!(key, "chat:a");
                     assert_eq!(question.identity, q.identity);
-                    draft
+                    (draft, request)
                 }
                 _ => panic!("Only explicit confirmation may request a reply"),
             };
@@ -387,7 +476,7 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                     e.accept(
                         WriteState {
                             book: Some(Arc::new(store.book.clone())),
-                            handled: BTreeMap::from([("chat:a".into(), 1)]),
+                            handled: BTreeMap::from([("chat:a".into(), request)]),
                             ..Default::default()
                         },
                         w,
@@ -553,6 +642,7 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
             );
         }
     }
+    cx.update(|cx| cx.set_reduce_motion(false));
     assert_eq!(cases, 4, "Nonzero exact native matrix");
     // The same composer inside the production Local root, as a run awaits it.
     crate::local_view::awaited_question_probe::run(cx);

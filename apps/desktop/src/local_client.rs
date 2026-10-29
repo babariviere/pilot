@@ -342,6 +342,46 @@ pub(crate) struct Presentation {
     pub(crate) test_publications: u64,
 }
 
+impl Presentation {
+    /// The same freshness gate serves reply admission and question attention.
+    /// Display priority must never change the summary's working/run semantics.
+    pub(crate) fn question_fresh(&self, selected: Option<&str>, generation: u64) -> bool {
+        self.generation == generation
+            && self.loaded
+            && !self.page_busy
+            && selected.is_some_and(|id| {
+                self.chats.iter().any(|chat| {
+                    chat.id == id
+                        && match chat.state.as_str() {
+                            "idle" | "parked" | "failed" => true,
+                            "working" => self.question_awaited,
+                            _ => false,
+                        }
+                })
+            })
+    }
+
+    /// Resolve once for every consumer (sidebar, Inbox, Home, mission, palette).
+    /// Keep the reader's base summaries untouched so stale/answered projections
+    /// immediately return to their ordinary state, without sticky overrides.
+    pub(crate) fn for_display(&self, selected: Option<&str>) -> Self {
+        let mut display = self.clone();
+        if self.question_fresh(selected, self.generation)
+            && let crate::question::Projection::Pending(question) = &self.question
+            && let Some(ix) = self
+                .chats
+                .iter()
+                .position(|c| Some(c.id.as_str()) == selected && !c.archived)
+        {
+            let chat = &mut Arc::make_mut(&mut display.chats)[ix];
+            chat.signal = Some(crate::state_mark::Signal::NeedsYou);
+            chat.attention = Some(crate::attention::question(&question.content.question));
+            chat.order.question = true;
+        }
+        display
+    }
+}
+
 /// The daemon behind the live Local control socket, from the hello that admitted
 /// that socket. Never the bundled runtime, a staged capsule or a release listing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1027,7 +1067,7 @@ async fn run(
         {
             view.test_publications += 1;
         }
-        publish(&updates, &replace, view.clone());
+        publish(&updates, &replace, view.for_display(selected.as_deref()));
     }
     control.abort();
     if let Some(task) = chat_socket {
@@ -1113,6 +1153,82 @@ mod read_transport_tests;
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn pending_question_attention_overrides_work_only_with_fresh_canonical_evidence() {
+        use crate::{
+            attention::Kind,
+            question::Projection,
+            state_mark::{Mark, Signal},
+        };
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[{"id":4,"kind":"pilot.question","model":[],"data":{"question":"Choose a layout 日本語 👩‍💻","blocking":true}}],"run":{"startedAt":1}}));
+        let mut raw = Presentation {
+            chats: Arc::new(vec![local_model::chat(&json!({"id":"a","state":"working","working":true,"outcome":"question","outcomeReason":"Old question"})).unwrap()]),
+            loaded: true,
+            generation: 5,
+            question: model.question(),
+            question_awaited: model.question_awaited(),
+            ..Default::default()
+        };
+        let shown = raw.for_display(Some("a"));
+        let c = &shown.chats[0];
+        assert_eq!(c.signal, Some(Signal::NeedsYou));
+        assert_eq!(c.attention.as_ref().unwrap().kind, Kind::Question);
+        assert!(
+            c.attention
+                .as_ref()
+                .unwrap()
+                .label
+                .contains("Choose a layout")
+        );
+        assert_eq!(Mark::of(c), Some(Mark::Question));
+        let mut rollup = crate::sidebar_tree::Rollup::default();
+        rollup.add(Mark::of(c));
+        assert_eq!(rollup.counts(), vec![(Mark::NeedsYou, 1)]);
+        assert_eq!(
+            (c.state.as_str(), c.busy, c.writable),
+            ("working", true, true)
+        );
+        assert!(shown.question_fresh(Some("a"), 5));
+        assert!(!shown.question_fresh(Some("a"), 4));
+        assert_eq!(
+            raw.chats[0].signal,
+            Some(Signal::Working),
+            "Raw summary is never rewritten"
+        );
+        assert!(!Arc::ptr_eq(&raw.chats, &shown.chats));
+        assert!(Arc::ptr_eq(
+            &raw.chats,
+            &raw.for_display(Some("other")).chats
+        ));
+        for case in 0..4 {
+            let mut stale = raw.clone();
+            match case {
+                0 => stale.loaded = false,
+                1 => stale.page_busy = true,
+                2 => stale.question_awaited = false,
+                _ => stale.question = Projection::Unavailable,
+            }
+            assert!(Arc::ptr_eq(&raw.chats, &stale.for_display(Some("a")).chats));
+        }
+        // The exact user answer clears attention even while the run continues.
+        model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Threads"}]}}));
+        raw.question = model.question();
+        raw.question_awaited = model.question_awaited();
+        let answered = raw.for_display(Some("a"));
+        assert_eq!(answered.chats[0].signal, Some(Signal::Working));
+        assert!(answered.chats[0].attention.is_none());
+        assert!(!answered.chats[0].order.question);
+        // Turn-ending/idle questions share the same display priority.
+        raw.chats = Arc::new(vec![
+            local_model::chat(&json!({"id":"a","state":"parked"})).unwrap(),
+        ]);
+        raw.question = shown.question;
+        assert_eq!(
+            raw.for_display(Some("a")).chats[0].signal,
+            Some(Signal::NeedsYou)
+        );
+    }
     #[test]
     fn identity_protocol_and_allowlist_fail_closed() {
         let options = LocalOptions {

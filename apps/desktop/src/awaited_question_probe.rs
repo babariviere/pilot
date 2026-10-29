@@ -29,6 +29,7 @@ struct Probe {
     v: Entity<LocalViewer>,
     writes: async_channel::Receiver<WriteCommand>,
     model: LiveTranscript,
+    chats: Arc<Vec<crate::local_model::Chat>>,
 }
 impl Probe {
     fn open(cx: &mut HeadlessAppContext) -> Self {
@@ -64,11 +65,13 @@ impl Probe {
                 )
             })
             .unwrap();
+        let chats = cx.update(|cx| v.read(cx).state.chats.clone());
         Self {
             h,
             v,
             writes,
             model: LiveTranscript::default(),
+            chats,
         }
     }
     /// As the Local reader publishes a chat presentation.
@@ -85,12 +88,13 @@ impl Probe {
                         generation,
                         loaded: true,
                         rows,
-                        chats: v.state.chats.clone(),
+                        chats: self.chats.clone(),
                         user_queue: queue,
                         question,
                         question_awaited,
                         ..Default::default()
-                    },
+                    }
+                    .for_display(Some("synthetic")),
                     w,
                     cx,
                 )
@@ -136,6 +140,26 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
     );
     p.publish(cx, json!({"type":"queue_update","items":[],"automatic":[]}));
     assert!(p.model.question_awaited());
+    cx.update_window(p.h, |_, w, cx| {
+        let v = p.v.read(cx);
+        let chat = v.state.chats.iter().find(|c| c.id == "synthetic").unwrap();
+        assert_eq!(chat.signal, Some(crate::state_mark::Signal::NeedsYou));
+        assert_eq!(
+            chat.attention.as_ref().unwrap().kind,
+            crate::attention::Kind::Question
+        );
+        assert_eq!(
+            crate::state_mark::Mark::of(chat),
+            Some(crate::state_mark::Mark::Question)
+        );
+        assert!(
+            chat.busy && chat.state == "working",
+            "Stop/admission keeps actual run state"
+        );
+        assert_eq!(v.editor.read(cx).activity_label(), Some("Needs you"));
+        assert_eq!(w.find("question-stop").disabled(), None);
+    })
+    .unwrap();
     assert_eq!(
         p.reply_disabled(cx),
         Some(true),

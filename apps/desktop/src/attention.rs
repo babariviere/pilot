@@ -31,6 +31,16 @@ fn first_line(value: &Value) -> Option<String> {
         prefix
     })
 }
+pub(crate) fn question(text: &str) -> Attention {
+    Attention {
+        kind: Kind::Question,
+        label: format!(
+            "Asks: {}",
+            first_line(&Value::String(text.into()))
+                .unwrap_or_else(|| "A question is waiting for your answer".into())
+        ),
+    }
+}
 pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention> {
     if !value["archivedAt"].is_null() || !value["continuedTo"].is_null() || value["control"] == true
     {

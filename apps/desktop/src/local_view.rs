@@ -1665,19 +1665,9 @@ impl LocalViewer {
             editor.activity(self.state.thinking && self.selected.is_some(), cx)
         });
         // An ended turn takes a reply; a working one only for the ask its run awaits.
-        let question_fresh = self.state.generation == self.generation
-            && self.state.loaded
-            && !self.state.page_busy
-            && self.selected.as_ref().is_some_and(|id| {
-                self.state.chats.iter().any(|chat| {
-                    &chat.id == id
-                        && match chat.state.as_str() {
-                            "idle" | "parked" | "failed" => true,
-                            "working" => self.state.question_awaited,
-                            _ => false,
-                        }
-                })
-            });
+        let question_fresh = self
+            .state
+            .question_fresh(self.selected.as_deref(), self.generation);
         self.editor.update(cx, |editor, cx| {
             editor.question_context(
                 self.selected.as_deref(),

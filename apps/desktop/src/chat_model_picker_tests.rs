@@ -345,6 +345,16 @@ fn busy_readonly_queued_failed_paused_private_pending_and_preedit_refuse_model_c
             e.choose_model(&scope, &epoch, "p/b", None, w, cx);
             e.writable = true;
             e.pending.insert(scope.key.clone(), 1);
+            assert!(
+                e.model_restriction()
+                    .unwrap()
+                    .contains("Wait for the pending")
+            );
+            assert!(e.visible_model_restriction().is_none());
+            assert!(
+                !e.has_model_notice(),
+                "Sending has no redundant composer helper"
+            );
             e.choose_model(&scope, &epoch, "p/b", None, w, cx);
             e.pending.clear();
             e.models

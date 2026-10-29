@@ -189,6 +189,9 @@ impl ChatEditor {
                 })
         })
     }
+    pub(super) fn question_needs_you(&self) -> bool {
+        self.questions.fresh && self.questions.current.is_some() && !self.question_accepted()
+    }
     /// Explicit Send again. An answer carries the fresh current question only
     /// when it still projects the reply's exact identity; otherwise the worker
     /// applies the ended-turn rule.
@@ -679,10 +682,29 @@ impl ChatEditor {
             .id("question-composer")
             .track_focus(&self.questions.focus)
             .v_flex()
+            .flex_none()
             .min_w_0()
             .gap_2()
             .p_2()
             .child(content);
+        // One content-sized action row, never a second Stop-only footer.
+        let mut actions = div()
+            .id("question-actions")
+            .h_flex()
+            .flex_none()
+            .gap_2()
+            .when(self.busy, |row| {
+                row.child(self.stop_button("question-stop", cx))
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .children(self.question_accepted().then(|| {
+                        ui::text(Text::Caption, "Reply sent. Waiting for the agent.")
+                            .text_color(cx.theme().muted_foreground)
+                    })),
+            );
         if q.content.kind == Kind::Message {
             let input_editable = self.writable
                 && self.state.book.is_some()
@@ -692,6 +714,7 @@ impl ChatEditor {
                 && !self.question_accepted();
             panel = panel.child(
                 div()
+                    .flex_none()
                     .bg(crate::appearance::card(cx))
                     .rounded(px(crate::appearance::Radius::CARD))
                     .child(
@@ -711,32 +734,18 @@ impl ChatEditor {
                 panel = panel.child(ui::text(Text::Caption, error).text_color(cx.theme().danger));
             }
             let identity = q.identity.clone();
-            panel = panel.child(
-                div()
-                    .h_flex()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                        // Routine draft handling stays silent; only a sent reply speaks.
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .children(self.question_accepted().then(|| {
-                                ui::text(Text::Caption, "Reply sent. Waiting for the agent.")
-                                    .text_color(cx.theme().muted_foreground)
-                            })),
-                    )
-                    .child(
-                        ui::action("answer-question", "Reply", Action::Primary)
-                            .disabled(!editable || !sendable || self.error.is_some())
-                            .on_click(cx.listener(move |v, _, w, cx| {
-                                v.answer_question(Some(&identity), w, cx)
-                            })),
+            actions = actions.child(
+                ui::action("answer-question", "Reply", Action::Primary)
+                    .disabled(!editable || !sendable || self.error.is_some())
+                    .on_click(
+                        cx.listener(move |v, _, w, cx| v.answer_question(Some(&identity), w, cx)),
                     ),
             );
         }
-        if self.busy {
-            panel = panel.child(self.stop_button("question-stop", cx));
+        if self.busy || q.content.kind == Kind::Message {
+            #[cfg(any(test, feature = "native-probes"))]
+            let actions = actions.test_support();
+            panel = panel.child(actions);
         }
         #[cfg(any(test, feature = "native-probes"))]
         let panel = panel.test_support();

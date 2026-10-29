@@ -422,7 +422,9 @@ impl ChatEditor {
     }
 
     pub(crate) fn activity_label(&self) -> Option<&'static str> {
-        if self.thinking {
+        if self.question_needs_you() {
+            Some("Needs you")
+        } else if self.thinking {
             Some("Thinking...")
         } else if self.jobs_only {
             None
