@@ -21,10 +21,20 @@ export PATH="$node_root/bin:$PATH"
 mkdir -p "$stage/runtime/node/bin"
 cp "$node_root/bin/node" "$stage/runtime/node/bin/node"
 cp "$node_root/LICENSE" "$stage/runtime/node/LICENSE"
-cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
-cp -R "$repo/patches" "$stage/runtime/patches"
-# tar preserves relative workspace links; exclude any existing workspace node_modules.
-(cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
+runtime_source=""
+if [ "$(/usr/bin/git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)" = "$repo" ]; then
+	# A Swift bundle needs the same boot-bound build/root proof as Next. Stamp only
+	# committed inputs, not a dirty checkout relabeled with HEAD's identity.
+	runtime_source="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
+	/usr/bin/git -C "$repo" archive "$runtime_source" package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages \
+		| (cd "$stage/runtime"; tar --exclude='*.test.ts' -xf -)
+else
+	# Next's immutable git-archive producer stamps its own exact source after this
+	# shared assembly step. An unproven standalone source tree stays unstamped.
+	cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
+	cp -R "$repo/patches" "$stage/runtime/patches"
+	(cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
+fi
 # Lifecycle scripts are limited to pnpm-workspace.yaml's allowBuilds. The hoisted linker keeps the
 # flat node_modules layout the release has always shipped (for example node_modules/node-pty), so
 # the app runtime does not depend on pnpm's virtual store or symlinks into it.
@@ -36,6 +46,9 @@ rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules
 (cd "$stage/runtime"; node packages/daemon/scripts/build-usage-worker.mjs build packages/daemon/src)
 python3 "$here/scripts/release_metadata.py" prepare-runtime "$stage/runtime"
 python3 "$here/scripts/release_metadata.py" symlinks "$stage/runtime"
+if [ -n "$runtime_source" ]; then
+	"$stage/runtime/node/bin/node" "$here/scripts/runtime-build.mjs" "$stage/runtime" "$runtime_source"
+fi
 # Copy links, not their targets. The @pilot/* workspace links must stay relative to runtime/packages.
 mkdir -p "$destination"
 cp -R "$stage/runtime/." "$destination/"

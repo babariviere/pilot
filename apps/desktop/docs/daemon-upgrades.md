@@ -18,7 +18,12 @@ The initial supported transition is the current user's macOS Swift-managed
 that same launch agent to an immutable Next capsule. It retains the original
 launchd label, logs, working directory, environment, and data profile. Only its
 verified runtime paths change; the profile is pinned explicitly and Node is first
-on PATH. The profile's `managed` flag is not changed, and the replacement is not
+on PATH. Modern Swift runtime assembly snapshots committed runtime inputs and stamps
+`runtime-build.json` before the enclosing app is signed. That gives ordinary
+Swift bootstrap the private boot-bound build/root proof needed for the same
+strict reservation. Older installed/unstamped Swift runtimes still defer; the
+adapter never manufactures a stamp or falls back to tool pause on the live app.
+The profile's `managed` flag is not changed, and the replacement is not
 started with `--bundled-runtime`. This is not enrollment or profile migration.
 
 Linux uses the known `pilotd.service` user unit with exact retained runtime, profile,

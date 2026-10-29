@@ -52,7 +52,11 @@ fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: boo
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    fs::write(runtime.join("package.json"), b"{\"type\":\"module\"}").unwrap();
+    fs::write(
+        runtime.join("package.json"),
+        b"{\"type\":\"module\",\"version\":\"0.0.1\"}",
+    )
+    .unwrap();
     fs::write(
         app.join(crate::layout::POLICY),
         b"{\"schema\":1,\"accepted_capsules\":[]}",
@@ -65,14 +69,22 @@ fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: boo
         include_str!("../../../../packages/daemon/src/update-reservation.ts"),
     )
     .unwrap();
-    {
-        let version = command(
-            node.to_str().unwrap(),
-            &["-p".as_ref(), "process.versions.node".as_ref()],
-        )
-        .unwrap();
-        fs::write(runtime.join("runtime-build.json"),serde_json::to_vec(&json!({"schema":1,"source":"a".repeat(40),"version":"0.0.1","protocol":1,"platform":"darwin","arch":"arm64","node":std::str::from_utf8(&version).unwrap().trim()})).unwrap()).unwrap();
-    }
+    // Exercise the production Swift stamp producer, not a fixture-only tuple.
+    let stamp = runtime.join("fixture-runtime-build.mjs");
+    fs::write(
+        &stamp,
+        include_str!("../../../macos/scripts/runtime-build.mjs"),
+    )
+    .unwrap();
+    command(
+        node.to_str().unwrap(),
+        &[
+            stamp.as_os_str(),
+            runtime.as_os_str(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".as_ref(),
+        ],
+    )
+    .unwrap();
     fs::write(app.join("Contents/Info.plist"),format!(r#"<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{id}</string><key>CFBundleExecutable</key><string>fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>{build}</string><key>CFBundleShortVersionString</key><string>0.0.1</string></dict></plist>"#)).unwrap();
     command(
         "/usr/bin/codesign",
