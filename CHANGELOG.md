@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.94.0](https://github.com/babariviere/pilot/compare/v1.93.0...v1.94.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** connect mission threads and quiet sidebar state marks ([267db88](https://github.com/babariviere/pilot/commit/267db884f957ba05955bb42b4d38158cee1640f6))
+* **missions:** allow two lifetime feedback task claims ([16c2760](https://github.com/babariviere/pilot/commit/16c276092bf9fe93379e6fe4a27347e99adefd46))
+* report a live ask_user question as Needs you in session summaries ([49305b4](https://github.com/babariviere/pilot/commit/49305b46e90ad20c55303b2735e1fdde6cb47c90))
+
+
+### Bug Fixes
+
+* **desktop:** clarify GitHub event action wording ([43336cd](https://github.com/babariviere/pilot/commit/43336cd37c5b940d03574433d4d8c594f0a49d11))
+* **desktop:** clarify uncertain GitHub events ([57485d5](https://github.com/babariviere/pilot/commit/57485d50dc96846ac4c9bcf2e23cb8cccc033250))
+* **desktop:** highlight matching text in conversation Find ([2def56a](https://github.com/babariviere/pilot/commit/2def56a3d5c4f8e043bb0277ca206d74e417d667))
+* **desktop:** remove distracting usage and tool tooltips ([7981fef](https://github.com/babariviere/pilot/commit/7981fef39c917e56ca5e01ca20a5293c35a5978e))
+* **desktop:** restore native background blur ([35d19c5](https://github.com/babariviere/pilot/commit/35d19c5d7e7bb8c790bc9bd7904404e707ed4d0e))
+* **desktop:** show waiting questions as Needs you over background work ([da54015](https://github.com/babariviere/pilot/commit/da54015a07b8cce2d4e8a4f2be943b27c0f11631))
+* **missions:** link mission and coordinator archival ([1e299e7](https://github.com/babariviere/pilot/commit/1e299e724f5378f8925edcc5426c152d0d35a910))
+
 ## [1.93.0](https://github.com/babariviere/pilot/compare/v1.92.0...v1.93.0) (2026-10-29)
 
 
