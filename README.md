@@ -226,7 +226,9 @@ GUI lifetime. Separately confirmed [daemon upgrades](apps/desktop/docs/daemon-up
 can replace a proven Swift launch agent while preserving its label, profile and PilotPower.
 Active work or failed inspection defers the switch; GUI updates never activate it.
 Production macOS GUI updates admit up to four verified prior same-protocol runtimes,
-so installing a new GUI can leave the existing daemon running.
+so installing a new GUI can leave the existing daemon running. macOS startup reconnects
+without publishing another runtime copy, including when the retained store is full.
+Only explicit service installation or daemon upgrade stages a new runtime.
 An explicit [stopped legacy service migration](apps/desktop/docs/daemon-upgrades.md#stopped-legacy-service-migration)
 can also select Next's runtime when the old Swift app is gone, without moving chat data.
 To install it on Linux, follow [Install Pilot Next on Linux](apps/desktop/docs/linux-install.md).

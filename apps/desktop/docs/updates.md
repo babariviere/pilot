@@ -57,7 +57,14 @@ obsolete operation results cannot overwrite newer state.
 
 ## Immutable runtime, not daemon replacement
 
-Before its first bundled daemon activation the app publishes a complete sealed
+Ordinary macOS startup validates the installed app and reconnects directly to the
+compatible running daemon. It does not publish a runtime, copy the app or require
+a free runtime slot. Updating just the GUI therefore does not grow the runtime
+store, and a store already containing four runtimes does not block reconnection.
+The daemon's actual retained capsule and signed compatibility policy are still
+verified; startup never executes the daemon from the replaceable installed app.
+
+Explicit service installation or daemon upgrade publishes a complete sealed
 capsule, not just Node/kernel. It retains module-relative imports, helpers,
 resources and production dependencies under their original relative paths.
 Capsule identity hashes the bounded path/mode/content/link closure. Publication

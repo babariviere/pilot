@@ -288,6 +288,11 @@ Production configuration/qualification is separate from synthetic test success.
 
 ## Focused checks
 
+On macOS, ordinary packaged startup passes the verified installed app to the
+read-only connection check. It does not publish another runtime capsule. Full
+runtime retention is needed only for explicit service installation or upgrade;
+the four-root publication limit must not become a GUI-update/reconnect limit.
+
 Under original-owner resource admission and the repository verification-slot/mbx CPU2/4GiB
 wrapper, using Rust1.98.1 and an isolated target directory:
 
@@ -297,6 +302,12 @@ cargo test --locked --features native-macos -- --test-threads=1
 cargo clippy --locked --all-targets --features native-macos -- -D warnings
 cargo build --locked --features native-macos --bin pilot-desktop-update-helper
 ```
+
+The opt-in `native_read_only_connect_uses_installed_policy_with_four_retained_roots`
+test uses signed temporary apps and a private Node child, not launchd. Set
+`PILOT_DAEMON_UPGRADE_FIXTURE_NODE` to an absolute Node 24 executable and run that
+test with `--ignored --test-threads=1 --nocapture` to verify full-store reconnects,
+unchanged daemon boot/root identities, and rejection of unsupported or tampered policy.
 
 The `native-macos` build compiles Objective-C against installed Foundation/Security,
 not Swift. Tests are unit-registered from `tests/owned.rs` (`autotests=false` prevents

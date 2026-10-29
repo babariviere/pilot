@@ -44,7 +44,9 @@ binaries must not be used to restart/repair the service during coexistence.
 ## Explicit registration and GUI independence
 
 A packaged GUI startup only verifies/connects. It never registers, starts,
-restarts or activates a daemon, including after an update ACK. On a fresh/stopped
+restarts or activates a daemon, including after an update ACK. On macOS it also
+does not publish a runtime: GUI updates and reconnects do not consume retained
+runtime slots. On a fresh/stopped
 profile the startup view offers **Register or start service…**, with a separate
 **Enable and start** confirmation that includes login enablement. Registration
 publishes the complete verified immutable bundled seed and executes normal

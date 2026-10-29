@@ -128,7 +128,8 @@ mod linux;
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 pub use linux::{register, upgrade};
 
-/// Read-only startup: attest the compatible running capsule, never start or activate.
+/// Read-only startup: attest the compatible running capsule, never publish or activate.
+/// On macOS `current` may be the installed app, not a retained execution root.
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
@@ -138,6 +139,14 @@ pub fn connect(
     current: &std::path::Path,
     trust: &crate::manifest::Trust,
 ) -> Result<(), Failure> {
+    #[cfg(target_os = "macos")]
+    {
+        use crate::installer::Platform;
+        crate::installer::validate_target(current, trust).map_err(|_| Failure::Unverified)?;
+        crate::installer::MacPlatform
+            .verify(current, trust, &trust.current_build, None)
+            .map_err(|_| Failure::Unverified)?;
+    }
     let root =
         crate::coordination::selected(location, current, trust).map_err(|_| Failure::Unverified)?;
     native::running(location, &root).map(|_| ())

@@ -458,12 +458,18 @@ fn start_runtime(
     let trust = pilot_desktop_updater::helper::compiled_trust()
         .map_err(|_| "Service runtime trust is unconfigured. No daemon was started.")?;
     #[cfg(target_os = "macos")]
-    let capsule = own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
+    let current = root
+        .canonicalize()
+        .map_err(|_| "Cannot resolve app bundle.")?;
     #[cfg(target_os = "linux")]
-    let capsule = own_capsule(root, &cancel, deadline)?;
+    let current = own_capsule(root, &cancel, deadline)?;
     let location = runtime_location()?;
     check(&cancel, deadline)?;
-    pilot_desktop_updater::daemon_upgrade::connect(&location, &capsule, &trust).map_err(|_| {
+    // Reconnection is read-only. The installed package supplies compatibility
+    // policy; selected() verifies the daemon's actual retained execution root.
+    // Publishing here made every GUI update consume another runtime slot even
+    // though no service was installed or upgraded.
+    pilot_desktop_updater::daemon_upgrade::connect(&location, &current, &trust).map_err(|_| {
         if location.home.join(".daemon-owner.json").exists() {
             RETAINED_OWNER_REFUSED
         } else {

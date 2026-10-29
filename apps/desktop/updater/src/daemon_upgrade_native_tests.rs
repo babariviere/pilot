@@ -111,6 +111,180 @@ fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: boo
     app
 }
 struct Service(String);
+
+struct FixtureDaemon(std::process::Child);
+impl Drop for FixtureDaemon {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+#[ignore = "explicit Node 24 signed capsule fixture; private child/profile, no launchd service"]
+fn native_read_only_connect_uses_installed_policy_with_four_retained_roots() {
+    let node = PathBuf::from(
+        std::env::var_os("PILOT_DAEMON_UPGRADE_FIXTURE_NODE").expect("explicit fixture Node 24"),
+    );
+    let temp = crate::owned_tests::Temp::new();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let seed_parent = temp.path().join("seed");
+    let installed_parent = temp.path().join("installed");
+    fs::create_dir(&seed_parent).unwrap();
+    fs::create_dir(&installed_parent).unwrap();
+    let seed = bundle(
+        &seed_parent,
+        "Pilot Next.app",
+        "com.example.synthetic.next",
+        "100.1",
+        &node,
+        true,
+    );
+    let mut trust = Trust {
+        application_id: "com.example.synthetic.next".into(),
+        channel: "desktop-stable".into(),
+        repository: "synthetic/fixture-only".into(),
+        public_key: [42; 32],
+        code_requirement: "identifier \"com.example.synthetic.next\"".into(),
+        current_build: "100.1".into(),
+        bundle_name: "Pilot Next.app".into(),
+    };
+    let store = temp.path().join(runtime::STORE_NAME);
+    let retained = runtime::publish(&seed, &store, &trust, &installer::MacPlatform).unwrap();
+    for value in 1..=3 {
+        fs::write(
+            seed.join("Contents/Resources/fixture-generation"),
+            value.to_string(),
+        )
+        .unwrap();
+        command(
+            "/usr/bin/codesign",
+            &[
+                "--force".as_ref(),
+                "--sign".as_ref(),
+                "-".as_ref(),
+                seed.as_os_str(),
+            ],
+        )
+        .unwrap();
+        runtime::publish(&seed, &store, &trust, &installer::MacPlatform).unwrap();
+    }
+    trust.current_build = "101.1".into();
+    let installed = bundle(
+        &installed_parent,
+        "Pilot Next.app",
+        &trust.application_id,
+        "101.1",
+        &node,
+        true,
+    );
+    let profile = temp.path().join("profile");
+    fs::create_dir(&profile).unwrap();
+    fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let location = Location {
+        home: profile,
+        port: listener.local_addr().unwrap().port(),
+        policy: Default::default(),
+    };
+    drop(listener);
+    let snapshot = || {
+        use std::os::unix::fs::MetadataExt;
+        let mut roots = fs::read_dir(&store)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (
+                    entry.file_name(),
+                    fs::symlink_metadata(entry.path()).unwrap().ino(),
+                )
+            })
+            .collect::<Vec<_>>();
+        roots.sort();
+        roots
+    };
+    let before = snapshot();
+    assert_eq!(
+        super::super::connect(&location, &installed, &trust),
+        Err(Failure::Unverified),
+        "missing owner never starts a daemon"
+    );
+    assert!(!location.home.join(".daemon-owner.json").exists());
+    let runtime_root = retained.join(crate::layout::RUNTIME);
+    let _daemon = FixtureDaemon(
+        std::process::Command::new(runtime_root.join("node/bin/node"))
+            .arg(runtime_root.join("packages/daemon/src/main.ts"))
+            .env("PILOT_HOME", &location.home)
+            .env("PILOT_PORT", location.port.to_string())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let owner = super::super::native::wait_registered(&location, &retained).unwrap();
+    assert_eq!(
+        super::super::connect(&location, &installed, &trust),
+        Err(Failure::Unverified),
+        "unlisted owner remains unsupported"
+    );
+    let id = retained
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    fs::write(
+        installed.join(crate::layout::POLICY),
+        serde_json::to_vec(&serde_json::json!({"schema":1,"accepted_capsules":[id]})).unwrap(),
+    )
+    .unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            installed.as_os_str(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        runtime::publish(&installed, &store, &trust, &installer::MacPlatform),
+        Err(crate::Error::StagingCapacity)
+    );
+    assert_eq!(
+        coordination::selected(&location, &installed, &trust),
+        Ok(retained.clone())
+    );
+    let started = Instant::now();
+    for _ in 0..3 {
+        assert_eq!(super::super::connect(&location, &installed, &trust), Ok(()));
+    }
+    println!(
+        "three read-only installed-root connections: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"],
+        "connection preserves the existing daemon"
+    );
+    assert_eq!(snapshot(), before, "no publication, deletion or rename");
+    assert!(!store.join(runtime::identity(&installed).unwrap()).exists());
+    fs::write(
+        installed.join(crate::layout::POLICY),
+        serde_json::to_vec_pretty(&serde_json::json!({"schema":1,"accepted_capsules":[id]}))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        super::super::connect(&location, &installed, &trust),
+        Err(Failure::Unverified),
+        "tampered installed policy is not trusted"
+    );
+    assert_eq!(snapshot(), before);
+}
+
 impl Drop for Service {
     fn drop(&mut self) {
         let _ = command("/bin/launchctl", &["bootout".as_ref(), self.0.as_ref()]);
