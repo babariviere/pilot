@@ -1,4 +1,4 @@
-/** Compose only the services this host can provide. Linux never starts/retries native Mac helpers. */
+/** Compose available helpers. Linux never starts native Mac helpers; KDE support is probed by PilotPower. */
 import { execFile } from "node:child_process";
 import { access, constants } from "node:fs/promises";
 import { promisify } from "node:util";
@@ -31,7 +31,7 @@ export async function detectPlatformCapabilities(
 		const isolation = platform === "linux" ? await linuxIsolation() : { available: false };
 		if (isolation.detail) console.warn(`pilotd: ${isolation.detail}`);
 		return {
-			powerManagement: false,
+			powerManagement: platform === "linux" && (await check(powerHelperPath("linux"))),
 			systemSleepEvents: false,
 			swiftUIArtifacts: false,
 			coordinatorIsolation: isolation.available,

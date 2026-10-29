@@ -241,6 +241,10 @@ re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
 
 Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
 client connection, and disconnecting a client does not stop them.
+Pilot Next Linux GUI runtimes include a separate daemon-owned KDE Wayland power helper,
+with the same 60-second idle grace. It requests automatic-suspend inhibition only, not display,
+manual-sleep or lid blockers. Its behavior remains explicitly **unqualified on real KDE hardware**;
+see [Linux power support and limits](docs/agent-sleep.md#linux-kde-wayland).
 HTML, React and image artifact authoring remain available; SwiftUI rendering requires macOS.
 Linux coordinators require a root-owned, non-setuid
 `bubblewrap` installation (`dnf install bubblewrap`, or the equivalent package-manager command) and working

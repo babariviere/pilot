@@ -20,6 +20,79 @@ const sample: PowerSample = {
 	sleepGeneration: 1,
 	closedLidActive: false,
 };
+
+test("KDE reports pending versus active inhibition and never authorizes a lid override", async (t) => {
+	const f = await fixture(t);
+	await f.emit({ backend: "kde", inhibitionActive: false, authorized: false, networkKnown: false });
+	assert.equal(f.service.status().keepingAwake, false);
+	assert.match(f.service.status().error!, /pending|blocked/i);
+	await f.emit({ backend: "kde", inhibitionActive: true, authorized: false, networkKnown: false });
+	assert.equal(f.service.status().keepingAwake, true);
+	assert.match(f.service.status().error!, /not.*qualified/i);
+	await assert.rejects(f.service.configure({ keepAwake: true, closedLid: true }), /not supported/i);
+	assert.equal(
+		f.commands.some((command) => command.action === "authorize"),
+		false,
+	);
+});
+
+test("running jobs hold power even with an explicitly nonworking model", async (t) => {
+	const f = await fixture(t, false);
+	f.sessions.change({
+		...session("job", "idle"),
+		working: false,
+		runningJobs: [{ id: "job", name: "build", state: "running", startedAt: 1, outputPath: "/tmp/build.log" }],
+	});
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, true);
+});
+
+test("KDE shares daemon grace, handoff cancellation and GUI-independent ownership", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const f = await fixture(t);
+	await f.emit({ backend: "kde", inhibitionActive: true, authorized: false, networkKnown: true });
+	const closeGuiSubscription = f.service.onChange(() => {});
+	closeGuiSubscription();
+	f.sessions.change(session("working", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS - 1);
+	assert.equal(f.service.status().keepingAwake, true);
+	f.sessions.change(session("coordinator"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, true);
+	f.sessions.change(session("coordinator", "idle"));
+	await f.service.settled();
+	t.mock.timers.tick(POWER_IDLE_GRACE_MS);
+	await f.service.settled();
+	assert.equal(f.service.status().keepingAwake, false);
+	assert.deepEqual(f.commands.at(-1), { action: "activity", awake: false, closedLid: false });
+	assert.equal(f.sessions.pauses, 0);
+});
+
+test("missing Linux network service is unknown, not offline or wake evidence", async (t) => {
+	const f = await fixture(t);
+	const paths: (boolean | undefined)[] = [];
+	f.service.onNetworkPath((path) => paths.push(path));
+	await f.emit({ backend: "kde", inhibitionActive: true, authorized: false, networkKnown: false, online: false });
+	assert.deepEqual(paths, [undefined]);
+	f.sessions.powerPause = { since: 1, wakeToken: "99:1" };
+	await f.emit({ backend: "kde", inhibitionActive: false, authorized: false, networkKnown: false, online: false });
+	assert.equal(f.sessions.resumes, 0);
+	await f.emit({
+		backend: "kde",
+		inhibitionActive: false,
+		authorized: false,
+		networkKnown: true,
+		online: true,
+		fullWake: false,
+	});
+	assert.equal(f.sessions.resumes, 0);
+	await f.emit({ backend: "kde", inhibitionActive: false, authorized: false, networkKnown: true, online: true });
+	assert.equal(f.sessions.resumes, 1);
+	assert.deepEqual(paths, [undefined, true]);
+});
 const session = (id: string, state: SessionSummary["state"] = "working"): SessionSummary => ({
 	id,
 	state,

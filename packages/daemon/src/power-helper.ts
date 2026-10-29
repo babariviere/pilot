@@ -6,6 +6,11 @@ import { ServiceUnavailable } from "./errors.ts";
 
 /** Private newline-delimited frames on inherited pipes, not a network service. */
 export interface PowerSample {
+	/** Optional Linux capability fields; absent on the unchanged macOS protocol. */
+	backend?: "kde";
+	inhibitionActive?: boolean;
+	networkKnown?: boolean;
+	qualification?: "unqualified";
 	available: boolean;
 	authorized: boolean;
 	connectedToPower: boolean;
@@ -46,30 +51,48 @@ export function parsePowerSample(value: unknown): PowerSample | undefined {
 	] as const)
 		if (typeof v[key] !== "boolean") return;
 	if (v.lidClosed !== null && typeof v.lidClosed !== "boolean") return;
+	if (v.backend !== undefined && v.backend !== "kde") return;
+	if (
+		v.backend === "kde" &&
+		(typeof v.inhibitionActive !== "boolean" ||
+			typeof v.networkKnown !== "boolean" ||
+			v.qualification !== "unqualified" ||
+			v.authorized ||
+			v.closedLidActive)
+	)
+		return;
 	return v;
 }
 
-export function powerHelperPath(): string {
+export function powerHelperPath(platform: string = process.platform): string {
 	const source = dirname(fileURLToPath(import.meta.url));
 	return (
 		process.env.PILOT_POWER_HELPER ??
-		(source.includes("/Contents/Resources/runtime/")
-			? resolve(source.split("/Contents/Resources/runtime/")[0]!, "Contents/Helpers/PilotPower")
-			: developmentPowerHelperPath(resolve(source, "../../..")))
+		packagedPowerHelperPath(source, platform) ??
+		developmentPowerHelperPath(resolve(source, "../../.."), platform)
 	);
 }
 
+export function packagedPowerHelperPath(source: string, platform: string): string | undefined {
+	if (platform === "darwin" && source.includes("/Contents/Resources/runtime/"))
+		return resolve(source.split("/Contents/Resources/runtime/")[0]!, "Contents/Helpers/PilotPower");
+	if (platform === "linux" && source.endsWith("/runtime/packages/daemon/src"))
+		return resolve(source, "../../..", "bin/PilotPower");
+}
+
 /** Prefer the standalone helper; keep the Swift development build during coexistence. */
-export function developmentPowerHelperPath(root: string): string {
+export function developmentPowerHelperPath(root: string, platform: string = process.platform): string {
 	for (const profile of ["release", "debug"]) {
 		const binary = resolve(root, "apps/power/target", profile, "PilotPower");
 		if (existsSync(binary)) return binary;
 	}
+	if (platform !== "darwin") return resolve(root, "apps/power/target/release/PilotPower");
 	return resolve(root, "apps/macos/build/Pilot.app/Contents/Helpers/PilotPower");
 }
 
 export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
-	if (process.platform !== "darwin") throw new ServiceUnavailable("Energy management requires macOS");
+	if (process.platform !== "darwin" && process.platform !== "linux")
+		throw new ServiceUnavailable("Energy management requires macOS or KDE Wayland");
 	const binary = powerHelperPath();
 	const child: ChildProcessWithoutNullStreams = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
 	let readyResolve!: () => void;
@@ -140,7 +163,9 @@ export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
 					else
 						p.reject(
 							new ServiceUnavailable(
-								"Energy operation failed. Check administrator permission in Energy settings.",
+								process.platform === "linux"
+									? "KDE energy operation failed or is unsupported."
+									: "Energy operation failed. Check administrator permission in Energy settings.",
 							),
 						);
 				} else lost();

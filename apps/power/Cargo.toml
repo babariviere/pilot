@@ -20,5 +20,15 @@ core-foundation = "0.10"
 dispatch2 = "0.3"
 signal-hook = "0.3"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net"] }
+zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time", "net", "test-util"] }
+zbus = { version = "5.19", default-features = false, features = ["tokio", "p2p"] }
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

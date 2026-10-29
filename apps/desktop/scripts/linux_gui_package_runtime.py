@@ -16,6 +16,30 @@ from bundle_runtime import CAP_BYTES, CAP_FILES
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def stage_power(checkout, runtime, expected, env):
+    """Build only the archived Rust helper; receipt enters the runtime inventory."""
+    toolchain = ROOT / "apps/desktop/.tools/rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin"
+    if not all((toolchain / name).is_file() for name in ("cargo", "rustc")):
+        raise ValueError("Bootstrap pinned Rust tools before Linux power packaging")
+    # The ABI container has no rustup shims or host home, and CI bootstrap omits mbx.
+    # Use that same pinned toolchain directly, with private writable Cargo state.
+    build_env = dict(env, PATH=str(toolchain) + os.pathsep + env.get("PATH", "/usr/bin:/bin"),
+                     RUSTC=str(toolchain / "rustc"), CARGO_HOME=str(checkout.parent / "power-cargo"),
+                     CARGO_TARGET_DIR=str(checkout / "apps/power/target"), CARGO_BUILD_JOBS="2")
+    run_builder([str(toolchain / "cargo"), "build", "--locked", "--release",
+                 "--manifest-path", str(checkout / "apps/power/Cargo.toml")],
+                cwd=checkout, env=build_env)
+    helper = (checkout / "apps/power/target/release/PilotPower").resolve(strict=True)
+    if not helper.is_relative_to(checkout.resolve(strict=True)) or not helper.is_file() or not os.access(helper, os.X_OK):
+        raise ValueError("Power helper must be a source-contained executable")
+    destination = runtime / "bin/PilotPower"
+    destination.parent.mkdir(exist_ok=True)
+    shutil.copyfile(helper, destination)
+    destination.chmod(0o755)
+    package.write_json(runtime / "power-inputs.json", dict(source=expected, target=package.TARGET,
+        sha256=package.digest(destination), bytes=destination.stat().st_size, qualification="unqualified"))
+
+
 def run_builder(command, cwd, env, timeout=1800):
     """Keep the owned leader unreaped until its build process group is drained."""
     child = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True)
@@ -122,6 +146,7 @@ def produce(expected, output, repository=ROOT):
                         cwd=checkout, env=env)
             extract(products / "Pilot-linux-x64.tar.gz", output)
             runtime = output / "runtime"
+            stage_power(checkout, runtime, expected, env)
             node = subprocess.check_output([str(runtime / "node/bin/node"), "--version"],
                                            env=env, text=True, timeout=10).strip().removeprefix("v")
             package.write_json(runtime / "runtime-build.json", dict(schema=1, source=expected,

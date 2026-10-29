@@ -96,8 +96,8 @@ export class PowerService {
 		const busy =
 			session.archivedAt === undefined &&
 			!session.sleepPaused &&
-			((session.working ??
-				(session.state === "working" || session.state === "starting" || !!session.runningJobs?.length)) ||
+			(!!session.runningJobs?.length ||
+				(session.working ?? (session.state === "working" || session.state === "starting")) ||
 				(session.state === "idle" && session.subagents?.some((agent) => agent.state === "working")));
 		if (busy) this.working.add(session.id);
 		else this.working.delete(session.id);
@@ -122,7 +122,7 @@ export class PowerService {
 				(state) => {
 					this.state = state;
 					this.failures = 0;
-					this.setNetworkPath(state.online);
+					this.setNetworkPath(state.networkKnown === false ? undefined : state.online);
 					this.schedule();
 				},
 				() => this.lost(),
@@ -142,7 +142,10 @@ export class PowerService {
 		this.applied = undefined;
 		this.setNetworkPath(undefined);
 		this.keepingAwake = false;
-		this.error = "Energy helper unavailable. Closed-lid operation is off.";
+		this.error =
+			this.state?.backend === "kde" || (process.platform === "linux" && this.factory === openPowerHelper)
+				? "Linux energy helper unavailable. Requires an active KDE Wayland session, current PowerDevil and logind delay permission."
+				: "Energy helper unavailable. Closed-lid operation is off.";
 		// If monitoring disappears during a closed-lid session, preserve work, never keep blindly running.
 		if (!this.stopping && (this.state?.lidClosed === true || this.state?.closedLidActive))
 			void this.sessions.pauseForSleep(this.state?.wakeToken).catch(() => {
@@ -173,7 +176,10 @@ export class PowerService {
 					try {
 						await this.evaluate();
 					} catch {
-						this.error = "Energy operation failed. Check administrator permission in Energy settings.";
+						this.error =
+							this.state?.backend === "kde" || (process.platform === "linux" && this.factory === openPowerHelper)
+								? "KDE energy operation failed or is unsupported."
+								: "Energy operation failed. Check administrator permission in Energy settings.";
 					}
 					this.publish();
 				}
@@ -240,6 +246,13 @@ export class PowerService {
 			this.keepingAwake = awake;
 			this.error = undefined;
 		}
+		if (state.backend === "kde") {
+			this.keepingAwake = awake && state.inhibitionActive === true;
+			this.error =
+				awake && !state.inhibitionActive
+					? "KDE automatic-suspend inhibition is pending or blocked."
+					: "Linux/KDE power behavior is not hardware-qualified.";
+		}
 		if (!state.sleeping && !closedLid && state.lidClosed === true) await helper.request({ action: "sleep" });
 	}
 	status(): PowerStatus {
@@ -280,6 +293,11 @@ export class PowerService {
 		const v = value as PowerSettings;
 		if (typeof v.keepAwake !== "boolean" || typeof v.closedLid !== "boolean")
 			throw new Error("Energy settings must be booleans");
+		if (
+			v.closedLid &&
+			((process.platform === "linux" && this.factory === openPowerHelper) || this.state?.backend === "kde")
+		)
+			throw new Conflict("Closed-lid override is not supported on Linux.");
 		if (this.configuring) throw new Conflict("Energy setup is already in progress");
 		this.configuring = true;
 		try {

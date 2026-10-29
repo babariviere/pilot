@@ -1,4 +1,4 @@
-/** Daemon-owned Mac energy policy. No network names or Location Services. */
+/** Daemon-owned energy policy. Closed-lid overrides are macOS-only. No network names. */
 export interface PowerSettings {
 	keepAwake: boolean;
 	closedLid: boolean;

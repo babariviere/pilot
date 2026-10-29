@@ -25,6 +25,18 @@ REQUIRED = (
     "node_modules/@earendil-works/pi-durable/package.json",
     "node_modules/node-pty/package.json", "node_modules/ws/package.json",
 )
+
+
+def power_identity(runtime, expected):
+    helper = runtime / "bin/PilotPower"
+    proof = read_json(runtime / "power-inputs.json")
+    if (proof.get("source") != expected or proof.get("target") != TARGET
+            or proof.get("qualification") != "unqualified"
+            or helper.is_symlink() or not helper.is_file() or not helper.stat().st_mode & 0o111
+            or proof.get("sha256") != digest(helper) or proof.get("bytes") != helper.stat().st_size):
+        raise ValueError("Power helper source/target/hash mismatch")
+
+
 LAUNCHER = '''#!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -84,6 +96,7 @@ def runtime_identity(runtime, expected):
     for name in REQUIRED:
         if not (runtime / name).is_file():
             raise ValueError("Missing runtime resource: " + name)
+    power_identity(runtime, expected)
     return build
 
 

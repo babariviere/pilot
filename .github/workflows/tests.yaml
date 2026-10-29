@@ -167,7 +167,7 @@ jobs:
             libfontconfig1-dev libfreetype6-dev libwayland-dev libxkbcommon-dev \
             libxkbcommon-x11-dev libxcb1-dev libxcb-xkb-dev libx11-xcb-dev \
             libvulkan-dev libssl-dev libudev-dev libegl1-mesa-dev fonts-dejavu-core \
-            sway libgl1-mesa-dri mesa-vulkan-drivers acl
+            sway libgl1-mesa-dri mesa-vulkan-drivers acl dbus-daemon
       - name: Bootstrap pinned Rust and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -190,7 +190,7 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 35
         run: env -u DISPLAY -u WAYLAND_DISPLAY bash apps/desktop/scripts/ci.sh check
-      - name: Portable injected power model, no Linux power helper support
+      - name: Linux power helper build and private fake D-Bus tests, not KDE qualification
         if: steps.changes.outputs.rust == 'true'
         run: bash apps/desktop/scripts/ci.sh power-check
 

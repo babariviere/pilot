@@ -26,6 +26,12 @@ class PackageTests(unittest.TestCase):
         package.write_json(self.runtime / "package.json", dict(version="1.0.0"))
         package.write_json(self.runtime / "runtime-build.json", dict(schema=1, source=self.source,
                            platform="linux", arch="x64", protocol=1, node="24.21.0", version="1.0.0"))
+        helper = self.runtime / "bin/PilotPower"
+        helper.parent.mkdir(exist_ok=True)
+        helper.write_bytes(b"synthetic power helper, never execute")
+        helper.chmod(0o755)
+        package.write_json(self.runtime / "power-inputs.json", dict(source=self.source, target=package.TARGET,
+            sha256=package.digest(helper), bytes=helper.stat().st_size, qualification="unqualified"))
         entries = []
         for name in package.BINARIES:
             path = self.executables / name
@@ -42,6 +48,48 @@ class PackageTests(unittest.TestCase):
 
     def assemble(self):
         package.assemble(self.runtime, self.executables, self.receipt, self.output, self.source)
+
+    def test_runtime_power_helper_is_source_bound_and_inventory_protected(self):
+        helper = self.runtime / "bin/PilotPower"
+        helper.parent.mkdir(exist_ok=True)
+        helper.write_bytes(b"synthetic power helper, never execute")
+        helper.chmod(0o755)
+        proof = self.runtime / "power-inputs.json"
+        package.write_json(proof, dict(source=self.source, target=package.TARGET,
+            sha256=package.digest(helper), bytes=helper.stat().st_size, qualification="unqualified"))
+        self.receipt_runtime()
+        self.assemble()
+        package.verify(self.output)
+        helper.write_bytes(b"wrong helper")
+        with self.assertRaises(ValueError):
+            package.runtime_identity(self.runtime, self.source)
+
+    def test_power_build_uses_archived_inputs_and_enters_runtime_inventory(self):
+        from unittest.mock import patch
+        import linux_gui_package_runtime as runtime
+        checkout = self.root / "archive-source"
+        checkout.mkdir()
+        tools = self.root / "apps/desktop/.tools/rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin"
+        tools.mkdir(parents=True)
+        for name in ("cargo", "rustc"):
+            (tools / name).write_text("fixture tool, never executed")
+        def build(command, cwd, env):
+            self.assertEqual(cwd, checkout)
+            self.assertEqual(command, [str(tools / "cargo"), "build", "--locked", "--release", "--manifest-path", str(checkout / "apps/power/Cargo.toml")])
+            self.assertEqual(env["RUSTC"], str(tools / "rustc"))
+            self.assertEqual(env["CARGO_HOME"], str(checkout.parent / "power-cargo"))
+            self.assertEqual(env["CARGO_BUILD_JOBS"], "2")
+            helper = checkout / "apps/power/target/release/PilotPower"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"archived-source power helper")
+            helper.chmod(0o755)
+        with patch.object(runtime, "ROOT", self.root), patch.object(runtime, "run_builder", side_effect=build):
+            runtime.stage_power(checkout, self.runtime, self.source, {"HOME": str(self.root)})
+        self.assertEqual((self.runtime / "bin/PilotPower").read_bytes(), b"archived-source power helper")
+        package.power_identity(self.runtime, self.source)
+        self.receipt_runtime()
+        self.assemble()
+        package.verify(self.output)
 
     def test_full_update_payload_binds_helper_and_policy(self):
         updater = self.root / "updater"

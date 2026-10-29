@@ -15,10 +15,15 @@ import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
-test("Linux capability detection never probes Mac helpers or offers unrestricted isolation", async () => {
+test("Linux only probes its Rust power helper, never Mac toolchains or unrestricted isolation", async () => {
 	const unexpected = async () => assert.fail("Linux must not touch Mac helpers/toolchains");
+	const missingPower = async (path: string) => {
+		assert.ok(!path.includes("apps/macos"), path);
+		assert.ok(path.endsWith("PilotPower"), path);
+		return false;
+	};
 	assert.deepEqual(
-		await detectPlatformCapabilities("linux", unexpected, unexpected, async () => ({ available: false })),
+		await detectPlatformCapabilities("linux", missingPower, unexpected, async () => ({ available: false })),
 		{
 			powerManagement: false,
 			systemSleepEvents: false,
@@ -34,10 +39,18 @@ test("Linux capability detection never probes Mac helpers or offers unrestricted
 		);
 	assert.equal(loadConfig({ PILOT_HOST: "0.0.0.0" }).host, "127.0.0.1");
 	assert.equal(
-		(await detectPlatformCapabilities("linux", unexpected, unexpected, async () => ({ available: true })))
+		(await detectPlatformCapabilities("linux", missingPower, unexpected, async () => ({ available: true })))
 			.coordinatorIsolation,
 		true,
 	);
+	const installed = await detectPlatformCapabilities(
+		"linux",
+		async () => true,
+		unexpected,
+		async () => ({ available: true }),
+	);
+	assert.equal(installed.powerManagement, true);
+	assert.equal(installed.systemSleepEvents, false);
 });
 
 test("Darwin capabilities reflect installed helpers and compiler, not just an OS name", async () => {

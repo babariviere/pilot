@@ -66,13 +66,11 @@ PY
   host) host ;;
   power-check)
     host
-    # Linux executes the portable injected model only, never native power operations.
+    # Linux uses only private fake D-Bus services, never the user's power services.
     bash ../power/scripts/cargo.sh fmt -- --check
     bash ../power/scripts/cargo.sh clippy --locked --all-targets -- -D warnings
     bash ../power/scripts/cargo.sh test --locked
-    if [[ "$(uname -s)" == Darwin ]]; then
-      bash ../power/scripts/cargo.sh build --locked
-    fi
+    bash ../power/scripts/cargo.sh build --locked
     ;;
   bootstrap)
     host

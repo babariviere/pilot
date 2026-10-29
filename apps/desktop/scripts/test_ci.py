@@ -125,7 +125,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(self.calls(), [["scripts/linux_gui_package_native.py", "--binaries", "target/dev/debug",
                                        "--source", self.env["GITHUB_SHA"], "--output", "target/ci-linux-gui-fixture.json"]])
 
-    def test_power_check_runs_injected_models_on_linux_native_build_only_on_macos(self):
+    def test_power_check_runs_isolated_models_and_builds_both_native_helpers(self):
         desktop = self.root / "nested/desktop"
         power = self.root / "nested/power/scripts"
         (desktop / "scripts").mkdir(parents=True)
@@ -141,7 +141,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 commands = self.calls_path.read_text().splitlines()
                 self.assertEqual(commands[:3], ["fmt -- --check", "clippy --locked --all-targets -- -D warnings", "test --locked"])
-                self.assertEqual(commands[3:], ["build --locked"] if platform == "Darwin" else [])
+                self.assertEqual(commands[3:], ["build --locked"])
         workflow = WORKFLOW.read_text()
         self.assertEqual(workflow.count("run: bash apps/desktop/scripts/ci.sh power-check"), 2)
 

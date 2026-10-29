@@ -1,5 +1,7 @@
 //! Bounded NDJSON pipes. Short reads must not wait for a full buffer or EOF.
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(any(test, target_os = "macos"))]
+use serde_json::json;
 use std::io::{self, Read, Write};
 
 pub(crate) struct Frames<R> {
@@ -51,7 +53,9 @@ impl<R: Read> Frames<R> {
         }
     }
 }
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) struct ReplyReader<R>(Frames<R>);
+#[cfg(any(test, target_os = "macos"))]
 impl<R: Read> ReplyReader<R> {
     pub fn new(input: R) -> Self {
         Self(Frames::new(input, 8192))
@@ -65,6 +69,7 @@ pub(crate) fn emit(output: &mut impl Write, value: &Value) -> io::Result<()> {
     output.write_all(b"\n")?;
     output.flush()
 }
+#[cfg(any(test, target_os = "macos"))]
 pub(crate) fn reply(output: &mut impl Write, id: i64, ok: bool) {
     let _ = emit(output, &json!({"id":id,"ok":ok}));
 }
