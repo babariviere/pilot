@@ -127,8 +127,7 @@ impl ListDelegate for Rows {
                         .w_full()
                         .min_w_0()
                         .items_center()
-                        .gap_2()
-                        .px_3()
+                        .gap(px(Space::CONTROL))
                         .py_1()
                         .child(
                             if collapsed {
@@ -136,10 +135,15 @@ impl ListDelegate for Rows {
                             } else {
                                 crate::app_icon::AppIcon::Expand
                             }
-                            .inline(),
+                            .inline()
+                            .size(px(14.)),
                         )
                         .child(
                             ui::text(Text::Body, SharedString::from(title))
+                                .id(SharedString::from(format!(
+                                    "mission-tasks-phase-title-{section}"
+                                )))
+                                .test_support()
                                 .font_semibold()
                                 .min_w_0()
                                 .truncate(),

@@ -830,6 +830,32 @@ fn phases_journey(
             assert!(top.is_none_or(|t| hb.top() > t), "{header} in phase order");
             top = Some(hb.top());
         }
+        for (section, first) in [
+            (0, "mission-tasks-item-b-0"),
+            (1, "mission-tasks-item-b-4"),
+            (2, "mission-tasks-item-b-7"),
+        ] {
+            let content = w
+                .find(gpui_kit::SharedString::from(format!(
+                    "mission-tasks-phase-content-{section}"
+                )))
+                .bounds();
+            let title = w
+                .find(gpui_kit::SharedString::from(format!(
+                    "mission-tasks-phase-title-{section}"
+                )))
+                .bounds();
+            assert_eq!(
+                content.left(),
+                w.find(first).bounds().left(),
+                "phase and task glyph lanes align"
+            );
+            assert_eq!(
+                title.left(),
+                w.within(first).find("resource-title").bounds().left(),
+                "phase and task titles align"
+            );
+        }
         // Dropped tasks stay listed in their phase.
         assert!(w.find("mission-tasks-item-b-6").visible());
     })
