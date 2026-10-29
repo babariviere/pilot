@@ -81,6 +81,35 @@ function setup(store = new MissionStore(":memory:")) {
 	return { store, id };
 }
 
+test("unaccepted non-code delivery survives reopen and exact retries without completing work", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-delivery-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	const { store, id } = setup(new MissionStore(path));
+	const task = store.resolveTask(id, "1");
+	store.writeBrief(id, "Research findings", 0);
+	const delivery = {
+		kind: "non-code" as const,
+		references: [{ kind: "brief" as const, revision: 1 }],
+		checks: "Read sources",
+		limitations: "No independent review",
+	};
+	assert.deepEqual(store.saveNonCodeDelivery(id, task.id, "member", delivery), delivery);
+	await store.durable();
+	store.close();
+	const reopened = new MissionStore(path);
+	try {
+		assert.deepEqual(reopened.nonCodeDelivery(id, task.id), delivery);
+		assert.deepEqual(reopened.saveNonCodeDelivery(id, task.id, "member", delivery), delivery);
+		assert.equal(reopened.completion(id, task.id), undefined);
+		assert.equal(reopened.task(id, task.id).status, "in_progress");
+		assert.equal(reopened.retiredMember("member"), false);
+		assert.throws(() => reopened.completeTask(id, task.id, "member", delivery), /commit/);
+	} finally {
+		reopened.close();
+	}
+});
+
 test("completion is immutable, bounded, referenced once and retires admission durably", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-completion-"));
 	t.after(() => rm(home, { recursive: true, force: true }));

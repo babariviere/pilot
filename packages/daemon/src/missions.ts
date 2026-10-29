@@ -12,6 +12,7 @@ import type {
 	MissionArtifactLink,
 	MissionBrief,
 	MissionBriefRevision,
+	MissionCodeCompletion,
 	MissionComment,
 	MissionCommentWrite,
 	MissionDecision,
@@ -23,6 +24,7 @@ import type {
 	MissionHealth,
 	MissionLinearRole,
 	MissionLinearSync,
+	MissionNonCodeDelivery,
 	MissionPhase,
 	MissionPhaseWrite,
 	MissionResource,
@@ -51,6 +53,7 @@ import {
 	linearTarget,
 	reconcileLinearRecord,
 } from "./mission-linear-state.ts";
+import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
@@ -279,6 +282,10 @@ CREATE TABLE IF NOT EXISTS pending_notices (
 );
 CREATE INDEX IF NOT EXISTS pending_notices_by_mission ON pending_notices (mission_id, event_id);
 CREATE TABLE IF NOT EXISTS task_completions (
+	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+	record TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_non_code_deliveries (
 	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
 	record TEXT NOT NULL
 );
@@ -3086,7 +3093,7 @@ export class MissionStore {
 			checks: text(input.checks, "checks", 2000)!,
 			issues: text(input.issues, "issues", 1000, { empty: true })!,
 		};
-		if (!/^[a-f0-9]{40}$/.test(record.commit)) throw new Error("commit must be a landed 40-character commit hash");
+		if (!/^[a-f0-9]{40}$/.test(record.commit)) throw new Error("commit must be a 40-character lowercase hex hash");
 		const encoded = JSON.stringify(record);
 		const previous = this.completion(id, task.id);
 		if (previous) {
@@ -3122,10 +3129,57 @@ export class MissionStore {
 		return record;
 	}
 
-	completion(id: string, taskId: string): { commit: string; checks: string; issues: string } | undefined {
+	completion(id: string, taskId: string): MissionCodeCompletion | undefined {
 		this.task(id, taskId);
 		const row = this.one("SELECT record FROM task_completions WHERE task_id = ?", taskId);
 		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	/** Unaccepted submission only. Never changes task status or member lifecycle. */
+	nonCodeDelivery(id: string, taskId: string): MissionNonCodeDelivery | undefined {
+		this.task(id, taskId);
+		const row = this.one("SELECT record FROM task_non_code_deliveries WHERE task_id = ?", taskId);
+		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	/** Called after the service resolves artifact revisions. Rechecks persisted scope synchronously. */
+	saveNonCodeDelivery(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		resolvedArtifacts: ReadonlyMap<string, string> = new Map(),
+	) {
+		this.assertMember(id, sessionId);
+		const task = this.resolveTask(id, ref);
+		if (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId)
+			throw new Conflict("Only the task owner or coordinator may submit delivery");
+		const record = parseNonCodeDelivery(value);
+		const encoded = JSON.stringify(record);
+		const previous = this.nonCodeDelivery(id, task.id);
+		if (previous) {
+			if (JSON.stringify(previous) !== encoded) throw new Conflict("Task already has a non-code delivery");
+			return previous;
+		}
+		for (const item of record.references) {
+			if (item.kind === "brief") {
+				if (this.require(id).briefRevision !== item.revision || !this.brief(id, item.revision))
+					throw new Conflict("Brief reference is missing or stale");
+			} else {
+				const links = this.artifactReferences(id, item.artifactId);
+				const owner = resolvedArtifacts.get(item.artifactId);
+				if (
+					!owner ||
+					links.some((link) => link.sessionId !== owner) ||
+					!links.some(
+						(link) => link.sessionId === owner && link.taskId === task.id && link.revision === item.revision,
+					)
+				)
+					throw new Conflict("Artifact reference must be pinned to this task and revision");
+			}
+		}
+		this.transaction(() => this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded), true);
+		return record;
 	}
 
 	retiredMember(sessionId: string): boolean {

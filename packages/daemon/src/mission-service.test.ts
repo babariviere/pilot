@@ -25,6 +25,84 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("non-code delivery resolves pinned artifacts and cannot accept or retire work", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Research",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, { title: "Research", sessionId: member.id });
+	f.store.writeBrief(mission.id, "Research scope", 0, { sessionId: lead.id });
+	const artifact = await f.sessions["artifactStore"](member.id).create({
+		title: "Report",
+		kind: "html",
+		source: "<p>Findings</p>",
+	});
+	const record = {
+		kind: "non-code",
+		references: [
+			{ kind: "brief", revision: 1 },
+			{ kind: "artifact", artifactId: artifact.id, revision: 1 },
+		],
+		checks: "Sources checked",
+		limitations: "Not independently reviewed",
+	};
+	await assert.rejects(f.service.saveNonCodeDelivery(other.id, task.id, record), /owner or coordinator/);
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, record), /authorized/);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: member.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const readArtifact = f.sessions.artifact.bind(f.sessions);
+	const mocked = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof readArtifact>) => {
+		const value = await readArtifact(...args);
+		return { ...value, sessionId: other.id };
+	});
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, record), /pinned/);
+	mocked.mock.restore();
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, {
+			...record,
+			references: [{ kind: "brief", revision: 2 }],
+		}),
+		/stale/,
+	);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, {
+			...record,
+			references: [{ kind: "artifact", artifactId: artifact.id, revision: 2 }],
+		}),
+		/revision|not found/i,
+	);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, { checks: "x", limitations: "", references: [] }),
+	);
+	await assert.rejects(f.service.saveNonCodeDelivery(member.id, task.id, { ...record, commit: "a".repeat(40) }));
+	assert.deepEqual(await f.service.saveNonCodeDelivery(member.id, task.id, record), record);
+	assert.deepEqual(await f.service.saveNonCodeDelivery(member.id, task.id, record), record);
+	await assert.rejects(
+		f.service.saveNonCodeDelivery(member.id, task.id, { ...record, checks: "different" }),
+		/already has/,
+	);
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+	assert.equal(f.store.retiredMember(member.id), false);
+	await assert.rejects(
+		f.service.call(member.id, "complete", { id: task.id, completion: record }),
+		/coordinator\/user/,
+	);
+});
+
 test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR completion usable", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

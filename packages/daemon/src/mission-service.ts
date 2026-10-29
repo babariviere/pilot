@@ -22,6 +22,7 @@ import type {
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
+import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
@@ -357,6 +358,30 @@ export class MissionService {
 			throw new Conflict("Artifact reference changed while reading; retry");
 		const { html: _html, ...source } = value;
 		return source;
+	}
+
+	/** Internal foundation for future acceptance. No tool or completion action invokes it yet. */
+	async saveNonCodeDelivery(sessionId: string, taskRef: string, value: unknown) {
+		const missionId = this.store.missionOf(sessionId);
+		if (!missionId) throw new Error("Mission membership required");
+		this.assertSameProject(sessionId, missionId);
+		const task = this.store.resolveTask(missionId, taskRef);
+		if (task.sessionId !== sessionId && this.store.require(missionId).coordinatorSessionId !== sessionId)
+			throw new Conflict("Only the task owner or coordinator may submit delivery");
+		const record = parseNonCodeDelivery(value);
+		const resolved = new Map<string, string>();
+		for (const ref of record.references) {
+			if (ref.kind !== "artifact") continue;
+			const artifact = await this.readArtifactReference(sessionId, ref.artifactId, ref.revision);
+			if (artifact.id !== ref.artifactId || artifact.revision !== ref.revision)
+				throw new Conflict("Artifact identity or revision changed");
+			this.assertSameProject(artifact.sessionId, missionId);
+			resolved.set(ref.artifactId, artifact.sessionId);
+		}
+		// The store rechecks membership, ownership, current brief and task-scoped pins after I/O.
+		const saved = this.store.saveNonCodeDelivery(missionId, task.id, sessionId, record, resolved);
+		await this.store.durable();
+		return saved;
 	}
 
 	context(sessionId: string): MissionContext | undefined {

@@ -1045,6 +1045,25 @@ export interface MissionPhaseWrite {
 	order?: number;
 }
 
+/** A submission, not acceptance, completion, or evidence of code review or merge. */
+export type MissionNonCodeDeliveryReference =
+	| { kind: "brief"; revision: number }
+	| { kind: "artifact"; artifactId: string; revision: number };
+
+export interface MissionNonCodeDelivery {
+	kind: "non-code";
+	references: MissionNonCodeDeliveryReference[];
+	checks: string;
+	limitations: string;
+}
+
+/** Legacy receipts validate hash format only, not existence or landing. */
+export interface MissionCodeCompletion {
+	commit: string;
+	checks: string;
+	issues: string;
+}
+
 export interface MissionTask {
 	id: string;
 	/** Coordinator-owned definition, separate from execution status and log/comment reports. */
