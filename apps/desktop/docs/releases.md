@@ -52,9 +52,22 @@ Missing prerequisites fail, leaving the release draft unpublished:
   qualification; this release wiring cannot enable it or claim it works.
 - Optional platform-specific `PILOT_NEXT_MACOS_ACCEPTED_CAPSULES` and
   `PILOT_NEXT_LINUX_ACCEPTED_CAPSULES` variables are JSON lists of exact
-  retained-runtime manifest digests (existing limit: four). They become signed
-  candidate policy. On macOS, compatibility must be established for the actual
-  prior payload. Linux packaging also admits, after the configured digests, the
+  retained-runtime capsule digests (existing limit: four). They become signed
+  candidate policy. macOS packaging also admits the newest published stable
+  macOS runtimes with the same protocol, after the configured digests and within
+  the same four-capsule limit. It authenticates each release's exact update
+  envelope with the configured public key, checks the archive asset identity,
+  size and SHA256, then verifies the extracted native code seal, full bundle
+  inventory and runtime metadata before hashing the complete retained closure.
+  Drafts, prereleases, Swift-only releases and incompatible protocols are not
+  admitted. Invalid signed releases or failed discovery fail packaging rather
+  than silently producing an empty policy. API credentials are never sent to
+  archive downloads or source-build/native-verification subprocesses. Discovery
+  is sequential and bounded to 30 release records, 1 GiB per archive and a
+  20-minute overall admission deadline; extracted closures keep the existing
+  2 GiB bound. Redirects cannot downgrade HTTPS or forward API credentials to
+  another origin. This does not weaken startup or change daemon versions.
+  Linux packaging also admits, after the configured digests, the
   runtimes of the newest published Linux releases (SHA256 of each release's exact
   `linux-gui-package.json`), so an update can keep using the daemon an earlier
   release started; the app still checks the daemon's protocol when it connects.

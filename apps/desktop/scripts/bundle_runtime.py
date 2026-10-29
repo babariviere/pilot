@@ -33,8 +33,14 @@ REQUIRED = [
 ]
 
 
+def subprocess_env(env=None):
+    """Discovery credentials are not build or native-verification capabilities."""
+    return {key: value for key, value in (os.environ if env is None else env).items()
+            if key not in ("GH_TOKEN", "GITHUB_TOKEN")}
+
+
 def run(*args, cwd=None, env=None, timeout=30):
-    return subprocess.check_output(args, cwd=cwd, env=env, timeout=timeout, text=True).strip()
+    return subprocess.check_output(args, cwd=cwd, env=subprocess_env(env), timeout=timeout, text=True).strip()
 
 
 def digest(path):
@@ -97,6 +103,86 @@ def inventory(root):
             if len(result) > CAP_FILES:
                 raise ValueError("Bundle exceeds entry policy")
     return sorted(result, key=lambda item: item["path"])
+
+
+def capsule_identity(root):
+    """Return the Rust runtime::identity SHA-256 hex digest, without modifying root.
+
+    Structural admission and hashing only. Callers must separately verify native
+    signatures and ACL policy, as the updater does. Filesystem errors propagate;
+    unsupported, unsafe or changing trees raise ValueError. Never follow directory
+    symlinks while enumerating, and never hash the inventory's per-file digests.
+    """
+    root = Path(root)
+    if root.is_symlink():
+        raise ValueError("Capsule root must not be a symlink")
+    # Normalize ancestor aliases (notably /var -> /private/var on macOS) before
+    # comparing canonical link destinations with the capsule boundary.
+    root = root.resolve(strict=True)
+    pending, paths = [root], []
+    while pending:
+        path = pending.pop()
+        if len(paths) + len(pending) >= CAP_FILES:
+            raise ValueError("Capsule exceeds entry policy")
+        info = path.lstat()
+        relative = path.relative_to(root)
+        if len(relative.parts) > 128:
+            raise ValueError("Capsule exceeds depth policy")
+        if stat.S_ISDIR(info.st_mode):
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    pending.append(path / entry.name)
+                    if len(pending) + len(paths) >= CAP_FILES:
+                        raise ValueError("Capsule exceeds entry policy")
+        paths.append(relative)
+
+    # Rust Path::Ord compares components, not slash-separated strings. Encoding
+    # strictly also rejects non-UTF-8 Unix names, as relative.to_str() does.
+    paths.sort(key=lambda relative: tuple(part.encode("utf-8") for part in relative.parts))
+    identity, total = hashlib.sha256(), 0
+
+    def sized(value):
+        identity.update(len(value).to_bytes(8, "little"))
+        identity.update(value)
+
+    for relative in paths:
+        path = root / relative
+        info = path.lstat()
+        sized((relative.as_posix() if relative.parts else "").encode("utf-8"))
+        if stat.S_ISLNK(info.st_mode):
+            target = os.readlink(path)
+            if os.path.isabs(target) or not path.resolve(strict=True).is_relative_to(root):
+                raise ValueError(f"Capsule link escapes root: {relative}")
+            identity.update(b"link")
+            sized(target.encode("utf-8"))
+            continue
+        if info.st_mode & 0o6022:
+            raise ValueError(f"Unsafe capsule permissions: {relative}")
+        identity.update((info.st_mode & 0o777).to_bytes(4, "little"))
+        if stat.S_ISDIR(info.st_mode):
+            identity.update(b"directory")
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 256 * 1024**2:
+            raise ValueError(f"Unsupported capsule file: {relative}")
+        total += info.st_size
+        if total > CAP_BYTES:
+            raise ValueError("Capsule exceeds expanded byte policy")
+        identity.update(b"file")
+        identity.update(info.st_size.to_bytes(8, "little"))
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                raise ValueError(f"Capsule file changed: {relative}")
+            read = 0
+            while block := stream.read(64 * 1024):
+                read += len(block)
+                if read > info.st_size:
+                    raise ValueError(f"Capsule file changed: {relative}")
+                identity.update(block)
+            if read != info.st_size:
+                raise ValueError(f"Capsule file changed: {relative}")
+    return identity.hexdigest()
 
 
 def supports_macos_15(load_commands):
@@ -176,11 +262,13 @@ def native_closure(root):
     return binaries
 
 
-def validate_runtime(runtime, expected_source):
+def validate_runtime(runtime, expected_source, *, protocol=1):
     build = read_json(runtime / "runtime-build.json", 4096)
     if (build.get("schema") != 1 or build.get("source") != source(expected_source)
             or build.get("platform") != "darwin" or build.get("arch") != "arm64"
-            or build.get("protocol") != 1 or not re.fullmatch(r"24\.\d+\.\d+", build.get("node", ""))
+            or type(protocol) is not int or protocol < 1
+            or type(build.get("protocol")) is not int or build["protocol"] != protocol
+            or not re.fullmatch(r"24\.\d+\.\d+", build.get("node", ""))
             or build.get("version") != read_json(runtime / "package.json")["version"]):
         raise ValueError("Runtime build identity mismatch")
     for relative in REQUIRED:
@@ -285,7 +373,7 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
         raise
 
 
-def verify(output):
+def verify(output, *, protocol=1):
     value = read_json(output / MANIFEST)
     actual = [item for item in inventory(output) if item["path"] not in (MANIFEST, "Contents/MacOS/pilot-desktop")
               and not item["path"].startswith("Contents/_CodeSignature")]
@@ -294,7 +382,7 @@ def verify(output):
         observed = {item["path"]: item for item in actual}
         changed = [name for name in sorted(expected.keys() | observed.keys()) if expected.get(name) != observed.get(name)]
         raise ValueError("Bundle inventory/hash mismatch: " + ", ".join(changed[:4]))
-    if validate_runtime(output / "Contents/Resources/runtime", value["build"]["source"]) != value["build"]:
+    if validate_runtime(output / "Contents/Resources/runtime", value["build"]["source"], protocol=protocol) != value["build"]:
         raise ValueError("Runtime manifest/build identity mismatch")
 
 
@@ -311,12 +399,12 @@ def snapshot_build(expected_source, output, native=False):
         archive, checkout = temporary / "source.tar", temporary / "source"
         checkout.mkdir()
         with archive.open("wb") as stream:
-            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, check=True, timeout=60)
+            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, env=subprocess_env(), check=True, timeout=60)
         with tarfile.open(archive) as tar:
             tar.extractall(checkout, filter="data")
         if native:
             for product in ("PilotPower", "PilotSystemEvents"):
-                subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/build.sh"), "-c", "release", "--product", product], check=True, timeout=1200)
+                subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/build.sh"), "-c", "release", "--product", product], env=subprocess_env(), check=True, timeout=1200)
             package = (checkout / "apps/macos").resolve()
             # Use the same SDK selection as build.sh, without rerunning its vendor steps.
             reported = run("/bin/bash", "-c",
@@ -342,7 +430,7 @@ def snapshot_build(expected_source, output, native=False):
             write_json(output / "manifest.json", dict(schema=1, source=expected_source, target="aarch64-apple-darwin", binaries=binaries))
         else:
             # Same production workspace closure as Swift, from git objects, never live node_modules.
-            env = {key: value for key, value in os.environ.items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
+            env = {key: value for key, value in subprocess_env().items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
             env["HOME"] = str(temporary / "home")
             Path(env["HOME"]).mkdir()
             env["XDG_CONFIG_HOME"] = str(temporary / "config")
@@ -376,7 +464,7 @@ def snapshot_rust(expected_source, output, production=None):
         checkout, archive = temporary / "source", temporary / "source.tar"
         checkout.mkdir()
         with archive.open("wb") as stream:
-            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, check=True, timeout=60)
+            subprocess.run(["git", "archive", "--format=tar", expected_source], cwd=ROOT, stdout=stream, env=subprocess_env(), check=True, timeout=60)
         with tarfile.open(archive) as tar:
             tar.extractall(checkout, filter="data")
         desktop = checkout / "apps/desktop"
@@ -384,7 +472,7 @@ def snapshot_rust(expected_source, output, production=None):
         if (tools / "bin/mbx").is_file():  # Absent on CI, where cargo.sh runs plain Cargo.
             (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
         (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
-        env = {key: value for key, value in os.environ.items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
+        env = {key: value for key, value in subprocess_env().items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
         # No trust/feed/public-key variables are inherited. Only explicit
         # production configuration may enable the configured optimized lane.
         if production is not None:

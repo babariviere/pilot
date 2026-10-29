@@ -74,7 +74,10 @@ refusals are distinguished from identity failures and uncertain installation.
 
 An update's signed full bundle must explicitly list the exact retained capsule
 digest in `Contents/Resources/update-runtime-policy.json`. The default empty
-allowlist does not assert compatibility. The existing exact-source owner gate
+allowlist does not assert compatibility. Production macOS packaging populates
+this policy from explicitly configured identities and verified prior stable macOS releases with the same
+protocol, up to four exact capsules; see [release checks](releases.md).
+Development bundles still default to an empty allowlist. The exact-source owner gate
 remains intact: startup uses the proven retained source, never pretends a new
 runtime is that source. An already-running app-root/legacy daemon is not moved,
 stopped, restarted or retroactively declared independent. Unproven reuse refuses.

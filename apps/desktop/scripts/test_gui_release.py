@@ -1,5 +1,6 @@
 """Synthetic release-policy/ZIP/workflow checks. No native qualification claim."""
 import base64
+import json
 from pathlib import Path
 import stat
 import tempfile
@@ -12,6 +13,43 @@ import gui_release as release
 
 
 class GuiReleaseTests(unittest.TestCase):
+    def test_macos_release_merges_verified_prior_runtimes_with_configured_policy(self):
+        configured = "a" * 64
+        env = {"PILOT_NEXT_ACCEPTED_CAPSULES": json.dumps([configured])}
+        previous = [configured, "b" * 64, "c" * 64, "d" * 64, "e" * 64]
+        self.assertEqual(release.macos_release_capsules(env, 1, previous),
+                         [configured, "b" * 64, "c" * 64, "d" * 64])
+        full = ["a" * 64, "b" * 64, "c" * 64, "d" * 64]
+        # A full explicitly configured policy needs no discovery credentials/network.
+        self.assertEqual(release.macos_release_capsules(
+            {"PILOT_NEXT_ACCEPTED_CAPSULES": json.dumps(full)}, 1), full)
+
+    def test_macos_discovery_uses_release_public_key_protocol_and_api_token(self):
+        env = {"PILOT_NEXT_UPDATER_REPOSITORY": "owner/repo",
+               "PILOT_NEXT_UPDATER_PUBLIC_KEY": "configured-public-key", "GH_TOKEN": "api-only"}
+        with patch("macos_release_capsules.previous_macos_capsules", return_value=["a" * 64]) as discover:
+            self.assertEqual(release.macos_release_capsules(env, 1), ["a" * 64])
+        discover.assert_called_once_with("owner/repo", "configured-public-key", 1, token="api-only")
+
+    def test_macos_assembly_seals_discovered_capsules_for_its_runtime_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "release"
+            def snapshot(source, destination, **kwargs):
+                destination.mkdir()
+                bundle.write_json(destination / "runtime-build.json", {"protocol": 7})
+            def assemble(runtime, rust, native, app, source, **kwargs):
+                app.mkdir()
+            config = {"build": "200.1", "code_requirement": 'identifier "synthetic"'}
+            with patch.object(bundle, "snapshot_build", side_effect=snapshot), \
+                    patch.object(bundle, "snapshot_rust", side_effect=snapshot), \
+                    patch.object(bundle, "assemble", side_effect=assemble) as assembly, \
+                    patch.object(bundle, "verify"), patch.object(bundle, "native_closure"), \
+                    patch.object(release.subprocess, "run"), patch.object(release, "artifact"), \
+                    patch.object(release, "macos_release_capsules", return_value=["b" * 64]) as policy:
+                release.macos("a" * 40, output, config)
+            self.assertEqual(policy.call_args.args[1], 7)
+            self.assertEqual(assembly.call_args.kwargs["accepted_capsules"], ["b" * 64])
+
     def test_release_trust_is_explicit_and_separate_from_swift(self):
         env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc", PILOT_NEXT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes(32)).decode(),
                    PILOT_NEXT_UPDATER_REPOSITORY="owner/repo", PILOT_NEXT_UPDATER_BUILD="200.1")
@@ -120,9 +158,11 @@ class GuiReleaseTests(unittest.TestCase):
         self.assertNotIn("publish-release.sh", package)
         # Retried drafts keep tagged app source but run current packaging helpers.
         self.assertIn("ref: ${{ github.sha }}", package)
-        for helper in ("gui_release.py", "bundle_runtime.py", "linux_gui_package_runtime.py"):
+        for helper in ("gui_release.py", "bundle_runtime.py", "macos_release_capsules.py", "linux_gui_package_runtime.py"):
             self.assertTrue((root / "apps/desktop/scripts" / helper).is_file())
             self.assertIn(helper, package.split("Apply current packaging helpers")[1].split("- uses:")[0])
+        macos_step = package.split("Build optimized macOS GUI, updater helper and immutable native/runtime closure")[1].split("- name:")[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", macos_step)
 
 
 if __name__ == "__main__":

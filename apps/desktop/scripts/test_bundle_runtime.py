@@ -10,9 +10,195 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import bundle_runtime as bundle
 import make_dev_icon
+
+
+class SubprocessEnvironmentTests(unittest.TestCase):
+    def test_discovery_tokens_never_reach_native_queries(self):
+        env = {"GH_TOKEN": "api-only", "GITHUB_TOKEN": "api-only", "PATH": "/usr/bin"}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(bundle.subprocess, "check_output", return_value="arm64\n") as command:
+            self.assertEqual(bundle.run("/usr/bin/uname", "-m"), "arm64")
+        self.assertEqual(command.call_args.kwargs["env"], {"PATH": "/usr/bin"})
+        self.assertEqual(bundle.subprocess_env(env), {"PATH": "/usr/bin"})
+        self.assertEqual(env["GH_TOKEN"], "api-only")
+
+
+class CapsuleIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="next-capsule-faux-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "capsule"
+        self.root.mkdir(mode=0o755)
+        self.root.chmod(0o755)
+
+    def file(self, name, content=b"data", mode=0o644):
+        path = self.root / name
+        path.write_bytes(content)
+        path.chmod(mode)
+        return path
+
+    def test_fixed_rust_wire_vector_component_order_and_utf8_lengths(self):
+        # Independent identity_checked wire vector, in Rust Path::Ord order:
+        # ("", 0755, directory), ("a", 0755, directory),
+        # ("a/z", 0640, file, 00 ff 78), ("a-b", 0644, file, 41),
+        # ("link", link, "a/z"), ("é", 0755, file, 23 21 0a).
+        # Every name/data length is u64LE, every non-link mode u32LE.
+        # String sorting would put a-b before a/z and produce a different ID.
+        (self.root / "a").mkdir(mode=0o755)
+        (self.root / "a").chmod(0o755)
+        self.file("a/z", b"\x00\xffx", 0o640)
+        self.file("a-b", b"A")
+        (self.root / "link").symlink_to("a/z")
+        self.file("é", b"#!\n", 0o755)
+        expected = "25d6499d427363c628e001fe50872a3d58aab07b5d100ee05e883f230ef6ca2e"
+        self.assertEqual(bundle.capsule_identity(self.root), expected)
+        moved = self.root.with_name("relocated")
+        self.root.rename(moved)
+        self.assertEqual(bundle.capsule_identity(str(moved)), expected)
+
+    def test_root_and_every_kind_of_tampering_change_identity(self):
+        file = self.file("resource", b"first")
+        link = self.root / "link"
+        link.symlink_to("resource")
+        original = bundle.capsule_identity(self.root)
+        for mutate, restore in (
+            (lambda: file.write_bytes(b"other"), lambda: file.write_bytes(b"first")),
+            (lambda: file.chmod(0o755), lambda: file.chmod(0o644)),
+            (lambda: self.root.chmod(0o700), lambda: self.root.chmod(0o755)),
+            (lambda: file.rename(self.root / "renamed"), lambda: (self.root / "renamed").rename(file)),
+            (lambda: (self.root / "empty").mkdir(), lambda: (self.root / "empty").rmdir()),
+        ):
+            # Rename the linked resource only after removing its link.
+            link.unlink()
+            baseline = bundle.capsule_identity(self.root)
+            mutate()
+            self.assertNotEqual(bundle.capsule_identity(self.root), baseline)
+            restore()
+            link.symlink_to("resource")
+            self.assertEqual(bundle.capsule_identity(self.root), original)
+        link.unlink()
+        link.symlink_to("./resource")
+        self.assertNotEqual(bundle.capsule_identity(self.root), original)
+
+    def test_links_are_contained_and_directory_links_are_not_traversed(self):
+        directory = self.root / "directory"
+        directory.mkdir(mode=0o755)
+        self.file("directory/resource")
+        link = self.root / "link"
+        link.symlink_to("directory", target_is_directory=True)
+        # Four entries including root. Traversing the alias would exceed this.
+        with patch.object(bundle, "CAP_FILES", 4):
+            bundle.capsule_identity(self.root)
+        link.unlink()
+        for target in (str(directory), "..", "missing", "link"):
+            with self.subTest(target=target):
+                link.symlink_to(target)
+                with self.assertRaises((ValueError, OSError, RuntimeError)):
+                    bundle.capsule_identity(self.root)
+                link.unlink()
+
+    def test_unsafe_modes_hardlinks_and_special_files(self):
+        file = self.file("resource")
+        for mode in (0o666, 0o664, 0o4644, 0o2644):
+            with self.subTest(mode=oct(mode)):
+                file.chmod(mode)
+                with self.assertRaisesRegex(ValueError, "permissions"):
+                    bundle.capsule_identity(self.root)
+        file.chmod(0o644)
+        alias = self.root / "alias"
+        os.link(file, alias)
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            bundle.capsule_identity(self.root)
+        alias.unlink()
+        os.mkfifo(alias, 0o600)
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            bundle.capsule_identity(self.root)
+        alias.unlink()
+        self.root.chmod(0o777)
+        with self.assertRaisesRegex(ValueError, "permissions"):
+            bundle.capsule_identity(self.root)
+        self.root.chmod(0o755)
+
+    def test_entry_and_depth_boundaries_include_root(self):
+        self.file("one")
+        self.file("two")
+        with patch.object(bundle, "CAP_FILES", 3):
+            bundle.capsule_identity(self.root)
+            self.file("three")
+            with self.assertRaisesRegex(ValueError, "entry"):
+                bundle.capsule_identity(self.root)
+        directory = self.root
+        for _ in range(128):
+            directory /= "d"
+            directory.mkdir(mode=0o755)
+        bundle.capsule_identity(self.root)
+        (directory / "too-deep").mkdir()
+        with self.assertRaisesRegex(ValueError, "depth"):
+            bundle.capsule_identity(self.root)
+
+    def test_file_and_total_byte_limits_before_reading(self):
+        file = self.file("sparse")
+        with file.open("r+b") as stream:
+            stream.truncate(256 * 1024**2 + 1)
+        with patch.object(bundle.os, "open", side_effect=AssertionError("must not read oversized file")):
+            with self.assertRaisesRegex(ValueError, "Unsupported"):
+                bundle.capsule_identity(self.root)
+        file.write_bytes(b"1234")
+        self.file("second", b"5678")
+        with patch.object(bundle, "CAP_BYTES", 8):
+            bundle.capsule_identity(self.root)
+        with patch.object(bundle, "CAP_BYTES", 7):
+            with self.assertRaisesRegex(ValueError, "expanded byte"):
+                bundle.capsule_identity(self.root)
+
+    def test_changed_file_descriptor_or_short_read_is_rejected(self):
+        file = self.file("resource")
+        real_fstat = os.fstat
+        for change in (b"", b"longer data"):
+            file.write_bytes(b"data")
+
+            def tamper(fd):
+                info = real_fstat(fd)
+                file.write_bytes(change)
+                return info
+
+            with patch.object(bundle.os, "fstat", side_effect=tamper):
+                with self.assertRaisesRegex(ValueError, "changed"):
+                    bundle.capsule_identity(self.root)
+
+        replacement = self.file("replacement", b"same")
+        real_open = os.open
+
+        def swapped(path, flags):
+            return real_open(replacement, flags)
+
+        with patch.object(bundle.os, "open", side_effect=swapped):
+            with self.assertRaisesRegex(ValueError, "changed"):
+                bundle.capsule_identity(self.root)
+
+    def test_sticky_bit_is_not_hashed_and_non_utf8_names_are_rejected(self):
+        original = bundle.capsule_identity(self.root)
+        self.root.chmod(0o1755)
+        self.assertEqual(bundle.capsule_identity(self.root), original)
+        self.root.chmod(0o755)
+        bad = os.fsencode(self.root) + b"/invalid-\xff"
+        try:
+            fd = os.open(bad, os.O_CREAT | os.O_WRONLY, 0o644)
+        except OSError:
+            self.skipTest("filesystem does not support non-UTF-8 names")
+        os.close(fd)
+        with self.assertRaises(ValueError):
+            bundle.capsule_identity(self.root)
+
+    def test_root_symlink_is_not_followed(self):
+        alias = self.root.with_name("alias")
+        alias.symlink_to(self.root)
+        with self.assertRaisesRegex(ValueError, "root"):
+            bundle.capsule_identity(alias)
 
 
 class NativeSnapshotTests(unittest.TestCase):
@@ -189,6 +375,41 @@ class BundleRuntimeTests(unittest.TestCase):
         self.assertEqual(manifest["build"]["source"], self.source)
         self.assertTrue((relocated / "Contents/Resources/runtime/node_modules/@pilot/daemon/src/main.ts").is_file())
 
+    def test_prior_release_admission_uses_real_inventory_and_protocol_verification(self):
+        import macos_release_capsules as prior
+        self.assemble()
+        stamp = self.output / "Contents/Resources/runtime/runtime-build.json"
+        for protocol in (1, 2):
+            bundle.write_json(stamp, bundle.read_json(stamp) | {"protocol": protocol})
+            metadata = bundle.read_json(self.output / bundle.MANIFEST)
+            metadata["build"]["protocol"] = protocol
+            metadata["files"] = [item for item in bundle.inventory(self.output)
+                                 if item["path"] not in (bundle.MANIFEST, "Contents/MacOS/pilot-desktop")
+                                 and not item["path"].startswith("Contents/_CodeSignature")]
+            bundle.write_json(self.output / bundle.MANIFEST, metadata)
+            bundle.verify(self.output, protocol=protocol)
+            directory = self.root / f"prior-{protocol}"
+            directory.mkdir()
+            archive_path = directory / "release.zip"
+            with zipfile.ZipFile(archive_path, "w") as archive:
+                for path in [self.output] + sorted(self.output.rglob("*")):
+                    name = "Pilot Next.app" + ("/" + path.relative_to(self.output).as_posix() if path != self.output else "")
+                    entry = zipfile.ZipInfo(name + ("/" if path.is_dir() else ""))
+                    entry.create_system = 3
+                    entry.external_attr = path.lstat().st_mode << 16
+                    archive.writestr(entry, b"" if path.is_dir() else path.read_bytes())
+            def native(args, **kwargs):
+                if args[0] == "/usr/bin/ditto":
+                    shutil.copytree(self.output, Path(args[-1]) / "Pilot Next.app")
+                return subprocess.CompletedProcess(args, 0)
+            with patch.object(prior.subprocess, "run", side_effect=native), \
+                    patch.object(bundle, "native_closure", return_value=[]):
+                identity = prior._verify(archive_path, {"build": "1.64.0", "short_version": "1.64.0"}, 1)
+            self.assertEqual(identity, bundle.capsule_identity(self.output) if protocol == 1 else None)
+        # Default development/current-runtime verification remains protocol 1.
+        with self.assertRaises(ValueError):
+            bundle.verify(self.output)
+
     def test_runtime_source_arch_protocol_version_and_node_mismatch(self):
         path = self.runtime / "runtime-build.json"
         original = bundle.read_json(path)
@@ -340,7 +561,8 @@ class BundleRuntimeTests(unittest.TestCase):
             return "commit" if "cat-file" in args else "arm64"
         with patch.object(bundle, "ROOT", repository), patch.object(bundle.sys, "platform", "darwin"), \
              patch.object(bundle, "run", side_effect=query), patch.object(bundle.subprocess, "run", side_effect=command), \
-             patch.dict(os.environ, {"PILOT_NEXT_UPDATER_PRIVATE_KEY": "must-not-inherit", "PILOT_NEXT_UPDATER_PUBLIC_KEY": "wrong-ambient"}):
+             patch.dict(os.environ, {"PILOT_NEXT_UPDATER_PRIVATE_KEY": "must-not-inherit", "PILOT_NEXT_UPDATER_PUBLIC_KEY": "wrong-ambient",
+                                     "GH_TOKEN": "api-only", "GITHUB_TOKEN": "api-only"}):
             bundle.snapshot_rust(self.source, self.root / "release-inputs", production=config)
         builds = [(args, opts) for args, opts in calls if "build" in args]
         self.assertEqual(len(builds), 2)
@@ -348,6 +570,8 @@ class BundleRuntimeTests(unittest.TestCase):
             self.assertIn("--locked", args)
             self.assertIn("--release", args)
             self.assertNotIn("PILOT_NEXT_UPDATER_PRIVATE_KEY", options["env"])
+            self.assertNotIn("GH_TOKEN", options["env"])
+            self.assertNotIn("GITHUB_TOKEN", options["env"])
             self.assertEqual(options["env"]["PILOT_NEXT_UPDATER_PUBLIC_KEY"], config["public_key"])
         self.assertTrue(any(args[-1] == "--fetch" and "prepare-patches.py" in args[-2] for args, _ in calls))
         receipt = bundle.read_json(self.root / "release-inputs/manifest.json")

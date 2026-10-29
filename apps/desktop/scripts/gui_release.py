@@ -90,6 +90,19 @@ def linux_release_capsules(env, previous=None):
     return list(dict.fromkeys(accepted_capsules(env) + list(previous)))[:4]
 
 
+def macos_release_capsules(env, protocol, previous=None):
+    """Configured digests first, then verified compatible published macOS runtimes."""
+    configured = accepted_capsules(env)
+    if previous is None:
+        if len(configured) == 4:
+            return configured
+        from macos_release_capsules import previous_macos_capsules
+        previous = previous_macos_capsules(
+            env["PILOT_NEXT_UPDATER_REPOSITORY"], env["PILOT_NEXT_UPDATER_PUBLIC_KEY"],
+            protocol, token=env.get("GH_TOKEN"))
+    return list(dict.fromkeys(configured + list(previous)))[:4]
+
+
 def macos(expected, output, config):
     if output.exists():
         raise ValueError("Release staging must be fresh")
@@ -98,10 +111,13 @@ def macos(expected, output, config):
     bundle.snapshot_build(expected, runtime)
     bundle.snapshot_build(expected, native, native=True)
     bundle.snapshot_rust(expected, rust, production=config)
+    protocol = bundle.read_json(runtime / "runtime-build.json")["protocol"]
+    accepted = macos_release_capsules(os.environ, protocol)
+    print("Accepted retained macOS runtimes:", ", ".join(accepted) or "none")
     app = output / "app/Pilot Next.app"
     app.parent.mkdir()
     bundle.assemble(runtime, rust, native, app, expected, bundle_build=config["build"],
-                    accepted_capsules=accepted_capsules(os.environ), production=config)
+                    accepted_capsules=accepted, production=config)
     # Verify an actual relocated closure, not the input directories.
     moved = output / "relocated GUI/Pilot Next.app"
     moved.parent.mkdir()
@@ -111,9 +127,9 @@ def macos(expected, output, config):
     bundle.verify(moved)
     bundle.native_closure(moved)
     # A leading "=" makes codesign parse the requirement as text rather than a file path.
-    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R=" + config["code_requirement"], str(moved)], check=True)
-    subprocess.run(["/bin/bash", str(bundle.ROOT / "apps/macos/scripts/check-runtime.sh"), str(moved / "Contents/Resources/runtime")], check=True, timeout=300)
-    subprocess.run(["/usr/bin/ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent", str(moved), str(output / MAC_ARCHIVE)], check=True, timeout=300)
+    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R=" + config["code_requirement"], str(moved)], env=bundle.subprocess_env(), check=True)
+    subprocess.run(["/bin/bash", str(bundle.ROOT / "apps/macos/scripts/check-runtime.sh"), str(moved / "Contents/Resources/runtime")], env=bundle.subprocess_env(), check=True, timeout=300)
+    subprocess.run(["/usr/bin/ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent", str(moved), str(output / MAC_ARCHIVE)], env=bundle.subprocess_env(), check=True, timeout=300)
     artifact(output, expected, "macos", config["build"], MAC_ARCHIVE)
 
 
