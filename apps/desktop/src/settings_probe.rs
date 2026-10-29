@@ -96,6 +96,8 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
     }
     #[cfg(target_os = "macos")]
     crate::updates_view::Updates::probe_ready_reload(cx, captures.as_deref());
+    #[cfg(target_os = "macos")]
+    crate::updates_view::Updates::probe_download_progress(cx, captures.as_deref());
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let temp = Private::new(width as u32, mode);

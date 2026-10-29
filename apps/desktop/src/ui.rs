@@ -196,6 +196,19 @@ pub fn progress_bar(segments: &[(usize, Hsla)], total: usize, track: Hsla) -> Di
                 .bg(*color)
         }))
 }
+/// Kit's 6pt bar for an actual transfer: determinate with a measured `percent`, otherwise
+/// indeterminate (static under reduced motion). Never pass an estimate as a percentage.
+pub fn transfer_progress(
+    id: impl Into<ElementId>,
+    percent: Option<f32>,
+    label: impl Into<SharedString>,
+) -> gpui_kit::component::progress::Progress {
+    gpui_kit::component::progress::Progress::new(id)
+        .small()
+        .value(percent.unwrap_or_default())
+        .loading(percent.is_none())
+        .accessibility_label(label)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IconSize {

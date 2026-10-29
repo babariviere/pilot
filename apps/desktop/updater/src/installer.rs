@@ -532,6 +532,9 @@ impl Staged {
     pub fn build(&self) -> &str {
         &self.verified.manifest().build
     }
+    pub fn short_version(&self) -> &str {
+        &self.verified.manifest().short_version
+    }
 
     /// Helper-only reconstruction. Re-authenticate immutable bytes with the helper's
     /// compiled trust root, never a key supplied by the journal or command line.

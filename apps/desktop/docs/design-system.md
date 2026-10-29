@@ -108,6 +108,7 @@ transitions of live transcript geometry.
 | Resource row content | `ResourceLabel` inside existing Button/List | Another nested interactive owner |
 | Setting/field | `FieldRow` + existing Kit control | Value mirrors, persistence, a replacement input |
 | Empty/error/status | `Notice` + truthful caller text/`Tone` | Inferring unread, success, severity or totals |
+| Measured transfer | `transfer_progress` (Kit 6pt bar, indeterminate without a measured percent) | Estimated or time-based percentages, completion without verification |
 
 Functions return the actual Kit Button/Div where practical. Keep normal builder
 APIs instead of wrapping every control or forwarding a second event interface.

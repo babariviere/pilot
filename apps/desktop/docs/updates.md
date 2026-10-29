@@ -23,6 +23,20 @@ Linux uses the same controller and explicit restart gates with its own signed
 full-payload and native platform implementation. See [Linux updates](linux-updates.md)
 for its distinct layout, trust and qualification boundaries.
 
+## Version and download progress
+
+Once a check authenticates a newer release, the panel names it from the signed
+manifest: `Pilot Next <short version>` with its build number as quieter detail.
+The same version stays visible while downloading, cancelling, staged and installing;
+a failed or cancelled operation names none. Nothing is shown from an unsigned guess.
+
+The download bar is determinate, measuring bytes written against the signed archive
+size, which the transfer already enforces. The worker records the latest count and
+wakes the panel at most every 100 ms. Before the first byte, during staging
+verification and for local builds the bar is indeterminate. A full bar is not
+a verified download: it is followed by "Verifying the download…" until staging
+succeeds or fails. Cancel remains available throughout.
+
 ## Access and scheduling
 
 Configured builds check and download the public release anonymously; the signed

@@ -1,6 +1,6 @@
 //! One bounded background worker, one outstanding command/result, no idle polling.
 use crate::{
-    Backend, Candidate, Completion, Error, Outcome, Safety, Trigger,
+    Backend, Candidate, Completion, Error, Outcome, Progress, Safety, Trigger,
     helper::{PreparedExit, compiled_trust},
     installer::{self, NativePlatform, Platform},
     transport::{Access, Cancellation, Transport},
@@ -8,11 +8,21 @@ use crate::{
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
+    time::{Duration, Instant},
 };
+
+/// Wakes the UI at most this often while bytes arrive.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+type Shared = Arc<Mutex<Option<(u64, Progress)>>>;
+fn report(shared: &Shared, operation: u64, progress: Option<Progress>) {
+    if let Ok(mut slot) = shared.lock() {
+        *slot = progress.map(|progress| (operation, progress));
+    }
+}
 
 enum Job {
     Check(u64, Option<Access>, Cancellation),
@@ -58,6 +68,7 @@ pub struct Worker {
     ui_only: bool,
     navigation: serde_json::Value,
     recovery: Option<Receiver<Recovery>>,
+    progress: Shared,
 }
 impl Worker {
     /// No defaults or credential probing. Both GUI and helper need the same compiled
@@ -71,6 +82,8 @@ impl Worker {
         let stopped = Arc::new(AtomicBool::new(false));
         let shutdown = stopped.clone();
         let event_sender = sender.clone();
+        let progress = Shared::default();
+        let reporter = progress.clone();
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
@@ -85,6 +98,9 @@ impl Worker {
                     return;
                 }
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&wakeup));
+                let wake = || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&wakeup));
+                };
                 let mut verified = None;
                 let mut staged = None;
                 let mut prepared = None;
@@ -109,6 +125,7 @@ impl Worker {
                             let outcome = match &release {
                                 Some(release) => Outcome::Available(Candidate {
                                     version: release.manifest().build.clone(),
+                                    short_version: release.manifest().short_version.clone(),
                                 }),
                                 None => Outcome::Current,
                             };
@@ -120,18 +137,38 @@ impl Worker {
                             if release.manifest().build != candidate.version {
                                 return Err(Error::Version);
                             }
+                            let total = release.manifest().archive_size;
+                            report(
+                                &reporter,
+                                operation,
+                                Some(Progress::Transferring { received: 0, total }),
+                            );
                             let target: PathBuf =
                                 target.canonicalize().map_err(|_| Error::Filesystem)?;
                             let (root, lock) =
                                 installer::new_stage(&target, &trust, &NativePlatform)?;
                             let preparation = (|| {
+                                let mut woken = Instant::now();
                                 Transport::new()?.download(
                                     release,
                                     &trust,
                                     access.as_ref(),
                                     &root.join("archive.zip"),
                                     &cancel,
+                                    &mut |received| {
+                                        report(
+                                            &reporter,
+                                            operation,
+                                            Some(Progress::Transferring { received, total }),
+                                        );
+                                        if woken.elapsed() >= PROGRESS_INTERVAL {
+                                            woken = Instant::now();
+                                            wake();
+                                        }
+                                    },
                                 )?;
+                                report(&reporter, operation, Some(Progress::Verifying));
+                                wake();
                                 installer::finish_stage(
                                     root.clone(),
                                     target.clone(),
@@ -164,6 +201,7 @@ impl Worker {
                             )?;
                             let candidate = Candidate {
                                 version: stage.build().into(),
+                                short_version: stage.short_version().into(),
                             };
                             staged = Some(stage);
                             Ok(Outcome::Staged(candidate))
@@ -260,6 +298,7 @@ impl Worker {
                         Err(Error::Cancelled) => Outcome::Cancelled,
                         Err(error) => Outcome::Failed(error),
                     };
+                    report(&reporter, operation, None);
                     if shutdown.load(Ordering::Acquire) {
                         break;
                     }
@@ -286,7 +325,17 @@ impl Worker {
             ui_only: false,
             navigation: serde_json::Value::Null,
             recovery: Some(recovery_receive),
+            progress,
         })
+    }
+    /// The latest progress of this download operation; `None` before it starts or after it ends.
+    pub fn progress(&self, operation: u64) -> Option<Progress> {
+        self.progress
+            .lock()
+            .ok()
+            .and_then(|slot| *slot)
+            .filter(|(id, _)| *id == operation)
+            .map(|(_, progress)| progress)
     }
     pub fn supply_access(&mut self, access: Access) {
         self.access = Some(access);

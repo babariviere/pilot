@@ -191,6 +191,7 @@ impl Transport {
         Ok((offered > current).then_some(manifest))
     }
 
+    /// `progress` receives the cumulative bytes written, never more than the signed size.
     pub fn download(
         &self,
         manifest: &VerifiedManifest,
@@ -198,6 +199,7 @@ impl Transport {
         access: Option<&Access>,
         path: &Path,
         cancel: &Cancellation,
+        progress: &mut dyn FnMut(u64),
     ) -> Result<(), Error> {
         let metadata = manifest.manifest();
         let mut response = self.response(
@@ -241,6 +243,7 @@ impl Transport {
                 digest.update(&buffer[..count]);
                 file.write_all(&buffer[..count])
                     .map_err(|_| Error::Filesystem)?;
+                progress(total);
             }
             if total != metadata.archive_size || hex(&digest.finalize()) != metadata.archive_sha256
             {

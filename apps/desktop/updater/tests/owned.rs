@@ -398,6 +398,7 @@ fn public_release_check_and_download_need_no_token() {
             None,
             &temp.0.join("archive.zip"),
             &Default::default(),
+            &mut |_| {},
         )
         .unwrap();
     let requests = requests.lock().unwrap();
@@ -485,6 +486,7 @@ fn downloaded_archive_must_match_signed_size_and_digest_and_never_overwrites() {
             Some(&access()),
             &path,
             &Default::default(),
+            &mut |_| {},
         )
         .unwrap();
     assert_eq!(
@@ -504,11 +506,85 @@ fn downloaded_archive_must_match_signed_size_and_digest_and_never_overwrites() {
             &trust(),
             Some(&access()),
             &path,
-            &Default::default()
+            &Default::default(),
+            &mut |_| {}
         ),
         Err(Error::Filesystem)
     );
     assert_eq!(fs::read(&path).unwrap(), b"tampered");
+}
+/// Hands out a few bytes per read, like a slow network.
+struct Trickle(Cursor<Vec<u8>>);
+impl std::io::Read for Trickle {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let end = buffer.len().min(97);
+        self.0.read(&mut buffer[..end])
+    }
+}
+fn trickle(bytes: Vec<u8>) -> Result<transport::Reply, Error> {
+    Ok(transport::Reply {
+        status: 200,
+        location: None,
+        length: None,
+        body: Box::new(Trickle(Cursor::new(bytes))),
+    })
+}
+#[test]
+fn download_progress_is_monotonic_and_bounded_by_the_signed_size() {
+    let temp = Temp::new();
+    let bytes = archive();
+    let signed = verified(&bytes);
+    let total = signed.manifest().archive_size;
+    assert_eq!(total, bytes.len() as u64);
+    let (transport, _) = network(vec![trickle(bytes.clone())]);
+    let mut seen = Vec::new();
+    transport
+        .download(
+            &signed,
+            &trust(),
+            None,
+            &temp.0.join("archive.zip"),
+            &Default::default(),
+            &mut |received| seen.push(received),
+        )
+        .unwrap();
+    assert!(seen.len() > 2, "several reports while bytes arrive");
+    assert!(seen.windows(2).all(|pair| pair[0] < pair[1]), "{seen:?}");
+    assert_eq!(seen.last(), Some(&total));
+    // A longer or corrupt body never reports beyond the signed size, and fails.
+    for payload in [[bytes.clone(), vec![0; 300]].concat(), vec![0; bytes.len()]] {
+        let (transport, _) = network(vec![trickle(payload)]);
+        let mut seen = Vec::new();
+        let path = temp.0.join("bad.zip");
+        assert!(
+            transport
+                .download(
+                    &signed,
+                    &trust(),
+                    None,
+                    &path,
+                    &Default::default(),
+                    &mut |received| seen.push(received),
+                )
+                .is_err()
+        );
+        assert!(seen.iter().all(|received| *received <= total));
+        assert!(!path.exists());
+    }
+    // Cancellation stops reporting; nothing is left behind.
+    let cancel = transport::Cancellation::default();
+    let (transport, _) = network(vec![trickle(bytes)]);
+    let path = temp.0.join("cancelled.zip");
+    let mut reports = 0;
+    let result = transport.download(&signed, &trust(), None, &path, &cancel, &mut |_| {
+        reports += 1;
+        if reports == 2 {
+            cancel.cancel();
+        }
+    });
+    assert_eq!(result, Err(Error::Cancelled));
+    assert_eq!(reports, 2);
+    assert!(!path.exists());
 }
 #[test]
 fn corrupt_and_truncated_download_never_survive_as_a_verified_artifact() {
@@ -525,7 +601,8 @@ fn corrupt_and_truncated_download_never_survive_as_a_verified_artifact() {
                     &trust(),
                     Some(&access()),
                     &path,
-                    &Default::default()
+                    &Default::default(),
+                    &mut |_| {}
                 )
                 .is_err()
         );
@@ -996,6 +1073,7 @@ fn done(operation: u64, outcome: Outcome) -> Completion {
 fn candidate() -> Candidate {
     Candidate {
         version: "101.1".into(),
+        short_version: "0.1.1".into(),
     }
 }
 fn ready() -> Updater<FauxBackend> {
@@ -1144,6 +1222,56 @@ fn uncertain_commit_requires_recovery_not_new_checks_or_false_success() {
     assert_eq!(updater.next_deadline(), None);
 }
 
+#[test]
+fn target_follows_the_checked_release_through_download_and_staging() {
+    let other = Candidate {
+        version: "102.1".into(),
+        short_version: "0.1.2".into(),
+    };
+    let mut updater = Updater::new(FauxBackend::default(), false, Duration::ZERO);
+    assert_eq!(updater.target(), None);
+    updater.check(Trigger::Manual, Duration::ZERO).unwrap();
+    assert_eq!(
+        updater.target(),
+        None,
+        "no version is guessed while checking"
+    );
+    updater.complete(done(1, Outcome::Available(candidate())), Duration::ZERO);
+    assert_eq!(updater.target(), Some(&candidate()));
+    updater.download(Duration::ZERO).unwrap();
+    assert_eq!(
+        updater.target(),
+        Some(&candidate()),
+        "shown throughout transfer"
+    );
+    // A late result from the earlier check changes nothing.
+    assert!(!updater.complete(done(1, Outcome::Available(other.clone())), Duration::ZERO));
+    assert_eq!(updater.target(), Some(&candidate()));
+    updater.cancel(Duration::ZERO).unwrap();
+    assert_eq!(
+        updater.target(),
+        Some(&candidate()),
+        "still named while cancelling"
+    );
+    updater.complete(done(2, Outcome::Cancelled), Duration::ZERO);
+    assert_eq!(updater.state(), &State::Cancelled);
+    assert_eq!(updater.target(), None);
+    // A newer check replaces the offered version.
+    updater.check(Trigger::Manual, Duration::ZERO).unwrap();
+    updater.complete(done(3, Outcome::Available(other.clone())), Duration::ZERO);
+    assert_eq!(updater.target(), Some(&other));
+    updater.download(Duration::ZERO).unwrap();
+    updater.complete(done(4, Outcome::Failed(Error::Signature)), Duration::ZERO);
+    assert_eq!(updater.target(), None, "a failed download offers nothing");
+    updater.check(Trigger::Manual, Duration::ZERO).unwrap();
+    updater.complete(done(5, Outcome::Available(other.clone())), Duration::ZERO);
+    updater.download(Duration::ZERO).unwrap();
+    updater.complete(done(6, Outcome::Staged(other.clone())), Duration::ZERO);
+    assert_eq!(updater.state(), &State::ReadyToRestart(other.clone()));
+    assert_eq!(updater.target(), Some(&other));
+    updater.request_install(safe(), Duration::ZERO).unwrap();
+    assert_eq!(updater.target(), Some(&other));
+}
 #[test]
 fn staging_capacity_or_archive_failure_does_not_claim_an_uncertain_install() {
     for error in [Error::StagingCapacity, Error::StagingArchiveFailed] {

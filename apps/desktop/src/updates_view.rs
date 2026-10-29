@@ -10,7 +10,8 @@ use gpui_kit::{
     ParentElement, Render, StatefulInteractiveElement, Styled, Task, Window, div,
 };
 use pilot_desktop_updater::{
-    Error, Safety, State, Trigger, Updater, Work, coordination::Location, worker::Worker,
+    Candidate, Error, Progress, Safety, State, Trigger, Updater, Work, coordination::Location,
+    worker::Worker,
 };
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,10 @@ pub(crate) struct Updates {
     /// Probe-only injected controller state for mounted UI checks; never in production.
     #[cfg(feature = "native-probes")]
     probe_state: Option<State>,
+    #[cfg(feature = "native-probes")]
+    probe_target: Option<Candidate>,
+    #[cfg(feature = "native-probes")]
+    probe_progress: Option<Progress>,
 }
 impl EventEmitter<Event> for Updates {}
 impl Updates {
@@ -103,6 +108,7 @@ impl Updates {
             assert!(updates.notice.is_none());
             let ready = State::ReadyToRestart(pilot_desktop_updater::Candidate {
                 version: "synthetic".into(),
+                short_version: "0.1.1".into(),
             });
             assert!(can_install(Some(&ready), true, false, false, false));
             assert_eq!(install_label(false), "Install and restart…");
@@ -161,6 +167,7 @@ impl Updates {
         let ready = || {
             State::ReadyToRestart(pilot_desktop_updater::Candidate {
                 version: "synthetic-local".into(),
+                short_version: "0.1.1".into(),
             })
         };
         for width in [680., 1100.] {
@@ -276,6 +283,7 @@ impl Updates {
                         u.probe_state = Some(State::Deferred {
                             candidate: pilot_desktop_updater::Candidate {
                                 version: "synthetic-local".into(),
+                                short_version: "0.1.1".into(),
                             },
                             reason: Error::ActiveWork,
                         })
@@ -317,6 +325,273 @@ impl Updates {
                     .unwrap();
                 }
                 assert_eq!(restarts.get(), 2, "state changes never request a restart");
+                cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+                cx.run_until_parked();
+            }
+        }
+    }
+    /// Mounted Updates pane showing the checked version and download progress from
+    /// injected state. No Worker, network, transaction or daemon exists.
+    #[cfg(all(feature = "native-probes", target_os = "macos"))]
+    pub(crate) fn probe_download_progress(
+        cx: &mut gpui_kit::HeadlessAppContext,
+        captures: Option<&std::path::Path>,
+    ) {
+        use gpui_kit::{
+            AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
+            component::{Theme, ThemeMode},
+            px, size,
+            test::TestWindowExt,
+        };
+        use std::{cell::Cell, rc::Rc};
+        fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+            for _ in 0..4 {
+                cx.run_until_parked();
+                cx.advance_clock(Duration::from_millis(16));
+                cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+            }
+        }
+        let release = Candidate {
+            version: "4210.1".into(),
+            short_version: "1.85.0".into(),
+        };
+        // The longest signed short version the manifest admits.
+        let long = Candidate {
+            version: "999999999.999999999.999999999.999999999".into(),
+            short_version: format!("1.85.0-{}", "rc.".repeat(19)),
+        };
+        let downloading = State::Working {
+            operation: 2,
+            work: Work::Downloading,
+        };
+        for width in [680., 1100.] {
+            for dark in [false, true] {
+                let mode = if dark {
+                    ThemeMode::Dark
+                } else {
+                    ThemeMode::Light
+                };
+                cx.update(|cx| Theme::change(mode, None, cx));
+                let (h, updates) = cx
+                    .update(|cx| {
+                        gpui_kit::open_window(
+                            WindowOptions {
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                    Default::default(),
+                                    size(px(width), px(520.)),
+                                ))),
+                                show: false,
+                                focus: false,
+                                ..Default::default()
+                            },
+                            cx,
+                            |_, cx| {
+                                cx.new(|_| {
+                                    let mut u = Self::blank(None, true);
+                                    u.inspected = true;
+                                    u
+                                })
+                            },
+                        )
+                    })
+                    .unwrap();
+                let changes = Rc::new(Cell::new(0usize));
+                let _counter = cx.update(|cx| {
+                    let changes = changes.clone();
+                    cx.subscribe(&updates, move |_, event: &Event, _| {
+                        if matches!(event, Event::Changed) {
+                            changes.set(changes.get() + 1);
+                        }
+                    })
+                });
+                let set = |cx: &mut HeadlessAppContext,
+                           state: State,
+                           target: Option<&Candidate>,
+                           progress: Option<Progress>| {
+                    cx.update(|cx| {
+                        updates.update(cx, |u, cx| {
+                            u.probe_state = Some(state);
+                            u.probe_target = target.cloned();
+                            u.probe_progress = progress;
+                            cx.notify();
+                        })
+                    });
+                    settle(cx, h);
+                };
+                let capture = |cx: &mut HeadlessAppContext, state: &str| {
+                    if let Some(directory) = captures {
+                        let name = if dark { "dark" } else { "light" };
+                        cx.capture_screenshot(h)
+                            .unwrap()
+                            .save(
+                                directory
+                                    .join(format!("{}-{name}-updates-{state}.png", width as u32)),
+                            )
+                            .unwrap();
+                    }
+                };
+                let inside = |bounds: Bounds<gpui_kit::Pixels>| {
+                    bounds.left() >= px(0.)
+                        && bounds.right() <= px(width)
+                        && bounds.size.width > px(0.)
+                };
+                // Before download: the exact signed version, its build, and no bar.
+                set(cx, State::Available(release.clone()), Some(&release), None);
+                cx.update_window(h, |_, w, _| {
+                    let target = w.find("updates-target");
+                    assert!(target.visible() && inside(target.bounds()));
+                    assert_eq!(target.label(), Some("Pilot Next 1.85.0, Build 4210.1"));
+                    assert!(w.find("updates-download").visible());
+                    // Actions hug their labels on one row instead of spanning the pane.
+                    let download = w.find("updates-download").bounds();
+                    let check = w.find("updates-check").bounds();
+                    assert!(download.size.width < px(200.), "{download:?}");
+                    assert!(check.size.width < px(200.), "{check:?}");
+                    assert_eq!(download.top(), check.top());
+                    assert!(download.right() <= check.left(), "next step comes first");
+                    assert!(w.try_find("updates-progress").is_none());
+                    assert!(w.try_find("updates-cancel").is_none());
+                })
+                .unwrap();
+                capture(cx, "available");
+                // Transfer: the same version stays named above a measured bar.
+                let total = 45_600_000;
+                let mut track = None;
+                for (received, percent) in [(0, 0.), (18_240_000, 40.), (total, 100.)] {
+                    set(
+                        cx,
+                        downloading.clone(),
+                        Some(&release),
+                        Some(Progress::Transferring { received, total }),
+                    );
+                    let bar = cx
+                        .update_window(h, |_, w, cx| {
+                            assert!(updates.read(cx).status().starts_with("Downloading"));
+                            assert_eq!(
+                                w.find("updates-target").label(),
+                                Some("Pilot Next 1.85.0, Build 4210.1")
+                            );
+                            let bar = w.find("updates-progress");
+                            assert!(bar.visible() && inside(bar.bounds()));
+                            assert_eq!(bar.bounds().size.height, px(6.));
+                            assert_eq!(
+                                bar.bounds().left(),
+                                w.find("updates-status").bounds().left()
+                            );
+                            let caption = w.find("updates-progress-caption");
+                            assert!(caption.visible() && inside(caption.bounds()));
+                            assert!(caption.label().unwrap().ends_with(" of 45.6 MB"));
+                            assert!(w.try_find("updates-download").is_none());
+                            assert!(w.try_find("updates-install").is_none());
+                            bar.bounds()
+                        })
+                        .unwrap();
+                    // Let Kit's value transition finish, then measure the painted fill.
+                    for _ in 0..20 {
+                        cx.advance_clock(Duration::from_millis(50));
+                        settle(cx, h);
+                    }
+                    let image = cx.capture_screenshot(h).unwrap();
+                    let scale = image.width() as f32 / width;
+                    let y = ((f32::from(bar.top()) + 3.) * scale) as u32;
+                    // Skip the rounded caps, whose pixels blend with the page.
+                    let (left, right) = (
+                        ((f32::from(bar.left()) + 4.) * scale) as u32,
+                        ((f32::from(bar.right()) - 4.) * scale) as u32,
+                    );
+                    let track = *track.get_or_insert(image.get_pixel(right - 1, y).0);
+                    let filled = (left..right)
+                        .filter(|x| {
+                            let pixel = image.get_pixel(*x, y).0;
+                            (0..3).any(|c| pixel[c].abs_diff(track[c]) > 12)
+                        })
+                        .count() as f32
+                        / (right - left) as f32;
+                    let expected = (percent / 100. * f32::from(bar.size.width) - 4.).max(0.)
+                        / (f32::from(bar.size.width) - 8.);
+                    assert!(
+                        (filled - expected.min(1.)).abs() < 0.03,
+                        "{percent}%: painted {filled}, expected {expected}"
+                    );
+                    if received == 18_240_000 {
+                        capture(cx, "downloading");
+                    }
+                }
+                // Unknown and verification are indeterminate, named by their caption.
+                for (progress, caption) in [
+                    (None, "Starting download…"),
+                    (Some(Progress::Verifying), "Verifying the download…"),
+                ] {
+                    set(cx, downloading.clone(), Some(&release), progress);
+                    cx.update_window(h, |_, w, _| {
+                        let bar = w.find("updates-progress");
+                        assert!(bar.visible() && inside(bar.bounds()));
+                        assert_eq!(bar.label(), Some(caption));
+                        assert_eq!(w.find("updates-progress-caption").label(), Some(caption));
+                        assert!(w.find("updates-cancel").visible());
+                    })
+                    .unwrap();
+                }
+                capture(cx, "verifying");
+                // Cancel stays reachable by keyboard during the transfer.
+                set(
+                    cx,
+                    downloading.clone(),
+                    Some(&release),
+                    Some(Progress::Transferring { received: 1, total }),
+                );
+                let before = changes.get();
+                cx.update_window(h, |_, w, cx| w.focus_next(cx)).unwrap();
+                for _ in 0..12 {
+                    if cx
+                        .update_window(h, |_, w, _| {
+                            w.find("updates-cancel").focused() == Some(true)
+                        })
+                        .unwrap()
+                    {
+                        break;
+                    }
+                    cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+                }
+                cx.update_window(h, |_, w, cx| {
+                    assert_eq!(w.find("updates-cancel").focused(), Some(true));
+                    w.press("enter", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                assert_eq!(changes.get(), before + 1, "one key activation, one cancel");
+                // Long signed versions wrap inside the pane.
+                set(cx, downloading.clone(), Some(&long), None);
+                cx.update_window(h, |_, w, _| {
+                    assert!(inside(w.find("updates-target").bounds()));
+                })
+                .unwrap();
+                // Failure and no-update states name no version and show no bar.
+                for state in [
+                    State::Failed(Error::Signature),
+                    State::Cancelled,
+                    State::Current,
+                ] {
+                    set(cx, state, None, None);
+                    cx.update_window(h, |_, w, _| {
+                        assert!(w.try_find("updates-target").is_none());
+                        assert!(w.try_find("updates-progress").is_none());
+                    })
+                    .unwrap();
+                }
+                // Staged: the version remains; the bar is gone.
+                set(
+                    cx,
+                    State::ReadyToRestart(release.clone()),
+                    Some(&release),
+                    None,
+                );
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.find("updates-target").visible());
+                    assert!(w.try_find("updates-progress").is_none());
+                    assert!(w.find("updates-install").visible());
+                })
+                .unwrap();
                 cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
                 cx.run_until_parked();
             }
@@ -384,6 +659,10 @@ impl Updates {
             agents_paused: false,
             #[cfg(feature = "native-probes")]
             probe_state: None,
+            #[cfg(feature = "native-probes")]
+            probe_target: None,
+            #[cfg(feature = "native-probes")]
+            probe_progress: None,
         }
     }
     pub(crate) fn state(&self) -> Option<&State> {
@@ -392,6 +671,33 @@ impl Updates {
             return Some(state);
         }
         self.controller.as_ref().map(Updater::state)
+    }
+    /// The checked release the current state refers to, from signed metadata only.
+    fn target(&self) -> Option<&Candidate> {
+        #[cfg(feature = "native-probes")]
+        if self.probe_state.is_some() {
+            return self.probe_target.as_ref();
+        }
+        self.controller.as_ref().and_then(Updater::target)
+    }
+    /// `Some` while downloading or staging, holding the worker's latest report.
+    fn transfer(&self) -> Option<Option<Progress>> {
+        let Some(State::Working {
+            operation,
+            work: Work::Downloading,
+        }) = self.state()
+        else {
+            return None;
+        };
+        #[cfg(feature = "native-probes")]
+        if self.probe_state.is_some() {
+            return Some(self.probe_progress);
+        }
+        Some(
+            self.controller
+                .as_ref()
+                .and_then(|controller| controller.backend().progress(*operation)),
+        )
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn drive_fixture(&mut self, draft_ready: bool, cx: &mut Context<Self>) -> bool {
@@ -886,6 +1192,77 @@ fn status_line(message: &'static str) -> impl IntoElement {
     let line = gpui_kit::TestSupportExt::test_support(line);
     line
 }
+/// Buttons hug their labels in a wrapping row instead of stretching across the pane.
+fn action_row() -> gpui_kit::Div {
+    div().h_flex().flex_wrap().items_center().gap_2()
+}
+/// The signed release version, with its build number as quieter detail.
+fn target_line(candidate: &Candidate, muted: gpui_kit::Hsla) -> impl IntoElement {
+    let name = format!("Pilot Next {}", candidate.short_version);
+    let build = format!("Build {}", candidate.version);
+    let line = div()
+        .id("updates-target")
+        .h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap_x_2()
+        .min_w_0()
+        .aria_label(format!("{name}, {build}"))
+        .child(ui::text(Text::Body, name).font_medium())
+        .child(ui::text(Text::Caption, build).text_color(muted));
+    #[cfg(feature = "native-probes")]
+    let line = gpui_kit::TestSupportExt::test_support(line);
+    line
+}
+/// Decimal units, as Finder reports file sizes.
+fn size(bytes: u64) -> String {
+    for (unit, name) in [(1e9, "GB"), (1e6, "MB"), (1e3, "KB")] {
+        if bytes as f64 >= unit {
+            return format!("{:.1} {name}", bytes as f64 / unit);
+        }
+    }
+    format!("{bytes} bytes")
+}
+/// Bar percentage and caption. Only reported bytes against the signed size are
+/// determinate; a complete transfer still reads as verifying, never as done.
+fn transfer_text(progress: Option<Progress>, local: bool) -> (Option<f32>, Option<String>) {
+    match progress {
+        Some(Progress::Transferring { received, total }) if total > 0 => {
+            let received = received.min(total);
+            (
+                Some(received as f32 * 100. / total as f32),
+                Some(format!("{} of {}", size(received), size(total))),
+            )
+        }
+        Some(Progress::Verifying) => (None, Some("Verifying the download…".into())),
+        // The local build status line already says what is happening.
+        _ if local => (None, None),
+        _ => (None, Some("Starting download…".into())),
+    }
+}
+fn transfer_view(
+    progress: Option<Progress>,
+    local: bool,
+    muted: gpui_kit::Hsla,
+) -> impl IntoElement {
+    let (percent, caption) = transfer_text(progress, local);
+    let label = caption.clone().unwrap_or_else(|| "Verifying".into());
+    div()
+        .v_flex()
+        .gap_1()
+        .min_w_0()
+        .child(ui::transfer_progress("updates-progress", percent, label))
+        .children(caption.map(|caption| {
+            let line = div()
+                .id("updates-progress-caption")
+                .min_w_0()
+                .aria_label(caption.clone())
+                .child(ui::text(Text::Caption, caption).text_color(muted));
+            #[cfg(feature = "native-probes")]
+            let line = gpui_kit::TestSupportExt::test_support(line);
+            line
+        }))
+}
 /// Local folder staging is macOS-only until Linux is natively qualified.
 const LOCAL_BUILDS: bool = cfg!(target_os = "macos");
 /// Staging never replaces a staged (ready/deferred) or armed transaction.
@@ -1023,16 +1400,59 @@ impl Render for Updates {
             )
         ) || (self.fenced && matches!(state, Some(State::ReadyToRestart(_))))
             || waiting_for_agents;
+        let muted = {
+            use gpui_kit::component::ActiveTheme;
+            cx.theme().muted_foreground
+        };
+        let target = self.target().map(|candidate| target_line(candidate, muted));
+        let transfer = self
+            .transfer()
+            .map(|progress| transfer_view(progress, self.local_build, muted));
+        // One compact row: the next step first, then Cancel, then routine commands.
+        let mut actions = action_row().id("updates-actions");
+        if can_download {
+            actions = actions.child(
+                ui::action("updates-download", "Download update", Action::Primary)
+                    .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
+            );
+        }
+        if can_install {
+            actions = actions.child(
+                ui::action(
+                    "updates-install",
+                    install_label(self.local_build),
+                    Action::Primary,
+                )
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Restart))),
+            );
+        }
+        if can_cancel {
+            actions = actions.child(
+                ui::action("updates-cancel", "Cancel", Action::Secondary)
+                    .on_click(cx.listener(|view, _, _, cx| view.cancel(cx))),
+            );
+        }
+        actions = actions.child(
+            ui::action("updates-check", "Check for updates", Action::Secondary)
+                .disabled(self.controller.is_none() || checking || self.fenced)
+                .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
+        );
+        // Explicit local folder staging is offered only where it is natively qualified.
+        if LOCAL_BUILDS && self.controller.is_some() {
+            actions = actions.child(
+                ui::action("updates-local", "Load local build…", Action::Secondary)
+                    .disabled(!self.can_choose_local())
+                    .on_click(cx.listener(|view, _, window, cx| view.choose_local(window, cx))),
+            );
+        }
         let mut view = div()
             .id("updates-controller")
             .v_flex()
             .gap_3()
             .child(status_line(message))
-            .child(
-                ui::action("updates-check", "Check for updates", Action::Secondary)
-                    .disabled(self.controller.is_none() || checking || self.fenced)
-                    .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
-            );
+            .children(target)
+            .children(transfer)
+            .child(actions);
         if self.external {
             view = view.child(
                 Notice::new("Connected to an existing daemon. Updates replace only this app; the daemon keeps running.")
@@ -1061,13 +1481,13 @@ impl Render for Updates {
         }
         if self.recovery_blocked() {
             view=view.child(Notice::new("A previous update needs recovery inspection. Nothing was retried, rolled back or deleted.").tone(Tone::Warning))
-                .child(ui::action("updates-recovery-details","Recovery details",Action::Secondary).on_click(cx.listener(|u,_,_,cx|{u.recovery_open = !u.recovery_open;cx.notify();})));
+                .child(action_row().child(ui::action("updates-recovery-details","Recovery details",Action::Secondary).on_click(cx.listener(|u,_,_,cx|{u.recovery_open = !u.recovery_open;cx.notify();}))));
             if self.recovery_open {
                 match &self.recovery {
                     Some(Ok(rows))=>for (ix,(path,phase)) in rows.iter().enumerate(){
                         let path=path.clone();
                         view=view.child(ui::text(Text::Caption,format!("{phase:?}. {}",path.display())))
-                            .child(ui::action(format!("updates-recovery-copy-{ix}"),"Copy recovery path",Action::Quiet).on_click(move|_,_,cx|cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.to_string_lossy().into_owned()))));
+                            .child(action_row().child(ui::action(format!("updates-recovery-copy-{ix}"),"Copy recovery path",Action::Quiet).on_click(move|_,_,cx|cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.to_string_lossy().into_owned())))));
                     },
                     _=>view=view.child(ui::text(Text::Caption,"Recovery metadata could not be safely read. Preserve retained files and inspect them before attempting another installation.")),
                 }
@@ -1080,10 +1500,18 @@ impl Render for Updates {
         if let Some(input) = self.access_input.clone().filter(|_| wants_access) {
             if self.access.is_none() {
                 view=view.child(Input::new(&input).disabled(checking || self.fenced))
-                    .child(ui::text(Text::Caption,"Explicit access for the configured release repository only. Kept in memory for this app session, never saved or searched in Keychain, gh or provider accounts."))
-                    .child(ui::action("updates-authorize","Use for this session and check",Action::Primary).disabled(checking || self.fenced).on_click(cx.listener(|u,_,w,cx|u.approve_access(w,cx))));
+                    .child(ui::text(Text::Caption,"Explicit access for the configured release repository only. Kept in memory for this app session, never saved or searched in Keychain, gh or provider accounts."));
+                let mut access = action_row().child(
+                    ui::action(
+                        "updates-authorize",
+                        "Use for this session and check",
+                        Action::Primary,
+                    )
+                    .disabled(checking || self.fenced)
+                    .on_click(cx.listener(|u, _, w, cx| u.approve_access(w, cx))),
+                );
                 if self.unsaved_access(cx) {
-                    view = view.child(
+                    access = access.child(
                         ui::action("updates-clear-field", "Clear access field", Action::Quiet)
                             .disabled(checking || self.fenced)
                             .on_click(cx.listener(|u, _, w, cx| {
@@ -1096,53 +1524,26 @@ impl Render for Updates {
                             })),
                     );
                 }
+                view = view.child(access);
             } else {
                 view = view.child(
-                    ui::action(
-                        "updates-clear-access",
-                        "Clear session access",
-                        Action::Quiet,
-                    )
-                    .disabled(checking || self.fenced)
-                    .on_click(cx.listener(|u, _, _, cx| {
-                        u.access = None;
-                        if let Some(controller) = &mut u.controller {
-                            controller.backend_mut().clear_access();
-                        }
-                        cx.notify();
-                    })),
+                    action_row().child(
+                        ui::action(
+                            "updates-clear-access",
+                            "Clear session access",
+                            Action::Quiet,
+                        )
+                        .disabled(checking || self.fenced)
+                        .on_click(cx.listener(|u, _, _, cx| {
+                            u.access = None;
+                            if let Some(controller) = &mut u.controller {
+                                controller.backend_mut().clear_access();
+                            }
+                            cx.notify();
+                        })),
+                    ),
                 );
             }
-        }
-        // Explicit local folder staging is offered only where it is natively qualified.
-        if LOCAL_BUILDS && self.controller.is_some() {
-            view = view.child(
-                ui::action("updates-local", "Load local build…", Action::Secondary)
-                    .disabled(!self.can_choose_local())
-                    .on_click(cx.listener(|view, _, window, cx| view.choose_local(window, cx))),
-            );
-        }
-        if can_download {
-            view = view.child(
-                ui::action("updates-download", "Download update", Action::Primary)
-                    .on_click(cx.listener(|view, _, _, cx| view.download(cx))),
-            );
-        }
-        if can_install {
-            view = view.child(
-                ui::action(
-                    "updates-install",
-                    install_label(self.local_build),
-                    Action::Primary,
-                )
-                .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::Restart))),
-            );
-        }
-        if can_cancel {
-            view = view.child(
-                ui::action("updates-cancel", "Cancel", Action::Secondary)
-                    .on_click(cx.listener(|view, _, _, cx| view.cancel(cx))),
-            );
         }
         if let Some(notice) = self.notice {
             view = view.child(Notice::new(notice).tone(Tone::Warning));
@@ -1161,6 +1562,7 @@ mod tests {
     fn candidate() -> Candidate {
         Candidate {
             version: "synthetic".into(),
+            short_version: "0.1.1".into(),
         }
     }
     #[test]
@@ -1253,5 +1655,46 @@ mod tests {
             local_text(Some(&State::Failed(Error::StagingCapacity))),
             None
         );
+    }
+    #[test]
+    fn transfer_is_determinate_only_for_reported_bytes() {
+        let at = |received, total| {
+            transfer_text(Some(Progress::Transferring { received, total }), false)
+        };
+        assert_eq!(
+            at(0, 45_600_000),
+            (Some(0.), Some("0 bytes of 45.6 MB".into()))
+        );
+        assert_eq!(
+            at(12_340_000, 45_600_000).1.as_deref(),
+            Some("12.3 MB of 45.6 MB")
+        );
+        let percents: Vec<f32> = [0, 1, 999, 22_800_000, 45_600_000]
+            .into_iter()
+            .map(|received| at(received, 45_600_000).0.unwrap())
+            .collect();
+        assert!(percents.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(percents.last(), Some(&100.));
+        assert_eq!(at(22_800_000, 45_600_000).0, Some(50.));
+        // Never more than the signed size, and a zero size is not a percentage.
+        assert_eq!(at(9, 4).0, Some(100.));
+        assert_eq!(at(0, 0).0, None);
+        // Unknown and verification stay indeterminate; a full transfer is not "done".
+        assert_eq!(
+            transfer_text(None, false),
+            (None, Some("Starting download…".into()))
+        );
+        assert_eq!(transfer_text(None, true), (None, None));
+        assert_eq!(
+            transfer_text(Some(Progress::Verifying), true),
+            (None, Some("Verifying the download…".into()))
+        );
+        for (bytes, text) in [
+            (999, "999 bytes"),
+            (1_000, "1.0 KB"),
+            (2_500_000_000, "2.5 GB"),
+        ] {
+            assert_eq!(size(bytes), text);
+        }
     }
 }

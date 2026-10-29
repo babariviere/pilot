@@ -6,12 +6,12 @@ use std::time::Duration;
 ))]
 pub mod app_update;
 pub mod archive;
-pub mod daemon_upgrade;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
 pub mod coordination;
+pub mod daemon_upgrade;
 #[cfg(feature = "fixture")]
 pub mod fixture;
 pub mod helper;
@@ -72,7 +72,17 @@ pub enum Trigger {
 /// Signed metadata is authenticated; archive/bundle verification occurs during staging.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
+    /// Signed build identity, compared exactly before download.
     pub version: String,
+    /// Signed release version (the tag without its `v`), for display.
+    pub short_version: String,
+}
+/// The current download, measured against the signed archive size. A full transfer is
+/// not a verified download: staging still checks the digest, archive and bundle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Progress {
+    Transferring { received: u64, total: u64 },
+    Verifying,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Work {
@@ -188,6 +198,8 @@ pub struct Updater<B: Backend> {
     failures: u32,
     sequence: u64,
     staged: Option<Candidate>,
+    /// The candidate an in-flight download was started for.
+    downloading: Option<Candidate>,
     helper_operation: Option<u64>,
 }
 impl<B: Backend> Updater<B> {
@@ -200,11 +212,35 @@ impl<B: Backend> Updater<B> {
             failures: 0,
             sequence: 0,
             staged: None,
+            downloading: None,
             helper_operation: None,
         }
     }
     pub fn state(&self) -> &State {
         &self.state
+    }
+    /// The release the current state refers to: offered, downloading, staged or installing.
+    pub fn target(&self) -> Option<&Candidate> {
+        match &self.state {
+            State::Available(candidate)
+            | State::ReadyToRestart(candidate)
+            | State::Deferred { candidate, .. } => Some(candidate),
+            State::Working {
+                work: Work::Downloading,
+                ..
+            }
+            | State::Cancelling { .. } => self.downloading.as_ref(),
+            State::Working {
+                work: Work::PreparingExit | Work::CommittingExit,
+                ..
+            }
+            | State::ExitPrepared
+            | State::ExitAuthorized => self.staged.as_ref(),
+            _ => None,
+        }
+    }
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
@@ -230,6 +266,7 @@ impl<B: Backend> Updater<B> {
     }
     fn start(&mut self, work: Work) -> Result<u64, Error> {
         self.sequence = self.sequence.checked_add(1).ok_or(Error::Exhausted)?;
+        self.downloading = None;
         self.state = State::Working {
             operation: self.sequence,
             work,
@@ -267,6 +304,7 @@ impl<B: Backend> Updater<B> {
         };
         let candidate = candidate.clone();
         let operation = self.start(Work::Downloading)?;
+        self.downloading = Some(candidate.clone());
         if let Err(error) = self.backend.download(operation, &candidate) {
             self.complete(
                 Completion {
