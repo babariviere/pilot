@@ -97,8 +97,8 @@ authentication for the ordinary loopback API.
    usable while waiting; Cancel stops renewal and agents resume within 30 seconds.
    UI-only reloads and external app-only updates skip this entire daemon-management
    step. Their daemon remains active throughout the app swap.
-1. Fence UI admissions and reject preedit, unsaved secondary forms, unresolved
-   deliveries/model changes/mission outcomes, active or unreaped visual helpers,
+1. Fence UI admissions and reject preedit, unsaved secondary forms, in-flight or
+   daemon-pending deliveries, unresolved model changes/mission outcomes, active or unreaped visual helpers,
    and pending preference operations. Nothing is discarded to obtain readiness.
    A form holds the install only while it has unsent input, an unanswered request
    or (for preferences) an unconfirmed write; a form that was merely opened, closed
@@ -109,6 +109,12 @@ authentication for the ordinary loopback API.
    checkpoint returns an actual durable ACK; a timer is never a flush receipt.
    Missing default preferences may be persisted by this explicit checkpoint;
    ordinary clean Settings Save remains a no-op.
+   GUI-only restart may retain a durable Unknown immutable message without
+   resolving it. Startup never checks or resends it; its identity, payload,
+   newer draft and recovery actions survive unchanged. An unsaved volatile
+   delivery observation (including a known ACK) still vetoes restart, as do
+   failed writes and missing/stale checkpoint acknowledgements. The daemon-upgrade
+   checkpoint keeps its stricter unresolved-delivery gate.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
    same-volume transaction and start the matching helper. On macOS the helper

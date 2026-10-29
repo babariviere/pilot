@@ -198,7 +198,7 @@ impl LocalViewer {
         };
         self.restart_generation = generation;
         if !self.editor.update(cx, |e, cx| {
-            e.begin_update_checkpoint(generation, window, cx)
+            e.begin_gui_update_checkpoint(generation, window, cx)
         }) {
             crate::visual_runtime::release_restart_fence();
             updater.update(cx,|u,cx|u.defer("Finish preedit and resolve pending or unsaved drafts before installing. All text is retained.",cx));

@@ -59,6 +59,10 @@ fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAp
                 );
                 editor.state.book = Some(std::sync::Arc::new(book));
                 assert!(!editor.begin_update_checkpoint(8, window, cx));
+                assert!(
+                    !editor.begin_gui_update_checkpoint(8, window, cx),
+                    "orphan summaries are not retained immutable intents"
+                );
             }
             editor.state.book = Some(book());
         });
@@ -72,12 +76,125 @@ fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAp
             assert!(editor.marked(window, cx));
             let before = editor.text.read(cx).value().to_string();
             assert!(!editor.begin_update_checkpoint(9, window, cx));
+            assert!(!editor.begin_gui_update_checkpoint(9, window, cx));
             assert!(editor.marked(window, cx));
             assert_eq!(editor.text.read(cx).value().as_ref(), before);
         });
     })
     .unwrap();
     assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn update_checkpoint_retains_only_saved_unknown_and_still_needs_fresh_ack(cx: &mut TestAppContext) {
+    use crate::delivery_store::{
+        Delivery,
+        diagnostic::{Acknowledgment, Category, Diagnostic, Stage},
+    };
+    let (handle, view, commands) = setup(cx);
+    let root = std::env::temp_dir().join(format!("editor-checkpoint-{}", uuid::Uuid::new_v4()));
+    let mut store = Store::open(root.clone(), book().host.clone()).unwrap();
+    let intent = store
+        .prepare(
+            "chat:a",
+            &Draft {
+                revision: 1,
+                text: "Retain 日本語 👩‍💻".into(),
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .unwrap();
+    let saved = std::sync::Arc::new(store.book.clone());
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.accept(
+                WriteState {
+                    book: Some(saved.clone()),
+                    ..Default::default()
+                },
+                w,
+                cx,
+            );
+            assert!(
+                !e.begin_update_checkpoint(11, w, cx),
+                "daemon upgrade remains strict"
+            );
+            e.pending.insert("chat:a".into(), 1);
+            assert!(
+                !e.begin_gui_update_checkpoint(11, w, cx),
+                "in-flight request"
+            );
+            e.pending.clear();
+            e.unsaved_local.insert("chat:a".into());
+            assert!(!e.begin_gui_update_checkpoint(11, w, cx), "unsaved text");
+            e.unsaved_local.clear();
+            e.state.error = Some("Private state durability is unconfirmed.");
+            assert!(!e.begin_gui_update_checkpoint(11, w, cx));
+            e.state.error = None;
+            let mut report = crate::interaction::DeliveryReport {
+                key: "chat:a".into(),
+                delivery: Delivery::from_intent(&intent),
+                saved: false,
+                save_error: Some(Category::PrivateCapacity),
+            };
+            report.delivery.diagnostic = Some(Diagnostic {
+                stage: Stage::Adoption,
+                category: Category::PrivateCapacity,
+                status: Some(200),
+                acknowledgment: Acknowledgment::Accepted,
+            });
+            e.state
+                .delivery_reports
+                .insert(intent.id.clone(), report.clone());
+            assert!(
+                !e.begin_gui_update_checkpoint(11, w, cx),
+                "a volatile ACK must not be lost even without a store fault"
+            );
+            e.state.delivery_reports.clear();
+            let mut pending = (*saved).clone();
+            pending.pending.get_mut(&intent.id).unwrap().state = "pending".into();
+            e.state.book = Some(std::sync::Arc::new(pending));
+            assert!(
+                !e.begin_gui_update_checkpoint(11, w, cx),
+                "daemon-pending delivery"
+            );
+            e.state.book = Some(saved.clone());
+            assert!(e.begin_gui_update_checkpoint(11, w, cx));
+            assert_eq!(e.update_receipt(w, cx), None);
+            let mut flushed = (*saved).clone();
+            flushed.drafts = e.cache.clone();
+            assert!(flushed.pending[&intent.id] == intent);
+            e.state.book = Some(std::sync::Arc::new(flushed));
+            e.state.checkpoint = Some(10);
+            assert_eq!(e.update_receipt(w, cx), None);
+            e.state.checkpoint = Some(11);
+            assert_eq!(e.update_receipt(w, cx), Some(11));
+            e.state.delivery_reports.insert(intent.id.clone(), report);
+            assert_eq!(
+                e.update_receipt(w, cx),
+                None,
+                "late volatile ACK invalidates readiness"
+            );
+            e.state.delivery_reports.clear();
+            assert_eq!(e.update_receipt(w, cx), Some(11));
+            e.text
+                .update(cx, |i, cx| i.set_value("Newer unsaved text", w, cx));
+            assert_eq!(e.update_receipt(w, cx), None);
+            e.end_update_checkpoint(cx);
+            assert!(e.state.book.as_ref().unwrap().pending[&intent.id] == intent);
+        })
+    })
+    .unwrap();
+    let recorded: Vec<_> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+    assert_eq!(recorded.len(), 1);
+    assert!(
+        matches!(recorded[0], WriteCommand::Checkpoint(11)),
+        "no lookup, execute, retirement or replay"
+    );
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[gpui_kit::test]

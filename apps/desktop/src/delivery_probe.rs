@@ -163,11 +163,55 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             assert!(commands.try_recv().is_err(), "No automatic Check/execute");
+            cx.update_window(h, |_, w, cx| {
+                editor.update(cx, |e, cx| {
+                    assert!(e.begin_gui_update_checkpoint(31, w, cx));
+                    assert_eq!(
+                        e.update_receipt(w, cx),
+                        None,
+                        "recording is not a writer ACK"
+                    );
+                    let before = e.cache.clone();
+                    e.discard_draft(w, cx);
+                    assert!(
+                        e.cache == before,
+                        "stale Discard cannot mutate a checkpoint"
+                    );
+                });
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("composer-recovery").disabled(), Some(true));
+                editor.update(cx, |e, cx| e.end_update_checkpoint(cx));
+            })
+            .unwrap();
+            frame(cx, h);
+            assert!(matches!(
+                commands.try_recv(),
+                Ok(WriteCommand::Checkpoint(31))
+            ));
+            assert!(
+                commands.try_recv().is_err(),
+                "checkpoint never resolves or resends"
+            );
             cx.update_window(h, |_, w, cx| w.click("composer-recovery", cx))
                 .unwrap();
             frame(cx, h);
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}-restart-note.png", width as u32, mode.name())))
+                    .unwrap();
+            }
             cx.update_window(h, |_, w, cx| {
                 assert!(w.find("delivery-diagnostic").visible());
+                let note = w.find("delivery-restart-note");
+                assert!(note.visible());
+                assert!(
+                    note.bounds().left() >= px(0.)
+                        && note.bounds().right() <= w.viewport_size().width
+                );
                 w.click("check-delivery", cx);
             })
             .unwrap();

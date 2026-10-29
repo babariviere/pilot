@@ -2,6 +2,157 @@
 use super::*;
 
 #[tokio::test]
+async fn update_checkpoint_retains_unknown_across_cold_start_without_any_network() {
+    for behavior in [
+        Behavior::LostAccepted,
+        Behavior::LostBeforeAdmission,
+        Behavior::AnswerLost,
+    ] {
+        for key in ["chat:a", "new:checkpoint"] {
+            if behavior == Behavior::AnswerLost && key.starts_with("new:") {
+                continue;
+            }
+            let daemon = Daemon::start(behavior).await;
+            let temp = Temp::new();
+            let (client, updates) = ready(&daemon, &temp).await;
+            if behavior == Behavior::AnswerLost {
+                question_answer_command(&client, question_answer_fixture(), 1);
+            } else {
+                submit(&client, key, 1, "Original 日本語 👩‍💻", 1, false);
+            }
+            let state = until(&updates, |s| s.handled.get(key) == Some(&1)).await;
+            let original = state
+                .book
+                .as_ref()
+                .unwrap()
+                .pending
+                .values()
+                .next()
+                .unwrap()
+                .clone();
+            assert_eq!(original.state, "unknown");
+            let mut newer = state.book.as_ref().unwrap().drafts[key].clone();
+            newer.revision += 1;
+            newer.text = "Newer unsent e\u{301} 🦀".into();
+            assert!(client.edit(key.into(), newer));
+            assert!(client.command(WriteCommand::Checkpoint(91)));
+            let saved = until(&updates, |s| s.checkpoint == Some(91)).await;
+            assert!(saved.error.is_none());
+            let book = saved.book.unwrap();
+            assert!(book.pending[&original.id] == original);
+            assert!(
+                book.gui_restart_safe(),
+                "durable Unknown should survive a GUI restart"
+            );
+            assert!(
+                !book.restart_settled(),
+                "daemon upgrade keeps its stricter gate"
+            );
+            let bytes = fs::read(temp.0.join("state-v1.json")).unwrap();
+            let before = daemon.seen.lock().unwrap().requests.clone();
+            assert!(client.command(WriteCommand::Close));
+            until(&updates, |s| s.flushed).await;
+            drop(client);
+            while updates.recv().await.is_ok() {}
+            let (client, updates) = ready(&daemon, &temp).await;
+            assert!(client.command(WriteCommand::Checkpoint(92)));
+            let restored = until(&updates, |s| s.checkpoint == Some(92)).await;
+            assert!(restored.book.as_ref().unwrap().as_ref() == book.as_ref());
+            assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), bytes);
+            assert_eq!(
+                daemon.seen.lock().unwrap().requests,
+                before,
+                "no lookup or replay on restart/checkpoint"
+            );
+            assert!(client.command(WriteCommand::Close));
+            until(&updates, |s| s.flushed).await;
+            drop(client);
+            while updates.recv().await.is_ok() {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn update_checkpoint_never_acknowledges_unknown_with_failed_newer_save() {
+    let options = LocalOptions::synthetic(1);
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+    store
+        .prepare("chat:a", &draft(1, "Durable original"), false, false)
+        .unwrap();
+    let before = fs::read(temp.0.join("state-v1.json")).unwrap();
+    store.fail_write = true;
+    let (commands, receiver) = async_channel::bounded(8);
+    let (wake, wake_receiver) = async_channel::bounded(1);
+    let (close, close_receiver) = async_channel::bounded(1);
+    let (updates, output) = async_channel::bounded(1);
+    let edits = Arc::new(Mutex::new(BTreeMap::from([(
+        "chat:a".into(),
+        draft(2, "Unsaved newer 日本語"),
+    )])));
+    let task = tokio::spawn(run(
+        options,
+        Ok(store),
+        WorkerChannels {
+            commands: receiver,
+            wake: wake_receiver,
+            edits: edits.clone(),
+            updates,
+            replace: output.clone(),
+            close: close_receiver,
+        },
+    ));
+    until(&output, |s| s.book.is_some()).await;
+    commands.send(WriteCommand::Checkpoint(93)).await.unwrap();
+    let failed = until(&output, |s| s.error.is_some()).await;
+    assert_eq!(failed.checkpoint, None);
+    assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), before);
+    assert_eq!(edits.lock().unwrap()["chat:a"].text, "Unsaved newer 日本語");
+    drop((commands, wake, close));
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn update_checkpoint_retains_interrupted_execute_diagnostic_byte_exact() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let intent = store
+        .prepare(
+            "chat:a",
+            &draft(43, "Synthetic interrupted send"),
+            false,
+            false,
+        )
+        .unwrap();
+    let mut delivery = crate::delivery_store::Delivery::from_intent(&intent);
+    delivery.diagnostic = Some(Diagnostic {
+        stage: Stage::Execute,
+        category: Category::Interrupted,
+        status: None,
+        acknowledgment: Acknowledgment::Unknown,
+    });
+    store.record_diagnostic("chat:a", &delivery).unwrap();
+    let bytes = fs::read(temp.0.join("state-v1.json")).unwrap();
+    let original = store.book.clone();
+    drop(store);
+    for generation in [94, 95] {
+        let (client, updates) = ready(&daemon, &temp).await;
+        assert!(client.command(WriteCommand::Checkpoint(generation)));
+        let state = until(&updates, |s| s.checkpoint == Some(generation)).await;
+        assert!(state.book.as_ref().unwrap().as_ref() == &original);
+        assert!(state.book.as_ref().unwrap().gui_restart_safe());
+        assert!(state.error.is_none());
+        assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), bytes);
+        assert!(daemon.seen.lock().unwrap().requests.is_empty());
+        assert!(client.command(WriteCommand::Close));
+        until(&updates, |s| s.flushed).await;
+        drop(client);
+        while updates.recv().await.is_ok() {}
+    }
+}
+
+#[tokio::test]
 async fn restart_retains_newer_drafts_and_exact_pending_operations_without_network() {
     for behavior in [
         Behavior::Pending,

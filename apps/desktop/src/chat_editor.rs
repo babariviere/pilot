@@ -112,7 +112,8 @@ pub(crate) struct ChatEditor {
     state: WriteState,
     error: Option<&'static str>,
     closing: bool,
-    update_checkpoint: Option<u64>,
+    /// Generation and whether this GUI-only restart may retain durable Unknown messages.
+    update_checkpoint: Option<(u64, bool)>,
     /// The editor's current placeholder, so render updates it only on change.
     placeholder: &'static str,
     _subscriptions: Vec<Subscription>,
@@ -564,6 +565,9 @@ impl ChatEditor {
     /// Removes the selected draft. Its text is copied out first, and the store abandons any
     /// unresolved delivery, so the same operation is never sent again.
     fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.update_checkpoint.is_some() {
+            return;
+        }
         if self.question_blocks_discard(cx) || self.question_marked(window, cx) {
             cx.notify();
             return;
@@ -867,11 +871,31 @@ impl ChatEditor {
         cx.notify();
         false
     }
-    /// Find must not steal keys from question fields or model/project editors.
+    /// Daemon upgrade keeps the stricter settled-delivery policy.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn begin_update_checkpoint(
         &mut self,
         generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.begin_checkpoint(generation, false, window, cx)
+    }
+    /// A GUI replacement may carry saved Unknown messages, never volatile observations.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn begin_gui_update_checkpoint(
+        &mut self,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.begin_checkpoint(generation, true, window, cx)
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn begin_checkpoint(
+        &mut self,
+        generation: u64,
+        retain_unknown: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -882,16 +906,23 @@ impl ChatEditor {
             || !self.pending.is_empty()
             || self
                 .state
-                .book
-                .as_ref()
-                .is_none_or(|b| !b.restart_settled())
+                .delivery_reports
+                .values()
+                .any(|report| !report.saved)
+            || self.state.book.as_ref().is_none_or(|b| {
+                if retain_unknown {
+                    !b.gui_restart_safe()
+                } else {
+                    !b.restart_settled()
+                }
+            })
         {
             return false;
         }
         self.close_paths(cx);
         self.record_edit(true, cx);
         self.record_question_edit(true, cx);
-        self.update_checkpoint = Some(generation);
+        self.update_checkpoint = Some((generation, retain_unknown));
         if !self
             .client
             .as_ref()
@@ -909,10 +940,16 @@ impl ChatEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
-        let generation = self.update_checkpoint?;
+        let (generation, retain_unknown) = self.update_checkpoint?;
         if self.state.checkpoint != Some(generation)
             || self.state.error.is_some()
             || !self.unsaved_local.is_empty()
+            || !self.pending.is_empty()
+            || self
+                .state
+                .delivery_reports
+                .values()
+                .any(|report| !report.saved)
             || self.marked(window, cx)
         {
             return None;
@@ -929,12 +966,14 @@ impl ChatEditor {
                 return None;
             }
         }
-        if !book.restart_settled()
-            || !self.cache.iter().all(|(key, draft)| {
-                book.drafts.get(key) == Some(draft)
-                    || (self.selected.as_ref() != Some(key) && draft == &Draft::default())
-            })
-        {
+        if !(if retain_unknown {
+            book.gui_restart_safe()
+        } else {
+            book.restart_settled()
+        }) || !self.cache.iter().all(|(key, draft)| {
+            book.drafts.get(key) == Some(draft)
+                || (self.selected.as_ref() != Some(key) && draft == &Draft::default())
+        }) {
             return None;
         }
         Some(generation)

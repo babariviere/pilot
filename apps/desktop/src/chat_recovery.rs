@@ -25,6 +25,7 @@ impl ChatEditor {
                             "Resolve…",
                             crate::ui::Action::Quiet,
                         )
+                        .disabled(self.update_checkpoint.is_some())
                         .tooltip("Check, send again or discard this draft"),
                     )
                     .content(move |_, _, cx| {
@@ -35,7 +36,7 @@ impl ChatEditor {
             )
     }
     fn recovery_actions(&self, key: &str, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
-        if self.selected.as_deref() != Some(key) {
+        if self.update_checkpoint.is_some() || self.selected.as_deref() != Some(key) {
             return div().into_any_element();
         }
         let Some(draft) = self.cache.get(key) else {
@@ -71,6 +72,18 @@ impl ChatEditor {
             actions = actions.child(detail);
         }
         if let Some(intent) = pending {
+            if intent.state == "unknown" && intent.operation.is_some() {
+                let note = div()
+                    .id("delivery-restart-note")
+                    .min_w_0()
+                    .child(crate::ui::text(
+                        crate::ui::Text::Caption,
+                        "Restart keeps this unresolved. This message is never sent again automatically.",
+                    ));
+                #[cfg(any(test, feature = "native-probes"))]
+                let note = note.test_support();
+                actions = actions.child(note);
+            }
             let id = intent.id.clone();
             let retry_id = id.clone();
             let dismiss_id = id.clone();
@@ -90,6 +103,7 @@ impl ChatEditor {
                                     .icon(AppIcon::Retry.asset())
                                     .disabled(intent.operation.is_none())
                                     .on_click(cx.listener(move |view, _, _, _| {
+                                        if view.update_checkpoint.is_some() { return; }
                                         if let Some(client) = &view.client {
                                             client.command(WriteCommand::Check {
                                                 id: id.clone(),
@@ -110,6 +124,7 @@ impl ChatEditor {
                                         intent.operation.is_none() || intent.state == "pending",
                                     )
                                     .on_click(cx.listener(move |view, _, _, _| {
+                                        if view.update_checkpoint.is_some() { return; }
                                         if let Some(client) = &view.client {
                                             client.command(view.retry_command(&retry_id));
                                         }
@@ -127,6 +142,7 @@ impl ChatEditor {
                                 .icon(AppIcon::Info.asset())
                                 .disabled(intent.operation.is_some())
                                 .on_click(cx.listener(move |view, _, _, _| {
+                                    if view.update_checkpoint.is_some() { return; }
                                     if let Some(client) = &view.client {
                                         client.command(WriteCommand::DismissStop {
                                             id: dismiss_id.clone(),
@@ -187,6 +203,9 @@ impl ChatEditor {
                             .label("Remove recovered text")
                             .icon(AppIcon::Close.asset())
                             .on_click(cx.listener(move |view, _, _, _| {
+                                if view.update_checkpoint.is_some() {
+                                    return;
+                                }
                                 if let Some(client) = &view.client {
                                     client.command(WriteCommand::ClearRecovery {
                                         key: recovery_key.clone(),

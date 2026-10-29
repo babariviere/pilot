@@ -6,8 +6,14 @@ signed complete package is verified, **New build ready** offers **Reload UI**.
 Nothing installs on an agent commit, a build completion, a check, or ordinary Quit.
 
 The existing ordered writer must acknowledge an exact durable draft/outbox and
-preferences checkpoint before exit. Preedit, unresolved delivery, unsaved forms,
-and active native helpers defer reload without discarding content. The helper
+preferences checkpoint before exit. Preedit, in-flight or daemon-pending delivery,
+unsaved forms and active native helpers defer reload without discarding content.
+An immutable message with a durably retained Unknown outcome can survive a
+GUI-only restart unchanged. The exact fresh writer checkpoint is still required;
+unsaved text, failed writes and delivery observations/ACKs held only in memory
+still defer it. Cold startup neither checks nor resends the message. Its unresolved
+status and explicit Resolve actions remain available after restart. This does not
+relax daemon-upgrade admission or mark a message accepted/rejected. The helper
 still requires explicit COMMIT and actual OS-observed parent exit before its
 native whole-bundle swap/relaunch. The previous bundle remains in the transaction's
 `install-payload` directory. Recovery details expose retained paths; no automatic

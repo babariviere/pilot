@@ -194,11 +194,19 @@ pub(crate) struct Book {
 impl Book {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn restart_settled(&self) -> bool {
+        self.pending.is_empty() && self.gui_restart_safe()
+    }
+    /// The writer must still acknowledge a fresh checkpoint. Unknown immutable messages
+    /// survive cold open unchanged; opening the store never checks or executes them.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn gui_restart_safe(&self) -> bool {
         // An unconfirmed project registration is durable and never resent, so it survives a
         // restart unchanged. In-flight registration is fenced by the add-project sheet.
         // A dismissed Stop keeps an "unknown" summary, but Stop is never retried, so it
         // has nothing left to settle.
-        self.pending.is_empty()
+        self.pending
+            .values()
+            .all(|intent| intent.state == "unknown" && intent.operation.is_some())
             && self.model_changes.is_empty()
             && self
                 .missions
