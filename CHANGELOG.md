@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.91.0](https://github.com/babariviere/pilot/compare/v1.90.0...v1.91.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** migrate stopped legacy daemon services ([4d4e1c0](https://github.com/babariviere/pilot/commit/4d4e1c02ca246350ee0edfc7e1e910cb8e3188b1))
+* **desktop:** open message web links and show service link badges ([bf231db](https://github.com/babariviere/pilot/commit/bf231db2d771b33c61006729f5c573ace8694389))
+* **desktop:** show context compaction and reset as quiet event rows ([4a2470d](https://github.com/babariviere/pilot/commit/4a2470d00f66c2090949377ec29a89f610a97833))
+
+
+### Bug Fixes
+
+* **ci:** register missing native probes and updater tests ([d920b06](https://github.com/babariviere/pilot/commit/d920b06641d423df8a7ff77b1244b921f5da95d3))
+* **desktop:** admit replies to awaited asks while the chat is working ([4152682](https://github.com/babariviere/pilot/commit/4152682647fcbe349d6b927f0dc9c9831f77453b))
+* **desktop:** admit verified prior macOS release runtimes ([8f2faa7](https://github.com/babariviere/pilot/commit/8f2faa7fee3f4724d1f8f7f9c8b7a9827d60db20))
+* **desktop:** apply content limits only to writes ([ed3aa69](https://github.com/babariviere/pilot/commit/ed3aa69d0195e944ea64d272c89e900c2aefab89))
+* **desktop:** give each part of a split tool group its own row ([1094977](https://github.com/babariviere/pilot/commit/1094977a80d0b450447def7d49b0e86407b1463f))
+* **desktop:** scroll long tool output inside its block and keep scrollbar tracks clear ([875f6ac](https://github.com/babariviere/pilot/commit/875f6ac8af366f7baed5af3ac4bf308675ccaef6))
+
 ## [1.90.0](https://github.com/babariviere/pilot/compare/v1.89.0...v1.90.0) (2026-10-29)
 
 
