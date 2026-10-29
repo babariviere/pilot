@@ -34,7 +34,6 @@ enum Job {
         Safety,
         Option<crate::coordination::Location>,
         Option<crate::app_update::Connection>,
-        bool,
         serde_json::Value,
     ),
     Commit(u64, Safety),
@@ -66,7 +65,6 @@ pub struct Worker {
     stopped: Arc<AtomicBool>,
     runtime: Option<crate::coordination::Location>,
     external: Option<crate::app_update::Connection>,
-    ui_only: bool,
     navigation: serde_json::Value,
     recovery: Option<Receiver<Recovery>>,
     progress: Shared,
@@ -214,7 +212,7 @@ impl Worker {
                             staged = Some(stage);
                             Ok(Outcome::Staged(candidate))
                         }
-                        Job::Prepare(id, safety, runtime, external, ui_only, navigation) => {
+                        Job::Prepare(id, safety, runtime, external, navigation) => {
                             safety.validate_client()?;
                             if prepared.is_some() {
                                 return Err(Error::Busy);
@@ -243,23 +241,15 @@ impl Worker {
                             } else {
                                 let location = runtime.ok_or(Error::RuntimeUnverified)?;
                                 let candidate = installer::preview_bundle(&stage.root, &trust)?;
-                                let guard = if ui_only {
-                                    crate::coordination::Guard::prepare_ui(
-                                        location,
-                                        &candidate,
-                                        &stage.root,
-                                        stage.build(),
-                                        &trust,
-                                    )?
-                                } else {
-                                    crate::coordination::Guard::prepare(
-                                        location,
-                                        &candidate,
-                                        &stage.root,
-                                        stage.build(),
-                                        &trust,
-                                    )?
-                                };
+                                // App replacement reconnects to this exact retained runtime.
+                                // It must never reserve or stop independent agent work.
+                                let guard = crate::coordination::Guard::prepare_ui(
+                                    location,
+                                    &candidate,
+                                    &stage.root,
+                                    stage.build(),
+                                    &trust,
+                                )?;
                                 guard.save()?;
                                 crate::app_update::ExitGuard::Retained(guard)
                             };
@@ -337,7 +327,6 @@ impl Worker {
             stopped,
             runtime: None,
             external: None,
-            ui_only: false,
             navigation: serde_json::Value::Null,
             recovery: Some(recovery_receive),
             progress,
@@ -367,9 +356,6 @@ impl Worker {
     }
     pub fn supply_navigation(&mut self, navigation: serde_json::Value) {
         self.navigation = navigation;
-    }
-    pub fn ui_only(&mut self, value: bool) {
-        self.ui_only = value;
     }
     pub(crate) fn stage_local(&mut self, operation: u64, directory: PathBuf) -> Result<(), Error> {
         let cancel = Cancellation::default();
@@ -418,7 +404,6 @@ impl Backend for Worker {
             safety,
             self.runtime.clone(),
             self.external.clone(),
-            self.ui_only,
             self.navigation.clone(),
         ))
     }

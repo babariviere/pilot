@@ -32,7 +32,9 @@ owner.updates(async(action,value)=>{
 });
 owner.install((req,res)=>{
   if(req.url==='/api/update/pause' && req.method==='POST') {
-    res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:true,processId:process.pid}));
+    const pending=existsSync(process.env.PILOT_HOME+'/tool-pending');
+    if(pending){const count=process.env.PILOT_HOME+'/pause-count';writeFileSync(count,String(existsSync(count)?Number(readFileSync(count,'utf8'))+1:1),{mode:0o600});}
+    res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:!pending,processId:process.pid}));
   } else res.writeHead(404).end();
 });
 owner.ready({daemonId:'fixture-daemon',lineageId:'fixture-lineage',daemonVersion:'0.0.1',protocolVersion:1,minimumClientProtocolVersion:1,platform:process.platform,arch:process.arch,capabilities:{independentExecution:true}});
@@ -595,6 +597,21 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         &node,
         true,
     );
+    // Runtime version ordering is independent of the signed GUI build numbers.
+    let stamp_path = new.join(crate::layout::RUNTIME).join("runtime-build.json");
+    let mut stamp: Value = serde_json::from_slice(&fs::read(&stamp_path).unwrap()).unwrap();
+    stamp["version"] = json!("0.0.2");
+    fs::write(&stamp_path, serde_json::to_vec(&stamp).unwrap()).unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            new.as_os_str(),
+        ],
+    )
+    .unwrap();
     let trust = Trust {
         application_id: "com.example.synthetic.next".into(),
         channel: "desktop-stable".into(),
@@ -667,6 +684,7 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
     fs::write(profile.join("preserved-draft"), "still here 🐦").unwrap();
     let cancel = AtomicBool::new(false);
     let mut host = LaunchAgent {
+        automatic: false,
         original_backup: None,
         location: location.clone(),
         current: current.clone(),
@@ -686,6 +704,85 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         plist_stamp: None,
         reservation: None,
     };
+    assert_eq!(
+        check_needed(&mut host),
+        Err(Failure::Unsupported),
+        "legacy ownership stays manual-only"
+    );
+    let mut managed = definition.clone();
+    managed["PilotNextManaged"] = json!(true);
+    fs::write(&host.plist, serde_json::to_vec(&managed).unwrap()).unwrap();
+    assert_eq!(check_needed(&mut host), Ok(true));
+    assert!(!profile.join(JOURNAL).exists());
+    assert!(
+        !profile.join(".daemon-upgrade.lock").exists(),
+        "checker never locks or stages"
+    );
+    let mut changed = managed.clone();
+    changed["ProgramArguments"][1] = json!("/custom/main.ts");
+    fs::write(&host.plist, serde_json::to_vec(&changed).unwrap()).unwrap();
+    assert_eq!(
+        host.revalidate(),
+        Err(Failure::Unverified),
+        "modified service refuses at exact boundary"
+    );
+    fs::write(&host.plist, serde_json::to_vec(&managed).unwrap()).unwrap();
+    assert_eq!(check_needed(&mut host), Ok(true));
+    cancel.store(true, Ordering::Release);
+    assert_eq!(check_needed(&mut host), Err(Failure::Cancelled));
+    cancel.store(false, Ordering::Release);
+    // Equal/newer owners need no accepted-capsule entry or spare runtime slot.
+    host.current = new.clone();
+    for version in ["0.0.1", "0.0.0"] {
+        stamp["version"] = json!(version);
+        fs::write(&stamp_path, serde_json::to_vec(&stamp).unwrap()).unwrap();
+        command(
+            "/usr/bin/codesign",
+            &[
+                "--force".as_ref(),
+                "--sign".as_ref(),
+                "-".as_ref(),
+                new.as_os_str(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(check_needed(&mut host), Ok(false), "{version}");
+    }
+    fs::write(&stamp_path, b"tampered").unwrap();
+    assert_eq!(
+        check_needed(&mut host),
+        Err(Failure::Unverified),
+        "package signature required"
+    );
+    host.current = current.clone();
+    host.automatic = true;
+    host.prepare().unwrap();
+    let boot = host.owner["boot"].clone();
+    fs::write(profile.join("tool-pending"), "1").unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(Duration::from_millis(1200));
+            cancel.store(true, Ordering::Release);
+        });
+        assert_eq!(host.drained(), Err(Failure::Cancelled));
+    });
+    assert!(
+        fs::read_to_string(profile.join("pause-count"))
+            .unwrap()
+            .parse::<u32>()
+            .unwrap()
+            >= 2,
+        "pause lease renewed while tool runs"
+    );
+    assert_eq!(coordination::record(&location).unwrap()["boot"], boot);
+    assert!(
+        !profile.join(JOURNAL).exists(),
+        "cancelled boundary never stops"
+    );
+    fs::remove_file(profile.join("tool-pending")).unwrap();
+    cancel.store(false, Ordering::Release);
+    host.automatic = false;
+    host.lock.take();
     // Full daemon reservation refuses independent work, not merely tool pause.
     for kind in [
         "job", "terminal", "child", "transfer", "mutation", "unknown",
@@ -723,8 +820,28 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
     fs::remove_file(profile.join("lost-prepare")).unwrap();
     // Replacing/removing the bundled seed cannot affect retained execution.
     fs::remove_dir_all(&new).unwrap();
-    execute(&mut host, &cancel).expect("verified synthetic launchd handoff");
+    cancel.store(true, Ordering::Release);
+    assert_eq!(
+        host.verify_target(),
+        Ok(()),
+        "post-stop payload validation must not cancel bootstrap"
+    );
+    cancel.store(false, Ordering::Release);
+    host.automatic = true;
+    execute(&mut host, &cancel).expect("verified synthetic automatic launchd handoff");
     host.lock.take();
+    assert_eq!(
+        check_needed(&mut host),
+        Ok(false),
+        "automatic handoff is now current"
+    );
+    assert_eq!(
+        execute(&mut host, &cancel),
+        Err(Failure::Busy),
+        "equal automatic target never stops twice"
+    );
+    host.lock.take();
+    host.automatic = false;
     host.prepare()
         .expect("prior Next service remains verifiable, not mistaken for Swift");
     host.lock.take();

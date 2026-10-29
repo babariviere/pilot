@@ -41,9 +41,35 @@ pub fn upgrade(
     lineage: &str,
     cancel: &AtomicBool,
 ) -> Result<(), Failure> {
+    let mut host = launch_agent(location, current, trust, daemon, lineage, cancel)?;
+    execute(&mut host, cancel)
+}
+
+/// One startup attempt, with the automatic ownership/version gate rechecked under lock.
+pub fn upgrade_startup(
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    daemon: &str,
+    lineage: &str,
+    cancel: &AtomicBool,
+) -> Result<(), Failure> {
+    let mut host = launch_agent(location, current, trust, daemon, lineage, cancel)?;
+    host.automatic = true;
+    execute(&mut host, cancel)
+}
+
+fn launch_agent<'a>(
+    location: Location,
+    current: &Path,
+    trust: &'a Trust,
+    daemon: &'a str,
+    lineage: &'a str,
+    cancel: &'a AtomicBool,
+) -> Result<LaunchAgent<'a>, Failure> {
     let home = PathBuf::from(std::env::var_os("HOME").ok_or(Failure::Unverified)?);
     let service = format!("gui/{}/{LABEL}", unsafe { libc::geteuid() });
-    let mut host = LaunchAgent {
+    Ok(LaunchAgent {
         plist: home
             .join("Library/LaunchAgents")
             .join(format!("{LABEL}.plist")),
@@ -64,10 +90,79 @@ pub fn upgrade(
         plist_stamp: None,
         reservation: None,
         original_backup: None,
-    };
-    execute(&mut host, cancel)
+        automatic: false,
+    })
+}
+
+/// Read-only comparison. No capsule publication, lock, pause or service write.
+pub fn needed(
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    daemon: &str,
+    lineage: &str,
+    cancel: &AtomicBool,
+) -> Result<bool, Failure> {
+    let mut host = launch_agent(location, current, trust, daemon, lineage, cancel)?;
+    check_needed(&mut host)
+}
+
+fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
+    use crate::installer::Platform;
+    let current = host.current.clone();
+    let (trust, daemon, lineage, cancel) = (host.trust, host.daemon, host.lineage, host.cancel);
+    if cancel.load(Ordering::Acquire) {
+        return Err(Failure::Cancelled);
+    }
+    host.owner = verified(coordination::record(&host.location))?;
+    // Bind the caller identity and runtime stamp before interpreting its version.
+    prove(&host.location, &host.owner, daemon, lineage)?;
+    host.check_cancel()?;
+    verified(installer::validate_target(&current, trust))?;
+    verified(installer::MacPlatform.verify(&current, trust, &trust.current_build, None))?;
+    host.check_cancel()?;
+    verified(installer::validate_parents(
+        host.plist.parent().ok_or(Failure::Unverified)?,
+    ))?;
+    let meta = private_regular(&host.plist)?;
+    host.plist_stamp = Some((meta.dev(), meta.ino()));
+    host.original = plist(&host.plist)?;
+    host.check_cancel()?;
+    validate_definition(&host.original, &host.home, &host.location, &host.label)?;
+    if host.live_definition()? != host.pid()? {
+        return Err(Failure::Unverified);
+    }
+    host.check_cancel()?;
+    // Custom and externally managed definitions never gain automatic authority.
+    if host.original["PilotNextManaged"] != true {
+        return Err(Failure::Unsupported);
+    }
+    host.verify_running_payload()?;
+    super::native::no_incomplete_handoff(&host.location)?;
+    let candidate = super::native::runtime_stamp(&current)?;
+    let needed = super::runtime_upgrade_needed(&host.owner["build"], &candidate)?;
+    if needed {
+        host.revalidate()?;
+    } else {
+        // A newer signed runtime need not be in this older app's allowlist to
+        // leave it alone. This branch grants no handoff or lifecycle authority.
+        let meta = private_regular(&host.plist)?;
+        if Some((meta.dev(), meta.ino())) != host.plist_stamp
+            || plist(&host.plist)? != host.original
+            || host.live_definition()? != host.pid()?
+        {
+            return Err(Failure::Unverified);
+        }
+        host.verify_running_payload()?;
+        prove(&host.location, &host.owner, daemon, lineage)?;
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Err(Failure::Cancelled);
+    }
+    Ok(needed)
 }
 struct LaunchAgent<'a> {
+    automatic: bool,
     location: Location,
     current: PathBuf,
     trust: &'a Trust,
@@ -125,6 +220,13 @@ fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Fail
     pid.filter(|pid| *pid > 1).ok_or(Failure::Unverified)
 }
 impl LaunchAgent<'_> {
+    fn check_cancel(&self) -> Result<(), Failure> {
+        if self.cancel.load(Ordering::Acquire) {
+            Err(Failure::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
     fn bootstrap(&self) -> Result<(), Failure> {
         let domain = format!("gui/{}", unsafe { libc::geteuid() });
         command(
@@ -168,6 +270,7 @@ impl LaunchAgent<'_> {
         )
     }
     fn verify_old_payload(&self) -> Result<(), Failure> {
+        self.check_cancel()?;
         let node = Path::new(
             self.original["ProgramArguments"][0]
                 .as_str()
@@ -198,6 +301,17 @@ impl LaunchAgent<'_> {
                 Some(&id),
             ))?;
         }
+        self.check_cancel()?;
+        self.verify_running_payload()
+    }
+    fn verify_running_payload(&self) -> Result<(), Failure> {
+        self.check_cancel()?;
+        let node = Path::new(
+            self.original["ProgramArguments"][0]
+                .as_str()
+                .ok_or(Failure::Unsupported)?,
+        );
+        let app = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
         if super::native::running(&self.location, app)? != self.owner {
             return Err(Failure::Unverified);
         }
@@ -213,6 +327,7 @@ impl LaunchAgent<'_> {
         if self.original["ProgramArguments"][1].as_str() != expected.to_str() {
             return Err(Failure::Unsupported);
         }
+        self.check_cancel()?;
         Ok(())
     }
 }
@@ -244,7 +359,11 @@ impl Handoff for LaunchAgent<'_> {
         let meta = private_regular(&self.plist)?;
         self.plist_stamp = Some((meta.dev(), meta.ino()));
         self.original = plist(&self.plist)?;
+        self.check_cancel()?;
         validate_definition(&self.original, &self.home, &self.location, &self.label)?;
+        if self.automatic && self.original["PilotNextManaged"] != true {
+            return Err(Failure::Unsupported);
+        }
         if self.live_definition()? != self.pid()? {
             return Err(Failure::Unverified);
         }
@@ -280,6 +399,16 @@ impl Handoff for LaunchAgent<'_> {
             return Err(Failure::Unknown);
         }
         self.verify_target()?;
+        // Recheck under the permanent handoff lock, not only in the startup checker.
+        self.check_cancel()?;
+        let candidate = super::native::runtime_stamp(&self.current)?;
+        if super::runtime_version(&candidate)? < super::runtime_version(&self.owner["build"])? {
+            return Err(Failure::Unverified);
+        }
+        if self.automatic && !super::runtime_upgrade_needed(&self.owner["build"], &candidate)? {
+            // The daemon changed after the read-only checker. Never pause or stop it.
+            return Err(Failure::Busy);
+        }
         self.replacement = self.original.clone();
         self.replacement["PilotNextManaged"] = json!(true);
         let runtime = self.current.join(crate::layout::RUNTIME);
@@ -303,12 +432,15 @@ impl Handoff for LaunchAgent<'_> {
             .timeout(Duration::from_secs(5))
             .build()
             .map_err(|_| Failure::Unverified)?;
-        let until = Instant::now() + Duration::from_secs(30);
+        // Renew the pause lease while an active tool finishes. This is one bounded
+        // preflight attempt, not a repeated stop/start or background retry timer.
+        let until = Instant::now() + drain_timeout(self.automatic);
         loop {
             if self.cancel.load(Ordering::Acquire) {
                 return Err(Failure::Cancelled);
             }
             prove(&self.location, &self.owner, self.daemon, self.lineage)?;
+            self.check_cancel()?;
             let mut response = client
                 .post(format!(
                     "http://127.0.0.1:{}/api/update/pause",
@@ -325,6 +457,7 @@ impl Handoff for LaunchAgent<'_> {
                 return Err(Failure::Unverified);
             }
             let value: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Unverified)?;
+            self.check_cancel()?;
             if value["processId"] != self.owner["pid"] {
                 return Err(Failure::Unverified);
             }
@@ -338,6 +471,7 @@ impl Handoff for LaunchAgent<'_> {
         }
     }
     fn revalidate(&mut self) -> Result<(), Failure> {
+        self.check_cancel()?;
         let meta = private_regular(&self.plist)?;
         if Some((meta.dev(), meta.ino())) != self.plist_stamp
             || plist(&self.plist)? != self.original
@@ -347,6 +481,7 @@ impl Handoff for LaunchAgent<'_> {
         }
         self.verify_old_payload()?;
         prove(&self.location, &self.owner, self.daemon, self.lineage)?;
+        self.check_cancel()?;
         Ok(())
     }
     fn journal(&mut self, phase: &str) -> Result<(), Failure> {
@@ -420,7 +555,8 @@ impl Handoff for LaunchAgent<'_> {
         if let Some(backup) = &self.original_backup {
             let meta = private_regular(&self.plist)?;
             if Some((meta.dev(), meta.ino())) != self.plist_stamp
-                || io(fs::read(&self.plist))? != io(fs::read(backup))?
+                || super::native::read_file(&self.plist, 65536)?
+                    != super::native::read_file(backup, 65536)?
             {
                 return Err(Failure::Unverified);
             }
@@ -472,12 +608,7 @@ impl Handoff for LaunchAgent<'_> {
                 {
                     return Err(Failure::Unverified);
                 }
-                let expected: Value = serde_json::from_slice(&io(fs::read(
-                    self.current
-                        .join(crate::layout::RUNTIME)
-                        .join("runtime-build.json"),
-                ))?)
-                .map_err(|_| Failure::Unverified)?;
+                let expected = super::native::runtime_stamp(&self.current)?;
                 if record["build"] != expected {
                     return Err(Failure::Unverified);
                 }
@@ -489,6 +620,9 @@ impl Handoff for LaunchAgent<'_> {
             std::thread::sleep(Duration::from_millis(250));
         }
     }
+}
+fn drain_timeout(automatic: bool) -> Duration {
+    Duration::from_secs(if automatic { 10 * 60 } else { 30 })
 }
 fn validate_definition(
     value: &Value,
@@ -719,6 +853,40 @@ mod tests {
     use ring::hmac;
     use std::io::Read;
     use std::{net::TcpListener, os::unix::fs::PermissionsExt};
+    #[test]
+    fn startup_waits_one_bounded_ten_minute_boundary_manual_keeps_thirty_seconds() {
+        assert_eq!(drain_timeout(true), Duration::from_secs(600));
+        assert_eq!(drain_timeout(false), Duration::from_secs(30));
+    }
+    #[test]
+    fn runtime_stamp_reads_are_bounded_and_reject_nonregular_or_linked_files() {
+        let temp = crate::owned_tests::Temp::new();
+        let runtime = temp.path().join(crate::layout::RUNTIME);
+        fs::create_dir_all(&runtime).unwrap();
+        let path = runtime.join("runtime-build.json");
+        fs::write(&path, b"{\"version\":\"1.2.3\"}").unwrap();
+        assert_eq!(
+            super::super::native::runtime_stamp(temp.path()).unwrap()["version"],
+            "1.2.3"
+        );
+        fs::write(&path, vec![b' '; 4097]).unwrap();
+        assert_eq!(
+            super::super::native::runtime_stamp(temp.path()),
+            Err(Failure::Unverified)
+        );
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &path).unwrap();
+        assert_eq!(
+            super::super::native::runtime_stamp(temp.path()),
+            Err(Failure::Unverified)
+        );
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(
+            super::super::native::runtime_stamp(temp.path()),
+            Err(Failure::Unverified)
+        );
+    }
     #[test]
     fn loaded_service_must_match_definition_and_exact_pid() {
         let args = json!(["/node", "/main.ts"]);

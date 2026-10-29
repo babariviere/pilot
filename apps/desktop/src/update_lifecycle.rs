@@ -199,11 +199,8 @@ impl LocalViewer {
             updater.update(cx, |u, cx| u.block(blocker, cx));
             return;
         }
-        // Like the Swift app, pause agents once their current tool calls finish. Input is not
-        // fenced while waiting; the updater emits Restart again once every agent has paused.
-        if !updater.update(cx, |u, cx| u.ensure_agents_paused(cx)) {
-            return;
-        }
+        // Only GUI-owned input and durable state are fenced. Independent agents
+        // keep running while the app checkpoints, swaps and reconnects.
         if !crate::visual_runtime::fence_for_restart() {
             updater.update(cx,|u,cx|u.defer("A native visual helper is still active or its cleanup is unconfirmed. Close the visual and retry; no process was stopped.",cx));
             return;
@@ -283,6 +280,9 @@ impl LocalViewer {
             return;
         }
         self.acknowledge_update_startup(cx);
+        if !self.restart_pending {
+            self.advance_startup_daemon_upgrade(cx);
+        }
         #[cfg(feature = "native-probes")]
         if !self.restart_pending
             && pilot_desktop_updater::fixture::enabled()
@@ -345,7 +345,6 @@ impl LocalViewer {
                 ),
             Some(State::RecoveryRequired(_)) => {
                 self.restart_timeout = None;
-                updater.update(cx, |u, _| u.release_agents());
                 cx.notify();
             }
             _ => {}

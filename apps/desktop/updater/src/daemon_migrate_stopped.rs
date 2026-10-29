@@ -119,6 +119,7 @@ pub(super) fn migrate_at(
         ))?
     };
     let mut host = LaunchAgent {
+        automatic: false,
         location,
         current,
         trust,
@@ -825,6 +826,7 @@ mod tests {
             installer::write_new(&plist_path, &bytes).unwrap();
             let stamp = fs::metadata(&plist_path).unwrap();
             let mut host = LaunchAgent {
+                automatic: false,
                 location: temp.location(),
                 current: temp.0.join("Pilot Next.app"),
                 trust: &trust,

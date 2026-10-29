@@ -18,7 +18,10 @@ These are failure bounds, not unconditional sleeps:
 - Native relaunch command: 15 seconds, 10ms owned-command completion spacing.
 - External Local identity read: 2s connect / 5s request.
 - Retained owner reads: 1s connect / 5s request (prepare request up to 15s).
-- Managed reservation: nonrenewable 180 seconds, verified again after parent exit.
+- Legacy GUI receipts retain their nonrenewable 180-second reservation.
+  New GUI swaps use read-only inspection, with no agent pause or reservation.
+- Post-startup macOS daemon handoff: up to 10 minutes for tool boundaries,
+  cancellable before shutdown, followed by the existing daemon reservation.
 - Bundled startup validation/launcher: 45 seconds, with separate 2s cleanup bound;
   Node launcher has 20s overall / 10s preactivation and 100ms readiness spacing.
 
@@ -108,6 +111,24 @@ numbers above to the current layout or claim unchanged restart latency without a
 new measurement. Temporary purges never affect the durable rollback/journal.
 
 ## Remaining evidence for the reported minute
+
+### App-only qualification, 2026-10-29
+
+`verify_update_lifecycle.py --app-only` passed both native external and managed
+retained-runtime fixtures with unchanged source fingerprints. The faux daemon
+reports active work and rejects pause, admission freeze and non-inspect owner
+requests. Both swaps preserve its boot identity and acknowledge reconnect-only
+startup receipts.
+
+| Seconds | External | Managed retained |
+| --- | ---: | ---: |
+| Pre-quit preparation | 5.263 | 6.946 |
+| Exit marker → new process entry, upper bound | 3.950 | 4.715 |
+| Exit marker → durable startup ACK, upper bound | 4.123 | 6.678 |
+
+These are single synthetic runs, not a before/after speedup or production GUI
+timing. They demonstrate that agent readiness is no longer on the GUI swap path.
+The full-GUI payload and large-session streaming cost remain unmeasured here.
 
 If the minute persists, obtain the exact installed/target versions, whether the
 minute starts at Download, Restart or actual disappearance, and the retained

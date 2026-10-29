@@ -594,6 +594,8 @@ impl LocalViewer {
                         view.acknowledge_update_startup(cx);
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         view.restore_update_navigation(window, cx);
+                        #[cfg(any(target_os = "macos", target_os = "linux"))]
+                        view.advance_startup_daemon_upgrade(cx);
                         #[cfg(feature = "native-probes")]
                         view.advance_update_restart(window, cx);
                     })

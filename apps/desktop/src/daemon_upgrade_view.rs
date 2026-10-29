@@ -1,5 +1,5 @@
-//! Explicit daemon upgrade. The view asks; its parent serializes, then begins.
-//! Confirmation only emits Request. Nothing here runs the worker without begin().
+//! Daemon upgrades share one lifecycle owner. Startup checks once after the GUI
+//! is durable; manual confirmation and automatic checks use the same parent gate.
 use crate::{
     LocalOptions,
     ui::{self, Action, Notice, Text, Tone},
@@ -19,6 +19,8 @@ use std::sync::{
 /// Blocking native handoff. Runs on one dedicated thread per explicit attempt.
 pub(crate) type Worker =
     Arc<dyn Fn(Location, String, String, Arc<AtomicBool>) -> Result<(), Failure> + Send + Sync>;
+type Checker =
+    Arc<dyn Fn(Location, String, String, Arc<AtomicBool>) -> Result<bool, Failure> + Send + Sync>;
 
 /// The exact daemon the user confirmed against.
 #[derive(Clone)]
@@ -50,6 +52,7 @@ pub(crate) enum Event {
 pub(crate) enum Status {
     Unavailable,
     Idle,
+    Checking,
     Confirming,
     Requested,
     Running,
@@ -61,6 +64,7 @@ pub(crate) enum Status {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Idle,
+    Checking,
     Confirming,
     Requested,
     Running,
@@ -77,6 +81,9 @@ pub(crate) struct DaemonUpgrade {
     notice: Option<&'static str>,
     cancel: Option<Arc<AtomicBool>>,
     completion: Option<Task<()>>,
+    startup_check: Option<Checker>,
+    startup_worker: Option<Worker>,
+    automatic: bool,
     focus: FocusHandle,
     confirm_focus: FocusHandle,
     #[cfg(any(test, feature = "native-probes"))]
@@ -94,7 +101,22 @@ fn target(options: &LocalOptions) -> Option<Target> {
 impl DaemonUpgrade {
     pub(crate) fn new(options: Option<LocalOptions>, cx: &mut Context<Self>) -> Self {
         let worker: Worker = Arc::new(crate::bundled_runtime::upgrade_daemon_explicit);
-        Self::with_target(options.as_ref().and_then(target), worker, cx)
+        let mut owner = Self::with_target(options.as_ref().and_then(target), worker, cx);
+        // External connections, fixtures and unconfigured development binaries
+        // never acquire service-management authority merely by opening a window.
+        if cfg!(target_os = "macos")
+            && options
+                .as_ref()
+                .and_then(LocalOptions::update_location)
+                .is_some()
+            && std::env::current_exe().is_ok_and(|exe| crate::bundled_runtime::packaged(&exe))
+            && pilot_desktop_updater::helper::compiled_trust().is_ok()
+        {
+            owner.startup_check = Some(Arc::new(crate::bundled_runtime::daemon_upgrade_needed));
+            owner.startup_worker =
+                Some(Arc::new(crate::bundled_runtime::upgrade_daemon_on_startup));
+        }
+        owner
     }
     pub(crate) fn with_target(
         target: Option<Target>,
@@ -110,6 +132,9 @@ impl DaemonUpgrade {
             notice: None,
             cancel: None,
             completion: None,
+            startup_check: None,
+            startup_worker: None,
+            automatic: false,
             focus: cx.focus_handle(),
             confirm_focus: cx.focus_handle(),
             #[cfg(any(test, feature = "native-probes"))]
@@ -124,7 +149,91 @@ impl DaemonUpgrade {
     ) {
         if self.connected != connected {
             self.connected = connected;
+            cx.emit(Event::Changed);
             cx.notify();
+        }
+    }
+
+    /// Parent calls only after startup acknowledgement and durable UI restoration.
+    /// One check per app lifetime, never a polling/retry loop.
+    pub(crate) fn startup(&mut self, cx: &mut Context<Self>) {
+        if self.phase != Phase::Idle
+            || self.outcome.is_some()
+            || !matches!(
+                self.connected,
+                crate::local_client::ConnectedDaemon::Connected(_)
+            )
+        {
+            return;
+        }
+        let Some(target) = self.target.clone() else {
+            return;
+        };
+        let Some(checker) = self.startup_check.take() else {
+            return;
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        let (sender, receiver) = async_channel::bounded(1);
+        self.automatic = true;
+        if std::thread::Builder::new()
+            .name("daemon-upgrade-check".into())
+            .spawn(move || {
+                let _ = sender.send_blocking(checker(
+                    target.location,
+                    target.daemon_id,
+                    target.lineage_id,
+                    flag,
+                ));
+            })
+            .is_err()
+        {
+            self.outcome = Some(Err(Failure::Unverified));
+            cx.emit(Event::Changed);
+            cx.notify();
+            return;
+        }
+        self.cancel = Some(cancel);
+        self.phase = Phase::Checking;
+        self.completion = Some(cx.spawn(async move |owner, cx| {
+            let result = receiver.recv().await.unwrap_or(Err(Failure::Unverified));
+            let _ = owner.update(cx, |owner, cx| {
+                let cancelled = owner
+                    .cancel
+                    .as_ref()
+                    .is_some_and(|c| c.load(Ordering::Acquire));
+                owner.cancel = None;
+                owner.completion = None;
+                owner.phase = Phase::Idle;
+                match result {
+                    _ if cancelled => owner.outcome = Some(Err(Failure::Cancelled)),
+                    Ok(true) => {
+                        owner.phase = Phase::Requested;
+                        cx.emit(Event::Request);
+                    }
+                    Ok(false) => owner.automatic = false,
+                    Err(failure) => owner.outcome = Some(Err(failure)),
+                }
+                cx.emit(Event::Changed);
+                cx.notify();
+            });
+        }));
+        cx.emit(Event::Changed);
+        cx.notify();
+    }
+
+    pub(crate) fn startup_notice(&self) -> Option<&'static str> {
+        if !self.automatic {
+            return None;
+        }
+        match self.status() {
+            Status::Checking => None,
+            Status::Requested | Status::Running => Some("Updating daemon…"),
+            Status::Cancelling => Some("Cancelling daemon update…"),
+            Status::Failed(Failure::Busy) => Some("Daemon update deferred"),
+            Status::Failed(Failure::Cancelled) => None,
+            Status::Failed(_) => Some("Daemon update needs attention"),
+            _ => None,
         }
     }
 
@@ -133,6 +242,7 @@ impl DaemonUpgrade {
             return Status::Unavailable;
         }
         match self.phase {
+            Phase::Checking => Status::Checking,
             Phase::Idle => match self.outcome {
                 None => Status::Idle,
                 Some(Ok(())) => Status::Succeeded,
@@ -151,7 +261,10 @@ impl DaemonUpgrade {
     /// A worker is running. Only GUI exit/another activation waits for it;
     /// the editor and secondary forms remain live.
     pub(crate) fn active(&self) -> bool {
-        matches!(self.phase, Phase::Running | Phase::Cancelling)
+        matches!(
+            self.phase,
+            Phase::Checking | Phase::Running | Phase::Cancelling
+        )
     }
     /// A lifecycle write may have happened. Sticky; no retry is offered.
     pub(crate) fn uncertain(&self) -> bool {
@@ -171,7 +284,11 @@ impl DaemonUpgrade {
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
-        let worker = self.worker.clone();
+        let worker = if self.automatic {
+            self.startup_worker.as_ref().unwrap_or(&self.worker).clone()
+        } else {
+            self.worker.clone()
+        };
         let (sender, receiver) = async_channel::bounded(1);
         let started = std::thread::Builder::new()
             .name("daemon-upgrade-explicit".into())
@@ -225,7 +342,7 @@ impl DaemonUpgrade {
     pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
         match self.phase {
             Phase::Confirming | Phase::Requested => self.phase = Phase::Idle,
-            Phase::Running => {
+            Phase::Checking | Phase::Running => {
                 if let Some(cancel) = &self.cancel {
                     cancel.store(true, Ordering::Release);
                 }
@@ -242,6 +359,7 @@ impl DaemonUpgrade {
             return;
         }
         self.phase = Phase::Confirming;
+        self.automatic = false;
         self.notice = None;
         // Kit buttons keep focus on mouse down. Never take focus from another owner,
         // which may hold IME marked text; Cancel stays reachable by pointer and Tab.
@@ -274,6 +392,15 @@ impl DaemonUpgrade {
         cx.emit(Event::Changed);
         cx.notify();
         true
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn startup_probe(&mut self, needed: bool, cx: &mut Context<Self>) {
+        self.startup_check = Some(Arc::new(move |_, _, _, _| Ok(needed)));
+        self.connected(
+            crate::local_client::ConnectedDaemon::Connected(Some("1.0.0".into())),
+            cx,
+        );
+        self.startup(cx);
     }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_focus(window, cx);
@@ -343,6 +470,7 @@ impl Render for DaemonUpgrade {
             );
         }
         let status: Option<(&'static str, Option<String>, Tone)> = match self.status() {
+            Status::Checking => Some(("Checking the daemon version…", None, Tone::Normal)),
             Status::Requested => Some(("Starting the daemon upgrade…", None, Tone::Normal)),
             Status::Running => Some((
                 "Upgrading the daemon…",
@@ -354,7 +482,7 @@ impl Render for DaemonUpgrade {
                 Some("If the daemon was already stopping, the upgrade continues and its result appears here.".into()),
                 Tone::Normal,
             )),
-            Status::Succeeded => Some(("Daemon upgraded and verified.", None, Tone::Success)),
+            Status::Succeeded => Some(("Daemon is up to date.", None, Tone::Success)),
             Status::Failed(failure) => {
                 let (title, tone) = outcome(failure);
                 // Unknown's instruction is the caption below, beside the handoff path.
@@ -464,7 +592,7 @@ impl Render for DaemonUpgrade {
                         ),
                 );
             }
-            Phase::Requested | Phase::Running | Phase::Cancelling => {
+            Phase::Checking | Phase::Requested | Phase::Running | Phase::Cancelling => {
                 view = view.child(
                     div().h_flex().child(
                         ui::action("daemon-upgrade-cancel", "Cancel", Action::Secondary)

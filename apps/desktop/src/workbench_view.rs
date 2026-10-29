@@ -322,6 +322,16 @@ impl LocalViewer {
                 .on_action(cx.listener(|v,_:&super::SidebarExpand,w,cx|{if !v.sidebar_arrow(true,w,cx){cx.propagate();}}))
                 .child(List::new(&self.chats).search_placeholder("Find a chat…").scrollbar_visible(false)))
             .child(self.chat_actions.clone())
+            .children(self.daemon_update_notice(cx).map(|message| div().px(px(Space::SIDEBAR)).py_1().child(
+                crate::ui::action("daemon-startup-status", message, crate::ui::Action::Quiet)
+                    .w_full()
+                    .on_click(cx.listener(|view,_,window,cx| {
+                        view.settings.update(cx, |owner,cx| {
+                            owner.category = crate::settings_view::Category::Updates;
+                            cx.notify();
+                        });
+                        view.open_settings(window,cx);
+                    })))))
             // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()
                 // With history arrows the footer has no room for the words at either

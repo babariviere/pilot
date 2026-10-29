@@ -26,7 +26,7 @@ use std::{
 const OWNER: &str = include_str!("../../../../packages/daemon/src/runtime-owner.ts");
 const RESERVATION: &str = include_str!("../../../../packages/daemon/src/update-reservation.ts");
 const NODE: &str = r#"
-import {realpath,writeFile,readFile} from 'node:fs/promises';
+import {realpath,writeFile,readFile,appendFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import {existsSync} from 'node:fs';
@@ -43,10 +43,10 @@ await writeFile(join(home,'daemon-id'),daemonId,{mode:0o600});
 await writeFile(join(home,'storage-lineage'),lineageId,{mode:0o600});
 let frozen=false;
 const clock=()=>existsSync(join(home,'../expire-reservation'))?Number.MAX_SAFE_INTEGER:performance.now();
-const gate=new UpdateReservation({freezeAdmissions(){if(frozen)throw Error('busy');frozen=true;return()=>{frozen=false;};},async blockers(){return [];}},clock);
-owner.updates(async(action,receipt)=>{if(action==='inspect')return receipt;if(existsSync(join(home,'../no-management')))throw Error('management forbidden during UI-only reload');if(action==='prepare')return gate.prepare(receipt.operationId);if(action==='cancel'){gate.cancel(receipt);return receipt;}return gate.verify(receipt);});
+const gate=new UpdateReservation({freezeAdmissions(){if(existsSync(join(home,'../no-management')))throw Error('GUI update froze active agents');if(frozen)throw Error('busy');frozen=true;return()=>{frozen=false;};},async blockers(){return existsSync(join(home,'../no-management'))?['active-agent']:[];}},clock);
+owner.updates(async(action,receipt)=>{await appendFile(join(home,'../update-actions'),action+'\n',{mode:0o600});if(action==='inspect')return receipt;if(existsSync(join(home,'../no-management')))throw Error('management forbidden during UI-only reload');if(action==='prepare')return gate.prepare(receipt.operationId);if(action==='cancel'){gate.cancel(receipt);return receipt;}return gate.verify(receipt);});
 const hello={daemonId,lineageId,daemonVersion:build.version,protocolVersion:1,minimumClientProtocolVersion:1,platform:build.platform,arch:build.arch,capabilities:{independentExecution:true}};
-owner.install((req,res)=>{if(req.method==='GET'&&req.url==='/api/hello'){res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(hello));}else{res.writeHead(403).end();}});
+owner.install((req,res)=>{if(req.url==='/api/update/pause'){writeFile(join(home,'../pause-requested'),'unexpected',{mode:0o600});}if(req.method==='GET'&&req.url==='/api/hello'){res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify(hello));}else{res.writeHead(403).end();}});
 owner.ready(hello);
 console.log('READY');
 "#;
@@ -132,6 +132,27 @@ fn run(args: Vec<String>) -> Result<()> {
         event(&root, "startup_entered")?;
         if root.join("fail-startup").exists() {
             return Err("owned startup failure injection".into());
+        }
+        if !root.join("external-mode").exists() {
+            // Startup must reconnect to the original exact runtime, not acquire
+            // launch authority or substitute the newly installed app's payload.
+            let (capsule, location, reconnect_only) =
+                Guard::startup_connection(&transaction, &target, &trust).map_err(err)?;
+            let original: Location =
+                serde_json::from_slice(&fs::read(root.join("location.json"))?)?;
+            let owner: serde_json::Value =
+                serde_json::from_slice(&fs::read(original.home.join(".daemon-owner.json"))?)?;
+            if owner["runtimeRoot"].as_str()
+                != capsule
+                    .join(pilot_desktop_updater::layout::RUNTIME)
+                    .to_str()
+                || location.home != original.home
+                || location.port != original.port
+                || reconnect_only != root.join("no-management").exists()
+                || !capsule.is_dir()
+            {
+                return Err("startup receipt changed reconnect authority".into());
+            }
         }
         ExitGuard::acknowledge_startup(&transaction, &target, &trust).map_err(err)?;
         event(&root, "startup_ack")?;
@@ -366,6 +387,7 @@ fn run(args: Vec<String>) -> Result<()> {
         )?;
     }
     if mode == "external" {
+        fs::write(root.join("external-mode"), b"external GET-only proof")?;
         let path = location.home.join(".daemon-owner.json");
         let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
         record["build"] = serde_json::Value::Null;
@@ -479,6 +501,17 @@ fn run(args: Vec<String>) -> Result<()> {
     }
     if capsule_id(&capsule)? != id {
         return Err("active capsule changed".into());
+    }
+    if matches!(mode, "external" | "ui-only") {
+        if root.join("pause-requested").exists() {
+            return Err("app update requested agent pause".into());
+        }
+        let actions = fs::read_to_string(root.join("update-actions")).unwrap_or_default();
+        if actions.lines().any(|action| action != "inspect")
+            || (mode == "ui-only" && actions.lines().count() < 3)
+        {
+            return Err("app update acquired management authority or skipped proof".into());
+        }
     }
     if !installer::rollback_bundle(&transaction, &trust).is_dir() {
         return Err("old app not retained".into());

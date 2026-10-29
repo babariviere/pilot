@@ -121,12 +121,35 @@ fn execute(host: &mut impl Handoff, cancel: &AtomicBool) -> Result<(), Failure> 
 #[path = "daemon_upgrade_macos.rs"]
 mod macos;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
-pub use macos::{migrate_stopped, upgrade};
+pub use macos::{migrate_stopped, needed, upgrade, upgrade_startup};
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 #[path = "daemon_upgrade_linux.rs"]
 mod linux;
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 pub use linux::{register, upgrade};
+
+// Runtime package versions, never the GUI's bundle build or hello display version.
+#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
+fn runtime_version(stamp: &serde_json::Value) -> Result<crate::manifest::Build, Failure> {
+    let version = stamp["version"].as_str().ok_or(Failure::Unverified)?;
+    if stamp["schema"] != 1
+        || stamp["protocol"] != 1
+        || stamp["platform"] != "darwin"
+        || stamp["arch"] != "arm64"
+        || version.split('.').count() != 3
+    {
+        return Err(Failure::Unsupported);
+    }
+    crate::manifest::Build::parse(version).map_err(|_| Failure::Unverified)
+}
+
+#[cfg(any(test, all(target_os = "macos", feature = "native-macos")))]
+fn runtime_upgrade_needed(
+    running: &serde_json::Value,
+    bundled: &serde_json::Value,
+) -> Result<bool, Failure> {
+    Ok(runtime_version(running)? < runtime_version(bundled)?)
+}
 
 /// Read-only startup: attest the compatible running capsule, never publish or activate.
 /// On macOS `current` may be the installed app, not a retained execution root.
@@ -165,6 +188,66 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn stamp(version: &str) -> serde_json::Value {
+        serde_json::json!({"schema":1,"protocol":1,"platform":"darwin","arch":"arm64","version":version})
+    }
+    #[test]
+    fn startup_compares_runtime_versions_numerically_and_never_downgrades() {
+        for (running, bundled, needed) in [
+            ("1.9.0", "1.10.0", true),
+            ("1.10.0", "1.9.0", false),
+            ("1.10.0", "1.10.0", false),
+            ("2.0.0", "1.99.99", false),
+            ("0.99.99", "1.0.0", true),
+        ] {
+            assert_eq!(
+                runtime_upgrade_needed(&stamp(running), &stamp(bundled)),
+                Ok(needed)
+            );
+        }
+    }
+    #[test]
+    fn startup_refuses_unknown_and_unsupported_runtime_stamps() {
+        let target = stamp("1.10.0");
+        assert!(runtime_upgrade_needed(&serde_json::Value::Null, &target).is_err());
+        for version in [
+            "",
+            "1",
+            "1.2",
+            "1.2.3.4",
+            "01.2.3",
+            "1.2.3-dev",
+            "1.2.3+build",
+            "9999999999.0.0",
+        ] {
+            assert!(
+                runtime_upgrade_needed(&stamp(version), &target).is_err(),
+                "{version}"
+            );
+            assert!(
+                runtime_upgrade_needed(&target, &stamp(version)).is_err(),
+                "{version}"
+            );
+        }
+        for (field, value) in [
+            ("schema", serde_json::json!(2)),
+            ("protocol", serde_json::json!(2)),
+            ("platform", serde_json::json!("linux")),
+            ("arch", serde_json::json!("x64")),
+            ("version", serde_json::Value::Null),
+        ] {
+            let mut unknown = target.clone();
+            unknown[field] = value;
+            assert!(
+                runtime_upgrade_needed(&unknown, &target).is_err(),
+                "{field}"
+            );
+            assert!(
+                runtime_upgrade_needed(&target, &unknown).is_err(),
+                "{field}"
+            );
+        }
+    }
     #[derive(Default)]
     struct Faux {
         calls: Vec<String>,

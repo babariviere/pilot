@@ -105,10 +105,7 @@ pub(super) fn registration_complete(location: &Location) -> Result<(), Failure> 
 }
 pub(super) fn running(location: &Location, root: &Path) -> Result<Value, Failure> {
     let owner = verified(coordination::record(location))?;
-    let expected: Value = serde_json::from_slice(&io(fs::read(
-        root.join(crate::layout::RUNTIME).join("runtime-build.json"),
-    ))?)
-    .map_err(|_| Failure::Unverified)?;
+    let expected = runtime_stamp(root)?;
     let pid = owner["pid"]
         .as_i64()
         .and_then(|n| i32::try_from(n).ok())
@@ -125,10 +122,36 @@ pub(super) fn running(location: &Location, root: &Path) -> Result<Value, Failure
     {
         return Err(Failure::Unverified);
     }
-    let daemon = io(fs::read_to_string(location.home.join("daemon-id")))?;
-    let lineage = io(fs::read_to_string(location.home.join("storage-lineage")))?;
+    let daemon = String::from_utf8(read_file(&location.home.join("daemon-id"), 4096)?)
+        .map_err(|_| Failure::Unverified)?;
+    let lineage = String::from_utf8(read_file(&location.home.join("storage-lineage"), 4096)?)
+        .map_err(|_| Failure::Unverified)?;
     prove(location, &owner, daemon.trim(), lineage.trim())?;
     Ok(owner)
+}
+pub(super) fn read_file(path: &Path, limit: u64) -> Result<Vec<u8>, Failure> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = io(fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path))?;
+    let meta = io(file.metadata())?;
+    if !meta.is_file() || meta.len() > limit {
+        return Err(Failure::Unverified);
+    }
+    let mut bytes = Vec::new();
+    io(file.take(limit + 1).read_to_end(&mut bytes))?;
+    if bytes.len() as u64 > limit {
+        return Err(Failure::Unverified);
+    }
+    Ok(bytes)
+}
+pub(super) fn runtime_stamp(root: &Path) -> Result<Value, Failure> {
+    serde_json::from_slice(&read_file(
+        &root.join(crate::layout::RUNTIME).join("runtime-build.json"),
+        4096,
+    )?)
+    .map_err(|_| Failure::Unverified)
 }
 pub(super) fn wait_registered(location: &Location, root: &Path) -> Result<Value, Failure> {
     let end = Instant::now() + Duration::from_secs(30);

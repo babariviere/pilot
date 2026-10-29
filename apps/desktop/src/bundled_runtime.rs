@@ -646,6 +646,62 @@ fn own_capsule(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<Pa
     linux::publish(root, &data.join("pilot-next/runtimes"), cancel, deadline)
 }
 
+/// Read-only packaged macOS startup check. A false result must not be reported as
+/// an upgrade. Unsupported/unconfigured/custom owners remain manual-only.
+pub(crate) fn daemon_upgrade_needed(
+    location: pilot_desktop_updater::coordination::Location,
+    daemon_id: String,
+    lineage_id: String,
+    cancel: Arc<AtomicBool>,
+) -> Result<bool, pilot_desktop_updater::daemon_upgrade::Failure> {
+    use pilot_desktop_updater::daemon_upgrade::Failure;
+    #[cfg(target_os = "macos")]
+    {
+        if cancel.load(Ordering::Acquire) {
+            return Err(Failure::Cancelled);
+        }
+        let executable = std::env::current_exe().map_err(|_| Failure::Unverified)?;
+        if !packaged(&executable) {
+            return Err(Failure::Unsupported);
+        }
+        let root = package_root(&executable).map_err(|_| Failure::Unverified)?;
+        let trust =
+            pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
+        pilot_desktop_updater::daemon_upgrade::needed(
+            location,
+            root,
+            &trust,
+            &daemon_id,
+            &lineage_id,
+            &cancel,
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (location, daemon_id, lineage_id, cancel);
+        Err(Failure::Unsupported)
+    }
+}
+
+/// One bounded startup attempt. Check first so equal/newer runtimes consume no
+/// staging capacity. There is no retry timer; failures can be retried manually.
+pub(crate) fn upgrade_daemon_on_startup(
+    location: pilot_desktop_updater::coordination::Location,
+    daemon_id: String,
+    lineage_id: String,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
+    if !daemon_upgrade_needed(
+        location.clone(),
+        daemon_id.clone(),
+        lineage_id.clone(),
+        cancel.clone(),
+    )? {
+        return Ok(());
+    }
+    upgrade_daemon(location, daemon_id, lineage_id, cancel, true)
+}
+
 /// Explicit, checkpointed request only. The native bridge preserves the existing
 /// launch agent and refuses custom/foreground owners without acquiring authority.
 pub(crate) fn upgrade_daemon_explicit(
@@ -653,6 +709,16 @@ pub(crate) fn upgrade_daemon_explicit(
     daemon_id: String,
     lineage_id: String,
     cancel: Arc<AtomicBool>,
+) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
+    upgrade_daemon(location, daemon_id, lineage_id, cancel, false)
+}
+
+fn upgrade_daemon(
+    location: pilot_desktop_updater::coordination::Location,
+    daemon_id: String,
+    lineage_id: String,
+    cancel: Arc<AtomicBool>,
+    automatic: bool,
 ) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
     use pilot_desktop_updater::daemon_upgrade::Failure;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -676,18 +742,22 @@ pub(crate) fn upgrade_daemon_explicit(
             .map_err(|error| upgrade_publish_failure(error, cancel.load(Ordering::Acquire)))?;
         #[cfg(target_os = "linux")]
         let capsule = own_capsule(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
-        pilot_desktop_updater::daemon_upgrade::upgrade(
-            location,
-            &capsule,
-            &trust,
-            &daemon_id,
-            &lineage_id,
-            &cancel,
-        )
+        #[cfg(target_os = "macos")]
+        let worker = if automatic {
+            pilot_desktop_updater::daemon_upgrade::upgrade_startup
+        } else {
+            pilot_desktop_updater::daemon_upgrade::upgrade
+        };
+        #[cfg(target_os = "linux")]
+        let worker = {
+            let _ = automatic;
+            pilot_desktop_updater::daemon_upgrade::upgrade
+        };
+        worker(location, &capsule, &trust, &daemon_id, &lineage_id, &cancel)
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (location, daemon_id, lineage_id, cancel);
+        let _ = (location, daemon_id, lineage_id, cancel, automatic);
         Err(Failure::Unsupported)
     }
 }

@@ -35,14 +35,11 @@ pub(crate) struct Updates {
     pub(crate) notice: Option<&'static str>,
     /// What the last install refusal named, for its Show action while that notice is shown.
     pub(crate) blocker: Option<crate::update_hold::Blocker>,
-    /// The profile daemon whose agents pause before installing, as in the Swift app.
+    /// The profile daemon whose exact retained runtime is verified before installing.
     location: Option<Location>,
     external: bool,
     local_build: bool,
     choosing: bool,
-    /// Renews the daemon's 30 second pause lease until the install ends or is cancelled.
-    pausing: Option<Task<()>>,
-    agents_paused: bool,
     startup_started: bool,
     startup: Option<Result<(), Error>>,
     startup_task: Option<Task<()>>,
@@ -91,9 +88,6 @@ impl Updates {
         // Neither a managed profile nor a pinned external connection: still refused.
         let updates = cx.new(|cx| Self::new(None, None, cx));
         updates.update(cx, |updates, cx| {
-            assert!(!updates.ensure_agents_paused(cx));
-            assert!(updates.pausing.is_none());
-            assert!(!updates.agents_paused);
             updates.prepare(safety, cx);
             updates.commit(safety, cx);
             assert!(!updates.fenced);
@@ -108,14 +102,12 @@ impl Updates {
         );
         let updates = cx.new(|cx| Self::new(None, Some(connection), cx));
         updates.update(cx, |updates, cx| {
-            assert!(updates.ensure_agents_paused(cx));
-            assert!(updates.pausing.is_none() && !updates.agents_paused);
             assert!(updates.notice.is_none());
             let ready = State::ReadyToRestart(pilot_desktop_updater::Candidate {
                 version: "synthetic".into(),
                 short_version: "0.1.1".into(),
             });
-            assert!(can_install(Some(&ready), true, false, false, false));
+            assert!(can_install(Some(&ready), true, false, false));
             assert_eq!(install_label(false), "Install and restart…");
             updates.prepare(safety, cx);
             assert!(
@@ -126,22 +118,17 @@ impl Updates {
             updates.defer("synthetic", cx);
             assert!(!updates.fenced);
         });
-        // A managed profile pauses agents for a normal update, but a UI-only local
-        // build reload leaves the daemon and its agents running.
+        // Managed and local app updates have the same GUI-only authority.
         let updates = cx.new(|cx| Self::new(Some(synthetic("/synthetic-managed")), None, cx));
         updates.update(cx, |updates, cx| {
-            updates.local_build = true;
-            assert!(updates.ensure_agents_paused(cx));
-            assert!(updates.pausing.is_none());
-            updates.local_build = false;
-            assert!(!updates.ensure_agents_paused(cx));
-            assert!(
-                updates.pausing.is_some(),
-                "normal managed install pauses agents first"
-            );
-            // Drop the unpolled lease task before any synthetic request can be sent.
-            updates.release_agents();
-            assert!(updates.pausing.is_none());
+            for local in [false, true] {
+                updates.local_build = local;
+                updates.prepare(safety, cx);
+                assert!(updates.fenced, "only GUI admissions are fenced");
+                assert!(updates.notice.is_none());
+                updates.defer("synthetic", cx);
+                assert!(!updates.fenced);
+            }
             updates.choosing = true;
             assert!(updates.choosing_local());
             updates.choosing = false;
@@ -785,8 +772,6 @@ impl Updates {
             external,
             local_build: false,
             choosing: false,
-            pausing: None,
-            agents_paused: false,
             #[cfg(feature = "native-probes")]
             probe_state: None,
             #[cfg(feature = "native-probes")]
@@ -965,9 +950,6 @@ impl Updates {
             }
             if self.cancel_prepare && matches!(controller.state(), State::ReadyToRestart(_)) {
                 self.fenced = false;
-                // A cancelled install releases the agents too.
-                self.pausing = None;
-                self.agents_paused = false;
             }
         }
         self.filter_recovery();
@@ -994,6 +976,16 @@ impl Updates {
             Some(Err(_)) => true,
             None => false,
         }
+    }
+    /// A daemon boot change must not invalidate a GUI receipt before its durable ACK.
+    pub(crate) fn daemon_upgrade_ready(&self) -> bool {
+        self.inspected
+            && !self.recovery_blocked()
+            && (!(crate::bundled_runtime::update_receipt().is_some()
+                || self.startup_receipt.is_some()
+                || self.has_startup_recovery()
+                || self.startup_started)
+                || matches!(self.startup, Some(Ok(()))))
     }
     fn checking(&self) -> bool {
         !self.inspected
@@ -1082,7 +1074,6 @@ impl Updates {
             && self.inspected
             && !self.fenced
             && !self.choosing
-            && self.pausing.is_none()
             && can_stage(self.state())
     }
     fn choose_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1118,8 +1109,7 @@ impl Updates {
     /// Stages only from a state with no staged or armed transaction. A refused request
     /// leaves the current candidate and its label unchanged.
     fn stage_local(&mut self, directory: std::path::PathBuf, cx: &mut Context<Self>) {
-        let stageable =
-            self.inspected && !self.fenced && self.pausing.is_none() && can_stage(self.state());
+        let stageable = self.inspected && !self.fenced && can_stage(self.state());
         let Some(controller) = self.controller.as_mut().filter(|_| stageable) else {
             self.notice = Some("Another update step is active. The local build was not staged.");
             return;
@@ -1186,7 +1176,6 @@ impl Updates {
         self.cancel_prepare = false;
         self.notice = None;
         if let Some(controller) = &mut self.controller {
-            controller.backend_mut().ui_only(self.local_build);
             let _ = controller.prepare_retained(safety, self.epoch.elapsed());
         }
         self.schedule(cx);
@@ -1211,7 +1200,6 @@ impl Updates {
         self.blocker = None;
         self.fenced = false;
         self.cancel_prepare = false;
-        self.stop_pausing();
         cx.notify();
     }
     /// Defers with the blocker's own message and offers to show where it is.
@@ -1234,90 +1222,6 @@ impl Updates {
             Destination::Mission(_) => "Open mission",
         })
     }
-    /// Pauses agents once their current tool calls finish before installing. Returns true
-    /// once they are paused (or there is no daemon to pause). Until then the lease is
-    /// renewed off the UI thread, and `Event::Restart` is emitted again when ready.
-    pub(crate) fn ensure_agents_paused(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.recovery_blocked() {
-            self.defer("Recheck the previous installation before restarting. Checking and downloading remain available.", cx);
-            return false;
-        }
-        if self.location.is_none() && !self.external {
-            self.defer(
-                "Externally managed daemon. App installation is unavailable in this session.",
-                cx,
-            );
-            return false;
-        }
-        // A pinned external connection and a UI-only reload never pause or reserve
-        // the daemon; only the app is replaced and agents keep running.
-        if self.external || self.local_build {
-            return true;
-        }
-        let Some(location) = self.location.clone() else {
-            return false;
-        };
-        if self.agents_paused {
-            return true;
-        }
-        if self.pausing.is_none() {
-            self.notice = None;
-            self.pausing = Some(cx.spawn(async move |owner, cx| {
-                loop {
-                    let target = location.clone();
-                    let result =
-                        cx.background_executor()
-                            .spawn(async move {
-                                pilot_desktop_updater::coordination::pause_agents(&target)
-                            })
-                            .await;
-                    let Ok(Some(interval)) = owner.update(cx, |u, cx| u.paused(result, cx)) else {
-                        break;
-                    };
-                    cx.background_executor().timer(interval).await;
-                }
-            }));
-            cx.notify();
-        }
-        false
-    }
-    /// Next renewal interval, or None to stop. Renewals stay well inside the 30 second lease.
-    fn paused(&mut self, result: Result<bool, Error>, cx: &mut Context<Self>) -> Option<Duration> {
-        self.pausing.as_ref()?;
-        match result {
-            Ok(true) => {
-                if !self.agents_paused {
-                    self.agents_paused = true;
-                    cx.emit(Event::Restart);
-                }
-                cx.notify();
-                Some(Duration::from_secs(5))
-            }
-            Ok(false) => {
-                self.agents_paused = false;
-                Some(Duration::from_secs(1))
-            }
-            Err(_) => {
-                self.stop_pausing();
-                self.notice = Some(
-                    "Agents could not be paused for the update. Installation is deferred and agents resume on their own.",
-                );
-                cx.notify();
-                None
-            }
-        }
-    }
-    pub(crate) fn release_agents(&mut self) {
-        self.stop_pausing();
-    }
-    /// Agents resume on their own once the daemon's pause lease lapses.
-    fn stop_pausing(&mut self) {
-        self.pausing = None;
-        self.agents_paused = false;
-    }
-    fn waiting_for_agents(&self) -> bool {
-        self.pausing.is_some() && !self.agents_paused
-    }
     pub(crate) fn cancel_prepared(&mut self, message: &'static str, cx: &mut Context<Self>) {
         #[cfg(feature = "native-probes")]
         if pilot_desktop_updater::fixture::enabled() {
@@ -1335,9 +1239,6 @@ impl Updates {
         let state = self.state();
         let local = self.local_build.then(|| local_text(state)).flatten();
         match state {
-            _ if self.waiting_for_agents() => {
-                "Pausing agents after their current tool calls finish. Installation continues once they pause."
-            }
             _ if local.is_some() => local.unwrap_or_default(),
             None => error_text(self.unavailable.unwrap_or(Error::Unconfigured)),
             Some(State::Idle) => "No update check has completed.",
@@ -1381,14 +1282,6 @@ impl Updates {
         }
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        if self.pausing.is_some() && !self.fenced {
-            // Nothing is armed yet. The downloaded update stays ready to install.
-            self.stop_pausing();
-            self.notice = Some("Install cancelled. Agents resume within 30 seconds.");
-            cx.emit(Event::Changed);
-            cx.notify();
-            return;
-        }
         if let Some(controller) = &mut self.controller {
             match controller.state() {
                 State::Working {
@@ -1506,20 +1399,13 @@ fn can_stage(state: Option<&State>) -> bool {
         )
     )
 }
-fn can_install(
-    state: Option<&State>,
-    connected: bool,
-    fenced: bool,
-    choosing: bool,
-    pausing: bool,
-) -> bool {
+fn can_install(state: Option<&State>, connected: bool, fenced: bool, choosing: bool) -> bool {
     matches!(
         state,
         Some(State::ReadyToRestart(_) | State::Deferred { .. })
     ) && connected
         && !fenced
         && !choosing
-        && !pausing
 }
 fn install_label(local: bool) -> &'static str {
     if local {
@@ -1596,7 +1482,6 @@ impl Render for Updates {
             }));
         }
         let state = self.state();
-        let waiting_for_agents = self.waiting_for_agents();
         let message = self.status();
         let checking = self.checking();
         let can_download = matches!(state, Some(State::Available(_)));
@@ -1606,7 +1491,6 @@ impl Render for Updates {
                 self.location.is_some() || self.external,
                 self.fenced,
                 self.choosing,
-                self.pausing.is_some(),
             );
         let can_cancel = matches!(
             state,
@@ -1616,8 +1500,7 @@ impl Render for Updates {
                     ..
                 } | State::ExitPrepared
             )
-        ) || (self.fenced && matches!(state, Some(State::ReadyToRestart(_))))
-            || waiting_for_agents;
+        ) || (self.fenced && matches!(state, Some(State::ReadyToRestart(_))));
         let muted = {
             use gpui_kit::component::ActiveTheme;
             cx.theme().muted_foreground
@@ -1840,26 +1723,18 @@ mod tests {
             candidate: candidate(),
             reason: Error::ActiveWork,
         };
-        assert!(can_install(Some(&ready), true, false, false, false));
-        assert!(can_install(Some(&deferred), true, false, false, false));
-        for (connected, fenced, choosing, pausing) in [
-            (false, false, false, false),
-            (true, true, false, false),
-            (true, false, true, false),
-            (true, false, false, true),
+        assert!(can_install(Some(&ready), true, false, false));
+        assert!(can_install(Some(&deferred), true, false, false));
+        for (connected, fenced, choosing) in [
+            (false, false, false),
+            (true, true, false),
+            (true, false, true),
         ] {
-            assert!(!can_install(
-                Some(&ready),
-                connected,
-                fenced,
-                choosing,
-                pausing
-            ));
+            assert!(!can_install(Some(&ready), connected, fenced, choosing));
         }
         assert!(!can_install(
             Some(&State::Available(candidate())),
             true,
-            false,
             false,
             false
         ));
@@ -1970,6 +1845,30 @@ mod tests {
 #[cfg(test)]
 mod recovery_usability_tests {
     use super::*;
+    #[test]
+    fn daemon_upgrade_waits_for_inspection_and_durable_startup_ack() {
+        let mut u = Updates::blank(None, true);
+        assert!(!u.daemon_upgrade_ready());
+        u.inspected = true;
+        u.recovery = Some(Ok(vec![]));
+        assert!(u.daemon_upgrade_ready());
+        u.recovery = Some(Err(Error::Signature));
+        assert!(!u.daemon_upgrade_ready());
+        u.recovery = Some(Ok(vec![]));
+        u.startup_receipt = Some("/synthetic/receipt".into());
+        assert!(!u.daemon_upgrade_ready());
+        u.startup_started = true;
+        assert!(!u.daemon_upgrade_ready());
+        u.startup = Some(Err(Error::RecoveryRequired));
+        assert!(!u.daemon_upgrade_ready());
+        u.startup = Some(Ok(()));
+        assert!(u.daemon_upgrade_ready());
+        u.recovery = Some(Ok(vec![(
+            "/synthetic/other".into(),
+            pilot_desktop_updater::installer::Phase::RelaunchRequested,
+        )]));
+        assert!(!u.daemon_upgrade_ready());
+    }
     #[test]
     fn historical_recovery_does_not_disable_check_or_load() {
         for recovery in [

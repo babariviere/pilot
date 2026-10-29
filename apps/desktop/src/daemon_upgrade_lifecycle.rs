@@ -3,6 +3,25 @@
 use super::*;
 
 impl LocalViewer {
+    pub(super) fn advance_startup_daemon_upgrade(&mut self, cx: &mut Context<Self>) {
+        if self.restart_pending
+            || self.daemon_upgrade_pending
+            || !self.editor.read(cx).ready()
+            || !self.settings.read(cx).state.loaded()
+        {
+            return;
+        }
+        let Some(updater) = self.settings.read(cx).updater.clone() else {
+            return;
+        };
+        if !updater.read(cx).daemon_upgrade_ready() {
+            return;
+        }
+        if let Some(upgrade) = self.daemon_upgrade(cx) {
+            upgrade.update(cx, |upgrade, cx| upgrade.startup(cx));
+        }
+    }
+
     fn daemon_upgrade(
         &self,
         cx: &App,
@@ -33,6 +52,7 @@ impl LocalViewer {
         cx.notify();
     }
     pub(super) fn advance_daemon_upgrade(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.advance_startup_daemon_upgrade(cx);
         if self.daemon_upgrade_pending
             && self
                 .daemon_upgrade(cx)
@@ -45,5 +65,9 @@ impl LocalViewer {
         // Unknown fences another native handoff in DaemonUpgrade, not unrelated UI.
         self.daemon_upgrade_pending = false;
         cx.notify();
+    }
+
+    pub(super) fn daemon_update_notice(&self, cx: &App) -> Option<&'static str> {
+        self.daemon_upgrade(cx)?.read(cx).startup_notice()
     }
 }

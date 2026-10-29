@@ -64,7 +64,7 @@ store, and a store already containing four runtimes does not block reconnection.
 The daemon's actual retained capsule and signed compatibility policy are still
 verified; startup never executes the daemon from the replaceable installed app.
 
-Explicit service installation or daemon upgrade publishes a complete sealed
+Service installation or a needed daemon upgrade publishes a complete sealed
 capsule, not just Node/kernel. It retains module-relative imports, helpers,
 resources and production dependencies under their original relative paths.
 Capsule identity hashes the bounded path/mode/content/link closure. Publication
@@ -89,6 +89,11 @@ remains intact: startup uses the proven retained source, never pretends a new
 runtime is that source. An already-running app-root/legacy daemon is not moved,
 stopped, restarted or retroactively declared independent. Unproven reuse refuses.
 
+GUI installs use read-only retained-runtime inspection, not the reservation below.
+Agents, jobs and terminals continue throughout the app swap. After durable startup
+acknowledgement, the macOS GUI checks whether its managed daemon needs a separate
+[safe upgrade](daemon-upgrades.md). This check never delays the app installation.
+
 The private owner endpoint authenticates boot/root/build/profile-bound requests
 with a fresh nonce and HMAC. Install preparation acquires a single nonrenewable
 180-second reservation, after freezing all admissions. Sessions qualify when idle
@@ -102,11 +107,8 @@ authentication for the ordinary loopback API.
 
 ## Explicit install protocol
 
-0. For a conventional managed-runtime install, pause agents first: renew `POST /api/update/pause` off the
-   UI thread until every agent has paused after its current tool call. Input stays
-   usable while waiting; Cancel stops renewal and agents resume within 30 seconds.
-   UI-only reloads and external app-only updates skip this entire daemon-management
-   step. Their daemon remains active throughout the app swap.
+0. Leave the daemon running. GUI updates, local reloads and external app-only
+   updates never request agent pause or acquire a daemon reservation.
 1. Fence UI admissions and reject preedit, unsaved secondary forms, in-flight or
    daemon-pending deliveries, unresolved model changes/mission outcomes, active or unreaped visual helpers,
    and pending preference operations. Nothing is discarded to obtain readiness.
@@ -132,7 +134,7 @@ authentication for the ordinary loopback API.
    re-authenticates/extracts/syncs its own private OS-temporary installation payload before
    readiness, then waits for COMMIT. The GUI is still open during this work;
    restart admission/editing fences remain held.
-   Bundled UI-only reloads inspect the retained proof without reserving the daemon.
+   Bundled GUI updates and local reloads inspect the retained proof without reserving the daemon.
    External app-only updates record only their exact Local profile/port/hello pin.
 4. Revalidate fresh exact checkpoint receipts and the applicable reservation,
    retained proof or external identity pin before app-helper COMMIT.

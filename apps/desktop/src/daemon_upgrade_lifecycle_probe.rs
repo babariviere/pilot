@@ -138,7 +138,7 @@ pub fn run_daemon_upgrade_lifecycle_probe(cx: &mut HeadlessAppContext) {
             });
             assert!(input.read(cx).value().is_empty());
         });
-        daemon.update(cx, |u, cx| u.request_probe(cx));
+        daemon.update(cx, |u, cx| u.startup_probe(true, cx));
     })
     .unwrap();
     let end = std::time::Instant::now() + Duration::from_secs(5);
@@ -166,12 +166,31 @@ pub fn run_daemon_upgrade_lifecycle_probe(cx: &mut HeadlessAppContext) {
         );
     })
     .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("daemon-startup-status").visible());
+    })
+    .unwrap();
+    if let Some(dir) = std::env::var_os("PILOT_NEXT_DAEMON_UPGRADE_DIR") {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(std::path::PathBuf::from(dir).join("startup-daemon-running.png"))
+            .unwrap();
+    }
     send.send(Err(Failure::Busy)).unwrap();
     while cx.update(|cx| daemon.read(cx).active()) {
         assert!(std::time::Instant::now() < end);
         settle(cx, h);
         std::thread::yield_now();
     }
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.find("daemon-startup-status").visible(),
+            "deferred startup work remains discoverable"
+        );
+    })
+    .unwrap();
     // A fresh explicit attempt must also admit pre-existing composition and forms.
     cx.update(|cx| {
         view.update(cx, |v, cx| {

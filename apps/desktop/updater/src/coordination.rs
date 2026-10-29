@@ -797,6 +797,32 @@ mod configuration_tests {
     }
 
     #[test]
+    fn receipt_mode_is_durable_and_legacy_reservations_stay_legacy() {
+        let value = json!({"ui_only":true,"location":{"home":"/synthetic","port":1},
+            "boot":"boot","capsule":"/retained","capsule_id":"capsule",
+            "bundle_build":"1.1","build":{},"receipt":{"operationId":"original"},
+            "transaction":"/transaction","target_build":"101.1",
+            "policy_hash":"policy","configuration":"configuration"});
+        let guard: Guard = serde_json::from_value(value.clone()).unwrap();
+        assert!(
+            guard.ui_only,
+            "new app receipts grant reconnect authority only"
+        );
+        let saved = serde_json::to_value(&guard).unwrap();
+        assert_eq!(saved["ui_only"], true);
+        assert_eq!(saved["receipt"], value["receipt"]);
+        let mut legacy = value;
+        legacy.as_object_mut().unwrap().remove("ui_only");
+        let legacy: Guard = serde_json::from_value(legacy).unwrap();
+        assert!(
+            !legacy.ui_only,
+            "missing mode preserves reservation verification/cancel"
+        );
+        assert_eq!(legacy.receipt, guard.receipt);
+        assert_eq!(legacy.capsule, guard.capsule);
+    }
+
+    #[test]
     fn public_configuration_fingerprint_is_independent_of_json_map_features() {
         let trust = Trust {
             application_id: "com.example.synthetic.next".into(),

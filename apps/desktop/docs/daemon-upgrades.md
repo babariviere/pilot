@@ -1,8 +1,25 @@
-# Explicit daemon upgrade
+# Daemon upgrades
 
 Daemon upgrades are separate from **Install and restart…**, which replaces only
-the GUI. Neither launching Pilot Next nor acknowledging a GUI update upgrades a
-daemon automatically.
+the GUI. GUI installation does not pause agents, freeze daemon admissions or
+wait for tools. After the new macOS GUI connects, restores its durable state and
+acknowledges any update receipt, it checks the managed daemon's runtime version.
+An older runtime starts one automatic safe handoff in the background. Equal or
+newer runtimes are left alone, including when only the GUI build changed.
+
+Automatic handoff applies only to a verified `PilotNextManaged` launch agent
+for the connected profile in a configured packaged macOS app. Development,
+external connections, custom services and legacy Swift migration stay manual.
+The version check is read-only; only a needed daemon upgrade publishes a capsule.
+Startup checks once, not on every reconnect or Settings open. Pending or failed
+GUI startup acknowledgement, uncertain installation and incomplete handoffs
+prevent automatic replacement.
+
+The GUI remains usable while tools reach a boundary. Automatic preparation waits
+up to ten minutes, with cancellation, then defers rather than interrupting work.
+Active jobs, terminals or uninspectable resources still defer the handoff. A
+quiet sidebar status opens **Settings → Updates** for progress, Cancel or recovery.
+There is no automatic retry or blind replay after a failed or uncertain attempt.
 
 **Settings → Updates → Daemon → Upgrade daemon…** asks for explicit confirmation.
 Agents pause after their current tool calls finish. Chats, queued work and drafts
@@ -43,10 +60,10 @@ binaries must not be used to restart/repair the service during coexistence.
 
 ## Explicit registration and GUI independence
 
-A packaged GUI startup only verifies/connects. It never registers, starts,
-restarts or activates a daemon, including after an update ACK. On macOS it also
-does not publish a runtime: GUI updates and reconnects do not consume retained
-runtime slots. On a fresh/stopped
+A packaged GUI first verifies/connects without publishing a runtime. The separate
+post-startup check above may then upgrade an older managed macOS daemon. It never
+registers a missing service, migrates Swift ownership or starts a stopped daemon
+automatically. Ordinary GUI reconnects do not consume retained runtime slots. On a fresh/stopped
 profile the startup view offers **Register or start service…**, with a separate
 **Enable and start** confirmation that includes login enablement. Registration
 publishes the complete verified immutable bundled seed and executes normal

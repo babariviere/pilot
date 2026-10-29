@@ -142,14 +142,12 @@ trust/feed/signing configuration is deliberately absent from development assembl
    the running version. No helper is armed by checks, download, scheduling or ordinary quit.
 5. Explicit Restart intent fences edits/admissions and captures fresh durable receipts
    for drafts, deliveries and Settings. Preserve uncommitted IME/preedit and unsaved text.
-   Before fencing, the GUI pauses agents at their next tool boundary through
-   `coordination::pause_agents` (the daemon's renewable update pause, as in the Swift
-   app); it never cancels a tool call. The concrete GUI
-   uses `prepare_retained`, not a client assertion of `Runtime::Independent` or
-   `SharedStopped`. Its native worker proves the exact sealed capsule/process/profile
-   and obtains a nonrenewable reservation that accepts idle or paused sessions. Legacy/app-root
-   and unproven runtimes refuse. The same reservation must remain valid after actual parent
-   exit; no existing daemon is stopped, migrated, replaced or restarted.
+   The GUI never pauses agents or freezes daemon admissions for an app swap. The
+   concrete GUI uses `prepare_retained`, not a client assertion of
+   `Runtime::Independent` or `SharedStopped`. Its native worker proves the exact
+   sealed capsule/process/profile through read-only inspection. Legacy/app-root
+   and unproven runtimes refuse. The same retained proof must remain valid after
+   actual parent exit; no daemon is stopped, migrated, replaced or restarted.
 6. Call `request_install(safety, now)` only after those acknowledgements. It starts a
    helper that waits for COMMIT; the live app remains unchanged. When `ExitPrepared`
    arrives, capture/revalidate **fresh** exact-revision receipts and fences, then
@@ -290,8 +288,15 @@ Production configuration/qualification is separate from synthetic test success.
 
 On macOS, ordinary packaged startup passes the verified installed app to the
 read-only connection check. It does not publish another runtime capsule. Full
-runtime retention is needed only for explicit service installation or upgrade;
+runtime retention is needed only for service installation or a needed daemon upgrade;
 the four-root publication limit must not become a GUI-update/reconnect limit.
+
+After durable GUI startup acknowledgement, the configured macOS app checks its
+verified managed launch agent once. An older runtime uses the separate native
+handoff, with tool-boundary pause and an exact reservation before shutdown.
+Equal/newer runtimes, external connections and custom services are not replaced.
+GUI swaps use no reservation; existing legacy receipts keep their original
+reservation verification/release behavior.
 
 Under original-owner resource admission and the repository verification-slot/mbx CPU2/4GiB
 wrapper, using Rust1.98.1 and an isolated target directory:

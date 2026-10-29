@@ -271,6 +271,119 @@ fn unavailable_target_never_opens(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn startup_checks_once_then_uses_the_same_parent_upgrade_gate(cx: &mut TestAppContext) {
+    init(cx);
+    for needed in [false, true] {
+        let (worker, calls) = counting(Ok(()));
+        let (_, view, events) = mount(cx, Some(synthetic()), worker);
+        let checks = Arc::new(AtomicUsize::new(0));
+        let counted = checks.clone();
+        view.update(cx, |owner, cx| {
+            owner.startup_check = Some(Arc::new(move |_, _, _, _| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Ok(needed)
+            }));
+            owner.startup(cx);
+            assert_eq!(
+                owner.status(),
+                Status::Idle,
+                "wait for a healthy connection"
+            );
+            owner.connected(
+                crate::local_client::ConnectedDaemon::Connected(Some("1.0.0".into())),
+                cx,
+            );
+            owner.startup(cx);
+            owner.startup(cx);
+            assert_eq!(owner.status(), Status::Checking);
+        });
+        settle(cx, &view);
+        assert_eq!(checks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "checks never activate the service"
+        );
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| **e == Event::Request)
+                .count(),
+            usize::from(needed)
+        );
+        view.update(cx, |owner, cx| {
+            assert_eq!(owner.checkpoint_requested(), needed);
+            if needed {
+                assert!(owner.begin(cx));
+            }
+        });
+        settle(cx, &view);
+        view.update(cx, |owner, cx| {
+            owner.connected(
+                crate::local_client::ConnectedDaemon::Connected(Some("2.0.0".into())),
+                cx,
+            );
+            owner.startup(cx);
+        });
+        settle(cx, &view);
+        assert_eq!(
+            checks.load(Ordering::SeqCst),
+            1,
+            "reconnect never re-arms startup"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(needed));
+    }
+}
+
+#[gpui_kit::test]
+fn failed_startup_check_stays_visible_without_automatic_retries(cx: &mut TestAppContext) {
+    init(cx);
+    let (worker, calls) = counting(Ok(()));
+    let (_, view, _) = mount(cx, Some(synthetic()), worker);
+    view.update(cx, |owner, cx| {
+        owner.startup_check = Some(Arc::new(|_, _, _, _| Err(Failure::Unverified)));
+        owner.connected(crate::local_client::ConnectedDaemon::Connected(None), cx);
+        owner.startup(cx);
+    });
+    settle(cx, &view);
+    view.update(cx, |owner, cx| {
+        assert_eq!(owner.status(), Status::Failed(Failure::Unverified));
+        assert_eq!(
+            owner.startup_notice(),
+            Some("Daemon update needs attention")
+        );
+        owner.startup(cx);
+        assert!(!owner.active());
+    });
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[gpui_kit::test]
+fn cancelling_startup_check_never_requests_an_upgrade(cx: &mut TestAppContext) {
+    init(cx);
+    let (worker, calls) = counting(Ok(()));
+    let (_, view, events) = mount(cx, Some(synthetic()), worker);
+    let (release, wait) = std::sync::mpsc::channel();
+    let wait = Mutex::new(wait);
+    view.update(cx, |owner, cx| {
+        owner.startup_check = Some(Arc::new(move |_, _, _, _| {
+            wait.lock().unwrap().recv().unwrap();
+            Ok(true)
+        }));
+        owner.connected(crate::local_client::ConnectedDaemon::Connected(None), cx);
+        owner.startup(cx);
+        owner.cancel(cx);
+    });
+    release.send(()).unwrap();
+    settle(cx, &view);
+    cx.read(|cx| assert_eq!(view.read(cx).status(), Status::Failed(Failure::Cancelled)));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(!events.lock().unwrap().contains(&Event::Request));
+}
+
+#[gpui_kit::test]
 fn opening_never_takes_focus_from_another_owner(cx: &mut TestAppContext) {
     init(cx);
     let (worker, _) = counting(Ok(()));
