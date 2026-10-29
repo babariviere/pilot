@@ -10,6 +10,8 @@ use gpui_kit::{
 };
 use serde_json::json;
 use std::{path::PathBuf, time::Instant};
+#[path = "chat_menu_mission_probe.rs"]
+mod chat_menu;
 struct Private(PathBuf);
 impl Drop for Private {
     fn drop(&mut self) {
@@ -86,6 +88,15 @@ fn into_view(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) 
     }
 }
 pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
+    let case = std::env::var("PILOT_NEXT_MISSIONS_CASE").ok();
+    assert!(
+        case.as_deref().is_none_or(|c| c == "chat-menu"),
+        "unknown missions native case"
+    );
+    chat_menu::run(cx);
+    if case.is_some() {
+        return;
+    }
     let dir = std::env::var_os("PILOT_NEXT_MISSIONS_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();

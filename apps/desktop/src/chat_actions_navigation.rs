@@ -4,6 +4,19 @@ use crate::chat_actions::{Action, Evidence, Target};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
 impl LocalViewer {
+    /// Opens the row's own linked mission, by the summary's mission ID as the
+    /// sidebar mission link does. Unlinked or unknown associations get none.
+    fn open_mission_item(owner: gpui_kit::WeakEntity<Self>, chat: &Chat) -> Option<PopupMenuItem> {
+        let crate::local_model::MissionAssociation::Linked(mission) = &chat.mission else {
+            return None;
+        };
+        let mission = mission.clone();
+        Some(
+            PopupMenuItem::new("Open mission").on_click(move |_, w, cx| {
+                let _ = owner.update(cx, |v, cx| v.show_chat_mission(&mission, w, cx));
+            }),
+        )
+    }
     fn chat_action_ready(
         &mut self,
         target: &Target,
@@ -88,7 +101,11 @@ impl LocalViewer {
         let (rx, known_ack) = match admission {
             Ok(rx) => rx,
             Err(e) => {
-                let menu = menu.item(PopupMenuItem::new(e).disabled(true));
+                let menu = menu
+                    .item(PopupMenuItem::new(e).disabled(true))
+                    .when_some(Self::open_mission_item(owner, &chat), |m, item| {
+                        m.separator().item(item)
+                    });
                 return crate::session_clipboard::items(menu, Some(&chat));
             }
         };
@@ -135,8 +152,9 @@ impl LocalViewer {
                         let convert = evidence.clone();
                         let c = owner.clone();
                         let retry = evidence.clone();
+                        let open = Self::open_mission_item(owner.clone(), &copy);
+                        // The row already names the chat; the menu holds only actions.
                         menu.max_w(px(310.))
-                            .label(SharedString::from(evidence.target.chat.title.clone()))
                             .when_some(reason, |menu, reason| menu.label(reason))
                             .item(
                                 PopupMenuItem::new("Rename…")
@@ -174,6 +192,7 @@ impl LocalViewer {
                                     }),
                             )
                             .separator()
+                            .when_some(open, |menu, item| menu.item(item))
                             .item(
                                 PopupMenuItem::new("Make a mission…")
                                     .disabled(blocked || !evidence.can_convert)

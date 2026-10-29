@@ -268,7 +268,9 @@ row's section heading (no "Working" under Working, "Archived" under Archived).
 The accessible name keeps the full state. Every row has the same height. The
 row's … menu overhangs a text-height slot, so it never pushes the caption away,
 and shows only on hover or on the keyboard-selected row while the list has
-keyboard focus; the right-click menu always reaches the same actions. Only the
+keyboard focus; the right-click menu always reaches the same actions. Both
+menus hold actions only, never a header repeating the row's title. A linked
+chat's menu adds Open mission, the same navigation as its mission link. Only the
 hovered row, the selected row and the row whose menu opened last build the
 button (Tab reaches the selected row's); the rest keep an empty slot, because
 GPUI caches by absolute bounds and every row re-renders while the list scrolls.

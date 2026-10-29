@@ -279,6 +279,15 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                         && b.right() <= root.right()
                         && b.bottom() <= root.bottom()
                 );
+                // The row already names the chat: no title row, and a long
+                // Unicode title paints nothing past the menu's edge.
+                let title = f::source()["title"].as_str().unwrap().to_owned();
+                assert!(w.within("popup-menu").try_find_by_label(&title).is_none());
+                for e in w.within("popup-menu").elements() {
+                    assert!(e.bounds().right() <= b.right() + px(0.5), "{:?}", e.label());
+                }
+                // An unlinked chat has no mission to open.
+                assert!(!menu_has(w, "Open mission"));
                 assert_ne!(
                     w.within("popup-menu").find_by_label("Archive").disabled(),
                     Some(true)
