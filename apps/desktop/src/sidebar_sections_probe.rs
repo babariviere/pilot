@@ -36,9 +36,9 @@ fn projects() -> Vec<Project> {
     .map(|(id, name)| Project {
         id: id.into(),
         name: name.into(),
-            path: format!("/synthetic/{id}"),
-            policy: Default::default(),
-        })
+        path: format!("/synthetic/{id}"),
+        policy: Default::default(),
+    })
     .collect()
 }
 fn home() -> String {
@@ -634,6 +634,163 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
         }
     }
     run_many(cx, captures.as_deref());
+    run_section_settings(cx);
+}
+
+fn click_menu(w: &mut gpui_kit::Window, label: &str, cx: &mut gpui_kit::App) {
+    use gpui_kit::{InputEvent as _, MouseButton, MouseDownEvent, MouseUpEvent};
+    let position = w
+        .within("popup-menu")
+        .find_by_label(label)
+        .bounds()
+        .center();
+    w.dispatch_event(
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    w.render_frame(cx);
+    w.dispatch_event(
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+}
+
+/// A project section's menu opens Settings on exactly that project (the
+/// synthetic project daemon from the Settings probe), and a folder section
+/// without a project offers neither Settings nor folders.
+fn run_section_settings(cx: &mut HeadlessAppContext) {
+    use crate::{
+        project_settings_fixture::{Server, project},
+        project_settings_view::ProjectSettings,
+        settings_view::{Category, SettingsPreferences},
+    };
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let server = Server::start(&[
+                project("proj-a", "Atlas"),
+                project("proj-b", "Boreal 日本語"),
+            ]);
+            let catalog: Vec<_> = server
+                .state
+                .lock()
+                .unwrap()
+                .projects
+                .values()
+                .cloned()
+                .collect();
+            let catalog = crate::local_model::projects(&Value::Array(catalog)).unwrap();
+            let owner =
+                cx.update(|cx| cx.new(|_| ProjectSettings::new(Some(server.options.clone()))));
+            let chats = vec![
+                chat(
+                    json!({"id":"a1","title":"Atlas chat","projectId":"proj-a","state":"idle","createdAt":3,"lastUserMessageAt":3}),
+                    None,
+                ),
+                chat(
+                    json!({"id":"b1","title":"Boreal chat","projectId":"proj-b","state":"idle","createdAt":2,"lastUserMessageAt":2}),
+                    None,
+                ),
+                chat(
+                    json!({"id":"d1","title":"Loose chat","cwd":"/tmp/loose","state":"idle","createdAt":1,"lastUserMessageAt":1}),
+                    None,
+                ),
+            ];
+            let (h, view) = open(cx, width, chats, &[]);
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.projects = Arc::new(catalog);
+                    v.settings = cx.new(|_| SettingsPreferences::new(None));
+                    v.settings.update(cx, |o, cx| {
+                        o.projects = Some(owner.clone());
+                        o.load(cx);
+                    });
+                    v.settings_fixture_size = Some(size(px(width), px(980.)));
+                    v.rebuild_nav(w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            // A section without a project: collapse only.
+            cx.update_window(h, |_, w, cx| {
+                w.right_click("chat-row-group:dir:/tmp/loose", cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let menu = w.within("popup-menu");
+                assert!(menu.try_find_by_label("Collapse").is_some());
+                assert!(menu.try_find_by_label("Project settings…").is_none());
+                assert!(menu.try_find_by_label("Edit folders…").is_none());
+                w.press("escape", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            // Boreal's section, not the first one, opens Boreal's settings.
+            cx.update_window(h, |_, w, cx| {
+                w.right_click("chat-row-group:project:proj-b", cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let menu = w.within("popup-menu");
+                assert_eq!(
+                    ["Project settings…", "Edit folders…", "No folder"]
+                        .map(|l| menu.try_find_by_label(l).is_some()),
+                    [true; 3]
+                );
+                click_menu(w, "Project settings…", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let handle = cx.update(|cx| {
+                view.read(cx)
+                    .settings_window
+                    .expect("Settings opens on the project")
+            });
+            settle(cx, handle);
+            cx.update(|cx| {
+                assert_eq!(view.read(cx).settings.read(cx).category, Category::Project);
+                assert_eq!(owner.read(cx).selected.as_deref(), Some("proj-b"));
+                // Folders are sidebar organization only; nothing reached the daemon.
+                assert!(
+                    view.read(cx)
+                        .chats
+                        .read(cx)
+                        .delegate()
+                        .memory
+                        .folders()
+                        .names
+                        .is_empty()
+                );
+            });
+            assert_eq!(server.state.lock().unwrap().patches().len(), 0);
+            cx.update_window(handle, |_, w, cx| w.press("secondary-w", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| view.read(cx).settings_window.is_none()));
+            println!(
+                "{}",
+                json!({"width":width,"mode":mode.name(),"section_menu_settings":"exact proj-b","dir_section_menu":"collapse-only","patches":0})
+            );
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+            drop(server);
+        }
+    }
 }
 
 /// 132 chats across six projects and a folder: sections, scrolling keyboard
