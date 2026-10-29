@@ -49,13 +49,22 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     until(cx, h, |_, cx| editor.read(cx).saved_probe(cx));
     let text = cx.update(|cx| input.read(cx).value().to_string());
     let anchor = cx.update(|cx| transcript.read(cx).history_probe_anchor(cx));
-    let preserved = |w: &mut Window, cx: &mut App, disabled: bool| {
+    // `None`: the list shows the chat archived, so its notice replaces the composer.
+    let preserved = |w: &mut Window, cx: &mut App, disabled: Option<bool>| {
         let v = view.read(cx);
         assert_eq!(v.selected.as_deref(), Some("source"));
         assert_eq!(v.editor, editor);
         assert_eq!(v.transcript, transcript);
         assert_eq!(input.read(cx).value().as_ref(), text);
-        assert_eq!(w.find("local-send").disabled() == Some(true), disabled);
+        match disabled {
+            Some(disabled) => {
+                assert_eq!(w.find("local-send").disabled() == Some(true), disabled)
+            }
+            None => {
+                assert!(w.try_find("local-send").is_none());
+                assert!(w.try_find("archived-composer").is_some());
+            }
+        }
         let current = transcript.read(cx).history_probe_anchor(cx);
         assert_eq!(current.0, anchor.0);
         assert!((current.1 - anchor.1).abs() < 1.);
@@ -72,14 +81,14 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 .outcome("source")
                 .is_none()
     });
-    cx.update_window(h, |_, w, cx| preserved(w, cx, true))
+    cx.update_window(h, |_, w, cx| preserved(w, cx, Some(true)))
         .unwrap();
     server.released.notify_one();
     until(cx, h, |_, cx| {
         view.read(cx).chat_actions.read(cx).outcome("source")
             == Some(&crate::chat_actions::Outcome::Acknowledged)
     });
-    cx.update_window(h, |_, w, cx| preserved(w, cx, true))
+    cx.update_window(h, |_, w, cx| preserved(w, cx, Some(true)))
         .unwrap(); // ACK without WS still gates a stale editable row.
     let publish = |cx: &mut HeadlessAppContext| {
         let raw = server.seen.lock().unwrap().source.clone();
@@ -97,7 +106,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         settle(cx, h);
     };
     publish(cx);
-    cx.update_window(h, |_, w, cx| preserved(w, cx, true))
+    cx.update_window(h, |_, w, cx| preserved(w, cx, None))
         .unwrap();
     server.seen.lock().unwrap().behavior = Behavior::Accept;
     menu(cx, h, "Restore");
@@ -109,7 +118,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 == Some(&crate::chat_actions::Outcome::Acknowledged)
     });
     publish(cx);
-    cx.update_window(h, |_, w, cx| preserved(w, cx, false))
+    cx.update_window(h, |_, w, cx| preserved(w, cx, Some(false)))
         .unwrap();
     server.seen.lock().unwrap().behavior = Behavior::Lost;
     menu(cx, h, "Archive");
@@ -119,7 +128,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         view.read(cx).chat_actions.read(cx).outcome("source")
             == Some(&crate::chat_actions::Outcome::Unknown)
     });
-    cx.update_window(h, |_, w, cx| preserved(w, cx, true))
+    cx.update_window(h, |_, w, cx| preserved(w, cx, Some(true)))
         .unwrap();
     publish(cx);
     menu(cx, h, "Restore");
@@ -128,7 +137,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         w.press("down", cx);
         w.press("enter", cx);
         w.press("escape", cx);
-        preserved(w, cx, true);
+        preserved(w, cx, None);
     })
     .unwrap();
     settle(cx, h);

@@ -3,6 +3,11 @@ use crate::{LocalOptions, local_model::Chat, mission_browser::Home};
 use serde_json::Value;
 
 pub(crate) type Failure = &'static str;
+/// Menu-worded refusals. Other surfaces may word them for their own context.
+pub(crate) const CHANGED: Failure =
+    "This chat changed. Reopen its menu to check the current actions.";
+pub(crate) const INELIGIBLE: Failure =
+    "Chat eligibility changed. Reopen its menu. Nothing was submitted.";
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Target {
     pub(crate) host: crate::delivery_store::Host,
@@ -60,7 +65,7 @@ impl Evidence {
             return Err("Chat action metadata is incomplete or invalid.");
         }
         if crate::local_model::chat(raw).as_ref() != Some(&target.chat) {
-            return Err("This chat changed. Reopen its menu to check the current actions.");
+            return Err(CHANGED);
         }
         if !matches!(
             raw["state"].as_str(),

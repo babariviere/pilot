@@ -1,4 +1,6 @@
 //! Actual production rows/Kit menus, synthetic HTTP/private drafts, offscreen only.
+#[path = "archived_composer_probe.rs"]
+mod archived;
 #[path = "chat_actions_capacity_probe.rs"]
 mod capacity;
 #[path = "chat_actions_selected_probe.rs"]
@@ -138,11 +140,15 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
     let case = std::env::var("PILOT_NEXT_CHAT_ACTIONS_CASE").ok();
     assert!(
         case.as_deref()
-            .is_none_or(|s| matches!(s, "review" | "selected-archive")),
+            .is_none_or(|s| matches!(s, "review" | "selected-archive" | "archived-composer")),
         "unknown chat-actions native case"
     );
     if case.as_deref() == Some("selected-archive") {
         selected::run(cx);
+        return;
+    }
+    if case.as_deref() == Some("archived-composer") {
+        archived::run(cx);
         return;
     }
     let dir = std::env::var_os("PILOT_NEXT_CHAT_ACTIONS_DIR").map(PathBuf::from);
@@ -630,6 +636,9 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
         pending_delivery(cx);
     }
     selected::run(cx);
+    if case.is_none() {
+        archived::run(cx);
+    }
 }
 
 fn pending_delivery(cx: &mut HeadlessAppContext) {

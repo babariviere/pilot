@@ -17,7 +17,7 @@ impl LocalViewer {
             }),
         )
     }
-    fn chat_action_ready(
+    pub(super) fn chat_action_ready(
         &mut self,
         target: &Target,
         w: &mut Window,

@@ -20,6 +20,7 @@ fn chat_actions_old_completion_and_inspection_cannot_release_newer_operation() {
         renames: Default::default(),
         latest_rename: None,
         rename_observers: Default::default(),
+        restore: Default::default(),
     };
     actions.reports.insert(
         "source".into(),
@@ -74,6 +75,7 @@ fn chat_actions_inspection_started_before_ack_cannot_release_its_editor_fence() 
         renames: Default::default(),
         latest_rename: None,
         rename_observers: Default::default(),
+        restore: Default::default(),
         options: Some(options),
         worker: None,
         reports: BTreeMap::from([(

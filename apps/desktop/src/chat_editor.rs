@@ -1038,6 +1038,27 @@ impl ChatEditor {
         self.changed(cx);
         true
     }
+    /// Ends a composition no input method can finish because the editor unmounted
+    /// (an archived chat shows its notice instead). The composed text stays and is saved.
+    pub(crate) fn end_composition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut ended = false;
+        self.text.update(cx, |state, cx| {
+            if state.marked_text_range(window, cx).is_some() {
+                state.unmark_text(window, cx);
+                ended = true;
+            }
+        });
+        self.cwd.update(cx, |state, cx| {
+            if state.marked_text_range(window, cx).is_some() {
+                state.unmark_text(window, cx);
+                ended = true;
+            }
+        });
+        if ended {
+            self.changed(cx);
+            cx.notify();
+        }
+    }
     /// Puts a retained, never-sent queue edit into this chat's empty composer,
     /// like typing. Never sends and never overwrites; false leaves it with the queue.
     pub(crate) fn restore_queued_text(

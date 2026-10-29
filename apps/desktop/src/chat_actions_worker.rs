@@ -140,9 +140,7 @@ pub(crate) async fn set(
     let current = match inspect(client, options, &evidence.target).await {
         Ok(current) if &current == evidence => current,
         Ok(_) => {
-            return Outcome::Rejected(
-                "Chat eligibility changed. Reopen its menu. Nothing was submitted.",
-            );
+            return Outcome::Rejected(crate::chat_actions::INELIGIBLE);
         }
         Err(error) => return Outcome::Rejected(error),
     };
@@ -173,9 +171,7 @@ pub(crate) async fn set(
         };
     }
     if !current.can_archive {
-        return Outcome::Rejected(
-            "Chat eligibility changed. Reopen its menu. Nothing was submitted.",
-        );
+        return Outcome::Rejected(crate::chat_actions::INELIGIBLE);
     }
     let route = if current.archive {
         "archive"

@@ -84,6 +84,26 @@ qualified source/operation still matches on completion. A delayed pre-ACK GET,
 an older operation or Unknown cannot release it. This reads current permission
 after a known ACK, never converts an observation into a mutation receipt.
 
+## Archived chat composer
+
+When the chat list shows the selected chat archived, its composer slot shows
+*This chat is archived* with a **Restore** button instead of the editor, as in
+Swift's `ArchivedComposer`. The transcript stays mounted and readable. The
+editor, queue, send/stop and attachments are unmounted, not
+disabled; the `ChatEditor` entity keeps the draft, and a composition the input
+method can no longer finish ends as typed and is saved. Typing or navigating
+never restores.
+
+Restore reads the exact selected chat (GET, as the row menu does), then submits
+the shared non-replayable request. Navigating away while that read runs submits
+nothing. Pending shows *Restoring…*; a refusal before the POST is an error with
+Restore offered again; Unknown or another pending action disables it with the
+reason. An ACK shows *Restored* until the list shows the chat open: only then
+does the composer return, focused if focus was on the notice. The notice shows
+the selected chat's status, so the sidebar status omits it. Retained Control
+history refuses after the read. Code: `archived_composer.rs`,
+`Actions::restore_view`.
+
 ## Ownership and bounds
 
 `chat_actions.rs` owns targeting/evidence/report policy;
@@ -147,6 +167,13 @@ with the same draft/editor/reader. To rerun only this case:
 ```sh
 PILOT_NEXT_CHAT_ACTIONS_CASE=selected-archive python3 scripts/check-scoped.py --test chat_actions
 ```
+
+The archived composer journey (`archived-composer`) runs at 680/1100 in light
+and dark: composition and draft retention when the list archives the chat,
+transcript scroll, no restore on typing, Tab to Restore, keyboard (light) and
+pointer (dark) restore confirmed by the list with focus return, and at 1100
+light stale navigation, refused inspection with retry, and a lost Unknown that
+is never repeated.
 
 `PILOT_NEXT_CHAT_ACTIONS_CASE=review` selects the wide-light delayed conversion
 and selected-idle journey together; default CI retains all layout and pending

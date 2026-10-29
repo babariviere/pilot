@@ -1,4 +1,6 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
+#[path = "archived_composer.rs"]
+mod archived_composer;
 #[path = "chat_actions_navigation.rs"]
 mod chat_actions_navigation;
 #[cfg(feature = "native-probes")]
@@ -2640,7 +2642,7 @@ impl Render for LocalViewer {
                             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
                         .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
-                    .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.editor.clone()))
+                    .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.composer_slot(window, cx)))
                         .into_any_element();
                 self.side_panel_shell(conversation, window, cx)
                 }
