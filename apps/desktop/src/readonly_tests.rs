@@ -101,6 +101,11 @@ fn readonly_projection_keeps_selected_entity_across_prepend_delta_and_commit(
     cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
+        assert_eq!(
+            selected.read(cx).selected_source_range(),
+            Some(range.clone()),
+            "scrolling offscreen must retain the selection before publication"
+        );
         let before = view.read(cx).scroller.read(cx).logical_scroll_top();
         let anchor = view.read(cx).transcript.messages()[before.item_ix].id();
         let mut next: Vec<_> = (8..20)
@@ -115,6 +120,11 @@ fn readonly_projection_keeps_selected_entity_across_prepend_delta_and_commit(
             )
         }
         view.update(cx, |view, cx| view.replace_readonly(next, false, cx));
+        assert_eq!(
+            selected.read(cx).selected_source_range(),
+            Some(range.clone()),
+            "publishing a prefix extension must retain the selection before layout"
+        );
         window.render_frame(cx);
         assert_eq!(
             view.read(cx).text_states.last().unwrap().as_ref().unwrap(),
@@ -158,6 +168,78 @@ fn readonly_projection_keeps_selected_entity_across_prepend_delta_and_commit(
                 .selected_source_range()
                 .is_none()
         );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn readonly_committed_label_keeps_unicode_selection_through_layout_and_parse(
+    cx: &mut TestAppContext,
+) {
+    let key = crate::model::ReaderKey::model(20, 0, Some(0));
+    let source = "日本語 e\u{301} 👨‍👩‍👧 🇫🇷 reply";
+    let row = |label: &str, source: &str| {
+        Message::live(20, label.into(), source.into()).anchored(key.clone())
+    };
+    let (handle, view) = setup(cx, vec![row("assistant", source)]);
+    let (selected, range, copied) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let text = view.read(cx).text_states[0].as_ref().unwrap().clone();
+            let start = text.read(cx).bounds().origin + point(px(1.), px(10.));
+            window.drag(start, start + point(px(210.), px(0.)), cx);
+            let range = text.read(cx).selected_source_range().unwrap();
+            window.press("secondary-c", cx);
+            let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(
+                copied.contains("日本語") && copied.contains("e\u{301}"),
+                "{copied:?}"
+            );
+            (text, range, copied)
+        })
+        .unwrap();
+    // Label-only publication moves the same parser without changing its source.
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |v, cx| {
+            v.replace_readonly(vec![row("assistant · committed", source)], false, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).text_states[0].as_ref(), Some(&selected));
+        assert_eq!(
+            selected.read(cx).selected_source_range(),
+            Some(range.clone())
+        );
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+    })
+    .unwrap();
+    let extended = format!("{source}\n\nMore streamed words.");
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.replace_readonly(vec![row("assistant · committed", &extended)], false, cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(selected.read(cx).rendered_text().source(), extended);
+        assert_eq!(selected.read(cx).selected_source_range(), Some(range));
+        window.press("secondary-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+        // A new canonical reader must not inherit the old reader's selection.
+        view.update(cx, |v, cx| {
+            v.replace_readonly(
+                vec![
+                    Message::live(20, "assistant".into(), source.into())
+                        .anchored(crate::model::ReaderKey::model(21, 0, Some(0))),
+                ],
+                false,
+                cx,
+            )
+        });
+        let fresh = view.read(cx).text_states[0].as_ref().unwrap();
+        assert_ne!(fresh, &selected);
+        assert!(fresh.read(cx).selected_source_range().is_none());
     })
     .unwrap();
 }

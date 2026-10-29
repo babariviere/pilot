@@ -48,6 +48,15 @@ query serializer (which can add a paragraph newline). Unicode source offsets,
 prepend, other-message streaming, real unmount, remount and dismissal are tested.
 Existing selection is never transferred to a newly appended message ID.
 
+Rich-text selection resolves its own content-relative endpoints against the
+current layout origin and scroll offset. Inline paint precedes registration of
+that geometry, so last-frame window points would otherwise project into the
+wrong text. A committed-row label exposed this ordering bug even without a source
+change. Detached participants still use logical retention; mounted ones can
+reproject selection after a streamed parse, and ordinary clicks still clear it.
+Readonly regressions cover prepend/commit, Unicode copy, completed background
+parsing and a changed canonical reader identity.
+
 Before live integration, this patch needs upstream review and broader native
 interaction testing. It does not establish accessibility, giant-message,
 cross-platform or rendering-performance parity.

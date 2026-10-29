@@ -226,6 +226,16 @@
       "path": "src/scrollbar.rs",
       "old": "                                scroll_handle.end_drag();\n                                state.set(state.get().with_unset_drag_pos(Instant::now()));\n                                cx.notify(view_id);",
       "new": "                                scroll_handle.end_drag();\n                                if let Some(on_scroll) = &on_scroll { on_scroll(cx); }\n                                state.set(state.get().with_unset_drag_pos(Instant::now()));\n                                cx.notify(view_id);"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "        self.selection_adapter.selection_points(cx)",
+      "new": "        self.selection_adapter\n            .selection_points(self.bounds.origin + self.scroll_offset(), cx)"
+    },
+    {
+      "path": "src/text/selection_adapter.rs",
+      "old": "    pub(super) fn selection_points(&self, cx: &App) -> Option<(Point<Pixels>, Point<Pixels>)> {\n        let points = self.selection.snapshot(cx)?.window_points()?;\n        Some((points.anchor(), points.cursor()))\n    }",
+      "new": "    pub(super) fn selection_points(\n        &self,\n        origin: Point<Pixels>,\n        cx: &App,\n    ) -> Option<(Point<Pixels>, Point<Pixels>)> {\n        let snapshot = self.selection.snapshot(cx)?;\n        let points = snapshot.window_points()?;\n        // Inline paint precedes registration of this frame's geometry. Resolve\n        // our endpoints against the current layout, not last frame's origin.\n        // Detached participants still have no window points and keep their\n        // logical ranges through the existing retention path.\n        let resolve = |endpoint: TextSelectionEndpoint, fallback| {\n            if endpoint.entity_id() == Some(self.selection.entity_id()) {\n                origin + endpoint.content_point()\n            } else {\n                fallback\n            }\n        };\n        Some((\n            resolve(snapshot.anchor(), points.anchor()),\n            resolve(snapshot.cursor(), points.cursor()),\n        ))\n    }"
     }
   ]
 }
