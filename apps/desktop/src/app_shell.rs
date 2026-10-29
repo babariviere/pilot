@@ -47,7 +47,7 @@ struct Counts {
 }
 impl Counts {
     fn add(&mut self, c: &Chat) {
-        use crate::dither::Signal;
+        use crate::state_mark::Signal;
         self.chats += 1;
         self.working += usize::from(c.signal == Some(Signal::Working));
         self.attention += usize::from(matches!(c.signal, Some(Signal::Failed | Signal::NeedsYou)));
@@ -314,7 +314,8 @@ impl Overview {
                 if self.visible.len() < 12 {
                     self.visible.push(ix);
                 }
-                if self.working.len() < 5 && chat.signal == Some(crate::dither::Signal::Working) {
+                if self.working.len() < 5 && chat.signal == Some(crate::state_mark::Signal::Working)
+                {
                     self.working.push(ix);
                 }
             }
@@ -839,7 +840,7 @@ mod workbench_tests {
         chat.project_id = None;
         assert!(chat_row_detail(&chat, &projects, true).starts_with("No project · "));
         chat.attention = None;
-        chat.signal = Some(crate::dither::Signal::Working);
+        chat.signal = Some(crate::state_mark::Signal::Working);
         chat.background_work = true;
         assert_eq!(
             chat_row_detail(&chat, &projects, false),

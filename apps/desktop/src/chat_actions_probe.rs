@@ -561,6 +561,13 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                     *chats.iter_mut().find(|c| c.id == "source").unwrap() =
                         crate::local_model::chat(&raw).unwrap();
                     v.state.chats = Arc::new(chats);
+                    // The converted chat is now a quiet member of its thread,
+                    // folded under "+N finished": show it to reach its row.
+                    v.chats.update(cx, |l, _| {
+                        l.delegate_mut()
+                            .show_finished
+                            .insert("mission-exact".into());
+                    });
                     v.rebuild_nav(w, cx);
                 })
             })

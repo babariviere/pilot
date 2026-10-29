@@ -32,6 +32,15 @@ mod contextual_navigation;
 pub(crate) mod conversation_links_probe;
 #[path = "conversation_links_view.rs"]
 mod conversation_links_view;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "daemon_upgrade_lifecycle.rs"]
+mod daemon_upgrade_lifecycle;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+#[path = "daemon_upgrade_lifecycle_probe.rs"]
+pub(crate) mod daemon_upgrade_lifecycle_probe;
 #[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
@@ -44,14 +53,14 @@ pub(crate) mod glass_probe;
 #[cfg(feature = "native-probes")]
 #[path = "history_probe.rs"]
 pub(crate) mod history_probe;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "history_shortcut_tests.rs"]
+mod history_shortcut_tests;
 #[cfg(feature = "native-probes")]
 #[path = "inbox_probe.rs"]
 pub(crate) mod inbox_probe;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
-#[cfg(all(test, target_os = "macos"))]
-#[path = "history_shortcut_tests.rs"]
-mod history_shortcut_tests;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
@@ -102,18 +111,18 @@ pub(crate) mod scoped_models_probe;
 pub(crate) mod session_failure_probe;
 #[path = "session_failure_view.rs"]
 mod session_failure_view;
-#[cfg(feature = "native-probes")]
-#[path = "session_todos_probe.rs"]
-pub(crate) mod session_todos_probe;
-#[path = "session_todos_tray.rs"]
-mod session_todos_tray;
+#[path = "session_jobs_log_view.rs"]
+mod session_jobs_log_view;
 #[cfg(feature = "native-probes")]
 #[path = "session_jobs_probe.rs"]
 pub(crate) mod session_jobs_probe;
 #[path = "session_jobs_tray.rs"]
 mod session_jobs_tray;
-#[path = "session_jobs_log_view.rs"]
-mod session_jobs_log_view;
+#[cfg(feature = "native-probes")]
+#[path = "session_todos_probe.rs"]
+pub(crate) mod session_todos_probe;
+#[path = "session_todos_tray.rs"]
+mod session_todos_tray;
 #[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
@@ -145,12 +154,6 @@ pub(crate) mod transcript_find_probe;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[path = "update_lifecycle.rs"]
 mod update_lifecycle;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-#[path = "daemon_upgrade_lifecycle.rs"]
-mod daemon_upgrade_lifecycle;
-#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
-#[path = "daemon_upgrade_lifecycle_probe.rs"]
-pub(crate) mod daemon_upgrade_lifecycle_probe;
 #[cfg(feature = "native-probes")]
 #[path = "workbench_probe.rs"]
 pub(crate) mod workbench_probe;
@@ -167,16 +170,13 @@ use crate::{
     app_shell::{Overview, OverviewInput, Page, ProjectList, ShellEvent},
     appearance::{self},
     chat_editor::{ChatEditor, EditorEvent},
-    chat_order::{self, SECTIONS},
     delivery_store::Store,
-    dither::{Signal, Spec},
-    dither_view::CornerView,
     interaction::{Interaction, WriteCommand},
     local_client::{Command, LocalClient, Presentation},
     local_model::Chat,
     model::Message,
+    state_mark::Signal,
 };
-use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu};
 use gpui_kit::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
     Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
@@ -184,19 +184,18 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, IconName, IndexPath, Sizable, StyledExt,
         button::{Button, ButtonVariants},
-        list::{List, ListDelegate, ListEvent, ListItem, ListState},
+        list::{List, ListEvent, ListState},
     },
     div,
     prelude::FluentBuilder,
     px,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 #[cfg(feature = "native-probes")]
 pub use workspace_changes_view::session_file_view_probe::run_session_file_view_probe;
+#[path = "sidebar_list.rs"]
+mod sidebar_list;
+use sidebar_list::ChatList;
 
 gpui_kit::actions!(
     desktop,
@@ -208,7 +207,9 @@ gpui_kit::actions!(
         NavigateBack,
         NavigateForward,
         ToggleJump,
-        NewChat
+        NewChat,
+        SidebarCollapse,
+        SidebarExpand
     ]
 );
 #[derive(Clone, Copy)]
@@ -218,438 +219,6 @@ pub enum PreviewState {
     Loading,
     Unavailable,
 }
-struct ChatList {
-    action_owner: gpui_kit::WeakEntity<LocalViewer>,
-    all: Arc<Vec<Chat>>,
-    /// Visible indices of `all` in display order, grouped by `chat_order::SECTIONS`.
-    filtered: Vec<usize>,
-    /// Start of each section in `filtered`, plus its end.
-    bounds: [usize; SECTIONS.len() + 1],
-    query: String,
-    archived: bool,
-    selected: Option<IndexPath>,
-    opened: Option<String>,
-    loaded: bool,
-    project: Option<String>,
-    projects: Arc<Vec<crate::local_model::Project>>,
-    corners: HashMap<String, Entity<CornerView>>,
-    /// The list's keyboard focus (its search field), for revealing row actions.
-    focus: Option<gpui_kit::FocusHandle>,
-    /// Rows that build their action menu button: the hovered row, the selected
-    /// row and the row whose menu opened last. Other rows leave the slot empty,
-    /// so a scroll frame doesn't lay out and paint a menu button per row.
-    hovered: Option<String>,
-    menu_row: Option<String>,
-}
-impl ChatList {
-    fn filter(&mut self) {
-        let ids: HashSet<_> = self.all.iter().map(|chat| chat.id.as_str()).collect();
-        self.corners.retain(|id, _| ids.contains(id.as_str()));
-        let sections = chat_order::sections(&self.all, |c| {
-            (self.archived || !c.archived)
-                && (self.query.is_empty() || c.title.to_lowercase().contains(&self.query))
-                && self
-                    .project
-                    .as_ref()
-                    .is_none_or(|id| c.project_id.as_ref() == Some(id))
-        });
-        self.filtered.clear();
-        for (section, rows) in sections.iter().enumerate() {
-            self.bounds[section] = self.filtered.len();
-            self.filtered.extend(rows);
-        }
-        self.bounds[SECTIONS.len()] = self.filtered.len();
-    }
-    fn at(&self, ix: IndexPath) -> Option<&Chat> {
-        let start = *self.bounds.get(ix.section)?;
-        let end = *self.bounds.get(ix.section + 1)?;
-        (start + ix.row < end)
-            .then(|| self.filtered.get(start + ix.row))
-            .flatten()
-            .and_then(|ix| self.all.get(*ix))
-    }
-    /// Where a chat appears, by canonical id.
-    fn index(&self, id: &str) -> Option<IndexPath> {
-        let position = self.filtered.iter().position(|ix| self.all[*ix].id == id)?;
-        let section = self.bounds.iter().rposition(|start| *start <= position)?;
-        Some(IndexPath::new(position - self.bounds[section]).section(section))
-    }
-    fn first(&self) -> Option<IndexPath> {
-        let id = self.all.get(*self.filtered.first()?)?.id.clone();
-        self.index(&id)
-    }
-}
-impl ListDelegate for ChatList {
-    type Item = ListItem;
-    fn sections_count(&self, _: &App) -> usize {
-        SECTIONS.len()
-    }
-    fn items_count(&self, section: usize, _: &App) -> usize {
-        self.bounds[section + 1] - self.bounds[section]
-    }
-    /// Swift's sidebar section header: caption title, with a count for Needs
-    /// you and Working. Always rendered so the list measures one header height.
-    fn render_section_header(
-        &mut self,
-        section: usize,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<impl IntoElement> {
-        let kind = SECTIONS[section];
-        let count = self.items_count(section, cx);
-        Some(
-            div()
-                .id(SharedString::from(format!(
-                    "sidebar-section-{}",
-                    kind.key()
-                )))
-                .test_support()
-                .h_flex()
-                .items_center()
-                .gap_1()
-                .pl_2()
-                .pt_2()
-                .pb_1()
-                .text_size(px(appearance::TextRole::CAPTION))
-                .font_semibold()
-                .text_color(cx.theme().muted_foreground)
-                .child(kind.title())
-                .when(kind.counted() && count > 0, |d| d.child(count.to_string())),
-        )
-    }
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<ListItem> {
-        use gpui_kit::StatefulInteractiveElement as _;
-        let chat = self.at(ix)?.clone();
-        let section = SECTIONS[ix.section];
-        let spec = Spec::row(chat.signal, chat.background_work);
-        let corner = self
-            .corners
-            .entry(chat.id.clone())
-            .or_insert_with(|| cx.new(|cx| CornerView::new(spec, window, cx)))
-            .clone();
-        corner.update(cx, |view, cx| view.configure(spec, cx));
-        let has_corner = corner.read(cx).has_corner(cx);
-        // RowLine: project (only across all projects), then the state reason.
-        // Quiet chats say nothing rather than a raw "idle", and a row never
-        // repeats its section heading ("Working" under Working).
-        let project = self
-            .project
-            .is_none()
-            .then_some(chat.project_id.as_ref())
-            .flatten()
-            .and_then(|id| self.projects.iter().find(|p| &p.id == id))
-            .map(|p| p.name.clone());
-        let (state, full_state) = chat_order::row_state(&chat, section);
-        // Named from the session socket's mission list, else the cached
-        // catalog; no row reads.
-        let mark = mission_mark(&chat, |id| {
-            let owner = self.action_owner.upgrade()?;
-            let owner = owner.read(cx);
-            sidebar_mission_title(
-                owner.state.mission_titles.as_deref(),
-                owner.local_online(),
-                id,
-                || {
-                    owner
-                        .missions
-                        .read(cx)
-                        .sidebar_mission_name(id)
-                        .map(|(title, current)| (title.to_owned(), current))
-                },
-            )
-        });
-        let link = mission_link_focus(&chat, window, cx).map(|(mission, focus)| {
-            let (chat, owner) = (chat.id.clone(), self.action_owner.clone());
-            let tab_stop = self.selected == Some(ix);
-            let focused = window.last_input_was_keyboard() && focus.is_focused(window);
-            let link = move |segment| mission_link(chat, mission, focus, tab_stop, owner, segment);
-            (focused, link)
-        });
-        let has_project = project.is_some();
-        let detail = project
-            .iter()
-            .cloned()
-            .chain((!state.is_empty()).then(|| state.clone()))
-            .collect::<Vec<_>>()
-            .join(" · ");
-        // The accessible name keeps the complete state.
-        let spoken = project
-            .iter()
-            .cloned()
-            .chain((!full_state.is_empty()).then_some(full_state))
-            .chain(mark.as_ref().map(|m| m.label.clone()))
-            .collect::<Vec<_>>()
-            .join(" · ");
-        // Row actions appear on hover, or on the keyboard-selected row while
-        // the list has keyboard focus. The right-click menu reaches them always.
-        let menu_shown = self.selected == Some(ix)
-            && window.last_input_was_keyboard()
-            && self.focus.as_ref().is_some_and(|f| f.is_focused(window));
-        // The selected row keeps its button for Tab; the last opened menu's row
-        // keeps it so Escape can return focus to the trigger.
-        let menu_built = self.selected == Some(ix)
-            || self.hovered.as_ref() == Some(&chat.id)
-            || self.menu_row.as_ref() == Some(&chat.id);
-        let list = cx.entity().downgrade();
-        let open_list = list.clone();
-        let hover_id = chat.id.clone();
-        let open_id = chat.id.clone();
-        let owner = self.action_owner.clone();
-        let menu_owner = owner.clone();
-        let button_owner = owner.clone();
-        let menu_chat = chat.clone();
-        let button_chat = chat.clone();
-        Some(
-            ListItem::new(SharedString::from(chat.id.clone()))
-                .pl_2()
-                .pr_0()
-                .py_0()
-                .rounded(px(appearance::Radius::ROW))
-                .accessibility_label(SharedString::from(if spoken.is_empty() {
-                    chat.title.clone()
-                } else {
-                    format!("{} · {spoken}", chat.title)
-                }))
-                .hover_fill(!has_corner)
-                .confirmed(self.opened.as_ref() == Some(&chat.id))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("chat-row-{}", chat.id)))
-                        // Keys don't end the pointer's hover: the button under it stays.
-                        .hover_listener_mode(gpui_kit::HoverListenerMode::InputModalityIndependent)
-                        .on_hover(move |hovered, _, cx| {
-                            let _ = list.update(cx, |list, cx| {
-                                let row = &mut list.delegate_mut().hovered;
-                                if *hovered && row.as_ref() != Some(&hover_id) {
-                                    *row = Some(hover_id.clone());
-                                    cx.notify();
-                                } else if !*hovered && row.as_ref() == Some(&hover_id) {
-                                    *row = None;
-                                    cx.notify();
-                                }
-                            });
-                        })
-                        .test_support()
-                        .group("chat-row")
-                        .capture_any_mouse_down(move |_, w, cx| {
-                            if !owner
-                                .update(cx, |v, cx| v.chat_row_guard(w, cx))
-                                .unwrap_or(false)
-                            {
-                                cx.stop_propagation();
-                            }
-                        })
-                        .v_flex()
-                        .relative()
-                        .overflow_hidden()
-                        .rounded(px(appearance::Radius::ROW))
-                        .px_0()
-                        .py_1()
-                        .min_h(px(appearance::Space::ROW))
-                        .justify_center()
-                        .bg(
-                            if self.opened.as_ref() == Some(&chat.id) && self.selected != Some(ix) {
-                                appearance::selected(cx)
-                            } else {
-                                cx.theme().transparent
-                            },
-                        )
-                        .min_w_0()
-                        .w_full()
-                        .gap_0p5()
-                        .child(crate::dither_view::layer(corner))
-                        .child(
-                            div()
-                                .h_flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .id("sidebar-chat-title")
-                                        .test_support()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(px(appearance::TextRole::BODY))
-                                        .child(SharedString::from(chat.title.clone())),
-                                )
-                                .child(
-                                    // Built and revealed on hover or keyboard selection;
-                                    // the right-click menu reaches the same actions.
-                                    // A text-height slot: the 2rem target overhangs it rather
-                                    // than pushing the metadata line away from the title.
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "chat-menu-slot-{}",
-                                            chat.id
-                                        )))
-                                        .flex_none()
-                                        .w_8()
-                                        .h(px(appearance::TextRole::BODY))
-                                        .flex()
-                                        .items_center()
-                                        .opacity(if menu_shown { 1. } else { 0. })
-                                        .group_hover("chat-row", |s| s.opacity(1.))
-                                        .when(menu_built, |d| {
-                                            d.child(
-                                                crate::ui::icon_action(
-                                                    SharedString::from(format!(
-                                                        "chat-menu-{}",
-                                                        chat.id
-                                                    )),
-                                                    "Chat actions",
-                                                    AppIcon::More,
-                                                    crate::ui::Action::Quiet,
-                                                )
-                                                .size_8()
-                                                .dropdown_menu(move |menu, w, cx| {
-                                                    LocalViewer::chat_actions_menu(
-                                                        button_owner.clone(),
-                                                        button_chat.clone(),
-                                                        menu,
-                                                        w,
-                                                        cx,
-                                                    )
-                                                })
-                                                .on_open_change(move |open, _, cx| {
-                                                    if *open {
-                                                        let _ = open_list.update(cx, |list, cx| {
-                                                            list.delegate_mut().menu_row =
-                                                                Some(open_id.clone());
-                                                            cx.notify();
-                                                        });
-                                                    }
-                                                }),
-                                            )
-                                        })
-                                        .test_support(),
-                                ),
-                        )
-                        .when(!detail.is_empty() || mark.is_some(), |row| {
-                            row.child(
-                                div()
-                                    .id("sidebar-chat-detail")
-                                    .test_support()
-                                    .h_flex()
-                                    .items_center()
-                                    .min_w_0()
-                                    // Text lane: the line fades out before the state corner.
-                                    .when(has_corner, |d| d.pr(px(appearance::Space::SECTION)))
-                                    .text_size(px(appearance::TextRole::CAPTION))
-                                    .text_color(cx.theme().muted_foreground)
-                                    // A long project name yields before the state reason.
-                                    // Beside a mission it keeps a readable start and
-                                    // its own separator, so all three stay on the line.
-                                    .children(project.map(|p| {
-                                        let split = mark.is_some() && !state.is_empty();
-                                        div()
-                                            .id("sidebar-chat-project")
-                                            .test_support()
-                                            .min_w_0()
-                                            .when(mark.is_some(), |d| {
-                                                d.min_w(px(appearance::Space::SECTION))
-                                            })
-                                            .flex_shrink(16.)
-                                            .truncate()
-                                            .child(SharedString::from(
-                                                if state.is_empty() || split {
-                                                    p
-                                                } else {
-                                                    format!("{p} · ")
-                                                },
-                                            ))
-                                    }))
-                                    .when(mark.is_some() && has_project && !state.is_empty(), |d| {
-                                        d.child(div().flex_none().child(" · "))
-                                    })
-                                    .when(!state.is_empty(), |d| {
-                                        d.child(
-                                            div()
-                                                .id("sidebar-chat-state")
-                                                .test_support()
-                                                // Beside a mission it shares the line instead.
-                                                .when(mark.is_none(), |d| d.flex_shrink_0())
-                                                .when(mark.is_some(), |d| d.min_w_0())
-                                                .max_w(gpui_kit::relative(0.7))
-                                                .truncate()
-                                                .child(SharedString::from(state.clone())),
-                                        )
-                                    })
-                                    .when_some(mark, |d, mark| {
-                                        let segment = mission_segment(
-                                            mark,
-                                            !detail.is_empty(),
-                                            appearance::accent_mark(cx),
-                                            link.as_ref().is_some_and(|(focused, _)| *focused),
-                                        );
-                                        match link {
-                                            Some((_, link)) => d.child(link(segment)),
-                                            None => d.child(segment),
-                                        }
-                                    }),
-                            )
-                        })
-                        .context_menu(move |menu, w, cx| {
-                            LocalViewer::chat_actions_menu(
-                                menu_owner.clone(),
-                                menu_chat.clone(),
-                                menu,
-                                w,
-                                cx,
-                            )
-                        }),
-                ),
-        )
-    }
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) {
-        self.selected = ix;
-        cx.notify();
-    }
-    fn perform_search(
-        &mut self,
-        query: &str,
-        _: &mut Window,
-        _: &mut Context<ListState<Self>>,
-    ) -> Task<()> {
-        self.query = query.chars().take(240).collect::<String>().to_lowercase();
-        self.filter();
-        Task::ready(())
-    }
-    fn render_empty(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_3()
-            .text_size(px(appearance::TextRole::BODY))
-            .text_color(cx.theme().muted_foreground)
-            .child(
-                div()
-                    .id("sidebar-empty-message")
-                    .test_support()
-                    .child(if !self.loaded {
-                        "Loading chats…"
-                    } else if self.all.is_empty() {
-                        "No chats yet."
-                    } else {
-                        "No matching chats."
-                    }),
-            )
-    }
-}
-
 pub struct LocalViewer {
     session_failure_fence: crate::session_failure::Fence,
     session_failure_focus: gpui_kit::FocusHandle,
@@ -728,6 +297,8 @@ pub struct LocalViewer {
     writer: Option<Interaction>,
     nav_chats: Arc<Vec<Chat>>,
     nav_drafts: Vec<(String, String)>,
+    /// The latest write of the machine-local sidebar memory; writes chain in order.
+    memory_save: Option<Task<()>>,
     refreshing: bool,
     earlier_attempt: Option<(u64, u64)>,
     earlier_request: Option<(u64, u64, u64)>,
@@ -821,6 +392,10 @@ impl LocalViewer {
                 Some("QueuedMessage"),
             ),
             KeyBinding::new("secondary-k", ToggleJump, None),
+            // Sidebar tree keys, ahead of the search field's caret moves. The
+            // sidebar passes them on whenever it has nothing to collapse or expand.
+            KeyBinding::new("left", SidebarCollapse, Some("List > Input")),
+            KeyBinding::new("right", SidebarExpand, Some("List > Input")),
             KeyBinding::new("secondary-n", NewChat, None),
             KeyBinding::new("secondary-f", FocusChats, None),
             KeyBinding::new("secondary-1", GoHome, None),
@@ -868,6 +443,9 @@ impl LocalViewer {
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
         view.usage_options = Some(options.clone());
+        if let Ok(root) = Store::default_path() {
+            view.load_sidebar_memory(root.join(crate::sidebar_memory::FILE), window, cx);
+        }
         view.chat_actions
             .update(cx, |a, cx| a.connect(options.clone(), cx));
         let root = Store::default_path()
@@ -1349,23 +927,11 @@ impl LocalViewer {
         let action_owner = cx.weak_entity();
         let chats = cx.new(|cx| {
             ListState::new(
-                ChatList {
+                ChatList::new(
                     action_owner,
-                    all: Arc::new(Vec::new()),
-                    filtered: Vec::new(),
-                    bounds: Default::default(),
-                    query: String::new(),
-                    archived: false,
-                    selected: None,
-                    opened: None,
-                    loaded: false,
-                    project: None,
-                    projects: Arc::new(Vec::new()),
-                    corners: HashMap::new(),
-                    focus: None,
-                    hovered: None,
-                    menu_row: None,
-                },
+                    // Synthetic and preview windows remember nothing on disk.
+                    crate::sidebar_memory::Memory::ephemeral(f64::INFINITY),
+                ),
                 window,
                 cx,
             )
@@ -1376,10 +942,7 @@ impl LocalViewer {
         });
         let subscription = cx.subscribe_in(&chats, window, |view, list, event, window, cx| {
             if let ListEvent::Confirm(ix) = event {
-                let chat = list.read(cx).delegate().at(*ix).cloned();
-                if let Some(chat) = chat {
-                    view.open(chat, window, cx);
-                }
+                view.confirm_sidebar_row(*ix, list.clone(), window, cx);
             }
         });
         chats.update(cx, |list, cx| list.focus(window, cx));
@@ -1576,6 +1139,15 @@ impl LocalViewer {
                     view.rebuild_nav(window, cx)
                 }
                 EditorEvent::Flushed => menu_routing::exit(cx),
+                EditorEvent::Sent { chat } => {
+                    let now = crate::sidebar_memory::now();
+                    view.chats.update(cx, |list, cx| {
+                        list.delegate_mut().memory.note_sent(chat, now);
+                        list.delegate_mut().filter();
+                        cx.notify();
+                    });
+                    view.save_sidebar_memory(cx);
+                }
                 EditorEvent::OpenContinued(chat) => {
                     if view.jump.is_none() && view.page == Page::Chat {
                         view.open((**chat).clone(), window, cx);
@@ -1844,6 +1416,7 @@ impl LocalViewer {
             writer,
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
+            memory_save: None,
             refreshing: false,
             earlier_attempt: None,
             earlier_request: None,
@@ -2404,6 +1977,20 @@ impl LocalViewer {
         } else {
             None
         };
+        // You are looking at the open chat: its replies are seen.
+        if let Some(chat) = opened
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            && self.chats.read(cx).delegate().memory.unread(chat)
+        {
+            let chat = chat.clone();
+            self.chats.update(cx, |list, cx| {
+                list.delegate_mut().memory.note_seen(&chat);
+                list.delegate_mut().filter();
+                cx.notify();
+            });
+            self.save_sidebar_memory(cx);
+        }
         if Arc::ptr_eq(&self.nav_chats, &self.state.chats)
             && drafts == self.nav_drafts
             && self.chats.read(cx).delegate().opened == opened
@@ -2455,9 +2042,17 @@ impl LocalViewer {
             let selected = list
                 .delegate()
                 .selected
-                .and_then(|ix| list.delegate().at(ix))
-                .map(|c| c.id.clone());
+                .and_then(|ix| list.delegate().key_at(ix));
             let delegate = list.delegate_mut();
+            if metadata_changed {
+                delegate.memory.observe(&all);
+            }
+            if opened != delegate.opened
+                && let Some(id) = &opened
+            {
+                delegate.all = all.clone();
+                delegate.reveal(id);
+            }
             delegate.all = all;
             delegate.opened = opened;
             delegate.loaded = self.state.list_loaded;
@@ -2468,6 +2063,116 @@ impl LocalViewer {
             list.set_selected_index(selected, window, cx);
             cx.notify();
         });
+        self.save_sidebar_memory(cx);
+    }
+    /// Enter or a click on a sidebar row: open its chat, open a coordinator-less
+    /// mission, or show/hide a thread's finished members.
+    fn confirm_sidebar_row(
+        &mut self,
+        ix: IndexPath,
+        list: Entity<ListState<ChatList>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::sidebar_tree::Row;
+        let delegate = list.read(cx).delegate();
+        let Some(row) = delegate.row(ix) else {
+            return;
+        };
+        let mission = delegate
+            .thread_of(row)
+            .map(|t| delegate.tree.threads[t].mission.clone());
+        let coordinator = match row {
+            Row::Parent(t) => delegate.tree.threads[t].coordinator,
+            _ => None,
+        };
+        let key = delegate.key_at(ix);
+        let chat = delegate.at(ix).cloned();
+        match (row, mission) {
+            (Row::Fold(_), Some(mission)) => {
+                list.update(cx, |list, cx| {
+                    list.delegate_mut().toggle_finished(&mission);
+                    let ix = key.and_then(|key| list.delegate().index(&key));
+                    list.set_selected_index(ix, window, cx);
+                    cx.notify();
+                });
+            }
+            (Row::Parent(_), Some(mission)) if coordinator.is_none() => {
+                self.show_chat_mission(&mission, window, cx);
+            }
+            _ => {
+                if let Some(chat) = chat {
+                    self.open(chat, window, cx);
+                }
+            }
+        }
+    }
+    /// Left/Right in the sidebar: collapse or expand a thread, or move between
+    /// a member and its parent. False passes the key on to the search field.
+    pub(super) fn sidebar_arrow(
+        &mut self,
+        right: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.chats.read(cx).delegate().query.is_empty() {
+            return false;
+        }
+        self.chats.update(cx, |list, cx| {
+            let Some(ix) = list.delegate_mut().arrow(right) else {
+                return false;
+            };
+            list.set_selected_index(Some(ix), window, cx);
+            list.scroll_to_selected_item(window, cx);
+            cx.notify();
+            true
+        })
+    }
+    /// Read the machine-local sidebar memory off the UI thread, then apply it.
+    fn load_sidebar_memory(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.chats.update(cx, |list, _| {
+            list.delegate_mut().memory = crate::sidebar_memory::Memory::at(path.clone())
+        });
+        let read = cx
+            .background_executor()
+            .spawn(async move { crate::sidebar_memory::read(&path) });
+        cx.spawn_in(window, async move |view, cx| {
+            let saved = read.await;
+            let _ = view.update_in(cx, |view, window, cx| {
+                view.chats.update(cx, |list, _| {
+                    list.delegate_mut()
+                        .memory
+                        .restore(saved, crate::sidebar_memory::now())
+                });
+                // Seed and redraw with the restored memory.
+                view.nav_chats = Arc::new(Vec::new());
+                view.rebuild_nav(window, cx);
+            });
+        })
+        .detach();
+    }
+    /// Write the sidebar memory after a change, in order, off the UI thread.
+    fn save_sidebar_memory(&mut self, cx: &mut Context<Self>) {
+        let Some((path, bytes)) = self
+            .chats
+            .update(cx, |list, _| list.delegate_mut().memory.take_save())
+        else {
+            return;
+        };
+        let previous = self.memory_save.take();
+        self.memory_save = Some(cx.background_executor().spawn(async move {
+            if let Some(previous) = previous {
+                previous.await;
+            }
+            if let Err(error) = crate::sidebar_memory::write(&path, &bytes) {
+                tracing::warn!(%error, "sidebar memory was not saved");
+            }
+        }));
     }
 }
 
@@ -3325,7 +3030,7 @@ mod refresh_tests {
             let nav = view.chats.read(cx).delegate();
             assert_eq!(nav.opened, view.selected);
             assert_eq!(nav.query, "review");
-            assert!(!nav.filtered.is_empty());
+            assert!(!nav.tree.rows.is_empty());
             assert!(view.writer.is_none());
         });
     }

@@ -1,4 +1,4 @@
-//! Synthetic production-root dither/radius regression. No real data or window.
+//! Synthetic production-root state-mark/radius regression. No real data or window.
 use gpui_kit::HeadlessAppContext;
 use std::sync::Arc;
 fn main() {

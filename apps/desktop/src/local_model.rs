@@ -192,7 +192,7 @@ pub(crate) struct Chat {
     pub(crate) session_path: Option<String>,
     pub(crate) writable: bool,
     pub(crate) busy: bool,
-    pub(crate) signal: Option<crate::dither::Signal>,
+    pub(crate) signal: Option<crate::state_mark::Signal>,
     pub(crate) background_work: bool,
     pub(crate) cwd: String,
     pub(crate) project_id: Option<String>,
@@ -215,7 +215,7 @@ impl Chat {
             })
     }
     pub(crate) fn signal_label(&self) -> &str {
-        use crate::dither::Signal;
+        use crate::state_mark::Signal;
         match self.signal {
             Some(Signal::Working) if self.background_work => "Working in background",
             Some(Signal::Working) => "Working",
@@ -289,8 +289,8 @@ fn working(value: &Value) -> bool {
 
 // Read-only summary projection, mirroring SessionSignal/WorkingLine. It does not
 // import Swift's private review marks or alter action eligibility/working state.
-fn decoration(value: &Value) -> (Option<crate::dither::Signal>, bool) {
-    use crate::dither::Signal;
+fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
+    use crate::state_mark::Signal;
     let state = value["state"].as_str().unwrap_or("");
     let jobs = value["runningJobs"]
         .as_array()
@@ -1782,7 +1782,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn corner_summary_projection_preserves_action_eligibility_and_background_work() {
-        use crate::dither::Signal;
+        use crate::state_mark::Signal;
         for (value, signal, bg) in [
             (
                 json!({"id":"a","state":"working","working":true}),

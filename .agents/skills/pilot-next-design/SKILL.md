@@ -91,7 +91,8 @@ The composer keeps the documented 76pt tray/34pt editor geometry and opaque whit
 editor on soft gray tray in light mode, with the corresponding card/tray dark roles.
 Compact does not mean flattening both surfaces or adding another padded editor wrapper.
 
-Use meaningful Bayer activity and existing word fade, not decoration on every control.
+Bayer dither is atmosphere only (the Home sky). Row state is a still mark plus
+words; use the existing word fade and one-shot transitions, not decoration on every control.
 Reuse the bounded shared motion owner, respect reduced motion and hidden/idle state,
 and never animate streaming layout height or introduce per-control clocks.
 Real thumbnail tiles are legitimate artifact content; this is not permission for a

@@ -114,15 +114,13 @@ fn open(visible: bool, cx: &mut App) -> (gpui_kit::AnyWindowHandle, Entity<Local
 pub fn run(cx: &mut App) {
     let dir = std::env::var_os("PILOT_NEXT_SIDEBAR_SCROLL_DIR").map(std::path::PathBuf::from);
     let (h, view) = open(false, cx);
-    // Hidden windows skip state corners; paint them as a shown window would.
-    cx.update_window(h, |_, w, cx| crate::dither_view::probe_visible(true, w, cx))
-        .unwrap();
     let executor = cx.background_executor().clone();
     cx.spawn(async move |cx| {
-        // Like an app that opened and then sat idle: one draw, the background
-        // dither atlas finishes, one more draw. Nothing is prewarmed by scrolling.
+        // Like an app that opened and then sat idle: two draws apart. Nothing is
+        // prewarmed by scrolling.
         for _ in 0..2 {
-            cx.update_window(h, |_, w, cx| w.draw(cx).clear(cx)).unwrap();
+            cx.update_window(h, |_, w, cx| w.draw(cx).clear(cx))
+                .unwrap();
             executor.timer(Duration::from_millis(300)).await;
         }
         let mut records = Vec::new();
@@ -134,11 +132,10 @@ pub fn run(cx: &mut App) {
                     .update_window(h, |_, w, cx| {
                         let pane = w.find("chat-list-pane").bounds();
                         let position = pane.center();
-                        let corners_before = view.read(cx).chats.read(cx).delegate().corners.len();
+                        let marks_before = view.read(cx).chats.read(cx).delegate().marks.len();
                         let renders = |cx: &App| {
                             let v = view.read(cx);
-                            let corner_renders: u64 = v.chats.read(cx).delegate().corners.values().map(|c| c.read(cx).renders).sum();
-                            (v.render_count, v.transcript.read(cx).probe_render_count(), corner_renders)
+                            (v.render_count, v.transcript.read(cx).probe_render_count())
                         };
                         let renders_before = renders(cx);
                         let counters = instructions_cycles();
@@ -168,15 +165,17 @@ pub fn run(cx: &mut App) {
                             "minstructions": (after.0 - counters.0) as f64 / 1e6,
                             "local_renders": renders_after.0 - renders_before.0,
                             "transcript_renders": renders_after.1 - renders_before.1,
-                            "corner_renders": renders_after.2 - renders_before.2,
-                            "new_corners": list.delegate().corners.len() - corners_before,
+                            "new_marks": list.delegate().marks.len() - marks_before,
                             "offset": f32::from(list.scroll_handle().offset().y),
                         })
                     })
                     .unwrap();
                 frames.push(record);
             }
-            let draws: Vec<f64> = frames.iter().map(|f| f["draw_ms"].as_f64().unwrap()).collect();
+            let draws: Vec<f64> = frames
+                .iter()
+                .map(|f| f["draw_ms"].as_f64().unwrap())
+                .collect();
             let mut sorted = draws.clone();
             sorted.sort_by(f64::total_cmp);
             let summary = json!({
@@ -186,7 +185,7 @@ pub fn run(cx: &mut App) {
                 "median_draw_ms": sorted[sorted.len() / 2],
                 "p95_draw_ms": sorted[sorted.len() * 95 / 100],
                 "max_draw_ms": sorted[sorted.len() - 1],
-                "new_corners": frames.iter().map(|f| f["new_corners"].as_u64().unwrap()).sum::<u64>(),
+                "new_marks": frames.iter().map(|f| f["new_marks"].as_u64().unwrap()).sum::<u64>(),
             });
             println!("{summary}");
             records.push(json!({"summary": summary, "frames": frames}));
@@ -221,7 +220,7 @@ struct Phase {
 fn tick(w: &mut Window, cx: &mut App, mut phase: Phase) {
     let (now, cpu, counters) = (Instant::now(), thread_cpu_ms(), instructions_cycles());
     let list = phase.view.read(cx).chats.read(cx);
-    let corners = list.delegate().corners.len();
+    let marks = list.delegate().marks.len();
     let offset = f32::from(list.scroll_handle().offset().y);
     if let Some((at, cpu_at, (instructions, cycles))) = phase.last {
         // Previous tick's wheel, draw, present and anything else on the thread.
@@ -230,7 +229,7 @@ fn tick(w: &mut Window, cx: &mut App, mut phase: Phase) {
             "thread_cpu_ms": cpu - cpu_at,
             "process_minstructions": (counters.0 - instructions) as f64 / 1e6,
             "process_mcycles": (counters.1 - cycles) as f64 / 1e6,
-            "corners": corners,
+            "marks": marks,
             "offset": offset,
             "active": w.is_window_active(),
         }));

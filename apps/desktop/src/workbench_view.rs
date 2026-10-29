@@ -235,7 +235,11 @@ impl LocalViewer {
                     .child(self.chat_filter(cx)))
                 .when(archived,|this|this.child(div().id("archives-active").test_support().px_2().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
             // The sidebar scrolls without a visible scrollbar in any Kit mode.
-            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0().child(List::new(&self.chats).search_placeholder("Find a chat…").scrollbar_visible(false)))
+            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0()
+                // Left/Right collapse and expand mission threads; otherwise the search field keeps them.
+                .on_action(cx.listener(|v,_:&super::SidebarCollapse,w,cx|{if !v.sidebar_arrow(false,w,cx){cx.propagate();}}))
+                .on_action(cx.listener(|v,_:&super::SidebarExpand,w,cx|{if !v.sidebar_arrow(true,w,cx){cx.propagate();}}))
+                .child(List::new(&self.chats).search_placeholder("Find a chat…").scrollbar_visible(false)))
             .child(self.chat_actions.clone())
             // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()

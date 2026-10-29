@@ -103,7 +103,8 @@ pub(crate) struct InboxList {
     rows: Rows,
     selected: Option<IndexPath>,
     loaded: bool,
-    corners: HashMap<String, Entity<crate::dither_view::CornerView>>,
+    /// Each row's still state mark, by chat id.
+    marks: HashMap<String, crate::state_mark::Fade>,
 }
 impl InboxList {
     fn at(&self, ix: IndexPath) -> Option<&Chat> {
@@ -215,19 +216,25 @@ impl ListDelegate for InboxList {
             .unwrap_or("No project");
         let context = format!("{project} · {}", attention.label);
         let tooltip = SharedString::from(format!("{}\n{context}", chat.title));
-        let spec = crate::dither::Spec::row(Some(attention.kind.signal()), false);
-        let corner = self
-            .corners
-            .entry(chat.id.clone())
-            .or_insert_with(|| cx.new(|cx| crate::dither_view::CornerView::new(spec, window, cx)))
-            .clone();
-        corner.update(cx, |v, cx| v.configure(spec, cx));
+        // The same still mark as the sidebar, never a dither corner.
+        let mark = match attention.kind {
+            crate::attention::Kind::Failed | crate::attention::Kind::ScheduledFailure => {
+                crate::state_mark::Mark::Failed
+            }
+            crate::attention::Kind::Question => crate::state_mark::Mark::Question,
+            crate::attention::Kind::Other => crate::state_mark::Mark::NeedsYou,
+            crate::attention::Kind::Ready => crate::state_mark::Mark::Ready,
+        };
+        let (shown, previous, t) =
+            self.marks
+                .entry(chat.id.clone())
+                .or_default()
+                .show(Some(mark), window, cx);
         let owner = self.owner.clone();
         let id = chat.id.clone();
         Some(
             ListItem::new(SharedString::from(format!("inbox-{}", chat.id)))
                 .accessibility_label(SharedString::from(format!("{}, {context}", chat.title)))
-                .hover_fill(false)
                 // Pin pointer activation to the rendered ID, never a live urgency index.
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -248,7 +255,9 @@ impl ListDelegate for InboxList {
                             gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
                                 .build(window, cx)
                         })
-                        .v_flex()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
                         .relative()
                         .overflow_hidden()
                         .rounded(px(crate::appearance::Radius::ROW))
@@ -256,13 +265,17 @@ impl ListDelegate for InboxList {
                         .min_w_0()
                         .px_2()
                         .py_2()
-                        // Keep the existing full corner bounds; reserve a shared
-                        // spacing gutter in the text lane, not a hole in its paint.
-                        .pr(px(Space::SECTION))
-                        .child(crate::dither_view::layer(corner))
                         .child(
-                            ResourceLabel::new(SharedString::from(chat.title))
-                                .detail(SharedString::from(context)),
+                            div().flex_1().min_w_0().child(
+                                ResourceLabel::new(SharedString::from(chat.title))
+                                    .detail(SharedString::from(context)),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("inbox-mark-{}", chat.id)))
+                                .test_support()
+                                .child(crate::state_mark::slot(shown, previous, t, cx)),
                         ),
                 ),
         )
@@ -308,7 +321,7 @@ impl Inbox {
         (
             d.rows.needs.len(),
             d.rows.ready.len(),
-            d.corners.len(),
+            d.marks.len(),
             self.syncs,
         )
     }
@@ -323,7 +336,7 @@ impl Inbox {
                     rows: Rows::default(),
                     selected: None,
                     loaded: false,
-                    corners: HashMap::new(),
+                    marks: HashMap::new(),
                 },
                 window,
                 cx,
@@ -449,7 +462,7 @@ impl Inbox {
                 .chain(&d.rows.ready)
                 .map(|ix| d.all[*ix].id.as_str())
                 .collect();
-            d.corners.retain(|id, _| eligible.contains(id.as_str()));
+            d.marks.retain(|id, _| eligible.contains(id.as_str()));
             let ix = selected.and_then(|id| d.index(&id));
             v.set_selected_index(ix, window, cx);
             if filter_changed {
@@ -563,7 +576,12 @@ mod tests {
                 assert!(
                     title.left() >= row.left() && title.left() - row.left() < px(Space::SIDEBAR)
                 );
-                assert!(title.right() <= row.right() - px(Space::SECTION));
+                // The text lane ends before the trailing state mark.
+                let mark = w.find("inbox-mark-bounded").bounds();
+                assert!(
+                    title.right() <= mark.left() && mark.right() <= row.right(),
+                    "{title:?} {mark:?} {row:?}"
+                );
                 assert_eq!(title.left(), detail.left());
                 assert!(
                     w.within("attention-bounded")

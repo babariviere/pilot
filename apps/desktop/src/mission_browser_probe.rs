@@ -128,7 +128,7 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
             v.state.projects=Arc::new(crate::local_model::projects(&json!([{"id":"project-A","name":"Same project","path":"/synthetic/A"},{"id":"project-B","name":"Same project","path":"/synthetic/B"}])).unwrap());
             v.state.projects_loaded=true;v.state.list_loaded=true;v.state.loaded=true;v.state.status="Synthetic Local fixture".into();
             let mut chats:Vec<_>=["chat-A","chat-B"].iter().map(|id|crate::local_model::chat(&json!({"id":id,"title":"Same chat title","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap()).collect();
-            chats[1].signal=Some(crate::dither::Signal::NeedsYou);
+            chats[1].signal=Some(crate::state_mark::Signal::NeedsYou);
             v.state.chats=Arc::new(chats);
             v.selected=Some("chat-A".into());v.title="Same chat title".into();v.generation=1;v.state.generation=1;
             v.transcript.update(cx,|t,cx|t.replace_readonly(rows.clone(),true,cx));v.editor.update(cx,|e,cx|e.select("chat:chat-A".into(),true,false,w,cx));
@@ -956,6 +956,10 @@ fn run_chat_mission_jump(cx: &mut HeadlessAppContext) {
                             e.select("chat:chat-A".into(), true, false, w, cx)
                         });
                         v.rebuild_nav(w, cx);
+                        // Mission links live on flat rows (search, Pinned,
+                        // Archived); thread rows drop the caption. Every
+                        // fixture title contains "chat".
+                        v.chats.update(cx, |l, cx| l.set_query("chat", w, cx));
                         v.listen_writes(updates, w, cx);
                         v
                     })

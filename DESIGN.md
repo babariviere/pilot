@@ -46,10 +46,10 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   They explain a change, never decorate it.
 - **Dithered gradients are Pilot's signature.** Prefer ordered (Bayer) dithering with hard square pixels over smooth
   gradients, glows and blurs: the Home sky and the empty Inbox's coast (`DitherScene`, bundled pictures softened
-  and dithered, with the procedural `DitherSky` as fallback) and the sidebar's status corners (`DitherCorner`)
-  set the tone. Use it for
-  atmosphere and state, with a soft palette and quiet motion (a slow ripple, a breath, a dissolve from cell to
-  cell), and keep text readable over it.
+  and dithered, with the procedural `DitherSky` as fallback) set the tone. Dither is atmosphere, with a soft
+  palette and quiet motion, and keeps text readable over it. In Pilot Next it is atmosphere only: rows show state
+  with still marks and words (see State vocabulary), never dither. The Swift app keeps its status corners
+  (`DitherCorner`) unchanged until it retires.
 - **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result with real
   and long content, before calling a UI change done.
 
@@ -124,6 +124,15 @@ to right, like a typing indicator, fainter and half speed while only background 
 Chat motion plays on Core Animation (`LoopingLayerView`), never as per-frame SwiftUI updates, and changes only
 opacity, colour or a transform inside a fixed frame, so it never moves the layout.
 
+Pilot Next draws no row dither. A sidebar or Inbox row shows its state as one still mark in its trailing column,
+with words beside it or on its caption: an open ring for Working (neutral, fainter when only background jobs run),
+an amber dot for Needs you and questions, a red triangle for Failed and a green pull-request glyph for Ready to
+merge. Quiet chats draw nothing. Colour is only amber, red and green; Working stays neutral, and the words and the
+accessible name always carry the state. Marks never loop: a change cross-fades once (180 ms), instantly under
+Reduce Motion, and never moves the row. A small neutral dot after a title means the agent replied since you last
+opened that chat. When you last looked is kept only on this machine (no read-status writes, nothing imported from
+Swift); opening the chat clears the dot, and a collapsed mission rolls up its members' dots.
+
 ## Sidebar
 
 The sidebar answers "what needs me" before "where is it". From the top: Home (with compose), the Inbox (with the
@@ -183,6 +192,26 @@ Chat rows are the exception: their highlight is a selection and keeps the grey `
 
 The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
 as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
+
+### Pilot Next sidebar
+
+Pilot Next keeps the sidebar's job, finding your chat, but not Swift's urgency grouping, because rows that jump
+sections whenever an agent changes state are hard to find again. The Swift sidebar above is unchanged.
+
+- **Sections:** Drafts, Pinned, Chats and, with the Archived filter, Archived (newest archive first). There are no
+  Needs you, Ready to merge or Working groups and no Needs you strip: the Inbox and its badge own attention.
+- **Your order, not the agents'.** Chats are ordered by your own activity. A chat's place comes from its last user
+  message (else its creation) when the app first sees it; afterwards it moves only when you send to it from this
+  app. Agent work, results, automatic notices and state changes never move a row. This order is kept on this
+  machine only.
+- **Mission threads, one level.** A mission's coordinator chat is the parent row, titled with the mission name
+  (Compass and name in the accent) with its state on the right. Its members follow as one-line rows (title, then
+  state word and mark) in creation order. Quiet members you have already seen fold into "+N finished". The
+  chevron or Left collapses a thread, and its second line then rolls up its members' marks and new replies; Right
+  expands it, and opening a member expands its thread. A thread whose coordinator chat is not listed keeps a
+  parent that opens the mission.
+- **Missions are not sidebar rows.** The sidebar lists chats; missions live in the Missions view, reached by its
+  one sidebar entry. Search results, Pinned, Archived, the Inbox and ⌘K list chats flat with their mission caption.
 
 ## Consistency
 

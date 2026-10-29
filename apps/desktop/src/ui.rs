@@ -124,7 +124,7 @@ pub fn selected_fill(cx: &App) -> Hsla {
 /// Shared task status ladder (DESIGN.md): label, pie fill and row colour.
 /// Empty to do, one-third in progress, two-thirds in review, full done.
 pub fn task_status(status: &str, cx: &App) -> (SharedString, f32, Hsla) {
-    use crate::dither::Signal;
+    use crate::state_mark::Signal;
     let dark = cx.theme().is_dark();
     let tint = |s: Signal| -> Hsla { gpui_kit::rgb(s.rgb(dark)).into() };
     let muted = cx.theme().muted_foreground;

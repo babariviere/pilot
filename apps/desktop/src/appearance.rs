@@ -1,5 +1,4 @@
 //! Portable chrome tokens from Swift Theme.swift / DitherCorner.swift.
-//! Bounded app-owned dither motion is implemented in dither_view, without shaders.
 //! Pilot's identity comes from its icon: the dithered sky supplies the one accent,
 //! and the embedded Inter / JetBrains Mono faces carry interface and code text.
 use crate::settings_state::AppearancePreference;
@@ -387,7 +386,6 @@ fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
 }
 pub fn init_appearance(cx: &mut App) {
     cx.set_global(CommittedAppearance::default());
-    crate::dither_view::prepare(cx);
     // Before any layout: an unregistered family would fall back to another face.
     let fonts = cx
         .text_system()

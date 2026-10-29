@@ -1,33 +1,27 @@
-//! Chat-list order and status groups, matching the Swift app.
+//! Chat-list order and sidebar sections.
 //!
 //! Swift sources: `PilotCore/SessionListOrdering.swift` (`listPrecedes`,
-//! `listActivityAt`, `hasTerminalPullRequest`), `PilotCore/SessionSignal.swift`
-//! (`SidebarUrgency.groups`) and `Pilot/Sidebar.swift`.
+//! `listActivityAt`, `hasTerminalPullRequest`).
 //!
-//! Order (one comparator for every summary list): pinned first, then chats
-//! whose PRs have not all settled, then newest list activity, newest
-//! `createdAt`, and finally ascending id, so equal or missing timestamps stay
-//! deterministic. List activity is `updatedAt` while working; otherwise the
-//! later of `lastUserMessageAt` and the visible `outcomeAt`, falling back to
-//! `updatedAt`. Metadata updates (parking, PR polling, model changes) do not
-//! move a settled chat. Missing `createdAt` reads as 0 (oldest). Nothing here
-//! writes a timestamp.
+//! List order (Home, Inbox and Jump): pinned first, then chats whose PRs have
+//! not all settled, then newest list activity, newest `createdAt`, and finally
+//! ascending id, so equal or missing timestamps stay deterministic. List
+//! activity is `updatedAt` while working; otherwise the later of
+//! `lastUserMessageAt` and the visible `outcomeAt`, falling back to
+//! `updatedAt`. Missing `createdAt` reads as 0 (oldest). Nothing here writes a
+//! timestamp.
 //!
-//! Sidebar groups, in order: Pinned, Needs you (failed, then questions, then
-//! other attention), Ready to merge, Working, Recent. Each group keeps list
-//! order. Intentional differences: Pilot Next has no client review marks, so
-//! unread results stay in Recent rather than Needs you (and nothing is held
-//! there while open); local new-chat drafts lead under Drafts; archived chats,
-//! shown only with the Archived filter, follow under Archived, newest
-//! `archivedAt` first as in Swift's archive; retained-history chats stay
-//! visible under Recent instead of being hidden.
-use crate::{dither::Signal, local_model::Chat};
+//! The sidebar does not group by state: its sections are Drafts, Pinned,
+//! Chats (mission threads and standalone chats, in the user's own activity
+//! order, see `sidebar_tree`) and Archived, shown only with the Archived filter.
+//! Pilot Next has no client review marks; Swift's sidebar is unchanged.
+use crate::local_model::Chat;
 use serde_json::Value;
 use std::cmp::Ordering;
 
 /// A finite timestamp in epoch milliseconds with a total order.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Stamp(f64);
+pub(crate) struct Stamp(pub(crate) f64);
 impl PartialEq for Stamp {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
@@ -56,6 +50,12 @@ pub(crate) struct Order {
     pub(crate) activity: Stamp,
     pub(crate) created: Stamp,
     pub(crate) archived: Stamp,
+    /// `lastUserMessageAt`, else `createdAt`. The daemon also stamps automatic
+    /// notices here, so the sidebar only seeds its own order from it.
+    pub(crate) user: Stamp,
+    /// When the agent's latest visible reply or result settled (`outcomeAt` of a
+    /// done, question or failed outcome). Never `updatedAt`.
+    pub(crate) reply: Option<Stamp>,
 }
 
 fn stamp(value: &Value) -> Option<f64> {
@@ -116,6 +116,11 @@ pub(crate) fn read(value: &Value, working: bool) -> Order {
         activity: Stamp(activity),
         created: Stamp(created),
         archived: Stamp(stamp(&value["archivedAt"]).unwrap_or(0.)),
+        user: Stamp(user.unwrap_or(created)),
+        reply: (settled_view && matches!(outcome, Some("done" | "question" | "failed")))
+            .then(|| stamp(&value["outcomeAt"]))
+            .flatten()
+            .map(Stamp),
     }
 }
 
@@ -154,19 +159,13 @@ pub(crate) fn recent(a: &Chat, b: &Chat) -> Ordering {
 pub(crate) enum Section {
     Drafts,
     Pinned,
-    NeedsYou,
-    Ready,
-    Working,
-    Recent,
+    Chats,
     Archived,
 }
-pub(crate) const SECTIONS: [Section; 7] = [
+pub(crate) const SECTIONS: [Section; 4] = [
     Section::Drafts,
     Section::Pinned,
-    Section::NeedsYou,
-    Section::Ready,
-    Section::Working,
-    Section::Recent,
+    Section::Chats,
     Section::Archived,
 ];
 impl Section {
@@ -174,10 +173,7 @@ impl Section {
         match self {
             Self::Drafts => "Drafts",
             Self::Pinned => "Pinned",
-            Self::NeedsYou => "Needs you",
-            Self::Ready => "Ready to merge",
-            Self::Working => "Working",
-            Self::Recent => "Recent",
+            Self::Chats => "Chats",
             Self::Archived => "Archived",
         }
     }
@@ -185,16 +181,9 @@ impl Section {
         match self {
             Self::Drafts => "drafts",
             Self::Pinned => "pinned",
-            Self::NeedsYou => "needs-you",
-            Self::Ready => "ready",
-            Self::Working => "working",
-            Self::Recent => "recent",
+            Self::Chats => "chats",
             Self::Archived => "archived",
         }
-    }
-    /// Swift counts only Needs you and Working in their headers.
-    pub(crate) fn counted(self) -> bool {
-        matches!(self, Self::NeedsYou | Self::Working)
     }
     pub(crate) fn of(chat: &Chat) -> Self {
         if chat.local_draft {
@@ -204,56 +193,19 @@ impl Section {
         } else if chat.order.pinned {
             Self::Pinned
         } else {
-            match chat.signal {
-                Some(Signal::Working) => Self::Working,
-                Some(Signal::Failed | Signal::NeedsYou) => Self::NeedsYou,
-                Some(Signal::Ready) => Self::Ready,
-                None => Self::Recent,
-            }
+            Self::Chats
         }
     }
 }
 
-/// A sidebar row's state words: what the row shows, and the complete state for
-/// its accessible name. The shown words never repeat the row's section heading
-/// ("Working" under Working); quiet chats say nothing.
-pub(crate) fn row_state(chat: &Chat, section: Section) -> (String, String) {
-    let full: Vec<&str> = chat
-        .row_reason()
+/// A row's complete state words, for its caption and accessible name. Quiet
+/// chats say nothing.
+pub(crate) fn row_state(chat: &Chat) -> String {
+    chat.row_reason()
         .into_iter()
         .chain(chat.archived.then_some("Archived"))
-        .collect();
-    let shown: Vec<&str> = full
-        .iter()
-        .copied()
-        .filter(|s| *s != section.title())
-        .collect();
-    (shown.join(" · "), full.join(" · "))
-}
-
-/// Indices of `chats` (already in list order) per section, keeping only `keep`.
-pub(crate) fn sections(chats: &[Chat], keep: impl Fn(&Chat) -> bool) -> [Vec<usize>; 7] {
-    let mut out: [Vec<usize>; 7] = Default::default();
-    for (ix, chat) in chats.iter().enumerate().filter(|(_, c)| keep(c)) {
-        out[Section::of(chat) as usize].push(ix);
-    }
-    // Failed, then questions, then other attention; stable within each.
-    out[Section::NeedsYou as usize].sort_by_key(|ix| {
-        let chat = &chats[*ix];
-        match chat.signal {
-            Some(Signal::Failed) => 0,
-            _ if chat.order.question => 1,
-            _ => 2,
-        }
-    });
-    out[Section::Archived as usize].sort_by(|a, b| {
-        let (a, b) = (&chats[*a], &chats[*b]);
-        b.order
-            .archived
-            .cmp(&a.order.archived)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    out
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 #[cfg(test)]

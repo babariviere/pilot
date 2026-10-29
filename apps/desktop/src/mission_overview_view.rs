@@ -129,7 +129,10 @@ impl Browser {
                         .is_some_and(|a| a.kind != crate::attention::Kind::Ready)
                         || matches!(
                             c.signal,
-                            Some(crate::dither::Signal::NeedsYou | crate::dither::Signal::Failed)
+                            Some(
+                                crate::state_mark::Signal::NeedsYou
+                                    | crate::state_mark::Signal::Failed
+                            )
                         ))
             })
             .collect()

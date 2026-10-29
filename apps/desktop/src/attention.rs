@@ -1,5 +1,5 @@
 //! Public summary evidence only. Not the authoritative Inbox or private review marks.
-use crate::dither::Signal;
+use crate::state_mark::Signal;
 use serde_json::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -14,15 +14,6 @@ pub(crate) enum Kind {
 pub(crate) struct Attention {
     pub(crate) kind: Kind,
     pub(crate) label: String,
-}
-impl Kind {
-    pub(crate) fn signal(self) -> Signal {
-        match self {
-            Self::Failed | Self::ScheduledFailure => Signal::Failed,
-            Self::Question | Self::Other => Signal::NeedsYou,
-            Self::Ready => Signal::Ready,
-        }
-    }
 }
 fn first_line(value: &Value) -> Option<String> {
     let line = value

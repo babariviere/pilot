@@ -72,6 +72,10 @@ pub(crate) enum EditorEvent {
     },
     /// Continue with another model moved this chat's work to a new chat.
     OpenContinued(Box<crate::local_model::Chat>),
+    /// You sent a message to this existing chat (its canonical id).
+    Sent {
+        chat: String,
+    },
 }
 
 pub(crate) struct ChatEditor {
@@ -838,6 +842,11 @@ impl ChatEditor {
                 self.delivered.remove(&key);
                 self.load_input(window, cx);
                 cx.emit(EditorEvent::DraftsChanged);
+                if let Some(chat) = key.strip_prefix("chat:") {
+                    cx.emit(EditorEvent::Sent {
+                        chat: chat.to_owned(),
+                    });
+                }
             }
             if stop {
                 self.thinking = false;
@@ -1224,7 +1233,7 @@ impl Render for ChatEditor {
             .and_then(|id| self.state.book.as_ref().and_then(|b| b.pending.get(id)));
         // A settled empty chat draft disappears on its own. A new-chat slot and an
         // unresolved delivery never retire by themselves, so they can be discarded.
-        // No dither here: list rows carry state, and the working line says the rest.
+        // No state decoration here: list rows carry state, and the working line says the rest.
         let footer = div()
             .id("composer-tray")
             .v_flex()
@@ -1247,7 +1256,7 @@ impl Render for ChatEditor {
         let footer = footer.test_support();
         let mut footer = footer;
         // Kit owns the editor's text padding. Keep its opaque card on the tray
-        // without adding a second padded wrapper or outline; dither stays behind text.
+        // without adding a second padded wrapper or outline; nothing paints behind text.
         let input = div()
             .id("composer-input")
             .w_full()

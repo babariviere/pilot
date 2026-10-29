@@ -468,6 +468,11 @@ impl ChatEditor {
                 request,
             })
         }) {
+            if let Some(chat) = key.strip_prefix("chat:") {
+                cx.emit(EditorEvent::Sent {
+                    chat: chat.to_owned(),
+                });
+            }
             self.pending.insert(key, request);
             self.error = None;
         } else {

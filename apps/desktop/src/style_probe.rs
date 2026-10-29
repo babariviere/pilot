@@ -1,7 +1,8 @@
-//! Native production chrome with synthetic content and a test-only visibility
-//! lease. This is not native OS occlusion or visible-window performance evidence.
+//! Native production chrome with synthetic content: still sidebar state marks,
+//! their one-shot cross-fade, mission threads and the composer surfaces. This
+//! is not native OS occlusion or visible-window performance evidence.
 use super::{LocalViewer, PreviewState};
-use crate::{dither::Signal, dither_view, local_model::Chat};
+use crate::{local_model::Chat, state_mark::Signal};
 use gpui_kit::{
     AppContext, Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
@@ -19,15 +20,45 @@ fn pulse(cx: &mut HeadlessAppContext, handle: gpui_kit::AnyWindowHandle, count: 
             .unwrap();
     }
 }
-fn snapshot(
-    view: &gpui_kit::Entity<LocalViewer>,
-    id: &str,
-    cx: &gpui_kit::App,
-) -> crate::dither::Snapshot {
-    view.read(cx).chats.read(cx).delegate().corners[id]
-        .read(cx)
-        .probe(cx)
-        .0
+fn fading(view: &gpui_kit::Entity<LocalViewer>, id: &str, cx: &gpui_kit::App) -> bool {
+    view.read(cx).chats.read(cx).delegate().marks[id].fading()
+}
+
+/// Synthetic rows: every state, a mission thread with a long Unicode member,
+/// and a finished chat whose reply you haven't seen.
+pub(crate) fn rows() -> Vec<Chat> {
+    let mut chats: Vec<Chat> = [
+        ("style-fg", "Working", Some(Signal::Working), false),
+        ("style-bg", "Background jobs", Some(Signal::Working), true),
+        ("style-needs", "Needs you", Some(Signal::NeedsYou), false),
+        ("style-failed", "Failed", Some(Signal::Failed), false),
+        ("style-ready", "Ready to merge", Some(Signal::Ready), false),
+        ("style-idle", "Quiet", None, false),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(ix, (id, title, signal, background_work))| {
+        let mut chat = crate::local_model::chat(
+            &json!({"id":id,"title":title,"state":"idle","createdAt":100 - ix}),
+        )
+        .unwrap();
+        chat.state = title.into();
+        chat.busy = signal == Some(Signal::Working);
+        chat.signal = signal;
+        chat.background_work = background_work;
+        chat
+    })
+    .collect();
+    for value in [
+        json!({"id":"style-coord","title":"Coordinator","missionCoordinator":true,"missionId":"style-mission","state":"working","createdAt":40}),
+        json!({"id":"style-member","title":"Résumé des tâches 👩‍💻 長いタイトルの会話 with a very long member title","missionId":"style-mission","state":"failed","createdAt":41}),
+        json!({"id":"style-member-q","title":"Sidebar rows","missionId":"style-mission","state":"idle","outcome":"question","outcomeAt":5,"createdAt":42}),
+        json!({"id":"style-member-done","title":"Finished member","missionId":"style-mission","state":"idle","createdAt":43}),
+        json!({"id":"style-unread","title":"Replied since you looked","state":"idle","outcome":"done","outcomeAt":10,"createdAt":30}),
+    ] {
+        chats.push(crate::local_model::chat(&value).unwrap());
+    }
+    chats
 }
 
 pub fn run_style_probe(cx: &mut HeadlessAppContext) {
@@ -51,48 +82,24 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     },
                     cx,
                     |window, cx| {
-                        dither_view::probe_visible(true, window, cx);
                         cx.new(|cx| {
                             let mut view =
                                 LocalViewer::preview(PreviewState::Conversation, window, cx);
-                            view.state.chats = Arc::new(
-                                [
-                                    ("style-fg", "Working", Some(Signal::Working), false),
-                                    ("style-bg", "Background jobs", Some(Signal::Working), true),
-                                    ("style-needs", "Needs you", Some(Signal::NeedsYou), false),
-                                    ("style-failed", "Failed", Some(Signal::Failed), false),
-                                    ("style-ready", "Ready to merge", Some(Signal::Ready), false),
-                                    ("style-idle", "Quiet", None, false),
-                                ]
+                            view.state.chats = Arc::new(rows());
+                            view.state.mission_titles = Some(Arc::new(
+                                [(
+                                    "style-mission".to_owned(),
+                                    "GPUI Rewrite — 迁移 🚀 with a long mission name".to_owned(),
+                                )]
                                 .into_iter()
-                                .map(|(id, title, signal, background_work)| Chat {
-                                    mission: Default::default(),
-                                    mission_coordinator: false,
-                                    failure: None,
-                                    pull_requests: Vec::new(),
-                                    context_usage: Default::default(),
-                                    subscription_usage: None,
-                                    id: id.into(),
-                                    title: title.into(),
-                                    state: title.into(),
-                                    archived: false,
-                                    local_draft: false,
-                                    session_path: None,
-                                    writable: false,
-                                    busy: signal == Some(Signal::Working),
-                                    signal,
-                                    background_work,
-                                    order: Default::default(),
-                                    running_jobs: Default::default(),
-                                    cwd: String::new(),
-                                    project_id: None,
-                                    model_configuration: None,
-                                    attention: None,
-                                })
                                 .collect(),
-                            );
+                            ));
+                            view.chats.update(cx, |list, _| {
+                                list.delegate_mut().memory =
+                                    crate::sidebar_memory::Memory::ephemeral(0.)
+                            });
                             view.selected = Some("style-idle".into());
-                            view.title = "Rounded surfaces and status motion".into();
+                            view.title = "Rounded surfaces and still state marks".into();
                             view.editor.update(cx, |v, cx| {
                                 v.select("chat:style-idle".into(), false, false, window, cx)
                             });
@@ -108,38 +115,85 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
             let initial = cx
                 .capture_screenshot(handle)
                 .expect("native renderer required");
-            let (baseline, rects, static_counts) = cx
+            let ids = [
+                "chat-row-style-fg",
+                "chat-row-style-bg",
+                "chat-row-style-needs",
+                "chat-row-style-failed",
+                "chat-row-style-ready",
+                "chat-row-style-coord",
+                "chat-row-style-member",
+            ];
+            let (baseline, rects) = cx
                 .update_window(handle, |_, window, cx| {
                     window.render_frame(cx);
                     let v = view.read(cx);
-                    let list = v.chats.read(cx).delegate();
-                    let rects = [
+                    // Every state draws its still mark; quiet rows draw none.
+                    for id in [
                         "style-fg",
                         "style-bg",
                         "style-needs",
                         "style-failed",
                         "style-ready",
-                    ]
-                    .map(|id| window.find(id).bounds());
-                    let counts = ["style-fg", "style-failed", "style-ready"]
-                        .map(|id| list.corners[id].read(cx).probe(cx).1);
-                    (v.transcript.read(cx).probe_render_count(), rects, counts)
+                    ] {
+                        let mark = window.find(format!("chat-mark-{id}")).bounds();
+                        let title = window
+                            .within(format!("chat-row-{id}"))
+                            .find("sidebar-chat-title")
+                            .bounds();
+                        assert!(
+                            mark.size.width > px(0.) && mark.left() >= title.right(),
+                            "{id}: trailing mark"
+                        );
+                        assert!(
+                            (mark.center().y - title.center().y).abs() < px(1.5),
+                            "{id}: mark sits on the title line"
+                        );
+                    }
+                    // A thread: the coordinator row is titled with the mission, its
+                    // members are one-line rows indented under it.
+                    let parent = window.find("chat-row-style-coord").bounds();
+                    let member = window.find("chat-row-style-member").bounds();
+                    assert!(member.size.height < parent.size.height);
+                    let name = window
+                        .within("chat-row-style-coord")
+                        .find("sidebar-mission-title")
+                        .bounds();
+                    let member_title = window
+                        .within("chat-row-style-member")
+                        .find("sidebar-chat-title")
+                        .bounds();
+                    assert!(
+                        member_title.left() + px(1.) >= name.left() - px(1.),
+                        "member titles align with the mission name"
+                    );
+                    assert!(
+                        window.try_find("chat-row-style-member-done").is_none(),
+                        "finished members fold"
+                    );
+                    assert!(window.try_find("mission-fold-style-mission").is_some());
+                    // The reply dot follows the title on its line.
+                    let dot = window.find("chat-reply-style-unread").bounds();
+                    let title = window
+                        .within("chat-row-style-unread")
+                        .find("sidebar-chat-title")
+                        .bounds();
+                    assert!(
+                        dot.left() >= title.right()
+                            && (dot.center().y - title.center().y).abs() < px(1.5)
+                    );
+                    assert!(window.try_find("chat-reply-style-idle").is_none());
+                    // Long Unicode titles truncate inside the row, never under the state word.
+                    let word_right = window.find("chat-mark-style-member").bounds().left();
+                    assert!(member_title.right() <= word_right);
+                    (
+                        v.transcript.read(cx).probe_render_count(),
+                        ids.map(|id| window.find(id).bounds()),
+                    )
                 })
                 .unwrap();
-            let mut trace = Vec::new();
-            for frame in 0..12 {
-                cx.advance_clock(Duration::from_millis(84));
-                cx.run_until_parked();
-                trace.push(cx.update_window(handle,|_,window,cx|{
-    window.draw(cx).clear(cx);let v=view.read(cx);let list=v.chats.read(cx).delegate();
-    let snapshot=list.corners["style-bg"].read(cx).probe(cx).0;
-    let (ticks,members,running)=dither_view::probe_clock(window,cx);
-    assert_eq!(v.transcript.read(cx).probe_render_count(),baseline,"dither must not re-render the cached transcript");
-    for (id,count) in ["style-fg","style-failed","style-ready"].into_iter().zip(static_counts) {assert_eq!(list.corners[id].read(cx).probe(cx).1,count,"settled corners must not be notified");}
-    assert!(!snapshot.ticking && members==0 && !running,"settled corners hold still without a clock");
-    json!({"frame":frame,"ticks":ticks,"members":members,"running":running,"root_renders":v.render_count,"transcript_renders":v.transcript.read(cx).probe_render_count()})
-   }).unwrap());
-            }
+            // Marks hold still: nothing loops, nothing redraws the cached transcript.
+            pulse(cx, handle, 12, 84);
             let after = cx.capture_screenshot(handle).unwrap();
             let scale = initial.width() as f32 / width;
             let mut changes = Vec::new();
@@ -156,20 +210,22 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 }
                 changes.push(changed);
             }
-            assert_eq!(changes, [0; 5], "row corners hold still: {changes:?}");
+            assert_eq!(changes, [0; 7], "state marks hold still: {changes:?}");
+            assert_eq!(
+                cx.update(|cx| view.read(cx).transcript.read(cx).probe_render_count()),
+                baseline,
+                "still marks must not re-render the cached transcript"
+            );
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"samples":trace,"changed_pixels":changes,"native_production_root":true})
+                json!({"width":width,"mode":mode.name(),"changed_pixels":changes,"native_production_root":true})
             );
             if let Some(dir) = &captures {
                 initial
-                    .save(dir.join(format!("{}-{}-start.png", width as u32, mode.name())))
-                    .unwrap();
-                after
-                    .save(dir.join(format!("{}-{}-loop.png", width as u32, mode.name())))
+                    .save(dir.join(format!("{}-{}-sidebar.png", width as u32, mode.name())))
                     .unwrap();
             }
-            // Geometry and hover: the decoration must not move/resize its host.
+            // Geometry: the composer keeps its surfaces.
             let tray = cx
                 .update_window(handle, |_, window, _| window.find("composer-tray").bounds())
                 .unwrap();
@@ -231,38 +287,31 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 editor_pixel, tray_pixel,
                 "compact spacing must not flatten editor/tray contrast"
             );
-            println!(
-                "{}",
-                json!({"composer_width":width,"mode":mode.name(),"tray_height":f32::from(tray.size.height),"input_height":f32::from(input.size.height),"editor_rgba":editor_pixel,"tray_rgba":tray_pixel,"send_stop_one_row":true,"controls_contained":true,"native_production_root":true})
-            );
             let outside = sample(f32::from(tray.left()) + 0.5, f32::from(tray.top()) + 0.5);
             let top = sample(f32::from(tray.left()) + 24., f32::from(tray.top()) + 2.);
             assert_ne!(
                 outside, top,
                 "the composer tray must actually paint a rounded, inset surface"
             );
-            cx.update_window(handle, |_, window, cx| window.hover("style-fg", cx))
-                .unwrap();
-            cx.run_until_parked();
-            pulse(cx, handle, 3, 50);
-            let hover_mid = cx.update(|cx| snapshot(&view, "style-fg", cx));
-            assert!(hover_mid.recede > 0.5 && hover_mid.recede < 1. && hover_mid.fast);
-            pulse(cx, handle, 3, 50);
-            let hover_end = cx.update(|cx| snapshot(&view, "style-fg", cx));
-            assert_eq!(hover_end.recede, 1.);
-            assert!(!hover_end.ticking && !hover_end.fast);
-            let rect = cx
-                .update_window(handle, |_, window, _| window.find("style-fg").bounds())
-                .unwrap();
-            assert_eq!(rect, rects[0]);
-            let hovered = cx.capture_screenshot(handle).unwrap();
-            let x = ((f32::from(rect.left()) + 1.) * scale) as u32;
-            let y = (f32::from(rect.center().y) * scale) as u32;
-            assert_eq!(
-                initial.get_pixel(x, y),
-                hovered.get_pixel(x, y),
-                "a dither row recedes without adding a hover fill"
+            println!(
+                "{}",
+                json!({"composer_width":width,"mode":mode.name(),"tray_height":f32::from(tray.size.height),"input_height":f32::from(input.size.height),"editor_rgba":editor_pixel,"tray_rgba":tray_pixel,"send_stop_one_row":true,"controls_contained":true,"native_production_root":true})
             );
+
+            // Hover swaps the mark for the row's … menu; the row keeps its size.
+            cx.update_window(handle, |_, window, cx| {
+                window.hover("chat-row-style-fg", cx)
+            })
+            .unwrap();
+            pulse(cx, handle, 2, 50);
+            cx.update_window(handle, |_, window, _| {
+                assert!(
+                    window.try_find("chat-menu-style-fg").is_some(),
+                    "hover builds the row menu"
+                );
+                assert_eq!(window.find("chat-row-style-fg").bounds(), rects[0]);
+            })
+            .unwrap();
             if let Some(dir) = &captures {
                 cx.capture_screenshot(handle)
                     .unwrap()
@@ -271,134 +320,71 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
             }
             cx.update_window(handle, |_, window, cx| window.hover("new-local-chat", cx))
                 .unwrap();
-            pulse(cx, handle, 6, 50);
+            pulse(cx, handle, 2, 50);
 
-            // A live signal changes in place and settles; it must leave the clock.
-            cx.update_window(handle, |_, window, cx| {
-                view.update(cx, |v, cx| {
-                    let chats = Arc::make_mut(&mut v.state.chats);
-                    chats[0].signal = Some(Signal::Failed);
-                    chats[0].busy = false;
-                    v.rebuild_nav(window, cx);
+            // A live state change cross-fades once (180 ms) in place, then rests.
+            let change = |cx: &mut HeadlessAppContext, signal: Option<Signal>| {
+                cx.update_window(handle, |_, window, cx| {
+                    view.update(cx, |v, cx| {
+                        let chats = Arc::make_mut(&mut v.state.chats);
+                        chats[0].signal = signal;
+                        chats[0].busy = false;
+                        v.rebuild_nav(window, cx);
+                    });
+                    window.draw(cx).clear(cx);
                 })
-            })
-            .unwrap();
-            cx.run_until_parked();
-            cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
                 .unwrap();
-            let changed = cx.update(|cx| snapshot(&view, "style-fg", cx));
-            assert!(changed.mix < 1. && changed.fast);
-            pulse(cx, handle, 6, 50);
-            let dissolve_mid = cx.update(|cx| snapshot(&view, "style-fg", cx));
-            assert!((dissolve_mid.mix - 0.5).abs() < 0.02);
-            pulse(cx, handle, 6, 50);
-            let settled = cx.update(|cx| snapshot(&view, "style-fg", cx));
-            assert_eq!(settled.mix, 1.);
-            assert!(!settled.ticking);
-            // A deadline may have one already-scheduled final clock packet.
-            pulse(cx, handle, 1, 34);
-            let (_, members, _) = cx
-                .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                .unwrap();
-            assert_eq!(members, 0, "a settled change leaves the clock idle");
-
-            // Filtered/unmounted corners retain models but lose their paint leases.
-            cx.update_window(handle, |_, _, cx| {
-                let chats = view.read(cx).chats.clone();
-                chats.update(cx, |list, cx| {
-                    let d = list.delegate_mut();
-                    d.query = "quiet".into();
-                    d.filter();
-                    cx.notify();
-                });
-            })
-            .unwrap();
-            pulse(cx, handle, 3, 84);
-            let offscreen = cx
-                .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                .unwrap();
-            assert_eq!((offscreen.1, offscreen.2), (0, false));
-            pulse(cx, handle, 12, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                    .unwrap(),
-                offscreen,
-                "unmounted retained corners cannot keep ticking"
+            };
+            change(cx, Some(Signal::Failed));
+            assert!(cx.update(|cx| fading(
+                &view,
+                "chat-row-style-fg".trim_start_matches("chat-row-"),
+                cx
+            )));
+            pulse(cx, handle, 1, 90);
+            assert!(
+                cx.update(|cx| fading(&view, "style-fg", cx)),
+                "still fading halfway"
             );
-            cx.update_window(handle, |_, _, cx| {
-                let chats = view.read(cx).chats.clone();
-                chats.update(cx, |list, cx| {
-                    let d = list.delegate_mut();
-                    d.query.clear();
-                    d.filter();
-                    cx.notify();
-                });
+            pulse(cx, handle, 2, 60);
+            assert!(
+                !cx.update(|cx| fading(&view, "style-fg", cx)),
+                "settled after 180 ms"
+            );
+            let settled = cx.capture_screenshot(handle).unwrap();
+            pulse(cx, handle, 6, 84);
+            let rested = cx.capture_screenshot(handle).unwrap();
+            let row = rects[0];
+            let mut moved = 0;
+            for y in (f32::from(row.top()) * scale) as u32..(f32::from(row.bottom()) * scale) as u32
+            {
+                for x in
+                    (f32::from(row.left()) * scale) as u32..(f32::from(row.right()) * scale) as u32
+                {
+                    moved += usize::from(settled.get_pixel(x, y) != rested.get_pixel(x, y));
+                }
+            }
+            assert_eq!(moved, 0, "a settled change holds still");
+            cx.update_window(handle, |_, window, _| {
+                assert_eq!(
+                    window.find("chat-row-style-fg").bounds(),
+                    rects[0],
+                    "state never moves the row"
+                );
             })
             .unwrap();
-            pulse(cx, handle, 1, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
-                    .1)
-                    .unwrap(),
-                0
-            );
 
-            // Reduce Motion is still, including immediate hover recession.
+            // Reduce Motion: a change is instant.
             cx.update(|cx| cx.set_reduce_motion(true));
-            pulse(cx, handle, 2, 84);
-            let reduced = cx
-                .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                .unwrap();
-            assert_eq!((reduced.1, reduced.2), (0, false));
-            cx.update_window(handle, |_, window, cx| window.hover("style-bg", cx))
-                .unwrap();
-            cx.run_until_parked();
-            let still = cx.update(|cx| snapshot(&view, "style-bg", cx));
-            assert_eq!((still.recede, still.ticking), (1., false));
-            pulse(cx, handle, 12, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                    .unwrap(),
-                reduced
+            change(cx, Some(Signal::Ready));
+            assert!(
+                !cx.update(|cx| fading(&view, "style-fg", cx)),
+                "reduced motion swaps at once"
             );
             cx.update(|cx| cx.set_reduce_motion(false));
-            pulse(cx, handle, 1, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
-                    .1)
-                    .unwrap(),
-                0
-            );
-
-            // Test-only visibility override; same cancellation path as the native observer.
-            cx.update_window(handle, |_, window, cx| {
-                dither_view::probe_visible(false, window, cx)
-            })
-            .unwrap();
-            let hidden = cx
-                .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                .unwrap();
-            pulse(cx, handle, 12, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-                    .unwrap(),
-                hidden
-            );
-            assert_eq!((hidden.1, hidden.2), (0, false));
-            cx.update_window(handle, |_, window, cx| {
-                dither_view::probe_visible(true, window, cx)
-            })
-            .unwrap();
-            pulse(cx, handle, 1, 84);
-            assert_eq!(
-                cx.update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx)
-                    .1)
-                    .unwrap(),
-                0
-            );
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"lifecycle":"hover300-dissolve600-offscreen-reduced-motion-hidden-resume","hover_mid":hover_mid.recede,"mix_mid":dissolve_mid.mix,"offscreen_clock":offscreen,"hidden_clock":hidden,"native_production_root":true,"visibility_simulated_for_headless":true})
+                json!({"width":width,"mode":mode.name(),"lifecycle":"still-crossfade180-rest-reduced-motion","native_production_root":true})
             );
             if width == 1100. && mode == ThemeMode::Dark {
                 for background in [false, true] {
@@ -422,8 +408,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                             )
                         })
                         .unwrap();
-                    // A blank interior strip must stay opaque while the working
-                    // corner changes underneath. Avoid text and rounded edges.
+                    // A blank interior strip stays opaque. Avoid text and rounded edges.
                     let y = ((f32::from(editor.top()) + 2.) * scale) as u32;
                     for x in ((f32::from(editor.left()) + 16.) * scale) as u32
                         ..((f32::from(editor.right()) - 16.) * scale) as u32
@@ -431,13 +416,9 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                         assert_eq!(
                             before.get_pixel(x, y).0,
                             card,
-                            "working dither must not bleed through editor"
+                            "nothing bleeds through the editor"
                         );
-                        assert_eq!(
-                            after.get_pixel(x, y).0,
-                            card,
-                            "editor backing must remain opaque after dither ticks"
-                        );
+                        assert_eq!(after.get_pixel(x, y).0, card, "editor backing stays opaque");
                     }
                     let mut pixels = 0;
                     for y in (f32::from(tray.top()) * scale) as u32
@@ -451,7 +432,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     }
                     assert_eq!(
                         pixels, 0,
-                        "the composer carries no dither; the working line reports live work"
+                        "the composer carries no state decoration; the working line reports live work"
                     );
                     println!(
                         "{}",
@@ -473,6 +454,223 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
         }
     }
     run_large_motion(cx);
+    run_large_thread(cx, captures.as_deref());
+    run_reply_memory(cx);
+}
+
+fn open_rows(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+    chats: Vec<Chat>,
+    memory: Option<std::path::PathBuf>,
+) -> (gpui_kit::AnyWindowHandle, gpui_kit::Entity<LocalViewer>) {
+    let (handle, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(width), px(760.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |window, cx| {
+                cx.new(|cx| {
+                    let mut view = LocalViewer::preview(PreviewState::Conversation, window, cx);
+                    view.state.chats = Arc::new(chats);
+                    view.state.mission_titles = Some(Arc::new(
+                        [(
+                            "big".to_owned(),
+                            "Large mission · 大きなミッション".to_owned(),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ));
+                    view.selected = None;
+                    view.page = crate::app_shell::Page::Home;
+                    if let Some(path) = memory {
+                        view.load_sidebar_memory(path, window, cx);
+                    }
+                    view.rebuild_nav(window, cx);
+                    view
+                })
+            },
+        )
+        .unwrap()
+    });
+    cx.run_until_parked();
+    (handle, view)
+}
+
+/// A mission with 120 members: finished ones fold, the thread collapses and
+/// expands in place, and nothing else moves.
+fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {
+    let states = ["working", "failed", "idle"];
+    let mut chats = vec![crate::local_model::chat(&json!({"id":"big-coord","title":"Coordinator","missionCoordinator":true,"missionId":"big","state":"working","createdAt":500})).unwrap()];
+    for i in 0..120 {
+        let state = if i % 12 == 0 {
+            states[(i / 12) % 2]
+        } else {
+            states[2]
+        };
+        chats.push(crate::local_model::chat(&json!({"id":format!("big-{i:03}"),"title":format!("Member {i} · Überprüfung 検証 {}", "x".repeat(i % 7)),"missionId":"big","state":state,"createdAt":1000 + i})).unwrap());
+    }
+    for i in 0..30 {
+        chats.push(crate::local_model::chat(&json!({"id":format!("solo-{i:02}"),"title":format!("Standalone chat {i}"),"state":"idle","createdAt":400 - i})).unwrap());
+    }
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        cx.update(|cx| Theme::change(mode, None, cx));
+        let (handle, view) = open_rows(cx, 1100., chats.clone(), None);
+        let rows = |cx: &mut HeadlessAppContext| {
+            cx.update(|cx| view.read(cx).chats.read(cx).delegate().tree.rows.len())
+        };
+        // Parent, the 10 active members, "+110 finished", then the standalone chats.
+        assert_eq!(rows(cx), 1 + 10 + 1 + 30);
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.find("chat-row-big-coord").bounds().top()
+                    < window.find("chat-row-big-000").bounds().top()
+            );
+            assert!(
+                window.try_find("chat-row-big-001").is_none(),
+                "finished members fold"
+            );
+        })
+        .unwrap();
+        if let Some(dir) = captures {
+            cx.capture_screenshot(handle)
+                .unwrap()
+                .save(dir.join(format!("1100-{}-thread.png", mode.name())))
+                .unwrap();
+        }
+        let toggle = |cx: &mut HeadlessAppContext, f: &dyn Fn(&mut super::ChatList)| {
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |v, cx| {
+                    v.chats.update(cx, |l, cx| {
+                        f(l.delegate_mut());
+                        cx.notify();
+                    })
+                });
+                window.render_frame(cx);
+            })
+            .unwrap();
+        };
+        toggle(cx, &|l| l.toggle_finished("big"));
+        assert_eq!(rows(cx), 1 + 120 + 1 + 30);
+        toggle(cx, &|l| l.set_collapsed("big", true));
+        assert_eq!(rows(cx), 1 + 30);
+        cx.update_window(handle, |_, window, _| {
+            assert!(window.try_find("mission-rollup-NeedsYou").is_none());
+            assert!(window.try_find("mission-rollup-Failed").is_some());
+            assert!(window.try_find("mission-rollup-Working").is_some());
+        })
+        .unwrap();
+        if let Some(dir) = captures {
+            cx.capture_screenshot(handle)
+                .unwrap()
+                .save(dir.join(format!("1100-{}-thread-collapsed.png", mode.name())))
+                .unwrap();
+        }
+        println!(
+            "{}",
+            json!({"mode":mode.name(),"members":120,"rows_folded":42,"rows_expanded":152,"rows_collapsed":31})
+        );
+        cx.update_window(handle, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+    }
+}
+
+/// "Replied since you looked" survives a restart from the private file only:
+/// opening the chat clears it, and nothing is sent to the daemon.
+fn run_reply_memory(cx: &mut HeadlessAppContext) {
+    cx.update(|cx| Theme::change(ThemeMode::Light, None, cx));
+    let dir = std::env::temp_dir().join(format!("pilot-next-sidebar-{}", uuid::Uuid::new_v4()));
+    let path = dir.join(crate::sidebar_memory::FILE);
+    let later = crate::sidebar_memory::now() + 60_000.;
+    let chats = || {
+        ["seen", "unseen"]
+            .into_iter()
+            .map(|id| {
+                crate::local_model::chat(
+                    &json!({"id":id,"title":id,"state":"idle","outcome":"done","outcomeAt":later}),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let wait_for_file =
+        |cx: &mut HeadlessAppContext, want: &dyn Fn(&crate::sidebar_memory::Saved) -> bool| {
+            for _ in 0..200 {
+                cx.run_until_parked();
+                if crate::sidebar_memory::read(&path).is_some_and(|s| want(&s)) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("the sidebar memory was not written");
+        };
+    let (handle, view) = open_rows(cx, 1100., chats(), Some(path.clone()));
+    wait_for_file(cx, &|_| true);
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("chat-reply-seen").is_some());
+        assert!(window.try_find("chat-reply-unseen").is_some());
+        let label = window
+            .find("seen")
+            .label()
+            .map(|l| l.to_string())
+            .unwrap_or_default();
+        assert!(label.ends_with("new reply"), "{label}");
+        // Opening the chat clears its dot.
+        view.update(cx, |v, cx| {
+            v.page = crate::app_shell::Page::Chat;
+            v.selected = Some("seen".into());
+            v.rebuild_nav(window, cx);
+        });
+        window.render_frame(cx);
+        assert!(window.try_find("chat-reply-seen").is_none());
+        assert!(window.try_find("chat-reply-unseen").is_some());
+    })
+    .unwrap();
+    wait_for_file(cx, &|s| s.seen.contains_key("seen"));
+    cx.update_window(handle, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    // A restart reads the same private file.
+    let (handle, _) = open_rows(cx, 1100., chats(), Some(path.clone()));
+    for _ in 0..200 {
+        cx.run_until_parked();
+        let loaded = cx
+            .update_window(handle, |_, window, cx| {
+                window.render_frame(cx);
+                window.try_find("chat-reply-unseen").is_some()
+            })
+            .unwrap();
+        if loaded {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window.try_find("chat-reply-seen").is_none(),
+            "seen survives a restart"
+        );
+        assert!(window.try_find("chat-reply-unseen").is_some());
+        window.remove_window();
+    })
+    .unwrap();
+    cx.run_until_parked();
+    std::fs::remove_dir_all(&dir).unwrap();
+    println!(
+        "{}",
+        json!({"reply_memory":"private-file-round-trip","daemon_writes":0})
+    );
 }
 
 fn run_large_motion(cx: &mut HeadlessAppContext) {
@@ -481,7 +679,6 @@ fn run_large_motion(cx: &mut HeadlessAppContext) {
         window_bounds:Some(WindowBounds::Windowed(Bounds::new(Default::default(),size(px(1100.),px(760.))))),
         show:false,focus:false,..Default::default()
     },cx,|window,cx|{
-        dither_view::probe_visible(true,window,cx);
         cx.new(|cx|{
             let mut v=LocalViewer::synthetic(window,cx);
             Arc::make_mut(&mut v.state.chats)[0].signal=Some(Signal::Working);
@@ -496,28 +693,15 @@ fn run_large_motion(cx: &mut HeadlessAppContext) {
     cx.update_window(handle, |_, window, cx| window.render_frame(cx))
         .unwrap();
     let baseline = cx.update(|cx| view.read(cx).transcript.read(cx).probe_render_count());
-    let start = cx
-        .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-        .unwrap();
-    assert_eq!(
-        (start.1, start.2),
-        (0, false),
-        "a working row runs no clock"
-    );
     pulse(cx, handle, 12, 84);
     let count = cx.update(|cx| view.read(cx).transcript.read(cx).probe_render_count());
     assert_eq!(
         count, baseline,
         "large retained history must not re-render beside a working row"
     );
-    let end = cx
-        .update_window(handle, |_, window, cx| dither_view::probe_clock(window, cx))
-        .unwrap();
-    assert_eq!(end, start, "no clock ticks while nothing changes");
-    assert_eq!(dither_view::probe_atlas_bytes(), 12_480);
     println!(
         "{}",
-        json!({"large_history_rows":512,"source_bytes":source_bytes,"transcript_renders_during_ticks":count-baseline,"clock_ticks":end.0-start.0,"members":end.1,"atlas_bytes":dither_view::probe_atlas_bytes()})
+        json!({"large_history_rows":512,"source_bytes":source_bytes,"transcript_renders_while_working":count-baseline})
     );
     cx.update_window(handle, |_, window, _| window.remove_window())
         .unwrap();

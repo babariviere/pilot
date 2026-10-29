@@ -423,7 +423,7 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
     assert!(
         title.right() <= menu.left()
             && menu.right() <= right
-            && row.size.height >= px(crate::appearance::Space::ROW)
+            && row.size.height >= px(super::sidebar_list::TWO_LINE_HEIGHT)
     );
     assert!(
         (menu.center().x - compose.center().x).abs() < px(0.5)
@@ -882,6 +882,17 @@ fn sidebar_rows(
     settle(cx, h);
     let name = |suffix: &str| format!("{}-{}-rows{suffix}.png", width as u32, mode.name());
     capture(cx, h, captures, name(""));
+    // The tree (mission threads) is covered by the style probe. These checks
+    // read search results, which list every chat flat with its mission
+    // caption: every fixture title contains "a".
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.chats.update(cx, |l, cx| l.set_query("a", w, cx))
+        });
+    })
+    .unwrap();
+    settle(cx, h);
+    capture(cx, h, captures, name("-search"));
     // Every chat stays listed, including mission chats; the sidebar has no
     // per-mission rows, only the Missions entry.
     cx.update_window(h, |_, w, _| {
@@ -987,8 +998,8 @@ fn sidebar_rows(
         "Mission linked · name unavailable"
     );
     assert!(glyph(cx, "failed", Mission) && glyph(cx, "member", Mission));
-    // The name sits on the metadata line, after project and state and inside
-    // the corner's text lane; the title and menu slot keep their places.
+    // The name sits on the metadata line, after project and state; the title
+    // and menu slot keep their places.
     // `named`: the cached catalog names the linked missions.
     let mission_line = |cx: &mut HeadlessAppContext, named: bool| {
         for id in ["member", "coord", "failed", "stall", "idle2"] {
@@ -1020,12 +1031,6 @@ fn sidebar_rows(
                             && mark.right() <= detail.right() + px(0.5),
                         "{id}: mission on the metadata line"
                     );
-                    if ["failed", "stall"].contains(&id) {
-                        assert!(
-                            mark.right() <= detail.right() - px(28.) + px(0.5),
-                            "{id}: clear of the state corner"
-                        );
-                    }
                     // Linked rows keep their project and state beside the name.
                     let project = ["failed", "stall"].contains(&id).then(|| {
                         let project = scope.find("sidebar-chat-project").bounds();

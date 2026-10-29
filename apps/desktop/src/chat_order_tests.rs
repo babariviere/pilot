@@ -115,46 +115,50 @@ fn settled_pull_requests_follow_swift_terminal_rule() {
 }
 
 #[test]
-fn groups_match_swift_sidebar_urgency() {
-    let pr = json!({"state":"open","number":2,"url":"https://github.com/o/r/pull/2","readiness":{"state":"ready"}});
-    let mut chats = sorted(vec![
-        c(json!({"id":"recent","state":"idle","outcome":"done","outcomeAt":90})),
-        c(json!({"id":"question","state":"idle","outcome":"question","outcomeAt":80})),
-        c(json!({"id":"failed","state":"idle","outcome":"failed","outcomeAt":10})),
-        c(
-            json!({"id":"stalled","state":"working","attentionReason":{"kind":"tool_stall"},"updatedAt":95}),
-        ),
-        c(json!({"id":"working","state":"working","updatedAt":70})),
-        c(json!({"id":"ready","state":"idle","pullRequest":pr,"outcome":"done","outcomeAt":60})),
-        c(json!({"id":"pinned-working","state":"working","pinned":true,"updatedAt":1})),
-        c(json!({"id":"archived-old","state":"idle","archivedAt":5,"updatedAt":99})),
-        c(json!({"id":"archived-new","state":"idle","archivedAt":9,"updatedAt":1})),
-    ]);
-    let mut draft = c(json!({"id":"draft"}));
-    draft.local_draft = true;
-    chats.insert(0, draft);
-    let groups = sections(&chats, |_| true);
-    let names = |section: Section| -> Vec<&str> {
-        groups[section as usize]
-            .iter()
-            .map(|ix| chats[*ix].id.as_str())
-            .collect()
-    };
-    assert_eq!(names(Section::Drafts), ["draft"]);
-    assert_eq!(names(Section::Pinned), ["pinned-working"]);
-    // Failed first, then questions, then other attention, each in list order.
-    assert_eq!(names(Section::NeedsYou), ["failed", "question", "stalled"]);
-    assert_eq!(names(Section::Ready), ["ready"]);
-    assert_eq!(names(Section::Working), ["working"]);
-    assert_eq!(names(Section::Recent), ["recent"]);
-    assert_eq!(names(Section::Archived), ["archived-new", "archived-old"]);
-    // Filters keep grouping and order.
-    let active = sections(&chats, |c| !c.archived && !c.local_draft);
-    assert!(active[Section::Archived as usize].is_empty());
+fn sidebar_sections_ignore_state_and_seed_stamps_never_use_updated_at() {
+    let section = |v: Value| Section::of(&c(v));
+    assert_eq!(section(json!({"id":"w","state":"working"})), Section::Chats);
+    assert_eq!(section(json!({"id":"f","state":"failed"})), Section::Chats);
     assert_eq!(
-        active[Section::NeedsYou as usize],
-        groups[Section::NeedsYou as usize]
+        section(json!({"id":"p","state":"working","pinned":true})),
+        Section::Pinned
     );
+    assert_eq!(
+        section(json!({"id":"a","archivedAt":3,"pinned":true})),
+        Section::Archived
+    );
+    let mut draft = c(json!({"id":"d"}));
+    draft.local_draft = true;
+    assert_eq!(Section::of(&draft), Section::Drafts);
+    // The user stamp falls back to creation, never to updatedAt.
+    let chat = c(json!({"id":"u","createdAt":5,"updatedAt":900}));
+    assert_eq!(chat.order.user, Stamp(5.));
+    let chat = c(json!({"id":"u","createdAt":5,"updatedAt":900,"lastUserMessageAt":40}));
+    assert_eq!(chat.order.user, Stamp(40.));
+    // A reply is a settled done, question or failed outcome; not a stop,
+    // not while working and never updatedAt.
+    let reply = |v: Value| c(v).order.reply;
+    assert_eq!(
+        reply(json!({"id":"r","outcome":"done","outcomeAt":70,"updatedAt":99})),
+        Some(Stamp(70.))
+    );
+    assert_eq!(
+        reply(json!({"id":"r","outcome":"question","outcomeAt":71})),
+        Some(Stamp(71.))
+    );
+    assert_eq!(
+        reply(json!({"id":"r","state":"failed","outcome":"failed","outcomeAt":72})),
+        Some(Stamp(72.))
+    );
+    assert_eq!(
+        reply(json!({"id":"r","outcome":"stopped","outcomeAt":73})),
+        None
+    );
+    assert_eq!(
+        reply(json!({"id":"r","state":"working","outcome":"done","outcomeAt":74})),
+        None
+    );
+    assert_eq!(reply(json!({"id":"r","updatedAt":75})), None);
 }
 
 #[test]
@@ -201,27 +205,17 @@ fn recent_orders_by_activity_and_keeps_list_order_for_ties() {
 }
 
 #[test]
-fn row_state_never_repeats_its_section_heading() {
-    let state = |v: Value| {
-        let chat = c(v);
-        row_state(&chat, Section::of(&chat))
-    };
-    let s = |a: &str, b: &str| (a.to_owned(), b.to_owned());
-    assert_eq!(state(json!({"id":"w","state":"working"})), s("", "Working"));
-    assert_eq!(state(json!({"id":"q","state":"idle"})), s("", ""));
+fn row_state_keeps_the_complete_state_words() {
+    let state = |v: Value| row_state(&c(v));
+    assert_eq!(state(json!({"id":"w","state":"working"})), "Working");
+    assert_eq!(state(json!({"id":"q","state":"idle"})), "");
     assert_eq!(
         state(json!({"id":"a","state":"idle","archivedAt":1})),
-        s("", "Archived")
+        "Archived"
     );
-    // Specific reasons stay visible, including under Needs you.
-    let (shown, full) = state(json!({"id":"f","state":"failed"}));
-    assert!(!shown.is_empty() && shown == full && shown != "Needs you");
-    let (shown, _) =
-        state(json!({"id":"s","state":"working","attentionReason":{"kind":"tool_stall"}}));
-    assert!(!shown.is_empty() && shown != "Working");
-    // Outside its own section, a state still shows (pinned working chat).
+    assert!(!state(json!({"id":"f","state":"failed"})).is_empty());
     assert_eq!(
         state(json!({"id":"p","state":"working","pinned":true})),
-        s("Working", "Working")
+        "Working"
     );
 }

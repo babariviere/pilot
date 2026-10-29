@@ -168,6 +168,12 @@ fn one(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
                         v.editor.update(cx, |e, cx| {
                             e.select("chat:chat-A".into(), true, false, w, cx)
                         });
+                        // Quiet members fold under "+N finished"; show them.
+                        v.chats.update(cx, |l, _| {
+                            let d = l.delegate_mut();
+                            d.show_finished.insert("mission-A".into());
+                            d.show_finished.insert("mission-Z".into());
+                        });
                         v.rebuild_nav(w, cx);
                         v.listen_writes(updates, w, cx);
                         v

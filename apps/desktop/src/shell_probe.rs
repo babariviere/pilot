@@ -166,7 +166,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 let sidebar = window.find("chat-sidebar").bounds();
                 assert!(main.left() >= sidebar.right() && f32::from(main.size.width) > 350.);
                 assert_eq!(view.read(cx).page, Page::Home);
-                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 3);
+                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 3);
                 assert!(window.try_find("home-project-project-a").is_some());
                 assert!(window.try_find("home-project-project-b").is_some());
                 let button = window.find("home-project-project-a").bounds();
@@ -200,7 +200,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(view.read(cx).page, Page::Project("project-a".into()));
                 let v = view.read(cx);
                 let d = v.chats.read(cx).delegate();
-                assert_eq!(d.filtered.len(), 1);
+                assert_eq!(d.tree.rows.len(), 1);
                 assert_eq!(d.at(d.first().unwrap()).unwrap().id, "synthetic");
                 assert!(
                     Arc::ptr_eq(&d.all, &v.state.chats),
@@ -224,7 +224,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             settle(cx, handle);
             cx.update(|cx| {
                 assert!(
-                    view.read(cx).chats.read(cx).delegate().filtered.is_empty(),
+                    view.read(cx).chats.read(cx).delegate().tree.rows.is_empty(),
                     "search must stay within project scope"
                 )
             });
@@ -235,7 +235,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, handle);
             cx.update_window(handle, |_, _, cx| {
-                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 2);
+                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 2);
             })
             .unwrap();
             super::contextual_navigation::probe_menu_choice(
@@ -264,7 +264,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             settle(cx, handle);
             cx.update_window(handle, |_, window, cx| {
                 assert_eq!(view.read(cx).page, Page::Project("project-b".into()));
-                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1);
+                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 1);
                 let d = view.read(cx).chats.read(cx).delegate();
                 assert_eq!(d.at(d.first().unwrap()).unwrap().id, "other");
                 window.click("nav-home", cx);
@@ -332,7 +332,7 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(handle, |_, window, cx| {
                 assert_eq!(view.read(cx).page, Page::Project("project-a".into()));
                 assert_eq!(view.read(cx).project_scope.as_deref(), Some("project-a"));
-                assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1);
+                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 1);
                 window.click("nav-all-chats", cx);
             })
             .unwrap();
@@ -610,7 +610,10 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(handle, |_, window, cx| {
                     assert_eq!(view.read(cx).state.projects.len(), 256);
                     assert_eq!(view.read(cx).state.chats.len(), 1000);
-                    assert_eq!(view.read(cx).chats.read(cx).delegate().filtered.len(), 1001);
+                    assert_eq!(
+                        view.read(cx).chats.read(cx).delegate().tree.rows.len(),
+                        1001
+                    );
                     let title = window
                         .within("home-project-p000")
                         .find("resource-title")
@@ -866,7 +869,7 @@ fn run_project_rows_probe(cx: &mut HeadlessAppContext) {
                         assert_eq!(view.project_scope.as_deref(), Some("ab"));
                         let list = view.chats.read(cx).delegate();
                         assert_eq!(
-                            list.filtered.len(),
+                            list.tree.rows.len(),
                             2,
                             "exact ID membership, not shared cwd or archived chats"
                         );

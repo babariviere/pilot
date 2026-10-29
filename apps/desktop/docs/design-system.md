@@ -23,8 +23,8 @@ This is the existing calm native workbench, not a new visual direction. Reconcil
 | Metadata | `#5f6b7d` / `#a3acba` | active theme muted foreground |
 | Accent | `#2f6fc6` / `#7db9e8` | `appearance::accent`, the app icon's sky |
 
-Pilot's identity comes from its icon: the Bayer-dithered sky (Home sky, row
-state), neutrals tinted toward that sky (a slate night sky in dark) and its sky
+Pilot's identity comes from its icon: the Bayer-dithered sky (the Home sky,
+atmosphere only, never row state), neutrals tinted toward that sky (a slate night sky in dark) and its sky
 colour as the one accent. The accent marks commit actions
 (Kit primary buttons, including Send), links, the caret and text selection, and
 Kit's checked/slider controls follow it. The one role mark it colours is a
@@ -222,16 +222,20 @@ slot (`transition::Pulse`, frame-driven only while painted); they hold still
 under reduced motion and give way to the kind or error glyph when the call ends,
 fails or its run goes stale.
 
-Kit owns existing word fade; `dither_view` owns its bounded per-window activity
-clock/leases, reduced/hidden/offscreen/idle behavior. These components add neither
-durations nor clocks. Keep shared lifecycle checks separate from static catalog
-screenshots. Native phase checks are not visible smoothness/FPS/CPU/RSS proof.
-Dither marks chat-row state (sidebar, Inbox) and the Home sky only. The composer,
+Kit owns existing word fade. These components add neither durations nor clocks.
+Keep shared lifecycle checks separate from static catalog screenshots. Native
+phase checks are not visible smoothness/FPS/CPU/RSS proof.
+
+Dither is atmosphere only: the Home sky (`home_sky`). Rows, the composer,
 buttons, progress bars and cards never carry it; the working line covers live work.
-Row corners hold still (Pilot Next differs from Swift's rippling loops): working
-keeps a still ring texture, the other states a steady density, and the section
-heading and caption name the state. Only a state change (600 ms dissolve) and
-pointer recession (300 ms) move a corner, so the clock runs only then.
+Chat state on sidebar and Inbox rows is a still mark (`state_mark`, which also
+owns `Signal` and its tints for task status, attention, chat order and mission
+overview): ring Working (neutral, half opacity for background jobs), amber dot
+Needs you and questions, red triangle Failed, green pull request Ready. Marks
+never loop. `state_mark::Fade` cross-fades a changed mark once (180 ms) on the
+`transition::Transition` clock, requesting frames only while it runs; a first
+sight never fades and reduced motion swaps at once. The `style` native target
+checks still marks, the settled fade and reduced motion.
 
 Glass: `appearance::enable_glass` (called by the app before its windows open) makes
 the window background blur what is behind it on macOS, KWin and Hyprland, and turns
@@ -284,23 +288,38 @@ column and 28pt targets. Long names truncate without shrinking body text; actual
 owners retain full accessible names. Search, filters, archive, navigation history,
 Usage, Settings and connection/recovery state keep their existing owners.
 
-A chat row is its title, then at most one quiet caption line right under it:
-the project (across all projects) and the state reason, never repeating the
-row's section heading (no "Working" under Working, "Archived" under Archived).
-The accessible name keeps the full state. Every row has the same height. The
-row's … menu overhangs a text-height slot, so it never pushes the caption away,
-and shows only on hover or on the keyboard-selected row while the list has
-keyboard focus; the right-click menu always reaches the same actions. Both
+The sidebar list (`sidebar_list.rs`, rows built by `sidebar_tree.rs`) has
+four sections: Drafts, Pinned, Chats and, with the Archived filter, Archived.
+Chats holds mission threads and standalone chats in the user's own order
+(below). A standalone chat row is its title, then at most one quiet caption line
+right under it (a row with nothing to caption is one line): the project (across all projects) and the state reason, coloured
+only for amber, red or green states. Its still mark sits in the trailing slot on
+the title line. The accessible name keeps the full state, mission and "new
+reply". A thread's parent is the coordinator chat titled with the mission name
+(disclosure chevron, Compass and name in the accent, state word and mark on the
+right); its second line holds the project and, while collapsed, the roll-up of
+member marks. Members are one-line 28pt rows indented to the mission name under a
+hairline guide, then "+N finished" for quiet, seen members. Rows have fixed
+heights per kind through the patched Kit list's `ListDelegate::item_height`
+(48pt two-line, 32pt for a chat or parent without a caption, 28pt member,
+24pt fold). Left/Right
+(`SidebarCollapse`/`SidebarExpand`, bound ahead of the search field's caret
+moves and passed on when they do nothing) collapse, expand or move between a
+member and its parent; Enter opens a row's chat, opens a coordinator-less
+mission or shows/hides finished members. The small neutral "new reply" dot
+follows the title. The row's … menu overhangs the trailing slot, replacing the
+mark (and a one-line row's state word), and shows only on hover or on the
+keyboard-selected row while the list has keyboard focus; the right-click menu
+always reaches the same actions. Both
 menus hold actions only, never a header repeating the row's title. A linked
 chat's menu adds Open mission, the same navigation as its mission link. Only the
 hovered row, the selected row and the row whose menu opened last build the
 button (Tab reaches the selected row's); the rest keep an empty slot, because
 GPUI caches by absolute bounds and every row re-renders while the list scrolls.
-Dither corners paint their cells inside one `paint_layer`, one draw order
-instead of a bounds-tree insert per cell. The open
-row keeps its faint neutral fill. Missions is the sidebar's only mission entry
-(Command-3 opens the same browser); mission and member chats stay ordinary rows.
-A linked chat's metadata line ends with its mission: Map (`AppIcon::Mission`)
+The open row keeps its faint neutral fill. Missions is the sidebar's only mission
+entry (Command-3 opens the same browser); missions are never sidebar rows, only
+their chats are. Flat rows (search, Pinned, Archived) keep the mission caption:
+a linked chat's metadata line ends with its mission: Map (`AppIcon::Mission`)
 for a member, Compass (`AppIcon::Coordinator`) for the summary's coordinator
 role, as in Swift, then the mission name. As in Swift, names come from the
 session socket's `missions` list (sent on connection and after every mission
@@ -309,8 +328,8 @@ that never sends it, the cached mission catalog names it. Only a coordinator's
 Compass and real (current or last known) mission name take the accent; the
 member Map, placeholders, Info, title and project stay neutral. Beside it the project
 keeps a `Space::SECTION` start and its own separator, the name segment keeps
-two of them, and the state shares the rest; the title, menu slot and corner
-lane are unchanged. The tooltip and row accessible name give the
+two of them, and the state shares the rest; the title and menu slot are
+unchanged. The tooltip and row accessible name give the
 full wording. Without a known name it says "Name unavailable"; malformed
 association metadata gets Info and "Mission unavailable", never a guessed link,
 UUID or row fetch. Offline names are labelled last known. Summary and
@@ -333,15 +352,18 @@ The sidebar chat and project lists hide Kit's scrollbar in every scrollbar mode
 (`List::scrollbar_visible(false)`); wheel, keyboard selection and retained offsets
 still scroll them. Other panes keep their scrollbars.
 
-Chat order and groups follow Swift (`src/chat_order.rs` documents the exact
-rules). Every summary list uses Swift's `listPrecedes`: pinned, unsettled PRs,
-newest list activity (`updatedAt` while working, else the later of the last
-user message and the visible result), newest creation, then id. The sidebar
-groups that order into Pinned, Needs you (failed, questions, other attention),
-Ready to merge, Working and Recent, with Swift's caption headers and counts on
-Needs you and Working. Next has no review marks, so unread results stay in
-Recent; drafts lead under Drafts and the Archived filter adds Archived last.
-Selection follows the chat id when rows move.
+Home, Inbox and Jump keep Swift's `listPrecedes` (`src/chat_order.rs`):
+pinned, unsettled PRs, newest list activity, newest creation, then id. The
+sidebar does not group by state and never reorders on agent activity. Its order
+lives in `sidebar_memory.rs`, a private per-machine file next to the draft store
+(`sidebar-v1.json`, never sent or imported from Swift): a chat is seeded once
+from `lastUserMessageAt` (else creation), because the daemon also stamps
+automatic notices there, and then moves only when the user sends to it from this
+app. A thread sorts by its coordinator, or by the user's sends to its members.
+Members sort by creation. The same file records the latest reply (`outcomeAt`
+of a done, question or failed result, never `updatedAt`) seen in each chat for
+the "new reply" dot; replies older than the file's first baseline never light
+up. Selection follows the row's key (chat id, `mission:<id>`, `fold:<id>`).
 
 The `workbench` native target measures these columns/hit bounds and glyph paint,
 including long Unicode, empty/loading/unavailable and retained-error states at
