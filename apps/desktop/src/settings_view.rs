@@ -95,9 +95,6 @@ impl SettingsPreferences {
             let location = self.update_location.clone();
             let connection = self.update_connection.clone();
             let updater = cx.new(|cx| crate::updates_view::Updates::new(location, connection, cx));
-            if let Some(daemon) = &self.daemon_upgrade {
-                daemon.update(cx, |daemon, _| daemon.updater_guard = Some(updater.clone()));
-            }
             self.update_events
                 .push(cx.subscribe(&updater, |_, _, event, cx| cx.emit(*event)));
             self.updater = Some(updater);

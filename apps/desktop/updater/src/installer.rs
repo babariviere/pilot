@@ -373,7 +373,8 @@ fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<boo
     let Ok(journal) = read_journal(root) else {
         return Ok(false);
     };
-    if journal.phase != Phase::StartupAcknowledged {
+    let aborted = journal.phase == Phase::Aborted;
+    if journal.phase != Phase::StartupAcknowledged && !aborted {
         return Ok(false);
     }
     let Ok(manifest) = signed_manifest(root, trust) else {
@@ -381,25 +382,31 @@ fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<boo
     };
     // The running app's receipt stays at its original path, including reconnect
     // and UI checkpoint data. Only older completed history leaves active scans.
-    if crate::manifest::Build::parse(&manifest.manifest().build)?
-        >= crate::manifest::Build::parse(&trust.current_build)?
+    if !aborted
+        && crate::manifest::Build::parse(&manifest.manifest().build)?
+            >= crate::manifest::Build::parse(&trust.current_build)?
     {
         return Ok(false);
     }
-    let rollback = rollback_bundle(root, trust);
-    let Ok(old) = fs::symlink_metadata(&rollback) else {
-        return Ok(false);
-    };
-    if !old.is_dir()
-        || old.file_type().is_symlink()
-        || rollback.canonicalize().ok().as_deref() != Some(rollback.as_path())
-        || (old.dev(), old.ino()) != (journal.original_device, journal.original_inode)
-        || verify_archive(
-            &root.join("archive.zip"),
-            &manifest,
-            &Cancellation::default(),
-        )
-        .is_err()
+    if !aborted {
+        let rollback = rollback_bundle(root, trust);
+        let Ok(old) = fs::symlink_metadata(&rollback) else {
+            return Ok(false);
+        };
+        if !old.is_dir()
+            || old.file_type().is_symlink()
+            || rollback.canonicalize().ok().as_deref() != Some(rollback.as_path())
+            || (old.dev(), old.ino()) != (journal.original_device, journal.original_inode)
+        {
+            return Ok(false);
+        }
+    }
+    if verify_archive(
+        &root.join("archive.zip"),
+        &manifest,
+        &Cancellation::default(),
+    )
+    .is_err()
     {
         return Ok(false);
     }
@@ -473,7 +480,10 @@ pub fn transaction_path(root: &Path) -> Result<PathBuf, Error> {
     private_directory(&history)?;
     let archived = history.join(root.file_name().ok_or(Error::Identity)?);
     private_directory(&archived)?;
-    if read_journal(&archived)?.phase != Phase::StartupAcknowledged {
+    if !matches!(
+        read_journal(&archived)?.phase,
+        Phase::StartupAcknowledged | Phase::Aborted
+    ) {
         return Err(Error::RecoveryRequired);
     }
     Ok(archived)
@@ -955,8 +965,69 @@ pub fn discard_uncommitted(target: &Path, trust: &Trust) -> Result<usize, Error>
     Ok(stale.len())
 }
 
-/// Read-only bounded startup inspection. Unknown/corrupt transactions are never
-/// retried, deleted, adopted or treated as successful installation.
+/// Settle only a stopped installer whose exact original target is still installed.
+/// The target lock excludes live helpers; a pending journal or changed inode
+/// stays ambiguous. No install, relaunch, rollback or startup ACK is replayed.
+pub fn reconcile_recovery(
+    target: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+) -> Result<Vec<(PathBuf, Phase)>, Error> {
+    validate_target(target, trust)?;
+    platform.verify(target, trust, &trust.current_build, None)?;
+    let _lock = match lock_target(target) {
+        Ok(lock) => lock,
+        Err(Error::Busy) => return recoveries(target, trust),
+        Err(error) => return Err(error),
+    };
+    for (root, phase) in recoveries(target, trust)? {
+        if phase != Phase::Committed {
+            continue;
+        }
+        let _guard = journal_guard(&root)?;
+        let mut journal = read_journal(&root)?;
+        if journal.phase == Phase::Committed && original_target(&journal, target) {
+            signed_manifest(&root, trust)?;
+            journal.phase = Phase::Aborted;
+            write_journal(&root, &journal)?;
+        }
+    }
+    recoveries(target, trust)
+}
+
+fn original_target(journal: &Journal, target: &Path) -> bool {
+    fs::symlink_metadata(target).is_ok_and(|meta| {
+        meta.is_dir()
+            && !meta.file_type().is_symlink()
+            && (meta.dev(), meta.ino()) == (journal.original_device, journal.original_inode)
+    })
+}
+
+/// Find the one existing post-swap receipt for this exact signed running payload.
+/// Discovery does not acknowledge startup or replay any helper operation.
+pub fn startup_receipt(
+    target: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+) -> Result<Option<PathBuf>, Error> {
+    let mut matching = None;
+    for (root, phase) in recoveries(target, trust)? {
+        if !matches!(phase, Phase::Swapped | Phase::RelaunchRequested) {
+            continue;
+        }
+        let manifest = signed_manifest(&root, trust)?;
+        if manifest.manifest().build != trust.current_build {
+            continue;
+        }
+        platform.verify_candidate(target, trust, manifest.manifest())?;
+        if matching.replace(root).is_some() {
+            return Err(Error::RecoveryRequired);
+        }
+    }
+    Ok(matching)
+}
+
+/// Read-only transaction inspection.
 pub fn recoveries(target: &Path, trust: &Trust) -> Result<Vec<(PathBuf, Phase)>, Error> {
     validate_target(target, trust)?;
     let parent = target.parent().ok_or(Error::Identity)?;
@@ -981,9 +1052,9 @@ pub fn recoveries(target: &Path, trust: &Trust) -> Result<Vec<(PathBuf, Phase)>,
         }
         let root = entry.path();
         validate_root(&root, target)?;
-        let phase = recovery_phase(&root)?;
-        if phase != Phase::StartupAcknowledged {
-            result.push((root, phase));
+        let journal = read_journal(&root)?;
+        if !matches!(journal.phase, Phase::StartupAcknowledged | Phase::Aborted) {
+            result.push((root, journal.phase));
         }
         if result.len() > 2 {
             return Err(Error::RecoveryRequired);
@@ -1123,7 +1194,10 @@ fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
     }
     if archived {
         private_directory(&history)?;
-        if read_journal(root)?.phase != Phase::StartupAcknowledged {
+        if !matches!(
+            read_journal(root)?.phase,
+            Phase::StartupAcknowledged | Phase::Aborted
+        ) {
             return Err(Error::RecoveryRequired);
         }
     }

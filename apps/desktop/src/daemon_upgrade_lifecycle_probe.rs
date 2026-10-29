@@ -22,34 +22,6 @@ fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
 }
-fn acknowledge(
-    cx: &mut HeadlessAppContext,
-    h: gpui_kit::AnyWindowHandle,
-    view: &Entity<LocalViewer>,
-    generation: u64,
-) {
-    cx.update_window(h, |_, w, cx| {
-        view.update(cx, |v, cx| {
-            let draft = v.editor.read(cx).shell_probe().2.unwrap();
-            let mut book = crate::delivery_store::Book::shell_probe();
-            book.drafts.insert("chat:synthetic".into(), draft);
-            v.editor.update(cx, |e, cx| {
-                e.accept(
-                    crate::interaction::WriteState {
-                        book: Some(Arc::new(book)),
-                        checkpoint: Some(generation),
-                        ..Default::default()
-                    },
-                    w,
-                    cx,
-                )
-            });
-            v.advance_daemon_upgrade(w, cx);
-        })
-    })
-    .unwrap();
-    settle(cx, h);
-}
 pub fn run_daemon_upgrade_lifecycle_probe(cx: &mut HeadlessAppContext) {
     let (writer, commands) = Interaction::recording();
     let count = Arc::new(AtomicUsize::new(0));
@@ -130,64 +102,95 @@ pub fn run_daemon_upgrade_lifecycle_probe(cx: &mut HeadlessAppContext) {
             .unwrap()
     });
     let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
-    // Genuine marked text vetoes the request, retaining the text/composition.
+    // No visible draft, but a retained immutable Unknown from an earlier send.
+    // The old full-GUI checkpoint falsely refused this empty composer.
+    let root = std::env::temp_dir().join(format!("daemon-empty-{}", uuid::Uuid::new_v4()));
+    let mut store = crate::delivery_store::Store::open(
+        root.clone(),
+        crate::delivery_store::Book::shell_probe().host.clone(),
+    )
+    .unwrap();
+    store
+        .prepare(
+            "chat:earlier",
+            &crate::delivery_store::Draft {
+                revision: 1,
+                text: "previous synthetic send".into(),
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .unwrap();
+    store.book.drafts.clear();
+    let retained = serde_json::to_vec(&store.book.pending).unwrap();
     cx.update_window(h, |_, w, cx| {
-        input.focus_handle(cx).focus(w, cx);
-        input.update(cx, |i, cx| {
-            i.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+        view.update(cx, |v, cx| {
+            v.editor.update(cx, |e, cx| {
+                e.accept(
+                    crate::interaction::WriteState {
+                        book: Some(Arc::new(store.book.clone())),
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                )
+            });
+            assert!(input.read(cx).value().is_empty());
         });
         daemon.update(cx, |u, cx| u.request_probe(cx));
     })
     .unwrap();
-    settle(cx, h);
-    cx.update_window(h, |_, w, cx| {
-        assert!(!view.read(cx).restart_pending);
-        assert_eq!(
-            daemon.read(cx).notice(),
-            Some("Finish text composition before upgrading. Nothing was discarded.")
+    let end = std::time::Instant::now() + Duration::from_secs(5);
+    while count.load(Ordering::SeqCst) == 0 {
+        assert!(
+            std::time::Instant::now() < end,
+            "zero-draft daemon upgrade must not require GUI checkpoint settlement"
         );
+        settle(cx, h);
+        std::thread::yield_now();
+    }
+    cx.update_window(h, |_, w, cx| {
+        let v = view.read(cx);
+        assert!(!v.restart_pending && !v.settings.read(cx).restart_locked);
+        assert!(v.daemon_upgrade_pending);
+        // UI-only state remains live, even during native preedit and dirty secondary forms.
+        input.focus_handle(cx).focus(w, cx);
+        input.update(cx, |i, cx| {
+            i.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+        });
         assert!(
             input
                 .update(cx, |i, cx| i.marked_text_range(w, cx))
                 .is_some()
         );
-        input.update(cx, |i, cx| {
-            i.replace_text_in_range(None, "retained draft 🐦", w, cx)
-        });
     })
     .unwrap();
-    assert_eq!(count.load(Ordering::SeqCst), 0);
-    // Request freezes ordinary UI, but a missing or stale ACK never starts work.
-    cx.update(|cx| daemon.update(cx, |u, cx| u.request_probe(cx)));
-    settle(cx, h);
-    let generation = cx.update(|cx| {
-        let v = view.read(cx);
-        assert!(v.daemon_upgrade_pending && v.restart_pending);
-        assert!(v.settings.read(cx).restart_locked);
-        v.restart_generation
-    });
-    assert_eq!(count.load(Ordering::SeqCst), 0);
-    acknowledge(cx, h, &view, generation + 1);
-    assert_eq!(
-        count.load(Ordering::SeqCst),
-        0,
-        "stale checkpoint cannot authorize lifecycle"
-    );
-    // Cancel during checkpointing releases fences without any daemon action.
-    cx.update(|cx| daemon.update(cx, |u, cx| u.cancel(cx)));
-    settle(cx, h);
-    cx.update(|cx| assert!(!view.read(cx).restart_pending));
-    cx.update(|cx| daemon.update(cx, |u, cx| u.request_probe(cx)));
-    settle(cx, h);
-    let generation = cx.update(|cx| view.read(cx).restart_generation);
-    acknowledge(cx, h, &view, generation);
-    let end = std::time::Instant::now() + Duration::from_secs(5);
-    while count.load(Ordering::SeqCst) == 0 {
+    send.send(Err(Failure::Busy)).unwrap();
+    while cx.update(|cx| daemon.read(cx).active()) {
         assert!(std::time::Instant::now() < end);
         settle(cx, h);
         std::thread::yield_now();
     }
-    assert_eq!(count.load(Ordering::SeqCst), 1);
+    // A fresh explicit attempt must also admit pre-existing composition and forms.
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.settings.update(cx, |o, _| {
+                o.state
+                    .set_appearance(crate::settings_state::AppearancePreference::Dark);
+            });
+            v.mission_open = true;
+        });
+        daemon.update(cx, |u, cx| u.request_probe(cx));
+    });
+    while count.load(Ordering::SeqCst) < 2 {
+        assert!(
+            std::time::Instant::now() < end,
+            "live composition and secondary forms do not veto daemon replacement"
+        );
+        settle(cx, h);
+        std::thread::yield_now();
+    }
     send.send(Err(Failure::Unknown)).unwrap();
     while cx.update(|cx| daemon.read(cx).active()) {
         assert!(std::time::Instant::now() < end);
@@ -195,24 +198,38 @@ pub fn run_daemon_upgrade_lifecycle_probe(cx: &mut HeadlessAppContext) {
         std::thread::yield_now();
     }
     settle(cx, h);
-    cx.update(|cx| {
+    cx.update_window(h, |_, w, cx| {
         let v = view.read(cx);
         assert!(daemon.read(cx).uncertain());
-        assert!(v.restart_pending && v.daemon_upgrade_pending);
-        assert!(v.settings.read(cx).restart_locked);
-        assert_eq!(input.read(cx).value().as_ref(), "retained draft 🐦");
-    });
+        assert!(!v.restart_pending && !v.daemon_upgrade_pending);
+        assert!(!v.settings.read(cx).restart_locked);
+        assert!(v.settings.read(cx).state.dirty());
+        assert!(v.mission_open);
+        assert_eq!(v.editor.read(cx).retained_deliveries_probe(), retained);
+        assert_eq!(input.read(cx).value().as_ref(), "にほん");
+        assert!(
+            input
+                .update(cx, |i, cx| i.marked_text_range(w, cx))
+                .is_some()
+        );
+        assert!(
+            !daemon.update(cx, |u, cx| u.request_probe(cx)),
+            "no uncertain lifecycle replay"
+        );
+    })
+    .unwrap();
     while let Ok(command) = commands.try_recv() {
         assert!(
-            matches!(command, crate::interaction::WriteCommand::Checkpoint(_)),
-            "no user/agent action may be replayed"
+            !matches!(command, crate::interaction::WriteCommand::Checkpoint(_)),
+            "daemon-only replacement must not checkpoint or replay UI actions"
         );
     }
-    // Synthetic teardown only, not a product recovery action.
-    cx.update(|cx| view.update(cx, |v, cx| v.finish_daemon_checkpoint(cx)));
+    assert_eq!(serde_json::to_vec(&store.book.pending).unwrap(), retained);
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
     eprintln!(
-        "daemon-upgrade-root: IME, missing/stale/exact checkpoint, cancel, Unknown fences; one synthetic worker"
+        "daemon-upgrade-root: empty composer + retained Unknown, live IME, no GUI fences, no replay"
     );
 }

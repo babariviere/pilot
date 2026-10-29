@@ -25,6 +25,7 @@ fn report(shared: &Shared, operation: u64, progress: Option<Progress>) {
 }
 
 enum Job {
+    Inspect,
     Check(u64, Option<Access>, Cancellation),
     Download(u64, Candidate, Option<Access>, Cancellation),
     Local(u64, PathBuf, Cancellation),
@@ -51,7 +52,7 @@ impl Job {
             | Self::Commit(id, ..) => *id,
             Self::Abort(id) => *id,
             Self::HelperStopped(id, _) => *id,
-            Self::Shutdown => 0,
+            Self::Shutdown | Self::Inspect => 0,
         }
     }
 }
@@ -87,13 +88,13 @@ impl Worker {
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
-                let recovery = NativePlatform
-                    .verify(&target, &trust, &trust.current_build, None)
-                    .and_then(|()| {
-                        // A failed cleanup changes nothing; `recoveries` still reports it.
-                        let _ = installer::discard_uncommitted(&target, &trust);
-                        installer::recoveries(&target, &trust)
-                    });
+                let inspect = || {
+                    NativePlatform.verify(&target, &trust, &trust.current_build, None)?;
+                    // Only Ready with no live target owner is eligible for existing cleanup.
+                    let _ = installer::discard_uncommitted(&target, &trust);
+                    installer::reconcile_recovery(&target, &trust, &NativePlatform)
+                };
+                let recovery = inspect();
                 if recovery_send.send(recovery).is_err() {
                     return;
                 }
@@ -114,12 +115,19 @@ impl Worker {
                     if matches!(job, Job::HelperStopped(id, _) if helper_operation != Some(id)) {
                         continue;
                     }
+                    if matches!(job, Job::Inspect) {
+                        let _ = recovery_send.send(inspect());
+                        wake();
+                        continue;
+                    }
                     let operation = job.operation();
                     let result = (|| match job {
                         Job::Check(_, access, cancel) => {
                             prepared = None;
                             helper_operation = None;
                             staged = None;
+                            let _ = recovery_send.try_send(inspect());
+                            wake();
                             let release =
                                 Transport::new()?.discover(&trust, access.as_ref(), &cancel)?;
                             let outcome = match &release {
@@ -214,6 +222,13 @@ impl Worker {
                             installer::validate_target(&target, &trust)?;
                             NativePlatform.verify(&target, &trust, &trust.current_build, None)?;
                             let stage = staged.as_ref().ok_or(Error::Identity)?;
+                            // Downloading can coexist with old uncertainty; activation cannot.
+                            if installer::recoveries(&target, &trust)?
+                                .iter()
+                                .any(|(root, _)| root != &stage.root)
+                            {
+                                return Err(Error::RecoveryRequired);
+                            }
                             if let Some(old) = runtime_guard.take() {
                                 old.cancel();
                             }
@@ -291,7 +306,7 @@ impl Worker {
                             helper_operation = None;
                             Ok(Outcome::HelperStopped(error))
                         }
-                        Job::Shutdown => unreachable!(),
+                        Job::Shutdown | Job::Inspect => unreachable!(),
                     })();
                     let outcome = match result {
                         Ok(outcome) => outcome,
@@ -371,6 +386,10 @@ impl Worker {
     }
     pub fn take_recovery(&mut self) -> Option<Recovery> {
         self.recovery.as_ref()?.try_recv().ok()
+    }
+    /// Refresh existing evidence only. Never arms or replays an install.
+    pub fn inspect_recovery(&mut self) -> Result<(), Error> {
+        self.send(Job::Inspect)
     }
     fn send(&mut self, job: Job) -> Result<(), Error> {
         self.sender

@@ -69,6 +69,7 @@ impl Global for Exits {}
 impl LocalViewer {
     pub(super) fn request_menu_quit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.restart_pending
+            || self.daemon_upgrade_pending
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
             || self.queue_marked(w, cx)
         {

@@ -20,6 +20,89 @@ fn target(temp: &Temp) -> PathBuf {
     target
 }
 
+#[test]
+fn recovery_reconciles_unswapped_commit_without_install_or_replay() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let root = transaction(&target, 1, Phase::Committed);
+    let original = fs::metadata(&target).unwrap();
+    let mut journal = read_journal(&root).unwrap();
+    journal.original_device = original.dev();
+    journal.original_inode = original.ino();
+    write_journal(&root, &journal).unwrap();
+    let archive = fs::read(root.join("archive.zip")).unwrap();
+    let held = lock_target(&target).unwrap();
+    assert_eq!(
+        reconcile_recovery(&target, &trust(), &FixturePlatform).unwrap(),
+        vec![(root.clone(), Phase::Committed)],
+        "a live installer must not be settled"
+    );
+    drop(held);
+    assert!(
+        reconcile_recovery(&target, &trust(), &FixturePlatform)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(recovery_phase(&root).unwrap(), Phase::Aborted);
+    assert_eq!(fs::read(root.join("archive.zip")).unwrap(), archive);
+    assert!(
+        reconcile_recovery(&target, &trust(), &FixturePlatform)
+            .unwrap()
+            .is_empty()
+    );
+    transaction(&target, 100, Phase::StartupAcknowledged);
+    let (fresh, _lock) = new_stage(&target, &trust(), &FixturePlatform).unwrap();
+    assert!(fresh.exists());
+    assert_eq!(
+        recovery_phase(&root).unwrap(),
+        Phase::Aborted,
+        "retained aborted evidence resolves from history"
+    );
+}
+
+#[test]
+fn recovery_never_settles_changed_target_or_pending_journal() {
+    for phase in [Phase::Committed, Phase::Swapped, Phase::RelaunchRequested] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 1, phase);
+        let before = fs::read(root.join("journal.json")).unwrap();
+        assert_eq!(
+            reconcile_recovery(&target, &trust(), &FixturePlatform).unwrap(),
+            vec![(root.clone(), phase)]
+        );
+        assert_eq!(fs::read(root.join("journal.json")).unwrap(), before);
+        fs::write(root.join("journal.pending"), b"unconfirmed write").unwrap();
+        assert!(reconcile_recovery(&target, &trust(), &FixturePlatform).is_err());
+        assert_eq!(fs::read(root.join("journal.json")).unwrap(), before);
+        assert!(root.join("journal.pending").exists());
+    }
+}
+
+#[test]
+fn recovery_startup_discovery_requires_one_exact_signed_running_payload() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let old = transaction(&target, 1, Phase::RelaunchRequested);
+    assert_eq!(
+        startup_receipt(&target, &trust(), &FixturePlatform).unwrap(),
+        None
+    );
+    let current = transaction(&target, 100, Phase::RelaunchRequested);
+    assert_eq!(
+        startup_receipt(&target, &trust(), &FixturePlatform).unwrap(),
+        Some(current.clone())
+    );
+    assert_eq!(
+        recovery_phase(&current).unwrap(),
+        Phase::RelaunchRequested,
+        "discovery never fabricates an ACK"
+    );
+    fs::write(current.join("journal.pending"), b"interrupted ACK").unwrap();
+    assert!(startup_receipt(&target, &trust(), &FixturePlatform).is_err());
+    assert_eq!(recovery_phase(&old).unwrap(), Phase::RelaunchRequested);
+}
+
 fn transaction(target: &Path, id: u8, phase: Phase) -> PathBuf {
     let root = target
         .parent()
@@ -121,7 +204,6 @@ fn current_receipt_and_uncertain_phases_are_never_archived() {
         Phase::Committed,
         Phase::Swapped,
         Phase::RelaunchRequested,
-        Phase::Aborted,
     ] {
         let temp = Temp::new();
         let target = target(&temp);

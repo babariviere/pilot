@@ -230,17 +230,23 @@ The old app is retained after swap. At most two transactions remain in the activ
 install-parent scan. When staging needs room, the updater holds the permanent
 target lock and a transaction journal lock and moves an older acknowledged
 transaction intact into the private sibling `.pilot-next-updater-history/`.
+Known aborted transactions are eligible too, preserving their entire evidence;
+they have no exchanged rollback inode to qualify. An abandoned committed attempt
+can become aborted only while holding the target/journal locks, after verifying
+the signed manifest, native running target and exact original target inode.
+An active helper, changed target or pending journal never qualifies.
 It verifies the signed manifest/archive and exact retained rollback inode first.
 The current build receipt stays at its original path. Pending writes, uncertain
 phases, unreadable evidence and rollback mismatches are never archived. Both
 rename parents are synced before another stage is admitted. Archive collisions
 and failures preserve evidence and refuse staging, never overwrite history.
 
-Journals, authenticated archives, rollback bundles and UI/runtime receipts remain
-byte-for-byte retained. `installer::transaction_path` resolves an original receipt
-into acknowledged history for read-only phase, navigation and guard lookup;
+Authenticated archives, rollback bundles and UI/runtime receipts remain
+byte-for-byte retained; reconciliation only advances a proven unapplied commit's
+journal to aborted. `installer::transaction_path` resolves an original receipt
+into completed/aborted history for read-only phase, navigation and guard lookup;
 archived transactions cannot be reopened for installation. History is not part
-of automatic recovery scanning, since only acknowledged transactions enter it.
+of automatic recovery scanning, since only terminal transactions enter it.
 No history purge or automatic rollback is implemented, so retained disk usage can
 grow. Capacity/archive refusals are definite pre-staging failures, distinct from
 an uncertain COMMIT, swap or startup outcome. Fresh failed preparations with

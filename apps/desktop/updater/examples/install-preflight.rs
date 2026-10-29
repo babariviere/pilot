@@ -57,6 +57,12 @@ fn preflight() -> Result<(), Box<dyn std::error::Error>> {
     installer::MacPlatform
         .verify(&target, &trust, &trust.current_build, None)
         .map_err(|error| format!("Native signature/identity: {error:?}"))?;
+    let rows = installer::recoveries(&target, &trust)
+        .map_err(|error| format!("Recovery inspection: {error:?}"))?;
+    println!("Recovery transactions: {}", rows.len());
+    for (path, phase) in rows {
+        println!("{phase:?}: {}", path.display());
+    }
     println!("Installation filesystem and native identity passed. No app or runtime was started.");
     Ok(())
 }

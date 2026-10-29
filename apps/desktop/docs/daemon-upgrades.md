@@ -99,9 +99,12 @@ this migration's scope. Older helpers do not implement this command.
 
 ## Verified handoff
 
-1. Obtain exact durable editor/outbox/question and Settings checkpoints. Preedit,
-   unresolved deliveries, secondary forms and incomplete visual cleanup veto the
-   action without discarding work. Hold the existing input/admission fence.
+1. Exclude a concurrent GUI restart. The GUI stays alive: its composer, marked
+   text, secondary forms, preferences, visuals and retained Unknown deliveries
+   are not checkpoint prerequisites and remain with their existing owners.
+   Close/Quit waits only while the native handoff is actually running. Mutation
+   admission and in-flight daemon work belong to the pause/reservation below,
+   not an all-chat or GUI-idle check.
 2. Verify and publish this GUI's complete current runtime using the existing
    compiled trust, signature, source and immutable-capsule contract. No downloaded
    key, source checkout, mutable app runtime or PATH-provided Node is substituted.
@@ -128,7 +131,8 @@ this migration's scope. Older helpers do not implement this command.
 
 Pre-shutdown refusal leaves the daemon unchanged. A failed or lost acknowledgement
 after shutdown may have begun is **Unknown**, not a retry instruction. The GUI
-keeps its checkpoint fence. It does not send another stop/start, delete evidence,
+keeps the uncertain upgrade unavailable, but releases unrelated GUI controls.
+It does not send another stop/start, delete evidence,
 restore the old definition, or infer success from an HTTP response alone.
 
 The private `<profile>/.daemon-upgrade.json` journal retains the phase, identities,

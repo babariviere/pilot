@@ -1,6 +1,66 @@
 use super::*;
 
 #[gpui_kit::test]
+fn update_checkpoint_empty_composer_retains_unknown_without_replaying(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let root = std::env::temp_dir().join(format!("empty-update-{}", uuid::Uuid::new_v4()));
+    let mut store = Store::open(root.clone(), book().host.clone()).unwrap();
+    store
+        .prepare(
+            "chat:earlier",
+            &Draft {
+                revision: 1,
+                text: "earlier synthetic send".into(),
+                ..Default::default()
+            },
+            false,
+            false,
+        )
+        .unwrap();
+    store.book.drafts.clear();
+    let retained = serde_json::to_vec(&store.book.pending).unwrap();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.accept(
+                WriteState {
+                    book: Some(std::sync::Arc::new(store.book.clone())),
+                    ..Default::default()
+                },
+                w,
+                cx,
+            );
+            assert!(e.text.read(cx).value().is_empty());
+            assert!(e.state.book.as_ref().unwrap().drafts.is_empty());
+            assert!(
+                !e.state.book.as_ref().unwrap().restart_settled(),
+                "old daemon checkpoint falsely refused a zero-draft app"
+            );
+            assert!(e.begin_gui_update_checkpoint(42, w, cx));
+            assert_eq!(e.update_receipt(w, cx), None);
+            let mut flushed = (**e.state.book.as_ref().unwrap()).clone();
+            flushed.drafts = e.cache.clone();
+            e.state.book = Some(std::sync::Arc::new(flushed));
+            e.state.checkpoint = Some(42);
+            assert_eq!(e.update_receipt(w, cx), Some(42));
+            assert_eq!(
+                serde_json::to_vec(&e.state.book.as_ref().unwrap().pending).unwrap(),
+                retained
+            );
+            e.end_update_checkpoint(cx);
+        })
+    })
+    .unwrap();
+    while let Ok(command) = commands.try_recv() {
+        assert!(
+            matches!(command, WriteCommand::Checkpoint(42)),
+            "checkpoint never checks or executes a retained delivery"
+        );
+    }
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui_kit::test]
 fn update_checkpoint_keeps_draft_and_requires_exact_fresh_ack(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     cx.update_window(handle, |_, window, cx| {

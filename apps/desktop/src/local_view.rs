@@ -918,6 +918,9 @@ impl LocalViewer {
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
             weak.update(cx, |view, cx| {
+                if view.daemon_upgrade_pending {
+                    return false;
+                }
                 if !view
                     .settings
                     .update(cx, |owner, cx| owner.request_close(cx))

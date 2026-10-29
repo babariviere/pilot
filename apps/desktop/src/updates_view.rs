@@ -53,6 +53,7 @@ pub(crate) struct Updates {
     inspected: bool,
     recovery: Option<pilot_desktop_updater::worker::Recovery>,
     recovery_open: bool,
+    rechecking: bool,
     startup_receipt: Option<std::path::PathBuf>,
     #[cfg(feature = "native-probes")]
     fixture_armed: bool,
@@ -601,6 +602,102 @@ impl Updates {
             }
         }
     }
+    /// Production pane, synthetic historical recovery only. Buttons never run a worker.
+    #[cfg(all(feature = "native-probes", target_os = "macos"))]
+    pub(crate) fn probe_recovery(
+        cx: &mut gpui_kit::HeadlessAppContext,
+        captures: Option<&std::path::Path>,
+    ) {
+        use gpui_kit::component::{Theme, ThemeMode};
+        use gpui_kit::{Bounds, WindowBounds, WindowOptions, px, size, test::TestWindowExt};
+        for width in [680., 1100.] {
+            for dark in [false, true] {
+                cx.update(|cx| {
+                    Theme::change(
+                        if dark {
+                            ThemeMode::Dark
+                        } else {
+                            ThemeMode::Light
+                        },
+                        None,
+                        cx,
+                    )
+                });
+                let (h, u) = cx
+                    .update(|cx| {
+                        gpui_kit::open_window(
+                            WindowOptions {
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                    Default::default(),
+                                    size(px(width), px(580.)),
+                                ))),
+                                show: false,
+                                focus: false,
+                                ..Default::default()
+                            },
+                            cx,
+                            |_, cx| {
+                                cx.new(|_| {
+                                    let mut u = Self::blank(None, true);
+                                    u.inspected = true;
+                                    u.probe_state = Some(State::Idle);
+                                    u.recovery = Some(Ok(vec![(
+                                        "/synthetic/retained-update".into(),
+                                        pilot_desktop_updater::installer::Phase::Committed,
+                                    )]));
+                                    u
+                                })
+                            },
+                        )
+                    })
+                    .unwrap();
+                for _ in 0..4 {
+                    cx.run_until_parked();
+                    cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+                }
+                cx.update_window(h, |_, w, cx| {
+                    assert_ne!(w.find("updates-check").disabled(), Some(true));
+                    assert_ne!(w.find("updates-local").disabled(), Some(true));
+                    assert_ne!(w.find("updates-recovery-recheck").disabled(), Some(true));
+                    w.click("updates-recovery-details", cx);
+                })
+                .unwrap();
+                cx.run_until_parked();
+                cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+                if let Some(directory) = captures {
+                    let name = if dark { "dark" } else { "light" };
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(directory.join(format!("{width}-{name}-recovery.png")))
+                        .unwrap();
+                }
+                cx.update(|cx| {
+                    u.update(cx, |u, _| {
+                        u.probe_state = Some(State::ReadyToRestart(Candidate {
+                            version: "synthetic".into(),
+                            short_version: "0.1.1".into(),
+                        }));
+                    })
+                });
+                cx.update_window(h, |_, w, cx| {
+                    w.render_frame(cx);
+                    assert!(
+                        w.try_find("updates-install").is_none(),
+                        "uncertainty forbids activation, not downloads"
+                    );
+                })
+                .unwrap();
+                cx.update(|cx| u.update(cx, |u, _| u.recovery = Some(Ok(vec![]))));
+                cx.update_window(h, |_, w, cx| {
+                    w.render_frame(cx);
+                    assert_ne!(w.find("updates-install").disabled(), Some(true));
+                    w.remove_window();
+                })
+                .unwrap();
+                cx.run_until_parked();
+            }
+        }
+    }
     pub(crate) fn new(
         location: Option<Location>,
         connection: Option<pilot_desktop_updater::app_update::Connection>,
@@ -663,6 +760,7 @@ impl Updates {
             inspected: false,
             recovery: None,
             recovery_open: false,
+            rechecking: false,
             startup_receipt: None,
             startup_canonical: None,
             #[cfg(feature = "native-probes")]
@@ -749,14 +847,14 @@ impl Updates {
     }
     pub(crate) fn acknowledge_startup(
         &mut self,
-        receipt: std::path::PathBuf,
+        receipt: Option<std::path::PathBuf>,
         cx: &mut Context<Self>,
     ) {
         if self.startup_started {
             return;
         }
         self.startup_started = true;
-        self.startup_receipt = Some(receipt.clone());
+        self.startup_receipt = receipt.clone();
         let (sender, receiver) = async_channel::bounded(1);
         let started = std::thread::Builder::new()
             .name("update-startup-recovery".into())
@@ -764,11 +862,21 @@ impl Updates {
                 let result = (|| {
                     let trust = pilot_desktop_updater::helper::compiled_trust()?;
                     let target = pilot_desktop_updater::layout::running_root()?;
+                    let receipt = match receipt {
+                        Some(receipt) => receipt,
+                        None => pilot_desktop_updater::installer::startup_receipt(
+                            &target,
+                            &trust,
+                            &pilot_desktop_updater::installer::NativePlatform,
+                        )?
+                        .ok_or(Error::RecoveryRequired)?,
+                    };
                     pilot_desktop_updater::app_update::ExitGuard::acknowledge_startup(
                         &receipt, &target, &trust,
-                    )
-                })()
-                .map(|_| receipt.canonicalize().ok());
+                    )?;
+                    let canonical = receipt.canonicalize().ok();
+                    Ok((receipt, canonical))
+                })();
                 let _ = sender.send_blocking(result);
             });
         if started.is_err() {
@@ -782,12 +890,13 @@ impl Updates {
                 .await
                 .unwrap_or(Err(Error::RecoveryRequired));
             let _ = owner.update(cx, |owner, cx| {
-                if let Ok(canonical) = &result {
+                if let Ok((receipt, canonical)) = &result {
+                    owner.startup_receipt = Some(receipt.clone());
                     owner.startup_canonical.clone_from(canonical);
                 }
                 owner.startup = Some(result.map(|_| ()));
                 // Once this receipt is acknowledged, its transaction no longer blocks
-                // ordinary checks; other recovery rows still do.
+                // activation; other recovery rows still do.
                 owner.filter_recovery();
                 owner.schedule(cx);
                 cx.emit(Event::Changed);
@@ -803,7 +912,7 @@ impl Updates {
     }
     fn schedule(&mut self, cx: &mut Context<Self>) {
         self.timer = None;
-        if !self.inspected || self.recovery_blocked() {
+        if !self.inspected {
             return;
         }
         let Some(deadline) = self.controller.as_ref().and_then(Updater::next_deadline) else {
@@ -831,7 +940,15 @@ impl Updates {
         if let Some(controller) = &mut self.controller {
             if let Some(recovery) = controller.backend_mut().take_recovery() {
                 self.inspected = true;
+                self.rechecking = false;
                 self.recovery = Some(recovery);
+                if matches!(&self.recovery, Some(Ok(rows)) if rows.is_empty())
+                    && matches!(self.startup, Some(Err(_)))
+                {
+                    // A fresh empty scan removes an obsolete warning, not a success ACK.
+                    self.startup_started = false;
+                    self.startup = None;
+                }
             }
             while let Some(completion) = controller.backend_mut().take_completion() {
                 controller.complete(completion, self.epoch.elapsed());
@@ -852,7 +969,7 @@ impl Updates {
         cx.notify();
     }
     fn check(&mut self, cx: &mut Context<Self>) {
-        if !self.inspected || self.recovery_blocked() {
+        if self.checking() || self.fenced {
             return;
         }
         self.notice = None;
@@ -870,6 +987,60 @@ impl Updates {
             Some(Err(_)) => true,
             None => false,
         }
+    }
+    fn checking(&self) -> bool {
+        !self.inspected
+            || matches!(
+                self.state(),
+                Some(
+                    State::Working { .. }
+                        | State::Cancelling { .. }
+                        | State::ExitPrepared
+                        | State::ExitAuthorized
+                        | State::RecoveryRequired(_)
+                )
+            )
+    }
+    /// Inspection never retries installation. Only an exact existing startup receipt
+    /// can be acknowledged, after the parent has loaded its durable UI state.
+    pub(crate) fn has_startup_recovery(&self) -> bool {
+        use pilot_desktop_updater::installer::Phase;
+        self.recovery.as_ref().is_some_and(|rows| {
+            rows.as_ref().is_ok_and(|rows| {
+                rows.iter()
+                    .any(|(_, phase)| matches!(phase, Phase::Swapped | Phase::RelaunchRequested))
+            })
+        })
+    }
+    fn recheck_recovery(&mut self, cx: &mut Context<Self>) {
+        if self.rechecking || self.fenced || self.checking() {
+            return;
+        }
+        let Some(controller) = &mut self.controller else {
+            return;
+        };
+        match controller.backend_mut().inspect_recovery() {
+            Ok(()) => {
+                self.rechecking = true;
+                // A retry can revalidate a previously failed startup receipt, never a swap.
+                if matches!(self.startup, Some(Err(_))) {
+                    self.startup_started = false;
+                    self.startup = None;
+                }
+            }
+            Err(_) => {
+                self.notice =
+                    Some("The update worker is busy. Recheck when its current step finishes.")
+            }
+        }
+        cx.notify();
+    }
+    fn has_controller(&self) -> bool {
+        #[cfg(feature = "native-probes")]
+        if self.probe_state.is_some() {
+            return true;
+        }
+        self.controller.is_some()
     }
     fn filter_recovery(&mut self) {
         if matches!(self.startup, Some(Ok(())))
@@ -900,9 +1071,8 @@ impl Updates {
     }
     fn can_choose_local(&self) -> bool {
         LOCAL_BUILDS
-            && self.controller.is_some()
+            && self.has_controller()
             && self.inspected
-            && !self.recovery_blocked()
             && !self.fenced
             && !self.choosing
             && self.pausing.is_none()
@@ -941,11 +1111,8 @@ impl Updates {
     /// Stages only from a state with no staged or armed transaction. A refused request
     /// leaves the current candidate and its label unchanged.
     fn stage_local(&mut self, directory: std::path::PathBuf, cx: &mut Context<Self>) {
-        let stageable = self.inspected
-            && !self.recovery_blocked()
-            && !self.fenced
-            && self.pausing.is_none()
-            && can_stage(self.state());
+        let stageable =
+            self.inspected && !self.fenced && self.pausing.is_none() && can_stage(self.state());
         let Some(controller) = self.controller.as_mut().filter(|_| stageable) else {
             self.notice = Some("Another update step is active. The local build was not staged.");
             return;
@@ -997,6 +1164,10 @@ impl Updates {
         self.check(cx);
     }
     pub(crate) fn prepare(&mut self, safety: Safety, cx: &mut Context<Self>) {
+        if self.recovery_blocked() {
+            self.defer("Recheck the previous installation before restarting. Checking and downloading remain available.", cx);
+            return;
+        }
         if self.location.is_none() && !self.external {
             self.defer(
                 "Externally managed daemon. App installation is unavailable in this session.",
@@ -1060,6 +1231,10 @@ impl Updates {
     /// once they are paused (or there is no daemon to pause). Until then the lease is
     /// renewed off the UI thread, and `Event::Restart` is emitted again when ready.
     pub(crate) fn ensure_agents_paused(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.recovery_blocked() {
+            self.defer("Recheck the previous installation before restarting. Checking and downloading remain available.", cx);
+            return false;
+        }
         if self.location.is_none() && !self.external {
             self.defer(
                 "Externally managed daemon. App installation is unavailable in this session.",
@@ -1416,26 +1591,16 @@ impl Render for Updates {
         let state = self.state();
         let waiting_for_agents = self.waiting_for_agents();
         let message = self.status();
-        let checking = !self.inspected
-            || self.recovery_blocked()
-            || matches!(
-                state,
-                Some(
-                    State::Working { .. }
-                        | State::Cancelling { .. }
-                        | State::ExitPrepared
-                        | State::ExitAuthorized
-                        | State::RecoveryRequired(_)
-                )
-            );
+        let checking = self.checking();
         let can_download = matches!(state, Some(State::Available(_)));
-        let can_install = can_install(
-            state,
-            self.location.is_some() || self.external,
-            self.fenced,
-            self.choosing,
-            self.pausing.is_some(),
-        );
+        let can_install = !self.recovery_blocked()
+            && can_install(
+                state,
+                self.location.is_some() || self.external,
+                self.fenced,
+                self.choosing,
+                self.pausing.is_some(),
+            );
         let can_cancel = matches!(
             state,
             Some(
@@ -1480,11 +1645,11 @@ impl Render for Updates {
         }
         actions = actions.child(
             ui::action("updates-check", "Check for updates", Action::Secondary)
-                .disabled(self.controller.is_none() || checking || self.fenced)
+                .disabled(!self.has_controller() || checking || self.fenced)
                 .on_click(cx.listener(|view, _, _, cx| view.check(cx))),
         );
         // Explicit local folder staging is offered only where it is natively qualified.
-        if LOCAL_BUILDS && self.controller.is_some() {
+        if LOCAL_BUILDS && self.has_controller() {
             actions = actions.child(
                 ui::action("updates-local", "Load local build…", Action::Secondary)
                     .disabled(!self.can_choose_local())
@@ -1526,8 +1691,44 @@ impl Render for Updates {
                 view.child(Notice::new("Inspecting previous update receipts…").tone(Tone::Quiet));
         }
         if self.recovery_blocked() {
-            view=view.child(Notice::new("A previous update needs recovery inspection. Nothing was retried, rolled back or deleted.").tone(Tone::Warning))
-                .child(action_row().child(ui::action("updates-recovery-details","Recovery details",Action::Secondary).on_click(cx.listener(|u,_,_,cx|{u.recovery_open = !u.recovery_open;cx.notify();}))));
+            let message = match &self.recovery {
+                Some(Err(Error::Signature | Error::Identity | Error::Version)) => {
+                    "The installed app could not be verified. Check or load an update, then recheck before installation."
+                }
+                Some(Err(_)) => {
+                    "Previous update files could not be inspected. Checking and downloading are available; installation waits for a successful recheck."
+                }
+                _ => {
+                    "A previous installation is unconfirmed. Check or load an update, or recheck the retained installation. Nothing is automatically reinstalled."
+                }
+            };
+            view = view.child(Notice::new(message).tone(Tone::Warning)).child(
+                action_row()
+                    .child(
+                        ui::action(
+                            "updates-recovery-recheck",
+                            if self.rechecking {
+                                "Rechecking…"
+                            } else {
+                                "Recheck installation"
+                            },
+                            Action::Secondary,
+                        )
+                        .disabled(self.rechecking || checking || self.fenced)
+                        .on_click(cx.listener(|u, _, _, cx| u.recheck_recovery(cx))),
+                    )
+                    .child(
+                        ui::action(
+                            "updates-recovery-details",
+                            "Recovery details",
+                            Action::Quiet,
+                        )
+                        .on_click(cx.listener(|u, _, _, cx| {
+                            u.recovery_open = !u.recovery_open;
+                            cx.notify();
+                        })),
+                    ),
+            );
             if self.recovery_open {
                 match &self.recovery {
                     Some(Ok(rows))=>for (ix,(path,phase)) in rows.iter().enumerate(){
@@ -1535,7 +1736,8 @@ impl Render for Updates {
                         view=view.child(ui::text(Text::Caption,format!("{phase:?}. {}",path.display())))
                             .child(action_row().child(ui::action(format!("updates-recovery-copy-{ix}"),"Copy recovery path",Action::Quiet).on_click(move|_,_,cx|cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.to_string_lossy().into_owned())))));
                     },
-                    _=>view=view.child(ui::text(Text::Caption,"Recovery metadata could not be safely read. Preserve retained files and inspect them before attempting another installation.")),
+                    Some(Err(error))=>view=view.child(ui::text(Text::Caption,format!("Inspection failed: {error:?}. Recheck after the current installer finishes or file access is restored. Retained files are unchanged."))),
+                    _=>{},
                 }
             }
         }
@@ -1750,5 +1952,38 @@ mod tests {
         ] {
             assert_eq!(size(bytes), text);
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_usability_tests {
+    use super::*;
+    #[test]
+    fn historical_recovery_does_not_disable_check_or_load() {
+        for recovery in [
+            Ok(vec![(
+                "/synthetic/old".into(),
+                pilot_desktop_updater::installer::Phase::Committed,
+            )]),
+            Err(Error::Signature),
+        ] {
+            let mut u = Updates::blank(None, true);
+            u.inspected = true;
+            u.recovery = Some(recovery);
+            assert!(
+                !u.checking(),
+                "inspection uncertainty blocks activation, not checks"
+            );
+            assert!(u.recovery_blocked(), "uncertain activation stays refused");
+        }
+    }
+    #[cfg(feature = "native-probes")]
+    #[test]
+    fn current_uncertain_commit_still_serializes_all_new_work() {
+        let mut u = Updates::blank(None, true);
+        u.inspected = true;
+        u.probe_state = Some(State::RecoveryRequired(Error::CommitUncertain));
+        assert!(u.checking());
+        assert!(!u.can_choose_local());
     }
 }

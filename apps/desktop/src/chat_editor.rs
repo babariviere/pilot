@@ -458,6 +458,10 @@ impl ChatEditor {
         (self.text.clone(), self.cwd.clone(), self.draft().cloned())
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn retained_deliveries_probe(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.state.book.as_ref().unwrap().pending).unwrap()
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn saved_probe(&self, cx: &gpui_kit::App) -> bool {
         self.error.is_none()
             && self.state.error.is_none()
@@ -871,8 +875,8 @@ impl ChatEditor {
         cx.notify();
         false
     }
-    /// Daemon upgrade keeps the stricter settled-delivery policy.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// Strict checkpoint used by settled-delivery regression fixtures.
+    #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn begin_update_checkpoint(
         &mut self,
         generation: u64,

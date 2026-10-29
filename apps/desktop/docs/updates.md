@@ -116,8 +116,9 @@ authentication for the ordinary loopback API.
    resolving it. Startup never checks or resends it; its identity, payload,
    newer draft and recovery actions survive unchanged. An unsaved volatile
    delivery observation (including a known ACK) still vetoes restart, as do
-   failed writes and missing/stale checkpoint acknowledgements. The daemon-upgrade
-   checkpoint keeps its stricter unresolved-delivery gate.
+   failed writes and missing/stale checkpoint acknowledgements. Daemon-only upgrades
+   do not exit the GUI or use this checkpoint; their actual mutation admissions
+   are fenced by the daemon's pause and jobs/PTY/child-aware reservation instead.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
    same-volume transaction and start the matching helper. On macOS the helper
@@ -170,13 +171,29 @@ launch a window, or touch daemon/profile state. Use configuration from the separ
 verified release. A later retained-runtime compatibility refusal is a separate issue.
 Never overwrite an open app; obtain user close/approval before installing a correction.
 
-Recovery metadata is read-only, with details and copyable retained paths. Failed
-swap leaves the old app; failed relaunch/startup keeps both bundles and reports
+Recovery details include the observed phase/error and copyable retained paths.
+**Check for updates** and **Load local build…** remain available when a previous
+installation is unconfirmed. Download/staging never authorizes activation, and
+the permanent target lock still excludes another active installer. **Recheck
+installation** refreshes the evidence; a normal check also refreshes a stale
+inspection result. Installation waits while ambiguity remains.
+
+An unlocked `Committed` receipt whose exact original target inode is still
+installed can settle as `Aborted`, after native target and signed-manifest
+verification. No swap, relaunch, rollback or delivery is replayed. Pending journal
+writes and changed target identities remain unconfirmed. A matching signed
+post-swap receipt can use the ordinary startup acknowledgement after durable UI
+state loads, even if the receipt argument was lost; ambiguous/mismatched receipts
+never acknowledge another payload. Known aborted and startup-acknowledged receipts
+do not disable checks and are retained intact, with eligible history archived
+when staging needs space.
+
+Failed swap leaves the old app; failed relaunch/startup keeps both bundles and reports
 uncertainty. Transactions and backups are not blindly retried or deleted; the one
 exception is a download never committed (phase `Ready`), which startup removes once
 no session or helper holds the target lock. Two active transactions per install
 parent remain the admission limit. When staging needs room, older acknowledged
-transactions are moved intact into private `.pilot-next-updater-history/` under
+transactions (and verified aborted transactions) are moved intact into private `.pilot-next-updater-history/` under
 the permanent target and journal locks. The signed archive and exact rollback
 inode must still match; current receipts, pending writes and uncertain installs
 stay in place. Original receipt paths resolve into acknowledged history for

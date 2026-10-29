@@ -163,6 +163,15 @@ impl LocalViewer {
         if self.restart_pending {
             return;
         }
+        if self.daemon_upgrade_pending {
+            updater.update(cx, |u, cx| {
+                u.defer(
+                    "The daemon upgrade is running. Wait for its result before restarting the app.",
+                    cx,
+                )
+            });
+            return;
+        }
         if !matches!(
             updater.read(cx).state(),
             Some(State::ReadyToRestart(_) | State::Deferred { .. })
@@ -409,13 +418,14 @@ impl LocalViewer {
         restored
     }
     pub(super) fn acknowledge_update_startup(&mut self, cx: &mut Context<Self>) {
-        let Some(receipt) = crate::bundled_runtime::update_receipt() else {
+        let Some(updater) = self.updater(cx) else {
             return;
         };
-        if self.editor.read(cx).ready()
-            && self.settings.read(cx).state.persisted()
-            && let Some(updater) = self.updater(cx)
-        {
+        let receipt = crate::bundled_runtime::update_receipt();
+        if receipt.is_none() && !updater.read(cx).has_startup_recovery() {
+            return;
+        }
+        if self.editor.read(cx).ready() && self.settings.read(cx).state.persisted() {
             updater.update(cx, |u, cx| u.acknowledge_startup(receipt, cx));
         }
     }

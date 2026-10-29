@@ -1,11 +1,11 @@
-//! Explicit daemon upgrade. The view asks; its parent checkpoints, then begins.
+//! Explicit daemon upgrade. The view asks; its parent serializes, then begins.
 //! Confirmation only emits Request. Nothing here runs the worker without begin().
 use crate::{
     LocalOptions,
     ui::{self, Action, Notice, Text, Tone},
 };
 use gpui_kit::{
-    App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
+    App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, Styled, Task, TestSupportExt, Window,
     component::{ActiveTheme, Disableable, StyledExt},
     div,
@@ -39,7 +39,7 @@ impl Target {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
-    /// The user confirmed. The parent obtains a durable checkpoint, then calls
+    /// The user confirmed. The parent excludes a concurrent app restart, then calls
     /// begin(), or set_notice() to refuse.
     Request,
     /// Any phase or outcome change, including worker completion.
@@ -78,9 +78,6 @@ pub(crate) struct DaemonUpgrade {
     completion: Option<Task<()>>,
     focus: FocusHandle,
     confirm_focus: FocusHandle,
-    /// Sibling Updates owner in the same Settings window. Its token field may hold
-    /// IME marked text that the Local checkpoint cannot see. Set by the parent.
-    pub(crate) updater_guard: Option<Entity<crate::updates_view::Updates>>,
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) started: usize,
 }
@@ -113,7 +110,6 @@ impl DaemonUpgrade {
             completion: None,
             focus: cx.focus_handle(),
             confirm_focus: cx.focus_handle(),
-            updater_guard: None,
             #[cfg(any(test, feature = "native-probes"))]
             started: 0,
         }
@@ -139,8 +135,8 @@ impl DaemonUpgrade {
     pub(crate) fn checkpoint_requested(&self) -> bool {
         self.phase == Phase::Requested
     }
-    /// A worker is running. The parent keeps its fences while this or
-    /// checkpoint_requested() is true, and always while uncertain().
+    /// A worker is running. Only GUI exit/another activation waits for it;
+    /// the editor and secondary forms remain live.
     pub(crate) fn active(&self) -> bool {
         matches!(self.phase, Phase::Running | Phase::Cancelling)
     }
@@ -246,15 +242,6 @@ impl DaemonUpgrade {
         if self.phase != Phase::Confirming || self.uncertain() {
             return;
         }
-        if let Some(guard) = self.updater_guard.clone()
-            && guard.update(cx, |u, cx| u.marked(window, cx))
-        {
-            self.set_notice(
-                "Finish text composition before upgrading. Nothing was discarded.",
-                cx,
-            );
-            return;
-        }
         self.restore_focus(window, cx);
         self.phase = Phase::Requested;
         cx.emit(Event::Request);
@@ -274,11 +261,6 @@ impl DaemonUpgrade {
         cx.emit(Event::Changed);
         cx.notify();
         true
-    }
-    /// The latest parent refusal, so probes can tell which guard refused.
-    #[cfg(feature = "native-probes")]
-    pub(crate) fn notice(&self) -> Option<&'static str> {
-        self.notice
     }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_focus(window, cx);
@@ -343,7 +325,7 @@ impl Render for DaemonUpgrade {
             );
         }
         let status: Option<(&'static str, Option<String>, Tone)> = match self.status() {
-            Status::Requested => Some(("Saving a checkpoint before the upgrade…", None, Tone::Normal)),
+            Status::Requested => Some(("Starting the daemon upgrade…", None, Tone::Normal)),
             Status::Running => Some((
                 "Upgrading the daemon…",
                 Some("Running tools finish first, then the daemon restarts. Cancelling may not stop a shutdown that already started.".into()),
