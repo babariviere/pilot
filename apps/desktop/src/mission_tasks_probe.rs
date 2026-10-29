@@ -446,7 +446,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(p.state.key.as_ref().unwrap().id, "mission-B");
                 assert_eq!(host.read(cx).browser.read(cx).tab, Tab::Overview);
             });
-            phases_journey(cx, h, &host, &pane, &dir, &name);
+            phases_journey(cx, h, &host, &pane, &server, &dir, &name);
             assert!(server.all_gets());
             assert!(
                 server
@@ -531,6 +531,203 @@ fn phased() -> serde_json::Value {
     }).collect::<Vec<_>>());
     v
 }
+/// Filter/fold controls are local presentation. The owned server admits GET only.
+fn visibility_journey(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    host: &Entity<Host>,
+    pane: &Entity<crate::mission_tasks_view::Pane>,
+    server: &Server,
+    dir: &Option<std::path::PathBuf>,
+    name: &str,
+) {
+    let snapshot = cx.update(|cx| pane.read(cx).state.snapshot.clone().unwrap());
+    click(cx, h, "mission-tasks-item-b-0");
+    click(cx, h, "mission-tasks-hide-finished");
+    cx.update(|cx| {
+        let p = pane.read(cx);
+        assert!(
+            p.state.selected.is_none(),
+            "filtered task loses its action target"
+        );
+        assert!(Arc::ptr_eq(p.state.snapshot.as_ref().unwrap(), &snapshot));
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("mission-tasks-item-b-0").is_none());
+        assert!(w.try_find("mission-tasks-item-b-6").is_none());
+        assert!(
+            w.find("mission-tasks-item-b-7").visible(),
+            "unphased access"
+        );
+        assert!(
+            w.try_find("missions-refresh").is_none(),
+            "only one refresh control"
+        );
+    })
+    .unwrap();
+    click(cx, h, "mission-tasks-item-b-4");
+    click(cx, h, "mission-tasks-hide-finished");
+    click(cx, h, "mission-tasks-hide-finished");
+    cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("b-4")));
+    click(cx, h, "mission-tasks-phase-1");
+    cx.update(|cx| assert!(pane.read(cx).state.selected.is_none()));
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.try_find("mission-tasks-item-b-4").is_none());
+        assert_eq!(
+            w.find("mission-tasks-phase-1").label(),
+            Some("Expand Ship it 日本語 👩‍💻")
+        );
+        w.press("enter", cx); // Reopen the same focused disclosure.
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("mission-tasks-item-b-4").visible())
+    })
+    .unwrap();
+    click(cx, h, "mission-tasks-phase-0");
+    // Refresh retains rows, folds, filter and focus without moving the toolbar/list.
+    let (bounds, focus) = cx
+        .update_window(h, |_, w, cx| {
+            for _ in 0..60 {
+                w.press("tab", cx);
+                if w.find("mission-tasks-refresh").focused() == Some(true) {
+                    break;
+                }
+            }
+            assert_eq!(w.find("mission-tasks-refresh").focused(), Some(true));
+            (
+                [
+                    w.find("mission-tasks-refresh").bounds(),
+                    w.find("mission-tasks-list").bounds(),
+                ],
+                w.focused(cx),
+            )
+        })
+        .unwrap();
+    let mut slow = Reply::json(200, phased());
+    slow.delay_ms = 700;
+    server.reply("/api/missions/mission-B", slow);
+    cx.update_window(h, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert!(pane.read(cx).state.busy));
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.try_find("missions-refresh").is_none());
+        assert_eq!(
+            w.find("mission-tasks-refresh").label(),
+            Some("Refreshing tasks")
+        );
+        // Disabled controls leave the tab tree while busy, but retain the
+        // focused handle, which becomes active again on completion.
+        assert_eq!(w.focused(cx), focus);
+        assert_eq!(w.find("mission-tasks-refresh").disabled(), Some(true));
+        assert_eq!(
+            [
+                w.find("mission-tasks-refresh").bounds(),
+                w.find("mission-tasks-list").bounds()
+            ],
+            bounds
+        );
+        assert!(
+            w.find("mission-tasks-item-b-4").visible(),
+            "rows retained during refresh"
+        );
+    })
+    .unwrap();
+    until(cx, h, host, |_, cx| !pane.read(cx).state.busy);
+    cx.update(|cx| {
+        let p = pane.read(cx);
+        assert!(p.state.visibility.hide_finished);
+        assert!(p.state.visibility.collapsed.contains("phase:p-build"));
+        assert_eq!(
+            p.state.snapshot.as_ref().unwrap().progress,
+            snapshot.progress
+        );
+    });
+    cx.update_window(h, |_, w, _| {
+        assert_eq!(
+            [
+                w.find("mission-tasks-refresh").bounds(),
+                w.find("mission-tasks-list").bounds()
+            ],
+            bounds
+        );
+        assert_eq!(w.find("mission-tasks-refresh").focused(), Some(true));
+    })
+    .unwrap();
+    click(cx, h, "mission-tab-overview");
+    click(cx, h, "mission-tab-tasks");
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx)
+                .state
+                .visibility
+                .collapsed
+                .contains("phase:p-build")
+        )
+    });
+    // All hidden is not "No tasks". Headers and a one-click recovery remain.
+    click(cx, h, "mission-tasks-phase-1");
+    click(cx, h, "mission-tasks-phase-2");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("mission-tasks-show-all").visible());
+        for i in 0..3 {
+            assert!(
+                w.find(gpui_kit::SharedString::from(format!(
+                    "mission-tasks-phase-{i}"
+                )))
+                .visible()
+            );
+        }
+    })
+    .unwrap();
+    if let Some(dir) = dir {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(dir.join(format!("{name}-folded-tasks.png")))
+            .unwrap();
+    }
+    click(cx, h, "mission-tasks-show-all");
+    cx.update(|cx| {
+        let p = pane.read(cx);
+        assert!(!p.state.visibility.hide_finished && p.state.visibility.collapsed.is_empty());
+        assert!(p.state.selected.is_none());
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("mission-tasks-item-b-0").visible())
+    })
+    .unwrap();
+    let mut finished = phased();
+    for task in finished["tasks"].as_array_mut().unwrap() {
+        if task["status"] != "dropped" {
+            task["status"] = json!("done");
+        }
+    }
+    server.reply("/api/missions/mission-B", Reply::json(200, finished));
+    click(cx, h, "mission-tasks-refresh");
+    until(cx, h, host, |_, cx| !pane.read(cx).state.busy);
+    click(cx, h, "mission-tasks-hide-finished");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("mission-tasks-show-all").visible());
+        assert_eq!(
+            w.find("mission-tasks-phase-0").label(),
+            Some("Collapse Build")
+        );
+        assert!(w.try_find("mission-tasks-item-b-0").is_none());
+        assert!(w.try_find("mission-tasks-item-b-7").is_none());
+    })
+    .unwrap();
+    click(cx, h, "mission-tasks-phase-0");
+    cx.update_window(h, |_, w, cx| w.press("enter", cx))
+        .unwrap();
+    settle(cx, h);
+    click(cx, h, "mission-tasks-show-all");
+    server.reply("/api/missions/mission-B", Reply::json(200, phased()));
+    click(cx, h, "mission-tasks-refresh");
+    until(cx, h, host, |_, cx| !pane.read(cx).state.busy);
+    assert!(server.all_gets());
+}
 /// Overview phases in order with exact counts, keyboard into Tasks, phase
 /// sections, Up/Down across a section boundary, and drafts kept across tabs.
 fn phases_journey(
@@ -538,6 +735,7 @@ fn phases_journey(
     h: AnyWindowHandle,
     host: &Entity<Host>,
     pane: &Entity<crate::mission_tasks_view::Pane>,
+    server: &Server,
     dir: &Option<std::path::PathBuf>,
     name: &str,
 ) {
@@ -636,9 +834,11 @@ fn phases_journey(
         assert!(w.find("mission-tasks-item-b-6").visible());
     })
     .unwrap();
-    // Up/Down cross the Build/Ship boundary by exact ID.
+    visibility_journey(cx, h, host, pane, server, dir, name);
+    // Up/Down cross the Build/Ship disclosure by exact ID.
     click(cx, h, "mission-tasks-item-b-3");
     cx.update_window(h, |_, w, cx| {
+        w.press("down", cx); // phase disclosure
         w.press("down", cx);
         w.press("enter", cx);
     })

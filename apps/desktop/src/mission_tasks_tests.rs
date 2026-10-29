@@ -176,6 +176,53 @@ fn sections_group_every_task_by_phase_order_and_find_exact_positions() {
     assert!(s.at(0, 0).is_none());
 }
 #[test]
+fn visibility_composes_without_changing_snapshot_order_progress_or_membership() {
+    let key = f::key("mission-A");
+    let mut v = value();
+    v["phases"] = json!([
+        {"id":"a","name":"Same","order":1},
+        {"id":"b","name":"Same","order":2},
+        {"id":"empty","name":"Empty","order":3}
+    ]);
+    v["tasks"] = json!([
+        {"id":"a-open","number":1,"title":"Open","status":"blocked","storedStatus":"todo","order":0,"phaseId":"a"},
+        {"id":"a-done","number":2,"title":"Done","status":"done","order":1,"phaseId":"a"},
+        {"id":"b-dropped","number":3,"title":"Dropped","status":"dropped","order":2,"phaseId":"b"},
+        {"id":"unphased","number":4,"title":"Unphased","status":"in_review","order":3}
+    ]);
+    let s = parse(&key, &v).unwrap();
+    let mut visibility = Visibility::default();
+    assert_eq!(visibility.rows(&s), [vec![0, 1], vec![2], vec![3]]);
+    visibility.hide_finished = true;
+    assert_eq!(visibility.rows(&s), [vec![0], vec![], vec![3]]);
+    visibility.collapsed.insert("phase:a".into());
+    assert_eq!(visibility.rows(&s), [vec![], vec![], vec![3]]);
+    visibility.hide_finished = false;
+    assert_eq!(visibility.rows(&s), [vec![], vec![2], vec![3]]);
+    let progress = s.progress.clone();
+    let mut state = State::default();
+    state.target(Some(key.clone()));
+    state.visibility = visibility;
+    let g = state.begin();
+    state.accept(g, &key, Ok(Arc::new(s)));
+    // A rename and reorder must not transfer a fold to a different phase.
+    v["phases"][0]["name"] = json!("Renamed");
+    v["phases"][0]["order"] = json!(4);
+    let refreshed = parse(&key, &v).unwrap();
+    let g = state.begin();
+    state.accept(g, &key, Ok(Arc::new(refreshed)));
+    let s = state.snapshot.as_ref().unwrap();
+    assert_eq!(s.progress, progress);
+    assert_eq!(s.sections[1].title.as_deref(), Some("Renamed"));
+    assert_eq!(state.visibility.rows(s), [vec![2], vec![], vec![3]]);
+    assert_eq!(s.tasks.len(), 4);
+    assert_eq!(s.position("a-done"), Some((1, 1)));
+    state.visibility.collapsed.clear();
+    assert_eq!(state.visibility.rows(s), [vec![2], vec![0, 1], vec![3]]);
+    state.target(Some(f::key("mission-B")));
+    assert!(state.visibility.collapsed.is_empty() && !state.visibility.hide_finished);
+}
+#[test]
 fn stale_generation_mission_switch_errors_and_removed_selection_are_fenced() {
     let a = f::key("mission-A");
     let b = f::key("mission-B");

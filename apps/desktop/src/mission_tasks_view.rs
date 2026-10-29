@@ -4,7 +4,7 @@
 use crate::{
     LocalOptions,
     mission_browser::Key,
-    mission_tasks::{Snapshot, State},
+    mission_tasks::{Snapshot, State, Visibility},
     mission_tasks_reader::{Reader, Request, Route},
     ui::{self, Action, Notice, ResourceLabel, Space, Text, Tone},
 };
@@ -14,6 +14,7 @@ use gpui_kit::{
     Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     component::{
         ActiveTheme, Disableable, IndexPath, StyledExt, WindowExt,
+        checkbox::Checkbox,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
         menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     },
@@ -33,9 +34,29 @@ pub(crate) struct Rows {
     generation: u64,
     /// The list's highlighted row, which shows its "…" button.
     current: Option<IndexPath>,
+    visibility: Visibility,
+    rows: Vec<Vec<usize>>,
 }
-fn index_path((section, row): (usize, usize)) -> IndexPath {
-    IndexPath::new(row).section(section)
+impl Rows {
+    fn header(&self, section: usize) -> bool {
+        self.snapshot
+            .sections
+            .get(section)
+            .is_some_and(|s| s.title.is_some())
+    }
+    fn at(&self, ix: IndexPath) -> Option<&crate::mission_tasks::Task> {
+        let row = ix.row.checked_sub(usize::from(self.header(ix.section)))?;
+        self.snapshot
+            .tasks
+            .get(*self.rows.get(ix.section)?.get(row)?)
+    }
+    fn position(&self, id: &str) -> Option<IndexPath> {
+        self.rows.iter().enumerate().find_map(|(section, rows)| {
+            rows.iter()
+                .position(|i| self.snapshot.tasks[*i].id == id)
+                .map(|row| IndexPath::new(row + usize::from(self.header(section))).section(section))
+        })
+    }
 }
 impl ListDelegate for Rows {
     type Item = ListItem;
@@ -52,53 +73,89 @@ impl ListDelegate for Rows {
         self.snapshot.sections.len().max(1)
     }
     fn items_count(&self, section: usize, _: &App) -> usize {
-        self.snapshot
-            .sections
-            .get(section)
-            .map_or(0, |s| s.tasks.len())
+        self.rows.get(section).map_or(0, Vec::len) + usize::from(self.header(section))
     }
-    /// "Build  3/8 done", as in Swift's Tasks tab. Every header has one line,
-    /// so Kit's single measured header height holds for all of them.
-    fn render_section_header(
+    fn item_height(&self, ix: IndexPath, _: &App) -> Option<gpui_kit::Pixels> {
+        Some(px(if self.header(ix.section) && ix.row == 0 {
+            32.
+        } else {
+            48.
+        }))
+    }
+    fn render_empty(
         &mut self,
-        section: usize,
         _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<impl IntoElement> {
-        let s = self.snapshot.sections.get(section)?;
-        let title = s.title.clone()?;
-        Some(
-            div()
-                .id(SharedString::from(format!("mission-tasks-phase-{section}")))
-                .test_support()
-                .h_flex()
-                .w_full()
-                .min_w_0()
-                .items_center()
-                .gap_2()
-                .px_3()
-                .pt_3()
-                .pb_1()
-                .child(
-                    ui::text(Text::Body, SharedString::from(title))
-                        .min_w_0()
-                        .truncate()
-                        .font_semibold(),
-                )
-                .child(
-                    ui::text(Text::Caption, SharedString::from(s.progress.clone()))
-                        .flex_none()
-                        .text_color(cx.theme().muted_foreground),
-                ),
-        )
+        _: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        div()
     }
+    // Headers are list entries so even a folded/all-filtered phase remains
+    // reachable by Up/Down and Return. Kit omits empty section headers.
     fn render_item(
         &mut self,
         ix: IndexPath,
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
-        let t = self.snapshot.at(ix.section, ix.row)?;
+        if ix.row != 0 || !self.header(ix.section) {
+            return self.task_item(ix, cx);
+        }
+        let section = ix.section;
+        let s = self.snapshot.sections.get(section)?;
+        let title = s.title.clone()?;
+        let key = s.key.clone();
+        let collapsed = self.visibility.collapsed.contains(&key);
+        let owner = self.owner.clone();
+        let generation = self.generation;
+        Some(
+            ListItem::new(SharedString::from(format!("mission-tasks-phase-{section}")))
+                .accessibility_label(SharedString::from(format!(
+                    "{} {title}",
+                    if collapsed { "Expand" } else { "Collapse" }
+                )))
+                .on_click(move |_, w, cx| {
+                    cx.stop_propagation();
+                    let _ = owner.update(cx, |v, cx| v.toggle_phase(section, generation, w, cx));
+                })
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "mission-tasks-phase-content-{section}"
+                        )))
+                        .test_support()
+                        .h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .py_1()
+                        .child(
+                            if collapsed {
+                                crate::app_icon::AppIcon::Forward
+                            } else {
+                                crate::app_icon::AppIcon::Expand
+                            }
+                            .inline(),
+                        )
+                        .child(
+                            ui::text(Text::Body, SharedString::from(title))
+                                .font_semibold()
+                                .min_w_0()
+                                .truncate(),
+                        )
+                        .child(
+                            ui::text(Text::Caption, SharedString::from(s.progress.clone()))
+                                .flex_none()
+                                .text_color(cx.theme().muted_foreground),
+                        ),
+                ),
+        )
+    }
+}
+impl Rows {
+    fn task_item(&mut self, ix: IndexPath, cx: &mut Context<ListState<Self>>) -> Option<ListItem> {
+        let t = self.at(ix)?;
         let id = t.id.clone();
         let owner = self.owner.clone();
         let generation = self.generation;
@@ -232,6 +289,40 @@ pub(crate) struct Pane {
     models: Vec<(Entity<crate::task_model_view::Form>, Subscription)>,
 }
 impl Pane {
+    fn toggle_phase(
+        &mut self,
+        section: usize,
+        generation: u64,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.generation != generation || self.marked(w, cx) {
+            return;
+        }
+        let Some(s) = self
+            .state
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.sections.get(section))
+        else {
+            return;
+        };
+        if s.title.is_none() {
+            return;
+        }
+        let key = s.key.clone();
+        if !self.state.visibility.collapsed.remove(&key) {
+            self.state.visibility.collapsed.insert(key);
+        }
+        self.rebuild(w, cx);
+        if let Some(list) = &self.list {
+            list.update(cx, |l, cx| {
+                l.set_selected_index(Some(IndexPath::new(0).section(section)), w, cx);
+                l.focus(w, cx);
+            });
+        }
+        cx.notify();
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     /// The first retained task form with unsent input or an unanswered request.
     pub(crate) fn update_blocker(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Blocker> {
@@ -386,6 +477,21 @@ impl Pane {
                         .as_ref()
                         .is_some_and(|s| s.task(&id).is_some()) =>
             {
+                // An explicit jump reveals its target without changing any task.
+                if let Some(s) = &self.state.snapshot {
+                    if let Some((section, _)) = s.position(&id) {
+                        self.state
+                            .visibility
+                            .collapsed
+                            .remove(&s.sections[section].key);
+                    }
+                    if s.task(&id)
+                        .is_some_and(|t| matches!(t.work_status.as_str(), "done" | "dropped"))
+                    {
+                        self.state.visibility.hide_finished = false;
+                    }
+                }
+                self.rebuild(w, cx);
                 self.select(&id, self.state.generation, w, cx);
                 // The revealed task may be any received row: centre it in the list.
                 if let Some(list) = &self.list {
@@ -611,16 +717,27 @@ impl Pane {
             return;
         };
         let generation = self.state.generation;
+        let visibility = self.state.visibility.clone();
+        let rows = visibility.rows(&snapshot);
+        if self
+            .state
+            .selected
+            .as_ref()
+            .is_some_and(|id| !rows.iter().flatten().any(|i| snapshot.tasks[*i].id == *id))
+        {
+            self.state.selected = None;
+        }
         if let Some(list) = &self.list {
             list.update(cx, |l, cx| {
                 l.delegate_mut().snapshot = snapshot.clone();
                 l.delegate_mut().generation = generation;
+                l.delegate_mut().visibility = visibility;
+                l.delegate_mut().rows = rows;
                 let ix = self
                     .state
                     .selected
                     .as_ref()
-                    .and_then(|id| snapshot.position(id))
-                    .map(index_path);
+                    .and_then(|id| l.delegate().position(id));
                 l.set_selected_index(ix, w, cx);
                 cx.notify();
             });
@@ -633,6 +750,8 @@ impl Pane {
                         snapshot,
                         generation,
                         current: None,
+                        visibility,
+                        rows,
                     },
                     w,
                     cx,
@@ -641,14 +760,11 @@ impl Pane {
             });
             self.subscription = Some(cx.subscribe_in(&list, w, |v, l, event, w, cx| match event {
                 ListEvent::Confirm(ix) => {
-                    let choice = l
-                        .read(cx)
-                        .delegate()
-                        .snapshot
-                        .at(ix.section, ix.row)
-                        .map(|t| t.id.clone());
+                    let choice = l.read(cx).delegate().at(*ix).map(|t| t.id.clone());
                     if let Some(id) = choice {
                         v.select(&id, v.state.generation, w, cx);
+                    } else if ix.row == 0 {
+                        v.toggle_phase(ix.section, v.state.generation, w, cx);
                     }
                 }
                 ListEvent::Cancel => v.back(w, cx),
@@ -672,6 +788,10 @@ impl Pane {
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.task(id).is_some())
+            || !self
+                .list
+                .as_ref()
+                .is_some_and(|l| l.read(cx).delegate().position(id).is_some())
         {
             return;
         }
@@ -679,7 +799,7 @@ impl Pane {
         self.state.selected = Some(id.into());
         if let Some(list) = &self.list {
             list.update(cx, |l, cx| {
-                let ix = l.delegate().snapshot.position(id).map(index_path);
+                let ix = l.delegate().position(id);
                 l.set_selected_index(ix, w, cx);
             });
         }
@@ -696,6 +816,14 @@ impl Pane {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.state.generation != generation
+            || !self
+                .list
+                .as_ref()
+                .is_some_and(|l| l.read(cx).delegate().position(id).is_some())
+        {
+            return;
+        }
         self.select(id, generation, w, cx);
         if self.state.selected.as_deref() != Some(id) {
             return;
@@ -793,6 +921,12 @@ impl Render for Pane {
                     Action::Quiet,
                 )
                 .disabled(self.state.busy || !self.opened)
+                .loading(self.state.busy)
+                .accessibility_label(if self.state.busy {
+                    "Refreshing tasks"
+                } else {
+                    "Refresh tasks"
+                })
                 .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
             )
             .child(
@@ -809,20 +943,44 @@ impl Render for Pane {
             .min_w_0()
             .min_h_0()
             .gap(px(Space::CONTROL))
-            .child(toolbar);
+            .child(toolbar)
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("mission-tasks-hide-finished")
+                            .label("Hide done and dropped")
+                            .checked(self.state.visibility.hide_finished)
+                            .on_click(cx.listener(|v, checked, w, cx| {
+                                if !v.marked(w, cx) {
+                                    v.state.visibility.hide_finished = *checked;
+                                    v.rebuild(w, cx);
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .when(!self.state.visibility.collapsed.is_empty(), |d| {
+                        d.child(
+                            ui::action("mission-tasks-expand-all", "Expand all", Action::Quiet)
+                                .on_click(cx.listener(|v, _, w, cx| {
+                                    if !v.marked(w, cx) {
+                                        v.state.visibility.collapsed.clear();
+                                        v.rebuild(w, cx);
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                    }),
+            );
         if let Some(e) = self.create_error {
             root = root.child(Notice::new(e).tone(Tone::Error));
         }
         // Only states that change what the list means are narrated.
-        if self.opened && (self.state.busy || self.state.error.is_some()) {
-            root = root.child(ui::text(
-                Text::Caption,
-                if self.state.busy {
-                    "Loading tasks…"
-                } else {
-                    "Couldn't refresh tasks. What's shown may be out of date."
-                },
-            ));
+        if self.opened && self.state.busy && snapshot.is_none() {
+            root = root.child(ui::text(Text::Caption, "Loading tasks…"));
         }
         if let Some(e) = self.state.error {
             root = root.child(
@@ -835,6 +993,31 @@ impl Render for Pane {
         let empty = snapshot.as_ref().is_some_and(|s| s.tasks.is_empty());
         if empty {
             root = root.child(Notice::new("No tasks yet."));
+        }
+        let hidden = !empty
+            && self
+                .list
+                .as_ref()
+                .is_some_and(|l| l.read(cx).delegate().rows.iter().all(Vec::is_empty));
+        if hidden {
+            root = root.child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(ui::text(Text::Caption, "Tasks are hidden."))
+                    .child(
+                        ui::action("mission-tasks-show-all", "Show all", Action::Quiet).on_click(
+                            cx.listener(|v, _, w, cx| {
+                                if !v.marked(w, cx) {
+                                    v.state.visibility = Visibility::default();
+                                    v.rebuild(w, cx);
+                                    cx.notify();
+                                }
+                            }),
+                        ),
+                    ),
+            );
         }
         let list = self.list.clone().filter(|_| !empty);
         if let Some(l) = &list {

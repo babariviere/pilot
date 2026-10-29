@@ -20,6 +20,8 @@ pub(crate) struct Task {
 /// list (no title) when the mission has no phases.
 #[derive(Clone, Debug)]
 pub(crate) struct Section {
+    /// Stable across phase renames and refreshes, separate from its list index.
+    pub(crate) key: String,
     pub(crate) title: Option<String>,
     /// "3/8 done", as in Swift's phase header.
     pub(crate) progress: String,
@@ -41,6 +43,7 @@ impl Snapshot {
         self.tasks.iter().find(|t| t.id == id)
     }
     /// The task at a list position.
+    #[cfg(test)]
     pub(crate) fn at(&self, section: usize, row: usize) -> Option<&Task> {
         self.tasks.get(*self.sections.get(section)?.tasks.get(row)?)
     }
@@ -177,6 +180,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     );
     let sections = if groups.is_empty() {
         vec![Section {
+            key: "flat".into(),
             title: None,
             progress: String::new(),
             tasks: (0..tasks.len()).collect(),
@@ -186,6 +190,10 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             .into_iter()
             .filter(|g| !g.tasks.is_empty())
             .map(|g| Section {
+                key: g
+                    .phase
+                    .and_then(|p| index.id(p))
+                    .map_or_else(|| "unphased".into(), |id| format!("phase:{id}")),
                 progress: g.progress(),
                 title: Some(g.name),
                 tasks: g.tasks,
@@ -208,8 +216,39 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     })
 }
 
+/// Client-only list presentation. Neither filter nor folds change the snapshot.
+#[derive(Clone, Default)]
+pub(crate) struct Visibility {
+    pub(crate) hide_finished: bool,
+    pub(crate) collapsed: HashSet<String>,
+}
+impl Visibility {
+    pub(crate) fn rows(&self, snapshot: &Snapshot) -> Vec<Vec<usize>> {
+        snapshot
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .tasks
+                    .iter()
+                    .copied()
+                    .filter(|i| {
+                        !self.collapsed.contains(&section.key)
+                            && !(self.hide_finished
+                                && matches!(
+                                    snapshot.tasks[*i].work_status.as_str(),
+                                    "done" | "dropped"
+                                ))
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct State {
+    pub(crate) visibility: Visibility,
     pub(crate) key: Option<Key>,
     pub(crate) generation: u64,
     pub(crate) snapshot: Option<Arc<Snapshot>>,
@@ -225,6 +264,7 @@ impl State {
         self.generation = self.generation.saturating_add(1);
         self.key = key;
         self.snapshot = None;
+        self.visibility = Visibility::default();
         self.selected = None;
         self.busy = false;
         self.error = None;

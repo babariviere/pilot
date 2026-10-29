@@ -97,6 +97,9 @@ impl Index {
     pub(crate) fn name(&self, phase: usize) -> Option<&str> {
         self.phases.get(phase).map(|(_, name)| name.as_str())
     }
+    pub(crate) fn id(&self, phase: usize) -> Option<&str> {
+        self.phases.get(phase).map(|(id, _)| id.as_str())
+    }
     /// Groups in phase order, then "No phase". Empty when the mission has no
     /// phase to show, so callers show one flat list and one overall bar.
     /// `tasks` is each task's phase and work status, in display order. Every

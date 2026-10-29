@@ -1129,20 +1129,24 @@ impl Render for Browser {
                         ),
                     )
                     .when(!is_list, |d| d.children(self.coordinator_action(cx)))
-                    .child(
-                        ui::icon_action(
-                            "missions-refresh",
-                            "Refresh",
-                            crate::app_icon::AppIcon::Retry,
-                            Action::Quiet,
+                    .when(is_list || self.tab != Tab::Tasks, |d| {
+                        d.child(
+                            ui::icon_action(
+                                "missions-refresh",
+                                "Refresh",
+                                crate::app_icon::AppIcon::Retry,
+                                Action::Quiet,
+                            )
+                            .disabled(self.options.is_none() || self.busy)
+                            .on_click(cx.listener(
+                                move |v, _, w, cx| {
+                                    if v.generation == generation {
+                                        v.read(w, cx);
+                                    }
+                                },
+                            )),
                         )
-                        .disabled(self.options.is_none() || self.busy)
-                        .on_click(cx.listener(move |v, _, w, cx| {
-                            if v.generation == generation {
-                                v.read(w, cx);
-                            }
-                        })),
-                    )
+                    })
                     .when(!is_list, |d| d.children(self.overview_menu(generation, cx)))
                     .when(is_list, |d| {
                         d.child(
