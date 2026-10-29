@@ -4,7 +4,7 @@ use crate::{
     path_completion::{self as model, Capture, Target},
     path_completion_reader::{Candidates, Reader, Request},
 };
-use gpui_kit::{Focusable, Task, WeakEntity, component::Selectable};
+use gpui_kit::{Focusable, Task, TestSupportExt, WeakEntity, component::Selectable};
 #[derive(Clone)]
 pub(crate) struct Source {
     pub(crate) options: crate::LocalOptions,
@@ -27,7 +27,7 @@ pub(super) struct Paths {
     observed: Option<(std::ops::Range<usize>, bool)>,
     capture: Option<Capture>,
     candidates: Option<Candidates>,
-    error: Option<&'static str>,
+    error: Option<String>,
     selected: usize,
 }
 impl ChatEditor {
@@ -209,13 +209,13 @@ impl ChatEditor {
                         }
                         let _ = view.update(cx, |v, cx| {
                             v.paths.reader = None;
-                            v.paths.error = Some("Path completion unavailable.");
+                            v.paths.error = Some("Path completion unavailable.".into());
                             cx.notify();
                         });
                     }));
                 }
                 Err(e) => {
-                    self.paths.error = Some(e);
+                    self.paths.error = Some(e.into());
                 }
             }
         }
@@ -230,7 +230,7 @@ impl ChatEditor {
                 capture: Some(capture),
             })
         }) {
-            self.paths.error = Some("Path completion unavailable.");
+            self.paths.error = Some("Path completion unavailable.".into());
         }
         cx.notify();
         true
@@ -267,7 +267,7 @@ impl ChatEditor {
         };
         if captured.text.len() - captured.token.range.len() + replacement.len() > TEXT_CAP {
             self.paths.candidates = None;
-            self.paths.error = Some("This path would exceed the draft limit.");
+            self.paths.error = Some("This path would exceed the draft limit.".into());
             cx.notify();
             return;
         }
@@ -390,8 +390,10 @@ impl ChatEditor {
             root = root.child(
                 crate::ui::text(
                     crate::ui::Text::Caption,
-                    self.paths.error.unwrap_or("Reading paths…"),
+                    self.paths.error.as_deref().unwrap_or("Reading paths…"),
                 )
+                .id("path-status")
+                .test_support()
                 .text_color(cx.theme().muted_foreground),
             );
         }
@@ -411,5 +413,10 @@ impl ChatEditor {
     #[cfg(feature = "native-probes")]
     pub(crate) fn path_probe_accept(&mut self, c: Capture, w: &mut Window, cx: &mut Context<Self>) {
         self.accept_path(c, 0, w, cx);
+    }
+
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn path_probe_error(&self) -> Option<&str> {
+        self.paths.error.as_deref()
     }
 }

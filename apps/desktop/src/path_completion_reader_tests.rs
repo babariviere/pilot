@@ -169,3 +169,159 @@ fn cancellation_replaces_debounce_and_closes_command_lane() {
     });
     assert_eq!(s.state.lock().unwrap().seen.len(), 3);
 }
+
+#[test]
+fn refusal_keeps_http_status_and_existing_daemon_reason() {
+    for (status, reason) in [
+        (
+            409,
+            "Path completion requires the matching active Build workspace",
+        ),
+        (409, "Path completion daemon identity changed"),
+        (409, "Path completion workspace changed"),
+        (409, "Ask sessions are read-only"),
+        (400, "Symlinks are outside the readable scope"),
+        (
+            400,
+            "EACCES: permission denied, opendir '/synthetic/project/private'",
+        ),
+        (503, "Path completion reads are busy"),
+        (404, "Unknown session"),
+    ] {
+        let s = setup();
+        s.reply(&route(), Reply::json(status, json!({"error": reason})));
+        let error = rt()
+            .block_on(fetch(&client(), &s.options, &capture()))
+            .unwrap_err();
+        assert!(error.contains(&format!("HTTP {status}")), "{error}");
+        assert!(error.contains(reason), "{error}");
+        assert!(s.all_gets());
+        assert_eq!(
+            s.state.lock().unwrap().seen.len(),
+            2,
+            "no fallback or retries"
+        );
+    }
+}
+
+#[test]
+fn unavailable_capability_and_missing_endpoint_explain_compatibility() {
+    let s = setup();
+    let mut h = hello();
+    h["daemonVersion"] = json!("1.20.0");
+    h["capabilities"]["sessionPathCandidates"] = Value::Null;
+    s.reply("/api/hello", Reply::json(200, h.clone()));
+    let error = rt()
+        .block_on(fetch(&client(), &s.options, &capture()))
+        .unwrap_err();
+    assert!(error.contains("1.20.0"), "{error}");
+    assert!(error.contains("Settings → Updates"), "{error}");
+    assert_eq!(s.state.lock().unwrap().seen.len(), 1);
+
+    h["capabilities"]["sessionPathCandidates"] = json!(1);
+    s.reply("/api/hello", Reply::json(200, h));
+    s.reply(&route(), Reply::json(404, json!({"error":"Not found"})));
+    let error = rt()
+        .block_on(fetch(&client(), &s.options, &capture()))
+        .unwrap_err();
+    assert!(error.contains("HTTP 404"), "{error}");
+    assert!(error.contains("Settings → Updates"), "{error}");
+    assert!(error.contains("1.20.0"), "{error}");
+    assert!(s.all_gets());
+    assert_eq!(s.state.lock().unwrap().seen.len(), 3);
+}
+
+#[test]
+fn malformed_refusals_keep_status_and_untrusted_text_stays_bounded() {
+    for body in [json!({}), json!({"error":42}), json!({"error":""})] {
+        let s = setup();
+        s.reply(&route(), Reply::json(409, body));
+        let error = rt()
+            .block_on(fetch(&client(), &s.options, &capture()))
+            .unwrap_err();
+        assert!(error.contains("HTTP 409"), "{error}");
+        assert!(error.contains("No reason returned"), "{error}");
+    }
+    let s = setup();
+    s.reply(
+        &route(),
+        Reply {
+            status: 503,
+            bytes: b"not json".to_vec(),
+            chunked: false,
+            delay_ms: 0,
+        },
+    );
+    assert!(
+        rt().block_on(fetch(&client(), &s.options, &capture()))
+            .unwrap_err()
+            .contains("HTTP 503")
+    );
+    s.reply(
+        &route(),
+        Reply::json(
+            409,
+            json!({"error":format!("に\n\u{1b}{}", "界".repeat(1000))}),
+        ),
+    );
+    let error = rt()
+        .block_on(fetch(&client(), &s.options, &capture()))
+        .unwrap_err();
+    assert!(error.chars().count() < 650);
+    assert!(error.contains('に'));
+    assert!(error.contains("に "));
+    assert!(!error.chars().any(char::is_control));
+    assert!(error.ends_with('…'));
+    for chunked in [false, true] {
+        s.reply(
+            &route(),
+            Reply {
+                status: 409,
+                bytes: vec![b'x'; 16385],
+                chunked,
+                delay_ms: 0,
+            },
+        );
+        assert!(
+            rt().block_on(fetch(&client(), &s.options, &capture()))
+                .unwrap_err()
+                .contains("exceeded")
+        );
+    }
+}
+
+#[test]
+fn malformed_success_never_becomes_candidates_or_a_refusal_reason() {
+    for patch in [
+        json!({"entries":null}),
+        json!({"entries":[{"path":"README","directory":"false"}]}),
+        json!({"truncated":null}),
+    ] {
+        let s = setup();
+        let mut body = report();
+        body.as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        s.reply(&route(), Reply::json(200, body));
+        assert!(
+            rt().block_on(fetch(&client(), &s.options, &capture()))
+                .is_err()
+        );
+        assert_eq!(s.state.lock().unwrap().seen.len(), 2);
+    }
+    let s = setup();
+    s.reply(
+        &route(),
+        Reply {
+            status: 200,
+            bytes: b"not json".to_vec(),
+            chunked: false,
+            delay_ms: 0,
+        },
+    );
+    assert_eq!(
+        rt().block_on(fetch(&client(), &s.options, &capture()))
+            .unwrap_err(),
+        "Invalid path response."
+    );
+}

@@ -18,20 +18,62 @@ pub(crate) struct Candidates {
     pub(crate) entries: Vec<Candidate>,
     pub(crate) truncated: bool,
 }
+
+fn daemon_label(hello: &Value) -> String {
+    match hello["daemonVersion"].as_str().filter(|v| !v.is_empty()) {
+        Some(version) => format!("daemon {}", display_reason(version, 64)),
+        None => "daemon".into(),
+    }
+}
+
+/// Daemon error text is diagnostic data, never markup or a fallback instruction.
+fn display_reason(reason: &str, limit: usize) -> String {
+    let mut chars = reason
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| !c.is_control());
+    let mut text: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        text.push('…');
+    }
+    text
+}
+
+fn refusal(status: u16, bytes: &[u8], hello: &Value) -> String {
+    let body = serde_json::from_slice::<Value>(bytes).ok();
+    let reason = body.as_ref().and_then(|v| v["error"].as_str());
+    let reason = reason.map(|s| display_reason(s, 512)).unwrap_or_default();
+    let reason = if reason.trim().is_empty() {
+        "No reason returned."
+    } else {
+        &reason
+    };
+    let daemon = daemon_label(hello);
+    if status == 404 && reason == "Not found" {
+        return format!(
+            "Path completion endpoint missing on {daemon} (HTTP 404). Check Settings → Updates."
+        );
+    }
+    format!("Path completion refused by {daemon} (HTTP {status}). {reason}")
+}
+
 pub(crate) async fn fetch(
     client: &reqwest::Client,
     options: &LocalOptions,
     capture: &Capture,
-) -> Result<Candidates, &'static str> {
+) -> Result<Candidates, String> {
     let hello = crate::local_client::hello(client, options).await?;
     if hello["capabilities"]["sessionPathCandidates"] != 1 {
-        return Err("Path completion unavailable on this daemon.");
+        return Err(format!(
+            "Path completion is not supported by this {}. Check Settings → Updates.",
+            daemon_label(&hello)
+        ));
     }
     if !crate::local_model::valid_id(&capture.target.chat)
         || capture.target.cwd.is_empty()
         || !valid_prefix(&capture.token.prefix)
     {
-        return Err("Path source unavailable.");
+        return Err("Path source unavailable.".into());
     }
     let host = options.host();
     let mut url = reqwest::Url::parse(&format!(
@@ -50,22 +92,23 @@ pub(crate) async fn fetch(
         .send()
         .await
         .map_err(|_| "Path completion unavailable.")?;
-    if response.status() != 200 {
-        return Err("Local refused path completion. No fallback attempted.");
-    }
+    let status = response.status().as_u16();
     let mut bytes = Vec::new();
     if response.content_length().is_some_and(|n| n > 16384) {
-        return Err("Path response exceeded its bound.");
+        return Err(format!("Path response exceeded its bound (HTTP {status})."));
     }
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|_| "Path response interrupted.")?
+        .map_err(|_| format!("Path response interrupted (HTTP {status})."))?
     {
         if bytes.len() + chunk.len() > 16384 {
-            return Err("Path response exceeded its bound.");
+            return Err(format!("Path response exceeded its bound (HTTP {status})."));
         }
         bytes.extend_from_slice(&chunk);
+    }
+    if status != 200 {
+        return Err(refusal(status, &bytes, &hello));
     }
     let v: Value = serde_json::from_slice(&bytes).map_err(|_| "Invalid path response.")?;
     if v["sessionId"] != capture.target.chat
@@ -74,7 +117,7 @@ pub(crate) async fn fetch(
         || v["daemonId"] != host.daemon_id
         || v["lineageId"] != host.lineage_id
     {
-        return Err("Path completion source changed.");
+        return Err("Path completion source changed.".into());
     }
     let entries = v["entries"]
         .as_array()
@@ -89,13 +132,13 @@ pub(crate) async fn fetch(
             || !path.starts_with(&capture.token.prefix)
             || path.ends_with('/')
         {
-            return Err("Invalid candidate scope.");
+            return Err("Invalid candidate scope.".into());
         }
         // A candidate must be a direct child of the queried parent, never a deeper path.
         if path.rsplit_once('/').map(|(p, _)| p)
             != capture.token.prefix.rsplit_once('/').map(|(p, _)| p)
         {
-            return Err("Invalid candidate parent.");
+            return Err("Invalid candidate parent.".into());
         }
         if !result.iter().any(|c: &Candidate| c.path == path) {
             result.push(Candidate {
@@ -120,7 +163,7 @@ pub(crate) struct Request {
 pub(crate) struct Response {
     pub(crate) serial: u64,
     pub(crate) capture: Capture,
-    pub(crate) result: Result<Candidates, &'static str>,
+    pub(crate) result: Result<Candidates, String>,
 }
 pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,

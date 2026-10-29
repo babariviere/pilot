@@ -19,6 +19,8 @@ test("path candidates are bounded literal direct children, never links or expand
 	t.after(() => rm(root, { recursive: true, force: true }));
 	await writeFile(join(root, "README 🦀.md"), "x");
 	await mkdir(join(root, "Sources"));
+	await mkdir(join(root, "日本 語"));
+	await writeFile(join(root, "日本 語", "résumé 🦀.md"), "x");
 	await writeFile(join(root, ".hidden"), "x");
 	await symlink(tmpdir(), join(root, "link"));
 	const reader = new PathCompletionReader();
@@ -29,6 +31,12 @@ test("path candidates are bounded literal direct children, never links or expand
 		truncated: false,
 	});
 	assert.deepEqual((await reader.read(root, "Sou")).entries, [{ path: "Sources", directory: true }]);
+	assert.deepEqual((await reader.read(root, "日本 語/ré")).entries, [
+		{ path: "日本 語/résumé 🦀.md", directory: false },
+	]);
+	assert.deepEqual((await reader.read(root, "日本 語/")).entries, [
+		{ path: "日本 語/résumé 🦀.md", directory: false },
+	]);
 	assert.deepEqual((await reader.read(root, ".h")).entries, [{ path: ".hidden", directory: false }]);
 	assert.deepEqual((await reader.read(root, "link")).entries, []);
 	await assert.rejects(reader.read(root, "link/x"));
@@ -79,7 +87,7 @@ test("path candidate GET pins daemon/cwd and repeats passive admission without s
 	let starts = 0;
 	const worker = {
 		ready: Promise.resolve(),
-		state: "idle" as const,
+		state: "idle" as "idle" | "working" | "starting" | "failed",
 		send: () => {
 			starts++;
 		},
@@ -146,7 +154,12 @@ test("path candidate GET pins daemon/cwd and repeats passive admission without s
 	assert.equal(result.prefix, "R");
 	assert.equal(result.daemonId, "daemon");
 	assert.deepEqual(result.entries, [{ path: "README", directory: false }]);
-	assert.equal((await fetch(url.replace("daemonId=daemon", "daemonId=other"))).status, 409);
+	worker.state = "working";
+	assert.equal((await fetch(url)).status, 200, "working Build also admits a passive read");
+	worker.state = "idle";
+	const identity = await fetch(url.replace("daemonId=daemon", "daemonId=other"));
+	assert.equal(identity.status, 409);
+	assert.deepEqual(await identity.json(), { error: "Path completion daemon identity changed" });
 	assert.equal(
 		(
 			await fetch(
@@ -168,8 +181,19 @@ test("path candidate GET pins daemon/cwd and repeats passive admission without s
 		assert.notEqual((await fetch(url)).status, 200);
 		for (const key of Object.keys(patch)) delete (meta as Record<string, unknown>)[key];
 	}
+	for (const state of ["starting", "failed"] as const) {
+		worker.state = state;
+		const response = await fetch(url);
+		assert.equal(response.status, 409);
+		assert.deepEqual(await response.json(), {
+			error: "Path completion requires the matching active Build workspace",
+		});
+	}
+	worker.state = "idle";
 	sessions["workers"].delete(meta.id);
-	assert.equal((await fetch(url)).status, 409, "parked session never reopens for candidates");
+	const parked = await fetch(url);
+	assert.equal(parked.status, 409, "parked session never reopens for candidates");
+	assert.deepEqual(await parked.json(), { error: "Path completion requires the matching active Build workspace" });
 	assert.equal(starts, 0);
 	// A successful read cannot publish if admission changed while enumeration awaited.
 	sessions["workers"].set(meta.id, worker);

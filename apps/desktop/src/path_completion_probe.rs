@@ -30,6 +30,22 @@ fn wait(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalView
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+fn wait_error(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+    let end = std::time::Instant::now() + Duration::from_secs(4);
+    loop {
+        settle(cx, h);
+        if cx
+            .update_window(h, |_, _, cx| {
+                view.read(cx).editor.read(cx).path_probe_error().is_some()
+            })
+            .unwrap()
+        {
+            return;
+        }
+        assert!(std::time::Instant::now() < end, "refusal did not arrive");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 fn route(prefix: &str) -> String {
     let mut u =
         reqwest::Url::parse("http://127.0.0.1/api/sessions/source/path-candidates").unwrap();
@@ -206,6 +222,112 @@ pub fn run_path_completion_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            // Actual Tab accepts the highlighted directory, not just the first file.
+            replace(cx, "R");
+            cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+            wait(cx, h, &view);
+            cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, _, cx| {
+                assert_eq!(input.read(cx).value().as_ref(), "Reports/")
+            })
+            .unwrap();
+
+            for (status, reason) in [
+                (
+                    409,
+                    "Path completion requires the matching active Build workspace",
+                ),
+                (
+                    400,
+                    "EACCES: permission denied, opendir '/synthetic/project/private'",
+                ),
+                (404, "Not found"),
+            ] {
+                replace(cx, "R");
+                server.reply(&route("R"), Reply::json(status, json!({"error":reason})));
+                let before = server.state.lock().unwrap().seen.len();
+                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+                wait_error(cx, h, &view);
+                cx.update_window(h, |_, w, cx| {
+                    let error = view.read(cx).editor.read(cx).path_probe_error().unwrap();
+                    assert!(error.contains(&format!("HTTP {status}")), "{error}");
+                    assert!(
+                        error.contains(if status == 404 {
+                            "Settings → Updates"
+                        } else {
+                            reason
+                        }),
+                        "{error}"
+                    );
+                    assert_eq!(view.read(cx).editor.read(cx).path_probe().1, 0);
+                    let shown = w.find("path-status").bounds();
+                    let popup = w.find("path-suggestions").bounds();
+                    assert!(shown.size.height > px(0.));
+                    assert!(shown.origin.x >= popup.origin.x && shown.right() <= popup.right());
+                    assert!(shown.origin.y >= px(0.));
+                    assert!(popup.bottom() <= w.find("composer-input").bounds().origin.y);
+                    assert_eq!(input.read(cx).value().as_ref(), "R");
+                })
+                .unwrap();
+                if status == 409
+                    && let Some(dir) = std::env::var_os("PILOT_NEXT_PATHS_DIR")
+                {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(
+                            std::path::PathBuf::from(dir)
+                                .join(format!("paths-refused-{width}-{dark}.png")),
+                        )
+                        .unwrap();
+                }
+                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    assert_eq!(
+                        input.read(cx).value().as_ref(),
+                        "R",
+                        "refused Tab never inserts or sends"
+                    );
+                    assert!(input.read(cx).focus_handle(cx).is_focused(w));
+                    w.press("escape", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.try_find("path-suggestions").is_none())
+                })
+                .unwrap();
+                assert_eq!(
+                    server.state.lock().unwrap().seen.len(),
+                    before + 2,
+                    "no refusal retry or fallback"
+                );
+            }
+            server.reply("/api/hello", Reply::json(200, json!({"daemonId":"test-daemon","lineageId":"test-lineage","daemonVersion":"1.20.0","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})));
+            let before = server.state.lock().unwrap().seen.len();
+            cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+            wait_error(cx, h, &view);
+            cx.update_window(h, |_, w, cx| {
+                let error = view.read(cx).editor.read(cx).path_probe_error().unwrap();
+                assert!(
+                    error.contains("1.20.0") && error.contains("Settings → Updates"),
+                    "{error}"
+                );
+                assert_eq!(input.read(cx).value().as_ref(), "R");
+                w.press("escape", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert_eq!(
+                server.state.lock().unwrap().seen.len(),
+                before + 1,
+                "missing capability never queries candidates"
+            );
+            server.reply("/api/hello",Reply::json(200,json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"sessionPathCandidates":1}})));
+
             // Source generation change cancels an in-flight response, no insertion or background restart.
             let large = format!("{} R", "x".repeat(crate::delivery_store::TEXT_CAP));
             replace(cx, "");
@@ -227,46 +349,65 @@ pub fn run_path_completion_probe(cx: &mut HeadlessAppContext) {
                 server.state.lock().unwrap().seen.len(),
                 reads_before_large_tab
             );
-            replace(cx, "R");
-            let mut delayed = Reply::json(200, report("R"));
-            delayed.delay_ms = 350;
-            server.reply(&route("R"), delayed);
-            let before = server.state.lock().unwrap().seen.len();
-            cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
-            let deadline = std::time::Instant::now() + Duration::from_secs(4);
-            while server.state.lock().unwrap().seen.len() < before + 2 {
-                settle(cx, h);
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            cx.update_window(h, |_, _, cx| {
-                view.update(cx, |v, cx| {
-                    v.generation += 1;
-                    cx.notify();
+            for change_cwd in [false, true] {
+                cx.update_window(h, |_, _, cx| {
+                    view.update(cx, |v, cx| {
+                        v.generation = 7;
+                        Arc::make_mut(&mut v.state.chats)[0].cwd = "/synthetic/project".into();
+                        cx.notify();
+                    });
                 })
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("path-suggestions").is_none());
-                assert_eq!(input.read(cx).value().as_ref(), "R");
-            })
-            .unwrap();
-            let late = std::time::Instant::now() + Duration::from_millis(450);
-            while std::time::Instant::now() < late {
+                .unwrap();
                 settle(cx, h);
-                std::thread::sleep(Duration::from_millis(5));
+                replace(cx, "R");
+                let mut delayed = if change_cwd {
+                    Reply::json(409, json!({"error":"Path completion workspace changed"}))
+                } else {
+                    Reply::json(200, report("R"))
+                };
+                delayed.delay_ms = 350;
+                server.reply(&route("R"), delayed);
+                let before = server.state.lock().unwrap().seen.len();
+                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(4);
+                while server.state.lock().unwrap().seen.len() < before + 2 {
+                    settle(cx, h);
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                cx.update_window(h, |_, _, cx| {
+                    view.update(cx, |v, cx| {
+                        if change_cwd {
+                            Arc::make_mut(&mut v.state.chats)[0].cwd = "/synthetic/other".into();
+                        } else {
+                            v.generation += 1;
+                        }
+                        cx.notify();
+                    })
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    assert!(w.try_find("path-suggestions").is_none());
+                    assert_eq!(input.read(cx).value().as_ref(), "R");
+                })
+                .unwrap();
+                let late = std::time::Instant::now() + Duration::from_millis(450);
+                while std::time::Instant::now() < late {
+                    settle(cx, h);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                cx.update_window(h, |_, w, cx| {
+                    assert!(w.try_find("path-suggestions").is_none());
+                    assert_eq!(input.read(cx).value().as_ref(), "R");
+                })
+                .unwrap();
+                assert_eq!(
+                    server.state.lock().unwrap().seen.len(),
+                    before + 2,
+                    "late source must not restart or finish the bracket"
+                );
             }
-            cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("path-suggestions").is_none());
-                assert_eq!(input.read(cx).value().as_ref(), "R");
-            })
-            .unwrap();
-            assert_eq!(
-                server.state.lock().unwrap().seen.len(),
-                before + 2,
-                "late source must not restart or finish the bracket"
-            );
             assert!(server.all_gets());
             assert!(
                 writes.try_recv().is_err(),
@@ -277,6 +418,6 @@ pub fn run_path_completion_probe(cx: &mut HeadlessAppContext) {
         }
     }
     println!(
-        "path completion: four mounted theme/width keyboard/pointer/IME/undo/source/no-send flows passed"
+        "path completion: four mounted theme/width Tab success/refusal/compatibility/IME/undo/stale-cwd/no-send flows passed"
     );
 }

@@ -33,6 +33,30 @@ capped at 16 KiB and eight direct-child candidates, with exact response identity
 and a second hello check. Redirects, proxies, retries and alternate-root/host
 fallbacks are disabled. Requests time out after three seconds.
 
+### Refusal diagnostics
+
+The composer reports the HTTP status and the daemon's existing `error` text
+instead of replacing every non-200 response with a generic refusal. Error
+bodies share the 16 KiB response bound; displayed reasons are plain text,
+control-free and limited to 512 characters. Missing or malformed error bodies
+retain the HTTP status and explicitly say no reason was returned. The daemon
+version from the verified hello is included when present. This is diagnostic
+data, not proof of compatibility or permission.
+
+A missing/unsupported `sessionPathCandidates` capability stops before the
+candidate request and points to Settings → Updates. An advertised capability
+with the existing `404 / Not found` response is described as a missing endpoint,
+not assumed to be an older daemon. Other refusals retain their actual reason,
+including mismatched identity/cwd, unavailable active Build workspace,
+read-only mode, symlinks, filesystem access errors and busy reads. No refusal
+starts a worker, changes a guard, retries, updates a daemon or uses a fallback.
+
+The reported cropped screenshot alone does not identify which guard refused
+the user's request. Compatible synthetic idle/working Build sessions succeed;
+parked/starting/failed sessions still refuse. The user chose improved diagnostics
+followed by a retry. This change does not claim to fix an unconfirmed backend
+regression or qualify the user's installed daemon.
+
 ## Native composer behavior
 
 Tab explicitly opens suggestions for a supported collapsed-selection token in
