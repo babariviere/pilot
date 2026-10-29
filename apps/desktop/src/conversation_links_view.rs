@@ -78,6 +78,18 @@ impl Pane {
             cx.write_to_clipboard(ClipboardItem::new_string(link.url.clone()));
         }
     }
+    /// Explicit Open only; the scan never opens or fetches anything.
+    pub(super) fn open(&self, ix: usize, w: &mut Window, cx: &mut Context<Self>) {
+        if self.ready(w, cx)
+            && let Some(url) = self
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.links.get(ix))
+                .and_then(|link| crate::external_links::web(&link.url))
+        {
+            crate::external_links::open(&url, cx);
+        }
+    }
     fn source(&mut self, source: &Source, w: &mut Window, cx: &mut Context<Self>) {
         if !self.ready(w, cx) {
             return;
@@ -150,6 +162,15 @@ impl Render for Pane {
                         div()
                             .h_flex()
                             .gap_2()
+                            .child(
+                                ui::action(
+                                    ("conversation-link-open", ix),
+                                    "Open",
+                                    Action::Secondary,
+                                )
+                                .icon(AppIcon::OpenLink.asset())
+                                .on_click(cx.listener(move |p, _, w, cx| p.open(ix, w, cx))),
+                            )
                             .child(
                                 ui::action(
                                     ("conversation-link-copy", ix),

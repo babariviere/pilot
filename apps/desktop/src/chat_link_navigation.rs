@@ -1,6 +1,18 @@
 use super::*;
 
 impl LocalViewer {
+    /// A link the user clicked in a message. Chat links stay in the app; web links go to
+    /// the platform opener; anything else (scripts, files, app schemes) is refused.
+    pub(crate) fn open_message_link(&mut self, url: &str, w: &mut Window, cx: &mut Context<Self>) {
+        match crate::external_links::route(url) {
+            crate::external_links::Route::Chat => self.open_chat_url(url, w, cx),
+            crate::external_links::Route::Web(url) => crate::external_links::open(&url, cx),
+            crate::external_links::Route::Refused => {
+                self.nav_error = Some(crate::external_links::REFUSED);
+                cx.notify();
+            }
+        }
+    }
     /// Shared in-app and native URL-open route. Never delegates internal URLs to the OS.
     pub fn open_chat_url(&mut self, url: &str, w: &mut Window, cx: &mut Context<Self>) {
         self.link_epoch += 1;

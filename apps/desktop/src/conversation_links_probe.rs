@@ -17,6 +17,14 @@ pub fn run_conversation_links_probe(cx: &mut HeadlessAppContext) {
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();
     }
+    // Opening is captured, never handed to the real platform browser.
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    cx.update(|cx| {
+        let opened = opened.clone();
+        cx.set_global(crate::external_links::Opener(std::sync::Arc::new(
+            move |url, _| opened.lock().unwrap().push(url.into()),
+        )))
+    });
     for width in [680., 1100.] {
         for dark in [false, true] {
             cx.update(|cx| {
@@ -116,10 +124,20 @@ pub fn run_conversation_links_probe(cx: &mut HeadlessAppContext) {
                     selected.read(cx).selected_source_range(),
                     Some(range.clone())
                 );
-                // Pane root -> Refresh -> Close -> explicit Copy link.
+                // Pane root -> Refresh -> Close -> explicit Open, then Copy link.
                 for _ in 0..3 {
                     w.press("tab", cx);
                 }
+                assert_eq!(
+                    w.find(("conversation-link-open", 0usize)).focused(),
+                    Some(true)
+                );
+                w.press("enter", cx);
+                assert_eq!(
+                    std::mem::take(&mut *opened.lock().unwrap()),
+                    ["https://example.org/guide?q=%E6%97%A5%E6%9C%AC%E8%AA%9E#section"]
+                );
+                w.press("tab", cx);
                 assert_eq!(
                     w.find(("conversation-link-copy", 0usize)).focused(),
                     Some(true)
@@ -266,7 +284,9 @@ pub fn run_conversation_links_probe(cx: &mut HeadlessAppContext) {
                 // An already queued callback cannot copy after a conversation switch.
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("fenced".into()));
                 old.update(cx, |p, cx| p.copy(0, w, cx));
+                old.update(cx, |p, cx| p.open(0, w, cx));
                 assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "fenced");
+                assert!(opened.lock().unwrap().is_empty(), "stale pane cannot open");
                 assert!(before.message.is_some());
                 assert!(
                     writes.try_recv().is_err(),

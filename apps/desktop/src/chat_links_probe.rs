@@ -317,9 +317,186 @@ pub fn run_chat_links_probe(cx: &mut HeadlessAppContext) {
         "late read must not navigate after newer intent"
     );
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    web_links(cx);
     println!(
-        "chat_links: native Markdown click, URL dispatch, exact/unloaded identities, errors, drafts, IME, history and stale-result fencing passed"
+        "chat_links: native Markdown click, URL dispatch, exact/unloaded identities, errors, drafts, IME, history, stale-result fencing, web opening and service badges passed"
     );
+}
+
+/// Ordinary and service web links open only through the captured opener; unsafe and
+/// app/file schemes are refused. Nothing reaches a real browser or the network.
+fn web_links(cx: &mut HeadlessAppContext) {
+    let opened = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    cx.update(|cx| {
+        let opened = opened.clone();
+        cx.set_global(crate::external_links::Opener(Arc::new(move |url, _| {
+            opened.lock().unwrap().push(url.into())
+        })))
+    });
+    let rows = [
+        (920, "[docs](https://example.com/docs?q=1#a)"),
+        (921, "https://github.com/acme/api/pull/412"),
+        (922, "[the ticket](https://linear.app/acme/issue/ENG-3)"),
+        (923, "https://acme.slack.com/archives/C1/p1111111111111111"),
+        (
+            924,
+            "[lookalike](https://github.com.evil.io/acme/api/pull/1)",
+        ),
+        (925, "[script](javascript:alert(1))"),
+        (926, "[file](file:///etc/hosts)"),
+        (927, "[chat](pilot://chat/exact-ID)"),
+        (
+            928,
+            "Fixed in https://github.com/acme/api/pull/412, tracked by [ENG-3](https://linear.app/acme/issue/ENG-3) and discussed in https://acme.slack.com/archives/C1/p1111111111111111 with [docs](https://example.com/docs).",
+        ),
+    ];
+    let (client, commands) = LocalClient::synthetic_commands();
+    let (h, v) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(960.), px(900.)),
+                    ))),
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        w.activate_window();
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        v.client = Some(client);
+                        v.state.chats = Arc::new(
+                            ["synthetic", "exact-ID"]
+                                .map(|id| {
+                                    crate::local_model::chat(
+                                        &json!({"id":id,"title":"Links","state":"idle"}),
+                                    )
+                                    .unwrap()
+                                })
+                                .to_vec(),
+                        );
+                        v.transcript.update(cx, |t, cx| {
+                            t.history_scope(v.generation);
+                            t.replace_readonly(
+                                rows.iter()
+                                    .map(|(id, text)| {
+                                        Message::live(*id, "assistant".into(), (*text).into())
+                                    })
+                                    .collect(),
+                                true,
+                                cx,
+                            )
+                        });
+                        v.rebuild_nav(w, cx);
+                        v
+                    })
+                },
+            )
+        })
+        .unwrap();
+    settle(cx, h);
+    if let Some(dir) = std::env::var_os("PILOT_NEXT_CHAT_LINKS_DIR").map(std::path::PathBuf::from) {
+        std::fs::create_dir_all(&dir).unwrap();
+        for dark in [false, true] {
+            cx.update(|cx| {
+                crate::appearance::commit_appearance(
+                    if dark {
+                        crate::settings_state::AppearancePreference::Dark
+                    } else {
+                        crate::settings_state::AppearancePreference::Light
+                    },
+                    cx,
+                )
+            });
+            settle(cx, h);
+            cx.capture_screenshot(h)
+                .unwrap()
+                .save(dir.join(format!(
+                    "service-links-{}.png",
+                    if dark { "dark" } else { "light" }
+                )))
+                .unwrap();
+        }
+    }
+    let click_row = |cx: &mut HeadlessAppContext, id: u64| {
+        cx.update_window(h, |_, w, cx| {
+            let row = v.read(cx).transcript.read(cx).history_probe_row(id);
+            let p = row.read(cx).bounds().origin + gpui_kit::point(px(12.), px(10.));
+            w.pointer_down(p, MouseButton::Left, cx);
+            w.pointer_up(p, MouseButton::Left, cx);
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    let take = || std::mem::take(&mut *opened.lock().unwrap());
+    // An ordinary Markdown link used to fall into the chat route and only show an error.
+    click_row(cx, 920);
+    assert_eq!(take(), ["https://example.com/docs?q=1#a"]);
+    cx.update(|cx| assert_eq!(v.read(cx).nav_error, None));
+    // Service links render the mark and Swift's title (unit-tested), copy the written
+    // text and open the exact URL.
+    for (id, url, written) in [
+        (
+            921,
+            "https://github.com/acme/api/pull/412",
+            "https://github.com/acme/api/pull/412",
+        ),
+        (922, "https://linear.app/acme/issue/ENG-3", "the ticket"),
+        (
+            923,
+            "https://acme.slack.com/archives/C1/p1111111111111111",
+            "https://acme.slack.com/archives/C1/p1111111111111111",
+        ),
+    ] {
+        let badge = SharedString::from(format!("service-link-{id}-0"));
+        cx.update_window(h, |_, w, cx| {
+            let b = w.find(badge.clone()).bounds();
+            assert!(
+                b.size.width > px(40.) && b.size.height > px(10.),
+                "{id}: {b:?}"
+            );
+            let row = v.read(cx).transcript.read(cx).history_probe_row(id);
+            row.update(cx, |s, cx| s.select_all(cx));
+            assert_eq!(
+                row.read(cx).selected_text().trim_end(),
+                written,
+                "{id}: copy text"
+            );
+            row.update(cx, |s, cx| s.clear_selection(cx));
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| w.click(badge.clone(), cx))
+            .unwrap();
+        settle(cx, h);
+        assert_eq!(take(), [url], "{id}");
+    }
+    // A lookalike host is an ordinary link: no badge, but it still opens as written.
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.try_find(SharedString::from("service-link-924-0"))
+                .is_none()
+        )
+    })
+    .unwrap();
+    click_row(cx, 924);
+    assert_eq!(take(), ["https://github.com.evil.io/acme/api/pull/1"]);
+    for id in [925, 926] {
+        click_row(cx, id);
+        assert!(take().is_empty(), "{id} must not open");
+        cx.update(|cx| assert_eq!(v.read(cx).nav_error, Some(crate::external_links::REFUSED)));
+    }
+    // Internal chat links still navigate in the app, never through the opener.
+    while commands.try_recv().is_ok() {}
+    click_row(cx, 927);
+    assert!(take().is_empty());
+    cx.update(|cx| assert_eq!(v.read(cx).selected.as_deref(), Some("exact-ID")));
+    assert!(matches!(commands.try_recv(), Ok(Command::Open { id, .. }) if id == "exact-ID"));
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.update(|cx| cx.remove_global::<crate::external_links::Opener>());
 }
 
 fn until(

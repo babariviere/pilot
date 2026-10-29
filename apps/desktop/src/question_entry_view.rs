@@ -157,15 +157,20 @@ impl TranscriptView {
                 .border_color(cx.theme().border)
                 .min_w_0()
                 .child(match &self.text_states[ix] {
-                    Some(state) => crate::markdown_mermaid::install(
-                        crate::typography::rich(
-                            TextView::new(state),
-                            crate::typography::current(cx),
-                            crate::typography::Content::Chat,
-                            cx,
+                    Some(state) => crate::markdown_service_links::install(
+                        crate::markdown_mermaid::install(
+                            crate::typography::rich(
+                                TextView::new(state),
+                                crate::typography::current(cx),
+                                crate::typography::Content::Chat,
+                                cx,
+                            ),
+                            id,
+                            row.source(),
                         ),
                         id,
                         row.source(),
+                        Self::link_opener(owner.clone(), scope),
                     )
                     .selectable(true)
                     .scrollable(false)

@@ -439,7 +439,9 @@ pub(crate) fn selected(cx: &App) -> gpui_kit::Hsla {
 pub struct ChromeAssets;
 impl AssetSource for ChromeAssets {
     fn load(&self, path: &str) -> gpui_kit::Result<Option<Cow<'static, [u8]>>> {
-        if let Some(bytes) = crate::app_icon::AppIconAssets.load(path)? {
+        if let Some(bytes) = crate::app_icon::BrandMark::asset(path) {
+            Ok(Some(Cow::Borrowed(bytes)))
+        } else if let Some(bytes) = crate::app_icon::AppIconAssets.load(path)? {
             Ok(Some(bytes))
         } else {
             gpui_kit::assets::Assets.load(path)

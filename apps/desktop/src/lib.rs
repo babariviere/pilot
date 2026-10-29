@@ -55,6 +55,7 @@ mod chat_links_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_links_probe::run_chat_links_probe;
 mod conversation_links;
+mod external_links;
 mod session_clipboard;
 mod session_failure;
 mod session_file_view;
@@ -321,6 +322,7 @@ mod dither;
 mod dither_view;
 mod inbox;
 mod markdown_mermaid;
+mod markdown_service_links;
 mod native_mermaid;
 mod native_mermaid_view;
 mod visual_canvas_plan;

@@ -40,6 +40,22 @@ pub(crate) struct LinkOpen {
 }
 impl gpui_kit::EventEmitter<LinkOpen> for TranscriptView {}
 impl gpui_kit::EventEmitter<ArtifactOpen> for TranscriptView {}
+impl TranscriptView {
+    /// Service-link activations take the same route as ordinary Markdown links.
+    pub(crate) fn link_opener(
+        owner: gpui_kit::WeakEntity<Self>,
+        generation: u64,
+    ) -> crate::markdown_service_links::Open {
+        std::sync::Arc::new(move |url, _, cx| {
+            let _ = owner.update(cx, |_, cx| {
+                cx.emit(LinkOpen {
+                    url: url.to_string(),
+                    generation,
+                })
+            });
+        })
+    }
+}
 pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
 pub(crate) struct LatestRequested(pub(crate) u64);
@@ -850,19 +866,24 @@ impl TranscriptView {
         owner: gpui_kit::WeakEntity<Self>,
     ) -> gpui_kit::AnyElement {
         match &self.text_states[ix] {
-            Some(state) => crate::markdown_mermaid::install(
-                crate::typography::rich(
-                    TextView::new(state),
-                    crate::typography::current(cx),
-                    if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
-                        crate::typography::Content::PlainChat
-                    } else {
-                        crate::typography::Content::Chat
-                    },
-                    cx,
+            Some(state) => crate::markdown_service_links::install(
+                crate::markdown_mermaid::install(
+                    crate::typography::rich(
+                        TextView::new(state),
+                        crate::typography::current(cx),
+                        if row.is_plain() && (user || row.label().starts_with("Automatic input")) {
+                            crate::typography::Content::PlainChat
+                        } else {
+                            crate::typography::Content::Chat
+                        },
+                        cx,
+                    ),
+                    row.id(),
+                    row.source(),
                 ),
                 row.id(),
                 row.source(),
+                Self::link_opener(owner.clone(), self.history_scope),
             )
             .selectable(true)
             .scrollable(false)

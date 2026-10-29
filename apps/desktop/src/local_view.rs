@@ -1654,7 +1654,7 @@ impl LocalViewer {
             window,
             |v, _, event: &crate::transcript_view::LinkOpen, w, cx| {
                 if event.generation == v.generation && v.page == Page::Chat {
-                    v.open_chat_url(&event.url, w, cx);
+                    v.open_message_link(&event.url, w, cx);
                 }
             },
         );

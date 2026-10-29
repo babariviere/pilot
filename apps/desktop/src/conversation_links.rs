@@ -1,11 +1,11 @@
-//! Web-only, bounded inspection of received message text. No resolver or opener.
+//! Web-only, bounded inspection of received message text. No resolver; opening is an
+//! explicit user action through `external_links`.
 use crate::model::{Message, ReaderKey};
 use std::collections::HashMap;
 
 const ROWS: usize = 512;
 const BYTES: usize = 2 * 1024 * 1024;
 const ROW_BYTES: usize = 64 * 1024;
-const URL_BYTES: usize = 4096;
 const LINKS: usize = 64;
 const MENTIONS: usize = 256;
 
@@ -179,32 +179,7 @@ fn candidates(text: &str) -> impl Iterator<Item = &str> {
 }
 
 fn safe_url(raw: &str) -> Option<String> {
-    if raw.len() > URL_BYTES
-        || raw.chars().any(|c| {
-            c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        })
-        || raw.contains('\\')
-    {
-        return None;
-    }
-    // Reject encoded controls too. Never silently repair a copied target.
-    for pair in raw.as_bytes().windows(3).filter(|s| s[0] == b'%') {
-        if let Ok(hex) = std::str::from_utf8(&pair[1..])
-            && let Ok(byte) = u8::from_str_radix(hex, 16)
-            && (byte < 32 || byte == 127)
-        {
-            return None;
-        }
-    }
-    let url = reqwest::Url::parse(raw).ok()?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return None;
-    }
-    Some(url.to_string())
+    crate::external_links::web(raw).map(|url| url.to_string())
 }
 
 #[cfg(test)]

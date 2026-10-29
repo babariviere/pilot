@@ -47,6 +47,9 @@ Space and Radius re-export the existing source. Glyphs use the approved static
 `app_icon.rs` mapping, one-rem chrome or0.875rem inline; don't invent emoji,
 SF-symbol strings or raw SVG paths in feature views. Test actual rem-derived
 bounds: Kit's default test rem and the app's14pt rem need not match.
+The one non-Lucide exception is `app_icon::BrandMark` (GitHub, Linear, Slack, from
+Swift's `BrandMark`): only beside an exactly recognized service link in message text
+(`markdown_service_links`), in the link colour, never as decoration or status.
 
 Layout is a left-aligned reading column, not a grid of nested cards:
 
