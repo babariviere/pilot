@@ -107,6 +107,9 @@ requires actual Wayland `get_toplevel` and a `wl_surface.attach` rendered-buffer
 request, not merely a successful compiler or living process. No X server is
 started; inherited user/Pilot/Node/provider/network configuration is excluded.
 Only the two exact owned fixture processes are terminated and reaped.
+The GUI must remain alive for at least 12 seconds. Cold software rendering has
+up to 60 seconds to produce that protocol evidence; expiration still fails and
+includes the fixture trace tail rather than discarding the rendering diagnostic.
 
 `target/ci-linux-gui-fixture.json` is printed in the CI log and binds the tested
 commit/tree, binary sizes/hashes, resolved dependency paths, required GLIBC and

@@ -29,6 +29,27 @@ def stop(child):
             child.wait(timeout=5)
 
 
+def observe_frame(app, path):
+    # Separate the 12-second liveness check from the cold software-render deadline.
+    # Allow up to 60 for actual rendering, never just a surviving PID.
+    started = time.monotonic()
+    while True:
+        trace = path.read_text(errors="replace")
+        if app.poll() is not None:
+            raise ValueError("Fixture exited before observation: " + trace[-4000:])
+        elapsed = time.monotonic() - started
+        rendered = "get_toplevel(" in trace and re.search(r"wl_surface[^\n]*\.attach\(", trace)
+        if elapsed >= 12 and rendered:
+            return
+        if elapsed >= 60:
+            raise ValueError("No actual Wayland toplevel and attached rendered buffer after 60 seconds: "
+                             + trace[-4000:])
+        try:
+            app.wait(timeout=min(0.25, 60 - elapsed))
+        except subprocess.TimeoutExpired:
+            pass
+
+
 @contextmanager
 def compositor_display(root, env, existing):
     if existing is not None:
@@ -67,9 +88,10 @@ def probe(binaries, output, expected, existing=None):
     package.source(expected)
     if output.exists():
         raise ValueError("Probe receipt must be fresh")
-    # CI checkout SHA is the tested merge, never infer it from PR head.
+    # Caller pins the tested checkout: CI's merge SHA or the immutable release tag.
+    # A retried release's GITHUB_SHA identifies its workflow, not its tagged app.
     tested = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    if expected != tested or os.environ.get("GITHUB_SHA", tested) != tested:
+    if expected != tested:
         raise ValueError("Native probe source mismatch")
     with tempfile.TemporaryDirectory(prefix="linux-gui-fixture-") as directory:
         root = Path(directory)
@@ -107,16 +129,7 @@ def probe(binaries, output, expected, existing=None):
                                        env=dict(env, WAYLAND_DISPLAY=display, WAYLAND_DEBUG="1"),
                                        stdout=trace, stderr=trace, preexec_fn=bounded_log)
                 try:
-                    # Bounded lifetime, not evidence inferred from a surviving process.
-                    try:
-                        app.wait(timeout=12)
-                    except subprocess.TimeoutExpired:
-                        pass
-                    if app.poll() is not None:
-                        raise ValueError("Fixture exited before observation: " + path.read_text()[-4000:])
-                    trace_text = path.read_text(errors="replace")
-                    if "get_toplevel(" not in trace_text or not re.search(r"wl_surface[^\n]*\.attach\(", trace_text):
-                        raise ValueError("No actual Wayland toplevel and attached rendered buffer")
+                    observe_frame(app, path)
                 finally:
                     stop(app)
         package.write_json(output, dict(schema=1, kind="linux-native-gui-fixture-only", source=tested,

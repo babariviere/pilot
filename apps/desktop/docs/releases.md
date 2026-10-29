@@ -75,3 +75,13 @@ No release trigger, production variable/secret mutation, published-asset deletio
 live app/daemon installation or restart is part of this change. Retrying an older
 tag without the required GUI source/contracts fails rather than mixing source
 revisions or relabeling a headless/development package.
+
+An explicitly authorized draft retry runs the packaging-helper overlay from the
+selected workflow commit, including `linux_gui_package_native.py`, while keeping
+the GUI, updater and runtime inputs at the resolved tag commit. The native probe
+compares its explicit `--source` with the checked-out HEAD, not the workflow's
+`GITHUB_SHA` (which can be newer). Ordinary CI still passes its tested merge SHA
+through `ci.sh`. A source-only probe fix therefore needs a dispatch of the
+**updated workflow with the existing draft tag**, not a rerun of the old workflow
+commit. Neither an ordinary green Release Please run nor local probe results
+qualify the hosted full release payload.
