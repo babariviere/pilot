@@ -138,8 +138,12 @@ fn diagnostic_source() {
         digest.update([0]);
     }
     println!(
-        "cargo:rustc-env=PILOT_DESKTOP_SOURCE_SHA256={:x}",
-        digest.finalize()
+        "cargo:rustc-env=PILOT_DESKTOP_SOURCE_SHA256={}",
+        digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
     );
 }
 

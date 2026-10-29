@@ -209,7 +209,10 @@ pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'
             p.swap(0, 2);
         }
     }
-    let source_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let source_hash = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     cancelled(&stop)?;
     Ok(Raster {
         image: Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])),

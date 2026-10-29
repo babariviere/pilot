@@ -4,7 +4,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, App, Bounds, Corners, DispatchPhase, FocusHandle, HitboxBehavior, Hsla,
     IntoElement, KeyDownEvent, MouseExitEvent, MouseMoveEvent, ParentElement, PathBuilder,
-    RenderOnce, ScrollWheelEvent, SharedString, Styled, Subscription, Window, canvas,
+    RenderOnce, ScrollEvent, SharedString, Styled, Subscription, Window, canvas,
     component::{ActiveTheme, StyledExt},
     div, fill, point, px, relative, size,
 };
@@ -422,7 +422,7 @@ fn build(
                                 let report = on_hover.clone();
                                 let focused = focus.clone();
                                 window.on_mouse_event(
-                                    move |_: &ScrollWheelEvent, phase, window, cx| {
+                                    move |_: &ScrollEvent, phase, window, cx| {
                                         if phase == DispatchPhase::Capture
                                             && !focused.is_focused(window)
                                         {

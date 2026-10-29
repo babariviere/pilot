@@ -1,0 +1,34 @@
+{
+  "crate": "gpui-pre-macos",
+  "version": "0.3.10",
+  "archiveSha256": "7e07a5e5c84f0b2160c194a1c852cc89d1942db66867938ceabcd7f763cb4386",
+  "upstream": "https://crates.io/crates/gpui-pre-macos/0.3.10",
+  "purpose": "Keep the existing native NSVisualEffectView material, with live Reduce Transparency capability/appearance notifications and observer teardown.",
+  "edits": [
+    {
+      "path": "src/window.rs",
+      "old": "    fn background_appearance(&self) -> WindowBackgroundAppearance {",
+      "new": "    fn supports_background_blur(&self) -> bool {\n        // SAFETY: NSWorkspace is queried on the platform's main thread. This\n        // public accessibility preference is read-only and applies to all windows.\n        unsafe {\n            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];\n            let reduced: Bool = msg_send![workspace, accessibilityDisplayShouldReduceTransparency];\n            !reduced.as_bool()\n        }\n    }\n\n    fn background_appearance(&self) -> WindowBackgroundAppearance {"
+    },
+    {
+      "path": "src/window.rs",
+      "old": "            // Suppress beep on keystrokes with modifier keys.",
+      "new": "            decl.add_method(\n                sel!(accessibilityDisplayOptionsChanged:),\n                accessibility_display_options_changed as extern \"C\" fn(_, Sel, *mut AnyObject),\n            );\n\n            // Suppress beep on keystrokes with modifier keys."
+    },
+    {
+      "path": "src/window.rs",
+      "old": "            let _: () = msg_send![content_view, addSubview: native_view];",
+      "new": "            // The selector observer is window-owned. Defer its callback so a\n            // preference notification cannot re-enter an in-progress GPUI update.\n            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];\n            let center: *mut AnyObject = msg_send![workspace, notificationCenter];\n            let _: () = msg_send![center, addObserver: native_view,\n                selector: sel!(accessibilityDisplayOptionsChanged:),\n                name: ns_string(\"NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification\"),\n                object: ptr::null_mut::<AnyObject>()];\n            let _: () = msg_send![content_view, addSubview: native_view];"
+    },
+    {
+      "path": "src/window.rs",
+      "old": "            let _: () = msg_send![this.native_window, setDelegate: ptr::null_mut::<AnyObject>()];",
+      "new": "            let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];\n            let center: *mut AnyObject = msg_send![workspace, notificationCenter];\n            let _: () = msg_send![center, removeObserver: this.native_view.as_ptr()];\n            this.appearance_changed_callback.take();\n            let _: () = msg_send![this.native_window, setDelegate: ptr::null_mut::<AnyObject>()];"
+    },
+    {
+      "path": "src/window.rs",
+      "old": "extern \"C\" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {",
+      "new": "extern \"C\" fn accessibility_display_options_changed(this: &AnyObject, _: Sel, _: *mut AnyObject) {\n    // SAFETY: this is the live GPUIView registered with NSWorkspace above.\n    let state = unsafe { get_window_state(this) };\n    let executor = state.lock().foreground_executor.clone();\n    executor.spawn(async move {\n        let callback = state.lock().appearance_changed_callback.take();\n        if let Some(mut callback) = callback {\n            callback();\n            state.lock().appearance_changed_callback = Some(callback);\n        }\n    }).detach();\n}\n\nextern \"C\" fn view_did_change_effective_appearance(this: &AnyObject, _: Sel) {"
+    }
+  ]
+}

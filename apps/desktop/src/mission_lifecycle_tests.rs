@@ -61,8 +61,10 @@ fn completion_requires_the_whole_finished_catalog_not_summary_or_visible_rows() 
             dropped: 1
         })
     );
-    let mut visibility = crate::mission_tasks::Visibility::default();
-    visibility.hide_finished = true;
+    let mut visibility = crate::mission_tasks::Visibility {
+        hide_finished: true,
+        ..Default::default()
+    };
     let catalog = crate::mission_tasks::parse(&source().key, &v).unwrap();
     visibility.collapsed.insert("flat".into());
     assert!(visibility.rows(&catalog).iter().all(Vec::is_empty));

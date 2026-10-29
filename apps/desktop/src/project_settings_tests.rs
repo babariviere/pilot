@@ -95,7 +95,7 @@ fn removed_project_is_never_retargeted_and_keeps_the_draft() {
     let twin = project("b", "Atlas");
     let mut editor = Editor::new(&atlas);
     editor.set_name("Draft");
-    assert!(editor.catalog(&[twin.clone()]));
+    assert!(editor.catalog(std::slice::from_ref(&twin)));
     assert!(editor.removed());
     assert_eq!(editor.project_id(), "a");
     assert_eq!(editor.draft().name, "Draft");
@@ -178,7 +178,7 @@ fn concurrent_change_during_save_is_kept_visible() {
     editor.set_name("Mine");
     let s = editor.begin_save().unwrap();
     let theirs = with(&atlas, |p| p.name = "Theirs".into());
-    editor.catalog(&[theirs.clone()]);
+    editor.catalog(std::slice::from_ref(&theirs));
     editor.finish(&s, Outcome::Saved(with(&atlas, |p| p.name = "Mine".into())));
     assert!(editor.updated_elsewhere());
     assert_eq!(editor.draft().name, "Mine");
@@ -191,7 +191,7 @@ fn concurrent_change_during_save_is_kept_visible() {
     editor.set_name("Mine");
     let s = editor.begin_save().unwrap();
     let mine = with(&atlas, |p| p.name = "Mine".into());
-    editor.catalog(&[mine.clone()]);
+    editor.catalog(std::slice::from_ref(&mine));
     editor.finish(&s, Outcome::Saved(mine));
     assert!(!editor.updated_elsewhere() && !editor.dirty());
 }

@@ -43,7 +43,7 @@ fn frame(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     cx.run_until_parked();
     cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
 }
-fn control_key(w: &mut Window, key: &str, cx: &mut gpui_kit::App) {
+fn control_key(w: &mut Window, key: &'static str, cx: &mut gpui_kit::App) {
     // Exercise actual native control keys, not the helper's simulated text IME.
     let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
     w.dispatch_event(

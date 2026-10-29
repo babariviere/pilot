@@ -685,7 +685,11 @@ fn envelope(archive: &Path, output: &Path, trust: &Trust) -> Result<()> {
         archive_name: manifest::ARCHIVE_ASSET.into(),
         archive_asset_id: 12,
         archive_size: fs::metadata(archive)?.len(),
-        archive_sha256: format!("{:x}", hash.finalize()),
+        archive_sha256: hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
     };
     let bytes = serde_json::to_vec(&value)?;
     let key = Ed25519KeyPair::from_seed_unchecked(&[42; 32]).map_err(|_| "fixture key")?;
@@ -705,10 +709,12 @@ fn capsule_id(root: &Path) -> Result<String> {
 }
 #[cfg(target_os = "linux")]
 fn capsule_id(root: &Path) -> Result<String> {
-    Ok(format!(
-        "{:x}",
+    Ok(
         Sha256::digest(fs::read(root.join("linux-gui-package.json"))?)
-    ))
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+    )
 }
 #[cfg(target_os = "linux")]
 fn publish_linux(old: &Path, root: &Path) -> Result<PathBuf> {
@@ -827,7 +833,7 @@ fn bundle(
                 files.push(json!({"path":name,"kind":"directory","mode":meta.mode() & 0o7777}));
                 pending.push(path);
             } else {
-                files.push(json!({"path":name,"kind":"file","mode":meta.mode() & 0o7777,"bytes":meta.len(),"sha256":format!("{:x}",Sha256::digest(fs::read(path)?))}));
+                files.push(json!({"path":name,"kind":"file","mode":meta.mode() & 0o7777,"bytes":meta.len(),"sha256":Sha256::digest(fs::read(path)?).iter().map(|byte| format!("{byte:02x}")).collect::<String>()}));
             }
         }
     }

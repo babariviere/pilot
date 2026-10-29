@@ -18,8 +18,8 @@ use std::{collections::HashMap, time::Duration};
 
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, EntityInputHandler, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Styled, Subscription, Task, TestSupportExt, Window,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, StyleRefinement,
+    Styled, Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -130,10 +130,11 @@ impl TranscriptView {
     }
 
     pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys([
-            KeyBinding::new("secondary-q", Quit, None),
-            KeyBinding::new("secondary-l", FocusComposer, None),
-        ]);
+        let bindings = [
+            crate::ui::shortcut("secondary-q", Quit, None, cx),
+            crate::ui::shortcut("secondary-l", FocusComposer, None, cx),
+        ];
+        cx.bind_keys(bindings);
         cx.on_action(|_: &Quit, cx| crate::local_view::menu_routing::quit(cx));
     }
 
@@ -1154,8 +1155,8 @@ impl Render for TranscriptView {
             .min_w_0()
             // A fitting list lets wheel packets bubble instead of invoking the
             // bounce callback. Only upward intent at the top requests history.
-            .on_scroll_wheel(cx.listener(
-                move |view, event: &gpui_kit::ScrollWheelEvent, _, cx| {
+            .on_scroll(
+                cx.listener(move |view, event: &gpui_kit::ScrollEvent, _, cx| {
                     if view.readonly
                         && view.history_scope == scope
                         && event.delta.pixel_delta(px(20.)).y > px(0.)
@@ -1163,8 +1164,8 @@ impl Render for TranscriptView {
                     {
                         cx.emit(HistoryTop(scope));
                     }
-                },
-            ))
+                }),
+            )
             // First, so nested tool output knows where each wheel gesture began.
             .child(crate::nested_scroll::tracker());
         #[cfg(any(test, feature = "native-probes"))]

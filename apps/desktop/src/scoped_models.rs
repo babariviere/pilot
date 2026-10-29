@@ -32,7 +32,10 @@ pub(crate) fn hash(value: &Option<Vec<String>>) -> String {
         Some(value) => serde_json::to_vec(value),
     }
     .unwrap();
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
 }
 pub(crate) fn valid_selection(value: &Option<Vec<String>>) -> Result<(), Failure> {
     if let Some(patterns) = value

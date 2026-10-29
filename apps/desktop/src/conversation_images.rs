@@ -51,7 +51,13 @@ impl Source {
         digest.update(mime.as_bytes());
         digest.update([0]);
         digest.update(data.as_bytes());
-        result.hash = Some(format!("{:x}", digest.finalize()));
+        result.hash = Some(
+            digest
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        );
         result.problem = match mime {
             "image/png" | "image/jpeg" | "image/gif" => None,
             "image/webp" => Some("WebP preview is unavailable. Stored source is preserved."),

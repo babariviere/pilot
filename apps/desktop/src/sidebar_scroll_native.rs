@@ -5,7 +5,7 @@
 //! drawable back-pressure all count. Compositor latency is not observed.
 use super::*;
 use gpui_kit::{
-    Bounds, InputEvent, Pixels, ScrollDelta, ScrollWheelEvent, WindowBounds, WindowOptions, point,
+    Bounds, InputEvent, Pixels, ScrollDelta, ScrollEvent, WindowBounds, WindowOptions, point,
     size, test::TestWindowExt,
 };
 use serde_json::json;
@@ -141,7 +141,7 @@ pub fn run(cx: &mut App) {
                         let counters = instructions_cycles();
                         let (cpu, start) = (thread_cpu_ms(), Instant::now());
                         w.dispatch_event(
-                            ScrollWheelEvent {
+                            ScrollEvent {
                                 position,
                                 delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
                                 ..Default::default()
@@ -241,7 +241,7 @@ fn tick(w: &mut Window, cx: &mut App, mut phase: Phase) {
     phase.left -= 1;
     phase.last = Some((now, cpu, counters));
     w.dispatch_event(
-        ScrollWheelEvent {
+        ScrollEvent {
             position: phase.position,
             delta: ScrollDelta::Pixels(point(px(0.), px(phase.delta))),
             ..Default::default()

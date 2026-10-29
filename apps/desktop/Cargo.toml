@@ -102,37 +102,37 @@ harness = false
 required-features = ["native-probes"]
 
 [patch.crates-io]
-gpui-base = { path = ".patched/gpui-base-0.8.0" }
-gpui-component = { path = ".patched/gpui-component-0.8.0" }
-gpui-pre = { path = ".patched/gpui-pre-0.3.9" }
-gpui-pre-macos = { path = ".patched/gpui-pre-macos-0.3.9" }
-gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.9" }
+gpui-pre = { path = ".patched/gpui-pre-0.3.10" }
+gpui-pre-macos = { path = ".patched/gpui-pre-macos-0.3.10" }
+gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.10" }
+gpui-base = { path = ".patched/gpui-base-0.8.1" }
+gpui-component = { path = ".patched/gpui-component-0.8.1" }
 
 [dependencies]
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std"] }
-gpui-kit = "=0.8.0"
+gpui-kit = "=0.8.1"
 lyon_tessellation = "=1.0.23"
 async-channel = "=2.5.0"
 futures-util = "=0.3.34"
 serde_json = "=1.0.154"
 serde = { version = "=1.0.229", features = ["derive", "rc"] }
-sha2 = "=0.10.9"
-uuid = { version = "=1.28.0", features = ["v4"] }
-unicode-normalization = "=0.1.25"
+sha2 = "=0.11.1"
+uuid = { version = "=1.29.0", features = ["v4"] }
+unicode-normalization = "=0.1.26"
 unicode-segmentation = "=1.13.3"
 libc = "=0.2.191"
-base64 = "=0.22.1"
+base64 = "=0.23.1"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif"] }
-reqwest = { version = "=0.12.28", default-features = false }
+reqwest = { version = "=0.13.5", default-features = false, features = ["query"] }
 tokio = { version = "=1.54.1", features = ["rt", "net", "sync", "time", "macros", "io-util", "process"] }
-tokio-tungstenite = { version = "=0.28.0", default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 
 [build-dependencies]
-sha2 = "=0.10.9"
+sha2 = "=0.11.1"
 
 [dev-dependencies]
-gpui-kit = { version = "=0.8.0", features = ["test-support"] }
+gpui-kit = { version = "=0.8.1", features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pilot-desktop-updater = { path = "updater", features = ["native-linux"] }

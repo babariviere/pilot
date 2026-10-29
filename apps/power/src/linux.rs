@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::{io::Write, os::fd::OwnedFd, time::Duration};
 use tokio::sync::mpsc;
-use zbus::{Connection, Proxy, zvariant};
+use zbus::{Connection, Proxy, wire as zvariant};
 
 const POLICY_SERVICE: &str = "org.kde.Solid.PowerManagement";
 const POLICY_PATH: &str = "/org/kde/Solid/PowerManagement/PolicyAgent";
@@ -208,11 +208,11 @@ pub(crate) fn run() {
 
 #[cfg(target_os = "linux")]
 async fn native() -> Result<()> {
-    let system = zbus::connection::Builder::system()?
+    let system = zbus::connection::Builder::system()
         .method_timeout(Duration::from_secs(2))
         .build()
         .await?;
-    let session = zbus::connection::Builder::session()?
+    let session = zbus::connection::Builder::session()
         .method_timeout(Duration::from_secs(2))
         .build()
         .await?;

@@ -127,7 +127,10 @@ impl Question {
         if bytes.len() > METADATA_BYTES {
             return Err("Question metadata exceeds supported limits");
         }
-        let fingerprint = format!("{:x}", Sha256::digest(bytes));
+        let fingerprint = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         Ok(Self {
             identity: Identity { entry, fingerprint },
             content,

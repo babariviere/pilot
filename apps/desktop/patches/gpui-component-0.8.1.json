@@ -1,8 +1,8 @@
 {
   "crate": "gpui-component",
-  "version": "0.8.0",
-  "archiveSha256": "4097e161cc81e86323b439664be0cdd4f7c56148e867ed6f67fd72b966b6c2d1",
-  "upstream": "https://crates.io/crates/gpui-component/0.8.0",
+  "version": "0.8.1",
+  "archiveSha256": "46ce53430332e30f303364eaabfa10ed2aa23dfaf2a147e04370e0e9c423578b",
+  "upstream": "https://crates.io/crates/gpui-component/0.8.1",
   "purpose": "Reader anchor hold, event-derived list/bounce/scrollbar notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change. Optional per-scroller visibility mode; defaults unchanged. Optional delegate-provided list row/header heights for mixed-height rows; defaults unchanged.",
   "edits": [
     {
@@ -169,6 +169,11 @@
       "path": "src/list/delegate.rs",
       "old": "    fn items_count(&self, section: usize, cx: &App) -> usize;\n",
       "new": "    fn items_count(&self, section: usize, cx: &App) -> usize;\n\n    /// A fixed height for the item at `ix`, instead of the shared measured\n    /// item height. Default None keeps the measured height.\n    fn item_height(&self, ix: IndexPath, cx: &App) -> Option<gpui::Pixels> {\n        None\n    }\n\n    /// A fixed height for the section header, instead of the shared height\n    /// measured from section 0. Default None keeps the measured height.\n    fn section_header_height(&self, section: usize, cx: &App) -> Option<gpui::Pixels> {\n        None\n    }\n\n"
+    },
+    {
+      "path": "src/message_scroller.rs",
+      "old": ".on_scroll_wheel(",
+      "new": ".on_scroll("
     }
   ]
 }

@@ -112,7 +112,10 @@ pub(super) fn validate(
     if inputs["tested_sha"] != package.source || inputs["target"] != package.target {
         return Err("Linux executable source does not match its runtime.");
     }
-    Ok(format!("{:x}", Sha256::digest(raw)))
+    Ok(Sha256::digest(raw)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 fn private_directory(path: &Path) -> Result<(), Failure> {
@@ -380,7 +383,7 @@ mod tests {
                 } else if m.is_dir() {
                     json!({"path":name,"kind":"directory","mode":m.mode() & 0o7777})
                 } else {
-                    json!({"path":name,"kind":"file","bytes":m.len(),"mode":m.mode() & 0o7777,"sha256":format!("{:x}",Sha256::digest(fs::read(path).unwrap()))})
+                    json!({"path":name,"kind":"file","bytes":m.len(),"mode":m.mode() & 0o7777,"sha256":Sha256::digest(fs::read(path).unwrap()).iter().map(|byte| format!("{byte:02x}")).collect::<String>()})
                 });
             }
             fs::write(self.package.join(MANIFEST), serde_json::to_vec(&json!({

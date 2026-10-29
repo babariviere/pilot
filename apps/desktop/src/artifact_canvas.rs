@@ -3,7 +3,7 @@
 //! follow the display and stop while offscreen, collapsed or in another pane.
 use super::*;
 use gpui_kit::{
-    Bounds, DispatchPhase, HitboxBehavior, MouseExitEvent, MouseMoveEvent, Pixels, ScrollWheelEvent,
+    Bounds, DispatchPhase, HitboxBehavior, MouseExitEvent, MouseMoveEvent, Pixels, ScrollEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Weak;
@@ -184,7 +184,7 @@ impl ArtifactPane {
                         leave(bounds, None, cx);
                     }
                 });
-                window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, cx| {
+                window.on_mouse_event(move |_: &ScrollEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
                         report(bounds, None, cx);
                     }

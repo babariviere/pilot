@@ -4,7 +4,7 @@
 use super::*;
 use gpui_kit::{
     AnyWindowHandle, AsyncApp, BackgroundExecutor, Bounds, InputEvent as _, Pixels, ScrollDelta,
-    ScrollWheelEvent, WindowBounds, WindowOptions, point, size, test::TestWindowExt,
+    ScrollEvent, WindowBounds, WindowOptions, point, size, test::TestWindowExt,
 };
 use serde_json::{Value, json};
 use std::{
@@ -294,7 +294,7 @@ impl Run<'_> {
             if delta != 0. {
                 let position = viewport.origin + point(px(8.), px(200.));
                 w.dispatch_event(
-                    ScrollWheelEvent {
+                    ScrollEvent {
                         position,
                         delta: ScrollDelta::Pixels(point(px(0.), px(delta))),
                         ..Default::default()

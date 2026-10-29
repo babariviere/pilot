@@ -104,18 +104,14 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let fake = Fake::default();
-        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let (a, b) = StdUnixStream::pair().unwrap();
         let guid = zbus::Guid::generate();
         let server = zbus::connection::Builder::unix_stream(a)
             .server(guid)
-            .unwrap()
             .p2p()
             .serve_at(POLICY_PATH, fake.clone())
-            .unwrap()
             .serve_at(LOGIN_PATH, Login(fake.clone()))
-            .unwrap()
-            .serve_at("/org/freedesktop/NetworkManager", Network)
-            .unwrap();
+            .serve_at("/org/freedesktop/NetworkManager", Network);
         let (server, client) = tokio::join!(
             server.build(),
             zbus::connection::Builder::unix_stream(b).p2p().build()
@@ -235,7 +231,11 @@ fn isolated_pipe_child_entry() {
         .build()
         .unwrap()
         .block_on(async {
-            let stream = tokio::net::UnixStream::connect(path).await.unwrap();
+            let stream = tokio::net::UnixStream::connect(path)
+                .await
+                .unwrap()
+                .into_std()
+                .unwrap();
             let connection = zbus::connection::Builder::unix_stream(stream)
                 .p2p()
                 .build()
@@ -290,16 +290,12 @@ async fn real_pipe_eof_and_helper_process_death_close_native_resource_ownership(
             .unwrap();
         let (stream, _) = listener.accept().await.unwrap();
         let fake = Fake::default();
-        let server = zbus::connection::Builder::unix_stream(stream)
+        let server = zbus::connection::Builder::unix_stream(stream.into_std().unwrap())
             .server(zbus::Guid::generate())
-            .unwrap()
             .p2p()
             .serve_at(POLICY_PATH, fake.clone())
-            .unwrap()
             .serve_at(LOGIN_PATH, Login(fake.clone()))
-            .unwrap()
             .serve_at("/org/freedesktop/NetworkManager", Network)
-            .unwrap()
             .build()
             .await
             .unwrap();
@@ -533,24 +529,16 @@ mod bus {
         async fn fixture(&self) -> Fixture {
             let fake = Fake::default();
             let server = zbus::connection::Builder::address(self.address.as_str())
-                .unwrap()
                 .name(POLICY_SERVICE)
-                .unwrap()
                 .name(LOGIN_SERVICE)
-                .unwrap()
                 .name("org.freedesktop.NetworkManager")
-                .unwrap()
                 .serve_at(POLICY_PATH, fake.clone())
-                .unwrap()
                 .serve_at(LOGIN_PATH, Login(fake.clone()))
-                .unwrap()
                 .serve_at("/org/freedesktop/NetworkManager", Network)
-                .unwrap()
                 .build()
                 .await
                 .unwrap();
             let client = zbus::connection::Builder::address(self.address.as_str())
-                .unwrap()
                 .method_timeout(Duration::from_secs(2))
                 .build()
                 .await

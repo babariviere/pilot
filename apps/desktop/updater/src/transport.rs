@@ -102,7 +102,23 @@ impl Transport {
                 network: Box::new(crate::fixture::Fixture::open()?),
             });
         }
+        // Keep the previous native-root/ring policy. Reqwest 0.13's default
+        // Rustls backend instead uses platform-verifier and AWS-LC.
+        let mut roots = rustls::RootCertStore::empty();
+        let (valid, invalid) =
+            roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+        if valid == 0 && invalid != 0 {
+            return Err(Error::Offline);
+        }
+        let tls = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|_| Error::Offline)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
         let client = Client::builder()
+            .tls_backend_preconfigured(tls)
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .connect_timeout(Duration::from_secs(10))

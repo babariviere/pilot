@@ -1,8 +1,8 @@
 {
   "crate": "gpui-base",
-  "version": "0.8.0",
-  "archiveSha256": "d5cd7de73d5b2d3d18b94a928abf343922091fa77bc472f77b7d2e7e8b1823a7",
-  "upstream": "https://crates.io/crates/gpui-base/0.8.0",
+  "version": "0.8.1",
+  "archiveSha256": "d862bc8f2e27710039013d075ac4995892e9687ff207fa530f880cbcd513936f",
+  "upstream": "https://crates.io/crates/gpui-base/0.8.1",
   "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans. Let SelectableText style byte ranges (weight, color, italic, strike, font family) without changing its plain selection/copy text. Add literal plain TextView state with source positions so native range highlights and selection share the existing paragraph renderer, without HTML or Markdown rewriting.",
   "edits": [
     {
@@ -24,37 +24,6 @@
       "path": "src/text_selection.rs",
       "old": "    generation: u64,\n}\n\n#[derive(Clone)]\nstruct SelectionEndpoint",
       "new": "    generation: u64,\n    // No live geometry: retained only for logical copy/clear until remounted.\n    detached: bool,\n}\n\n#[derive(Clone)]\nstruct SelectionEndpoint"
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "                generation: self.frame_generation.get(),\n            },",
-      "new": "                generation: self.frame_generation.get(),\n                detached: false,\n            },",
-      "count": 2
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "(registration.generation != generation && !registration.registration.is_rendered())",
-      "new": "(!registration.detached && registration.generation != generation && !registration.registration.is_rendered())"
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "        let endpoint_departed = stale.iter().any(|(id, _)| {",
-      "new": "        let retained = stale.iter().filter_map(|(id, participant)| {\n            let participant = participant.upgrade()?;\n            let state = participant.read(cx);\n            (state.retain_on_unmount && state.has_selection_to_clear()).then_some(*id)\n        }).collect::<Vec<_>>();\n        let endpoint_departed = stale.iter().any(|(id, _)| {\n            if retained.contains(id) { return false; }"
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "        for (id, participant) in stale {\n            self.participants.get_mut().remove(&id);",
-      "new": "        if !retained.is_empty() {\n            self.stop_anchor_auto_scroll(cx);\n            self.is_selecting = false;\n        }\n        for (id, participant) in stale {\n            if retained.contains(&id) {\n                self.participants.get_mut().get_mut(&id).unwrap().detached = true;\n                continue;\n            }\n            self.participants.get_mut().remove(&id);"
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "            registration.generation != generation && !registration.registration.is_rendered()\n        };",
-      "new": "            !registration.detached && registration.generation != generation && !registration.registration.is_rendered()\n        };"
-    },
-    {
-      "path": "src/text_selection.rs",
-      "old": "            !gone(registration) && registration.participant.upgrade().is_some()",
-      "new": "            !gone(registration) && registration.participant.upgrade().is_some_and(|participant| {\n                !registration.detached || participant.read(cx).has_selection_to_clear()\n            })"
     },
     {
       "path": "src/text_selection.rs",
@@ -115,36 +84,6 @@
       "path": "src/text/state.rs",
       "old": "            image_source: self.image_source.clone(),",
       "new": "            image_source: if self.images_enabled { self.image_source.clone() } else {\n                Some(std::sync::Arc::new(|_| gpui::ImageSource::from(\"__disabled_document_image__\")))\n            },"
-    },
-    {
-      "path": "src/text/inline.rs",
-      "old": "thread_local! {\n    static RETAINED_LAYOUTS:",
-      "new": "// A dead-state epoch avoids rescanning an entirely live table at every paint.\n// Count completed InlineState destruction on any parser/UI thread.\nstatic RETAINED_STATE_DROPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);\n\n#[derive(Debug, Default, PartialEq)]\npub(crate) struct RetainedLiveness;\n\nimpl Drop for RetainedLiveness {\n    fn drop(&mut self) {\n        RETAINED_STATE_DROPS.fetch_add(1, std::sync::atomic::Ordering::Release);\n    }\n}\n\nthread_local! {\n    static RETAINED_LAST_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };\n    static RETAINED_LAYOUTS:"
-    },
-    {
-      "path": "src/text/inline.rs",
-      "old": "fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {\n    RETAINED_LAYOUTS.with(|layouts| {\n        let mut layouts = layouts.borrow_mut();\n        if layouts.len() >= RETAINED_SWEEP_AT {\n            layouts.retain(|_, retained| retained.state.strong_count() > 0);\n        }\n        layouts.insert(state_key(state), retained);\n    });\n}",
-      "new": "fn sweep_retained_layouts(\n    layouts: &mut HashMap<usize, RetainedLayout>,\n    epoch: usize,\n    last_sweep: &std::cell::Cell<usize>,\n) -> bool {\n    if layouts.len() < RETAINED_SWEEP_AT || last_sweep.get() == epoch {\n        return false;\n    }\n    // Remember the epoch from before the walk: a concurrent destruction must\n    // still trigger the next walk, even if it happened during this one.\n    last_sweep.set(epoch);\n    layouts.retain(|_, retained| retained.state.strong_count() > 0);\n    true\n}\n\nfn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {\n    RETAINED_LAYOUTS.with(|layouts| {\n        let mut layouts = layouts.borrow_mut();\n        let epoch = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n        RETAINED_LAST_SWEEP.with(|last| { sweep_retained_layouts(&mut layouts, epoch, last); });\n        layouts.insert(state_key(state), retained);\n    });\n}"
-    },
-    {
-      "path": "src/text/inline.rs",
-      "old": "mod tests {\n",
-      "new": "mod tests {\n    #[test]\n    fn retained_layout_sweeps_follow_destruction_without_changing_the_threshold() {\n        super::assert_retained_layout_sweep_invariants();\n    }\n"
-    },
-    {
-      "path": "src/text/inline.rs",
-      "old": "    pub(crate) editor_key: Option<u64>,\n}",
-      "new": "    pub(crate) editor_key: Option<u64>,\n    // Zero-sized destruction signal; InlineState itself stays movable.\n    pub(crate) _retained_liveness: RetainedLiveness,\n}"
-    },
-    {
-      "path": "src/text/inline.rs",
-      "old": "impl InlineState {\n    /// Save actually rendered text",
-      "new": "#[cfg(any(test, feature = \"test-support\"))]\n#[doc(hidden)]\npub fn assert_retained_layout_sweep_invariants() {\n    assert_eq!(std::mem::size_of::<RetainedLiveness>(),0);\n    fn entry(state: &Arc<Mutex<InlineState>>) -> RetainedLayout {\n        RetainedLayout { state: Arc::downgrade(state), styled_text: StyledText::new(\"x\"),\n            text: \"x\".into(), runs: Vec::new(), text_style: TextStyle::default() }\n    }\n    let mut owners = Vec::new();\n    let mut layouts = HashMap::new();\n    let last = std::cell::Cell::new(usize::MAX);\n    for _ in 0..RETAINED_SWEEP_AT {\n        let owner = Arc::new(Mutex::new(InlineState::default()));\n        layouts.insert(state_key(&owner), entry(&owner));\n        owners.push(owner);\n    }\n    let epoch = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert!(sweep_retained_layouts(&mut layouts, epoch, &last));\n    for _ in 0..128 {\n        assert!(!sweep_retained_layouts(&mut layouts, epoch, &last));\n    }\n    assert_eq!(layouts.len(), RETAINED_SWEEP_AT);\n    let dead = owners.pop().unwrap();\n    let dead_key = state_key(&dead);\n    std::thread::spawn(move || drop(dead)).join().unwrap();\n    let changed = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert_ne!(epoch, changed);\n    assert!(sweep_retained_layouts(&mut layouts, changed, &last));\n    assert!(!layouts.contains_key(&dead_key));\n    assert_eq!(layouts.len(), RETAINED_SWEEP_AT - 1);\n    assert!(owners.iter().all(|owner| layouts.contains_key(&state_key(owner))));\n    // Below the original threshold, dead entries remain until the next\n    // eligible insertion, exactly as before.\n    let another = owners.pop().unwrap();\n    let another_key = state_key(&another);\n    drop(another);\n    let next = RETAINED_STATE_DROPS.load(std::sync::atomic::Ordering::Acquire);\n    assert!(!sweep_retained_layouts(&mut layouts, next, &last));\n    assert!(layouts.contains_key(&another_key));\n    let owner = Arc::new(Mutex::new(InlineState::default()));\n    layouts.insert(state_key(&owner), entry(&owner));\n    assert!(sweep_retained_layouts(&mut layouts, next, &last));\n    assert!(!layouts.contains_key(&another_key));\n\n}\n\nimpl InlineState {\n    /// Save actually rendered text"
-    },
-    {
-      "path": "src/text/mod.rs",
-      "old": "mod inline;\n",
-      "new": "mod inline;\n#[cfg(feature = \"test-support\")]\n#[doc(hidden)]\npub use inline::assert_retained_layout_sweep_invariants;\n"
     },
     {
       "path": "src/virtual_list.rs",
@@ -238,6 +177,80 @@
       "new": "    pub(super) fn selection_points(\n        &self,\n        origin: Point<Pixels>,\n        cx: &App,\n    ) -> Option<(Point<Pixels>, Point<Pixels>)> {\n        let snapshot = self.selection.snapshot(cx)?;\n        let points = snapshot.window_points()?;\n        // Inline paint precedes registration of this frame's geometry. Resolve\n        // our endpoints against the current layout, not last frame's origin.\n        // Detached participants still have no window points and keep their\n        // logical ranges through the existing retention path.\n        let resolve = |endpoint: TextSelectionEndpoint, fallback| {\n            if endpoint.entity_id() == Some(self.selection.entity_id()) {\n                origin + endpoint.content_point()\n            } else {\n                fallback\n            }\n        };\n        Some((\n            resolve(snapshot.anchor(), points.anchor()),\n            resolve(snapshot.cursor(), points.cursor()),\n        ))\n    }"
     },
     {
+      "path": "src/text_selection.rs",
+      "old": "                document_order,\n                generation,",
+      "new": "                document_order,\n                generation,\n                detached: false,"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "let missed_frame = participant.generation != generation",
+      "new": "let missed_frame = !participant.detached && participant.generation != generation"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "!participant.registration.paint_order || participant.generation == generation",
+      "new": "participant.detached || !participant.registration.paint_order || participant.generation == generation"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        let stale = self.stale_participants(true);",
+      "new": "        let mut stale = self.stale_participants(true);\n        self.detach_selected_participants(&mut stale, cx);"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "    fn endpoint_departed(&self, stale: &[(EntityId, WeakEntity<SelectableTextState>)]) -> bool {",
+      "new": "    fn detach_selected_participants(\n        &mut self,\n        stale: &mut Vec<(EntityId, WeakEntity<SelectableTextState>)>,\n        cx: &mut App,\n    ) {\n        let retained = stale.iter().filter_map(|(id, weak)| {\n            let participant = weak.upgrade()?;\n            let state = participant.read(cx);\n            (state.retain_on_unmount && state.has_selection_to_clear()).then_some(*id)\n        }).collect::<Vec<_>>();\n        if retained.is_empty() { return; }\n        self.stop_anchor_auto_scroll(cx);\n        self.is_selecting = false;\n        for id in &retained {\n            if let Some(participant) = self.participants.get_mut().get_mut(id) {\n                participant.detached = true;\n            }\n        }\n        stale.retain(|(id, _)| !retained.contains(id));\n    }\n\n    fn endpoint_departed(&self, stale: &[(EntityId, WeakEntity<SelectableTextState>)]) -> bool {"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "            let stale = state\n                .read(cx)\n                .stale_participants(state.read(cx).layer_painted.get());",
+      "new": "            let mut stale = state\n                .read(cx)\n                .stale_participants(state.read(cx).layer_painted.get());\n            if stale.iter().any(|(_, weak)| weak.upgrade().is_some_and(|participant| {\n                let participant = participant.read(cx);\n                participant.retain_on_unmount && participant.has_selection_to_clear()\n            })) {\n                state.update(cx, |state, cx| state.detach_selected_participants(&mut stale, cx));\n            }"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "        if dropped != SWEPT_AT_DROPS.get() || layouts.len() >= RETAINED_SWEEP_AT {",
+      "new": "        if dropped != SWEPT_AT_DROPS.get() {"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "const RETAINED_SWEEP_AT: usize = 4096;",
+      "new": "#[cfg(any(test, feature = \"test-support\"))]\nconst RETAINED_SWEEP_AT: usize = 4096;"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "impl InlineState {\n    /// Save actually rendered text",
+      "new": "#[cfg(any(test, feature = \"test-support\"))]\n#[doc(hidden)]\npub fn assert_retained_layout_sweep_invariants() {\n    let previous = RETAINED_LAYOUTS.with(|layouts| std::mem::take(&mut *layouts.borrow_mut()));\n    let mut owners = Vec::new();\n    for _ in 0..RETAINED_SWEEP_AT {\n        let owner = Arc::new(Mutex::new(InlineState::default()));\n        let retained = RetainedLayout {\n            state: Arc::downgrade(&owner), styled_text: StyledText::new(\"x\"),\n            text: \"x\".into(), runs: Vec::new(), text_style: TextStyle::default(),\n        };\n        retain_layout(&owner, retained, None);\n        owners.push(owner);\n    }\n    sweep_retained_layouts();\n    let epoch = SWEPT_AT_DROPS.get();\n    for _ in 0..128 { sweep_retained_layouts(); }\n    assert_eq!(SWEPT_AT_DROPS.get(), epoch);\n    RETAINED_LAYOUTS.with(|layouts| assert_eq!(layouts.borrow().len(), RETAINED_SWEEP_AT));\n    let dead = owners.pop().unwrap();\n    let key = state_key(&dead);\n    std::thread::spawn(move || drop(dead)).join().unwrap();\n    sweep_retained_layouts();\n    assert_ne!(SWEPT_AT_DROPS.get(), epoch);\n    RETAINED_LAYOUTS.with(|layouts| {\n        let layouts = layouts.borrow();\n        assert_eq!(layouts.len(), RETAINED_SWEEP_AT - 1);\n        assert!(!layouts.contains_key(&key));\n    });\n    drop(owners);\n    sweep_retained_layouts();\n    RETAINED_LAYOUTS.with(|layouts| {\n        assert!(layouts.borrow().is_empty());\n        *layouts.borrow_mut() = previous;\n    });\n}\n\nimpl InlineState {\n    /// Save actually rendered text"
+    },
+    {
+      "path": "src/text/mod.rs",
+      "old": "mod inline;\n",
+      "new": "mod inline;\n#[cfg(feature = \"test-support\")]\n#[doc(hidden)]\npub use inline::assert_retained_layout_sweep_invariants;\n"
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "        full_frame: bool,\n    ) -> Vec<(EntityId, WeakEntity<SelectableTextState>)>",
+      "new": "        full_frame: bool,\n        cx: &App,\n    ) -> Vec<(EntityId, WeakEntity<SelectableTextState>)>",
+      "count": 1
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "self.stale_participants(true)",
+      "new": "self.stale_participants(true, cx)",
+      "count": 1
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": ".stale_participants(state.read(cx).layer_painted.get())",
+      "new": ".stale_participants(state.read(cx).layer_painted.get(), cx)",
+      "count": 1
+    },
+    {
+      "path": "src/text_selection.rs",
+      "old": "(missed_frame || participant.participant.upgrade().is_none())",
+      "new": "(missed_frame || participant.participant.upgrade().is_none_or(|state| {\n                    participant.detached && !state.read(cx).has_selection_to_clear()\n                }))",
+      "count": 1
+    },
+    {
       "path": "src/text/state.rs",
       "old": "    /// HTML view\n    Html,",
       "new": "    /// HTML view\n    Html,\n    /// Literal text with source-mapped paragraph ranges.\n    Plain,"
@@ -267,6 +280,21 @@
       "path": "src/text/state.rs",
       "old": "        if self.format == TextViewFormat::Markdown\n            && self.parsed_error.is_none()",
       "new": "        if self.format != TextViewFormat::Html\n            && self.parsed_error.is_none()"
+    },
+    {
+      "path": "src/text/selection_adapter.rs",
+      "old": "    pub(super) fn painted_selection_points(\n        &self,\n        cx: &App,",
+      "new": "    pub(super) fn painted_selection_points(\n        &self,\n        origin: Point<Pixels>,\n        cx: &App,"
+    },
+    {
+      "path": "src/text/selection_adapter.rs",
+      "old": "        let (anchor, cursor) = self.selection_points(cx)?;",
+      "new": "        let (anchor, cursor) = self.selection_points(origin, cx)?;"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "        self.selection_adapter.painted_selection_points(cx)",
+      "new": "        self.selection_adapter.painted_selection_points(self.bounds.origin + self.scroll_offset(), cx)"
     }
   ]
 }

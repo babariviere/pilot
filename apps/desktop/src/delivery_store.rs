@@ -261,7 +261,10 @@ pub(crate) fn valid_key(key: &str) -> bool {
         .is_some_and(token)
 }
 pub(crate) fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
 }
 
 fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {

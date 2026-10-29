@@ -55,7 +55,7 @@ pub fn run(cx: &mut App) {
                     let bounds = w.find("viewport").bounds();
                     let position = bounds.origin + point(px(4.),px(180.));
                     let delta = if phase == "resident" {if step%2 == 0 {-2.} else {2.}} else if step < 80 {-42.} else {42.};
-                    w.dispatch_event(ScrollWheelEvent {position,delta:ScrollDelta::Pixels(point(px(0.),px(delta))),..Default::default()}.to_platform_input(),cx);
+                    w.dispatch_event(ScrollEvent {position,delta:ScrollDelta::Pixels(point(px(0.),px(delta))),..Default::default()}.to_platform_input(),cx);
                     let drawing = Instant::now();
                     w.draw(cx).clear(cx);
                     let draw_ms = drawing.elapsed().as_secs_f64()*1000.;

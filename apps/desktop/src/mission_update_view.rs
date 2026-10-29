@@ -47,10 +47,11 @@ impl Form {
     }
     fn new(key: Key, options: LocalOptions, w: &mut Window, cx: &mut Context<Self>) -> Self {
         if !cx.has_global::<Keys>() {
-            cx.bind_keys([
-                gpui_kit::KeyBinding::new("secondary-enter", SubmitUpdate, Some("MissionUpdate")),
+            let bindings = [
+                crate::ui::shortcut("secondary-enter", SubmitUpdate, Some("MissionUpdate"), cx),
                 gpui_kit::KeyBinding::new("escape", CloseUpdate, Some("MissionUpdate")),
-            ]);
+            ];
+            cx.bind_keys(bindings);
             cx.set_global(Keys);
         }
         let text = cx.new(|cx| {

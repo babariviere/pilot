@@ -226,7 +226,11 @@ impl Process {
             if hello.protocol != 1
                 || Some(hello.pid) != process.child.id()
                 || hello.engine != "0.17.0"
-                || hello.runtime_hash != format!("{:x}", Sha256::digest(RUNTIME))
+                || hello.runtime_hash
+                    != Sha256::digest(RUNTIME)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
                 || !hello.sandbox
             {
                 return Err(Fault::new(

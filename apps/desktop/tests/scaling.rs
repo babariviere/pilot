@@ -81,7 +81,10 @@ fn main() {
     let bytes: usize = args[1].parse().unwrap();
     assert!((8192..=1_048_576).contains(&bytes));
     let mut source = fixture(kind, bytes - 400);
-    let source_hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let source_hash = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     let mut cx = HeadlessAppContext::with_platform(
         gpui_kit::platform::current_platform(true).text_system(),
         Arc::new(pilot_desktop::ChromeAssets),

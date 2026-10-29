@@ -1,8 +1,8 @@
 {
   "crate": "gpui-pre",
-  "version": "0.3.9",
-  "archiveSha256": "34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0",
-  "upstream": "https://crates.io/crates/gpui-pre/0.3.9",
+  "version": "0.3.10",
+  "archiveSha256": "df4b5f8d0c278308df2f11e0bfe0212dd77d7848ce1bdc4b9d513334414396f6",
+  "upstream": "https://crates.io/crates/gpui-pre/0.3.10",
   "purpose": "Expose native background blur capability. Unsupported and headless platforms default to opaque.",
   "edits": [
     {

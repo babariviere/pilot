@@ -680,7 +680,7 @@ Kit's runtime shader compilation is enabled by its own baseline Metal backend;
 this is not support for user-authored shader artifacts.
 
 Linux: GNU x86-64/aarch64 bootstrap, native Wayland only. Install the native build
-prerequisites for GPUI 0.3.9 using your distribution's documented mechanism
+prerequisites for GPUI 0.3.10 using your distribution's documented mechanism
 (compiler/pkg-config, Wayland/xkbcommon, font/text, Vulkan/EGL libraries; Kit also
 enables X11 build dependencies). This prototype does not install system packages.
 It requires `WAYLAND_DISPLAY` and a reachable compositor socket, checks a real
@@ -757,8 +757,8 @@ target files and a private local compiler daemon. Ordinary commands, scoped chec
 below; Blaze output is not authoritative verification.
 
 - `rust-toolchain.toml`: Rust **1.98.1**, edition 2024, minimal + rustfmt/clippy.
-- `Cargo.toml` and `Cargo.lock`: **gpui-kit =0.8.0**, matching baseline
-  **gpui-pre 0.3.9** via Kit re-exports only. No GPUI Fast, WebView, terminal,
+- `Cargo.toml` and `Cargo.lock`: **gpui-kit =0.8.1**, matching baseline
+  **gpui-pre 0.3.10** via Kit re-exports only. No GPUI Fast, WebView, terminal,
   tree-sitter languages, syntect, shaders or iOS integration is enabled. Code
   fences render, but syntax highlighting is not part of this small proof.
 - `patches/` contains scoped, checksum-pinned source edits. Builds materialize

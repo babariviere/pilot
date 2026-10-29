@@ -663,6 +663,86 @@ pub(crate) fn random_operation() -> Result<String, Error> {
     ))
 }
 
+// Shared private boot-bound channel. Callers separately prove native service ownership.
+pub(crate) fn signed_update(
+    location: &Location,
+    expected: &Value,
+    receipt: &Value,
+    action: &str,
+) -> Result<Value, Error> {
+    use ring::hmac;
+    let r = record(location)?;
+    if &r != expected {
+        return Err(Error::Identity);
+    }
+    let secret = r["secret"].as_str().ok_or(Error::Identity)?;
+    let key: Vec<u8> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&secret[i..i + 2], 16).map_err(|_| Error::Identity))
+        .collect::<Result<_, _>>()?;
+    let nonce = random_hex()?;
+    let body = serde_json::to_string(
+        &json!({"boot":expected["boot"],"nonce":nonce,"action":action,"receipt":receipt}),
+    )
+    .map_err(|_| Error::Identity)?;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
+    let proof =
+        crate::transport::hex(hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref());
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| Error::Native)?;
+    let mut response = client
+        .post(format!(
+            "http://127.0.0.1:{}/__pilot_runtime_update/v1",
+            location.port
+        ))
+        .header("x-pilot-update-proof", proof)
+        .body(body)
+        .send()
+        .map_err(|_| Error::RuntimeUnverified)?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(Error::ActiveWork);
+    }
+    let mut bytes = Vec::new();
+    response
+        .by_ref()
+        .take(16_385)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::RuntimeUnverified)?;
+    if bytes.len() > 16_384 {
+        return Err(Error::RuntimeUnverified);
+    }
+    let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)?;
+    let body = envelope["body"].as_str().ok_or(Error::Identity)?;
+    let signature = envelope["mac"]
+        .as_str()
+        .filter(|v| hex(Some(v)))
+        .ok_or(Error::Identity)?;
+    let signature: Vec<u8> = (0..64)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&signature[i..i + 2], 16).map_err(|_| Error::Identity))
+        .collect::<Result<_, _>>()?;
+    hmac::verify(&key, format!("update/v1\n{body}").as_bytes(), &signature)
+        .map_err(|_| Error::Signature)?;
+    let value: Value = serde_json::from_str(body).map_err(|_| Error::Identity)?;
+    if value["schema"] != 1
+        || value["boot"] != expected["boot"]
+        || value["nonce"] != nonce
+        || value["build"] != expected["build"]
+        || value["runtimeRoot"] != r["runtimeRoot"]
+        || value["port"] != location.port
+        || value["home"] != r["home"]
+        || record(location)? != *expected
+    {
+        return Err(Error::Identity);
+    }
+    Ok(value["receipt"].clone())
+}
+
 #[cfg(test)]
 mod configuration_tests {
     use super::*;
@@ -856,84 +936,4 @@ mod tests {
             "existing ACL must not be stripped"
         );
     }
-}
-
-// Shared private boot-bound channel. Callers separately prove native service ownership.
-pub(crate) fn signed_update(
-    location: &Location,
-    expected: &Value,
-    receipt: &Value,
-    action: &str,
-) -> Result<Value, Error> {
-    use ring::hmac;
-    let r = record(location)?;
-    if &r != expected {
-        return Err(Error::Identity);
-    }
-    let secret = r["secret"].as_str().ok_or(Error::Identity)?;
-    let key: Vec<u8> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&secret[i..i + 2], 16).map_err(|_| Error::Identity))
-        .collect::<Result<_, _>>()?;
-    let nonce = random_hex()?;
-    let body = serde_json::to_string(
-        &json!({"boot":expected["boot"],"nonce":nonce,"action":action,"receipt":receipt}),
-    )
-    .map_err(|_| Error::Identity)?;
-    let key = hmac::Key::new(hmac::HMAC_SHA256, &key);
-    let proof =
-        crate::transport::hex(hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref());
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(1))
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|_| Error::Native)?;
-    let mut response = client
-        .post(format!(
-            "http://127.0.0.1:{}/__pilot_runtime_update/v1",
-            location.port
-        ))
-        .header("x-pilot-update-proof", proof)
-        .body(body)
-        .send()
-        .map_err(|_| Error::RuntimeUnverified)?;
-    if response.status() != reqwest::StatusCode::OK {
-        return Err(Error::ActiveWork);
-    }
-    let mut bytes = Vec::new();
-    response
-        .by_ref()
-        .take(16_385)
-        .read_to_end(&mut bytes)
-        .map_err(|_| Error::RuntimeUnverified)?;
-    if bytes.len() > 16_384 {
-        return Err(Error::RuntimeUnverified);
-    }
-    let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)?;
-    let body = envelope["body"].as_str().ok_or(Error::Identity)?;
-    let signature = envelope["mac"]
-        .as_str()
-        .filter(|v| hex(Some(v)))
-        .ok_or(Error::Identity)?;
-    let signature: Vec<u8> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&signature[i..i + 2], 16).map_err(|_| Error::Identity))
-        .collect::<Result<_, _>>()?;
-    hmac::verify(&key, format!("update/v1\n{body}").as_bytes(), &signature)
-        .map_err(|_| Error::Signature)?;
-    let value: Value = serde_json::from_str(body).map_err(|_| Error::Identity)?;
-    if value["schema"] != 1
-        || value["boot"] != expected["boot"]
-        || value["nonce"] != nonce
-        || value["build"] != expected["build"]
-        || value["runtimeRoot"] != r["runtimeRoot"]
-        || value["port"] != location.port
-        || value["home"] != r["home"]
-        || record(location)? != *expected
-    {
-        return Err(Error::Identity);
-    }
-    Ok(value["receipt"].clone())
 }

@@ -356,21 +356,23 @@ impl LocalViewer {
         view
     }
     pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys([
-            KeyBinding::new(
+        let bindings = [
+            crate::ui::shortcut(
                 "secondary-enter",
                 crate::project_add_view::ConfirmProject,
                 Some("AddProject"),
+                cx,
             ),
             KeyBinding::new(
                 "escape",
                 crate::project_add_view::CancelProject,
                 Some("AddProject"),
             ),
-            KeyBinding::new(
+            crate::ui::shortcut(
                 "secondary-enter",
                 crate::mission_view::ConfirmMission,
                 Some("MissionConversion"),
+                cx,
             ),
             KeyBinding::new(
                 "escape",
@@ -387,40 +389,42 @@ impl LocalViewer {
                 workspace_changes_view::Close,
                 Some("WorkspaceChanges"),
             ),
-            KeyBinding::new("secondary-alt-d", workspace_changes_view::Toggle, None),
-            KeyBinding::new("secondary-alt-l", conversation_links_view::Toggle, None),
+            crate::ui::shortcut("secondary-alt-d", workspace_changes_view::Toggle, None, cx),
+            crate::ui::shortcut("secondary-alt-l", conversation_links_view::Toggle, None, cx),
             KeyBinding::new(
                 "escape",
                 queued_message_view::CloseQueue,
                 Some("QueuedMessage"),
             ),
-            KeyBinding::new(
+            crate::ui::shortcut(
                 "secondary-enter",
                 queued_message_view::SaveQueue,
                 Some("QueuedMessage"),
+                cx,
             ),
-            KeyBinding::new("secondary-k", ToggleJump, None),
+            crate::ui::shortcut("secondary-k", ToggleJump, None, cx),
             // Sidebar tree keys, ahead of the search field's caret moves. The
             // sidebar passes them on whenever it has nothing to collapse or expand.
             KeyBinding::new("left", SidebarCollapse, Some("List > Input")),
             KeyBinding::new("right", SidebarExpand, Some("List > Input")),
-            KeyBinding::new("secondary-n", NewChat, None),
-            KeyBinding::new("secondary-f", FocusChats, None),
-            KeyBinding::new("secondary-1", GoHome, None),
-            KeyBinding::new("secondary-2", ShowAllChats, None),
-            KeyBinding::new("secondary-3", ShowMissions, None),
+            crate::ui::shortcut("secondary-n", NewChat, None, cx),
+            crate::ui::shortcut("secondary-f", FocusChats, None, cx),
+            crate::ui::shortcut("secondary-1", GoHome, None, cx),
+            crate::ui::shortcut("secondary-2", ShowAllChats, None, cx),
+            crate::ui::shortcut("secondary-3", ShowMissions, None, cx),
             KeyBinding::new(
                 "escape",
                 crate::mission_inspector_view::Close,
                 Some("MissionContext"),
             ),
-            KeyBinding::new(
+            crate::ui::shortcut(
                 "secondary-alt-m",
                 crate::mission_inspector_view::Toggle,
                 None,
+                cx,
             ),
-            KeyBinding::new("secondary-[", NavigateBack, None),
-            KeyBinding::new("secondary-]", NavigateForward, None),
+            crate::ui::shortcut("secondary-[", NavigateBack, None, cx),
+            crate::ui::shortcut("secondary-]", NavigateForward, None, cx),
             // macOS history aliases, registered after the brackets so the Go menu
             // keeps showing ⌘[/⌘]. GPUI ranks context-free bindings as deepest, so
             // exclude text fields explicitly: there these keys stay line start/end.
@@ -428,23 +432,26 @@ impl LocalViewer {
             KeyBinding::new("cmd-left", NavigateBack, Some("!Input")),
             #[cfg(target_os = "macos")]
             KeyBinding::new("cmd-right", NavigateForward, Some("!Input")),
-            KeyBinding::new("secondary-,", crate::settings_view::OpenSettings, None),
-            KeyBinding::new(
+            crate::ui::shortcut("secondary-,", crate::settings_view::OpenSettings, None, cx),
+            crate::ui::shortcut(
                 "secondary-w",
                 crate::settings_view::CloseSettings,
                 Some("Settings"),
+                cx,
             ),
-            KeyBinding::new(
+            crate::ui::shortcut(
                 "secondary-s",
                 crate::settings_view::SaveSettings,
                 Some("Settings"),
+                cx,
             ),
             KeyBinding::new(
                 "escape",
                 crate::settings_view::CloseSettings,
                 Some("Settings"),
             ),
-        ]);
+        ];
+        cx.bind_keys(bindings);
     }
     pub fn new(options: LocalOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (writer, write_updates) = Interaction::start(options.clone(), Store::default_path());

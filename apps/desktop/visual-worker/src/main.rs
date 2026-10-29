@@ -80,7 +80,10 @@ fn run() -> Result<(), ()> {
             .as_bytes(),
     )
     .map_err(|_| ())?;
-    let hash = format!("{:x}", Sha256::digest(engine::RUNTIME));
+    let hash = Sha256::digest(engine::RUNTIME)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     isolation::prepare()?;
     // Trusted intrinsics only, no runtime.js or user source has been evaluated yet.
     let mut engine = engine::Engine::new().ok_or(())?;

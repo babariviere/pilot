@@ -60,10 +60,11 @@ impl EventEmitter<Event> for Workspace {}
 impl Workspace {
     pub(crate) fn new(options: LocalOptions, w: &mut Window, cx: &mut Context<Self>) -> Self {
         if !cx.has_global::<Keys>() {
-            cx.bind_keys([
-                gpui_kit::KeyBinding::new("secondary-s", SaveBrief, Some("MissionBrief")),
+            let bindings = [
+                crate::ui::shortcut("secondary-s", SaveBrief, Some("MissionBrief"), cx),
                 gpui_kit::KeyBinding::new("escape", CloseBrief, Some("MissionBrief")),
-            ]);
+            ];
+            cx.bind_keys(bindings);
             cx.set_global(Keys);
         }
         let input = cx.new(|cx| {

@@ -973,7 +973,7 @@ fn wheel(
     use gpui_kit::InputEvent;
     cx.update_window(handle, |_, window, cx| {
         window.dispatch_event(
-            gpui_kit::ScrollWheelEvent {
+            gpui_kit::ScrollEvent {
                 position: at,
                 delta,
                 touch_phase,

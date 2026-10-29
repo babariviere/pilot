@@ -8,7 +8,7 @@
 //! the transcript, and an area that reaches its end stops there.
 use gpui_kit::{
     App, DispatchPhase, Div, Global, HitboxBehavior, IntoElement, ParentElement, Pixels,
-    ScrollDelta, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, Styled, TouchPhase,
+    ScrollDelta, ScrollHandle, ScrollEvent, StatefulInteractiveElement, Styled, TouchPhase,
     Window, canvas, component::scroll::Scrollbar, div, px,
 };
 use std::{
@@ -38,7 +38,7 @@ struct Gesture {
 
 impl Global for Gesture {}
 
-fn vertical(event: &ScrollWheelEvent, window: &Window) -> Option<Pixels> {
+fn vertical(event: &ScrollEvent, window: &Window) -> Option<Pixels> {
     let delta = event.delta.pixel_delta(window.line_height());
     (delta.y != px(0.) && delta.y.abs() >= delta.x.abs()).then_some(delta.y)
 }
@@ -49,7 +49,7 @@ pub(crate) fn tracker() -> impl IntoElement {
     canvas(
         |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
         |_, hitbox, window, _| {
-            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) {
                     return;
                 }
@@ -123,7 +123,7 @@ impl NestedScroll {
                     move |_, hitbox, window, _| {
                         let view = window.current_view();
                         window.on_mouse_event(
-                            move |event: &ScrollWheelEvent, phase, window, cx| {
+                            move |event: &ScrollEvent, phase, window, cx| {
                                 if phase != DispatchPhase::Capture
                                     || !hitbox.should_handle_scroll(window)
                                 {

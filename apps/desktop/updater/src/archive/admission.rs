@@ -71,7 +71,7 @@ fn preflight<'a>(
     let mut count = u64::from(u16_at(eocd, 10));
     let mut bytes = u32_at(eocd, 12);
     let mut start = u32_at(eocd, 16);
-    // Match zip8.6.0's Zip32CentralDirectoryEnd::may_be_zip64 exactly.
+    // Match zip9.1.3's Zip32CentralDirectoryEnd::may_be_zip64 exactly.
     // Its dispatch ignores the per-disk count; ZIP32 indexing then USES that
     // count. An adjacent locator alone must not authorize a different count.
     let zip64_dispatch =
@@ -201,7 +201,7 @@ fn preflight<'a>(
 }
 
 /// During indexing, expose only the admitted metadata and zero-filled payload.
-/// zip8.6 may retry older EOCDs after a header error. Refuse those seeks BEFORE it
+/// zip9.1 may retry older EOCDs after a header error. Refuse those seeks BEFORE it
 /// can reserve from an unchecked count; a byte budget also bounds failed searches.
 struct MetadataReader<'a> {
     bytes: Vec<u8>,
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_per_disk_sentinel_exercises_actual_zip32_dispatch_before_rejection() {
+    fn mixed_per_disk_sentinel_is_rejected_before_central_header_reads() {
         let cancel = Cancellation::default();
         // The small ZIP64 control is admitted. Mutating only its snapshot per-disk
         // field models exactly what the old preflight handed to the eager index.
@@ -410,7 +410,6 @@ mod tests {
         assert!(reader.start >= u16::MAX as u64); // defeats zip's capacity-zero optimization
         let footer_at = (reader.footer - reader.start) as usize;
         reader.bytes[footer_at + 8..footer_at + 10].copy_from_slice(&u16::MAX.to_le_bytes());
-        let second_header = reader.zip64_footer.unwrap();
         let positions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         assert!(
             zip::ZipArchive::with_config(
@@ -424,9 +423,9 @@ mod tests {
             )
             .is_err()
         );
-        // Actual pinned parser tries to read ANOTHER central header at the ZIP64
-        // footer: it used the ZIP32 per-disk count, not the valid ZIP64 count=1.
-        assert_eq!(*positions.borrow(), [100_000, second_header]);
+        // ZIP9 rejects this inconsistent count before central-header reads.
+        // Admission still rejects it before snapshot/index allocation below.
+        assert!(positions.borrow().is_empty());
         let raw_positions = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         assert!(
             zip::ZipArchive::with_config(
@@ -440,7 +439,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(*raw_positions.borrow(), [100_000, second_header]);
+        assert!(raw_positions.borrow().is_empty());
         let mut source = observed(mixed_footer(1, true));
         assert!(matches!(
             preflight(&mut source, &cancel),

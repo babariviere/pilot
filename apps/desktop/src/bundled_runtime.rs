@@ -333,7 +333,14 @@ fn validate_inventory(
                     }
                     hash.update(&buffer[..count]);
                 }
-                if read != bytes || format!("{:x}", hash.finalize()) != sha256 {
+                if read != bytes
+                    || hash
+                        .finalize()
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect::<String>()
+                        != sha256
+                {
                     return Err("Bundled runtime hash mismatch.");
                 }
             }
@@ -954,7 +961,7 @@ mod tests {
                         directories.push(path);
                     } else {
                         let bytes = fs::read(&path).unwrap();
-                        entries.push(json!({"path":name,"kind":"file","bytes":bytes.len(),"mode":metadata.permissions().mode() & 0o7777,"sha256":format!("{:x}",Sha256::digest(bytes))}));
+                        entries.push(json!({"path":name,"kind":"file","bytes":bytes.len(),"mode":metadata.permissions().mode() & 0o7777,"sha256":Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>()}));
                     }
                 }
             }

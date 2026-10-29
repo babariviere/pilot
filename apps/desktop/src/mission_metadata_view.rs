@@ -61,10 +61,11 @@ impl Form {
         cx: &mut Context<Self>,
     ) -> Self {
         if !cx.has_global::<Keys>() {
-            cx.bind_keys([
-                gpui_kit::KeyBinding::new("secondary-enter", SaveMetadata, Some("MissionMetadata")),
+            let bindings = [
+                crate::ui::shortcut("secondary-enter", SaveMetadata, Some("MissionMetadata"), cx),
                 gpui_kit::KeyBinding::new("escape", CloseMetadata, Some("MissionMetadata")),
-            ]);
+            ];
+            cx.bind_keys(bindings);
             cx.set_global(Keys);
         }
         let title = cx.new(|cx| {

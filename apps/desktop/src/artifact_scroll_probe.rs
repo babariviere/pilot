@@ -1,6 +1,6 @@
 //! Opt-in offscreen scroll journey. Times synchronous native work, not presentation.
 use super::*;
-use gpui_kit::{InputEvent, ScrollWheelEvent};
+use gpui_kit::{InputEvent, ScrollEvent};
 use std::{cell::RefCell, collections::BTreeMap};
 
 thread_local! {
@@ -127,7 +127,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 let bounds = w.find("viewport").bounds();
                 let position = bounds.origin + point(px(4.), px(180.));
                 w.dispatch_event(
-                    ScrollWheelEvent {
+                    ScrollEvent {
                         position,
                         delta: ScrollDelta::Pixels(point(
                             px(0.),

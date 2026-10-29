@@ -1,8 +1,8 @@
 {
   "crate": "gpui-pre-linux",
-  "version": "0.3.9",
-  "archiveSha256": "e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3",
-  "upstream": "https://crates.io/crates/gpui-pre-linux/0.3.9",
+  "version": "0.3.10",
+  "archiveSha256": "7c6ffd2dce7b75cce0bb3382994912f84c2a05389a4a236bb8bd72cb098fc083",
+  "upstream": "https://crates.io/crates/gpui-pre-linux/0.3.10",
   "purpose": "Request explicit resized KDE/ext background blur regions and expose live compositor capability, including global removal/rebind. Reuse existing Wayland protocol dependencies; no X11 changes or desktop-name inference.",
   "edits": [
     {

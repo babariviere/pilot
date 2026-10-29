@@ -793,7 +793,7 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                 use gpui_kit::InputEvent;
                 let at = w.find("chart-plot").bounds().center();
                 w.dispatch_event(
-                    gpui_kit::ScrollWheelEvent {
+                    gpui_kit::ScrollEvent {
                         position: at,
                         delta: ScrollDelta::Pixels(point(px(0.), px(-1.))),
                         ..Default::default()

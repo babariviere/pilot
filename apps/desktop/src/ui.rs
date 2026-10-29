@@ -525,3 +525,25 @@ mod tests {
         const { assert!(Radius::CONTROL < Radius::TRAY) };
     }
 }
+/// Resolve platform-relative shortcuts through the host OS, as GPUI 0.3.10
+/// reserves KeyBinding::new for explicit, platform-independent modifiers.
+pub(crate) fn shortcut(
+    keys: &str,
+    action: impl gpui_kit::Action,
+    context: Option<&str>,
+    cx: &gpui_kit::App,
+) -> gpui_kit::KeyBinding {
+    gpui_kit::KeyBinding::load(
+        keys,
+        Box::new(action),
+        context.map(|value| {
+            gpui_kit::KeyBindingContextPredicate::parse(value)
+                .expect("static shortcut context")
+                .into()
+        }),
+        false,
+        None,
+        cx,
+    )
+    .expect("static shortcut")
+}

@@ -10,18 +10,18 @@ tracking; no alternate selection or paint layer is added.
 
 These are isolated desktop-prototype edits to published, pinned sources, not registry/cache
 edits, an upstream fork or a framework upgrade. The application still imports
-GPUI exclusively through Kit 0.8.0 re-exports, with baseline GPUI 0.3.9.
+GPUI exclusively through Kit 0.8.1 re-exports, with baseline GPUI 0.3.10.
 
-Native glass uses three narrow `gpui-pre{,-macos,-linux}-0.3.9.json` patches:
+Native glass uses three narrow `gpui-pre{,-macos,-linux}-0.3.10.json` patches:
 a default-false window capability, public macOS Reduce Transparency observation,
 and explicit KDE/ext Wayland blur regions with live capability/lifetime handling.
-No dependency version or X11 path changes. See
+No X11 path or compositor-policy changes. See
 [`native-glass.md`](../docs/native-glass.md) for isolated request tests and the
 separate visible-compositor qualification boundary.
 
-`gpui-base-0.8.0.json` records exact preimages/replacements and the original
+`gpui-base-0.8.1.json` records exact preimages/replacements and the original
 crates.io archive SHA-256. `scripts/prepare-patches.py` verifies that archive,
-extracts it into ignored `.patched/gpui-base-0.8.0`, checks every edit count,
+extracts it into ignored `.patched/gpui-base-0.8.1`, checks every edit count,
 and fingerprints generated inputs. It refuses to overwrite changed generated
 files. Never edit `.patched` by hand, Cargo's registry or the shared cache.
 Change the tracked edit specification instead. The extracted crate retains
@@ -105,7 +105,7 @@ Four additional exact edits to Base state add the opt-out
 `TextViewState::images_enabled(false)`. It replaces the document image source
 with one inert missing embedded asset, for both layout measurement and paint.
 Remote, file and data URLs therefore never reach the default resolver. The
-Component wrapper has no image-policy forwarding method in 0.8.0; owning the
+Component wrapper has no image-policy forwarding method in 0.8.1; owning the
 policy in retained Base state keeps Component styling and built-in fade intact.
 The default remains enabled for other callers. A fake HTTP-client regression
 checks zero image requests while rendering a remote Markdown image in live mode.
@@ -116,7 +116,7 @@ historical checksum is not the current image-policy specification checksum.
 
 ## Reader-controlled work disclosures
 
-`gpui-component-0.8.0.json` pins the original Component archive separately and
+`gpui-component-0.8.1.json` pins the original Component archive separately and
 contains seventeen exact edits across two files: thirteen to its message scroller
 and four for an opt-in `ListItem::hover_fill(false)`. The original
 `pause_following_tail(cx)` forwarding method remains available. A separate
@@ -165,24 +165,22 @@ Native history checks compare active/idle pixels and exercise real wheel/drag.
 
 ## Retained-layout cleanup
 
-The combined Base specification now has28 exact edits across six files. The
-four additional `inline.rs` edits keep the4096-entry sweep trigger and weak
-identity checks unchanged. This trigger is not a live-entry size cap.
-
-Previously, every retained inline above that trigger walked the whole table,
-even if all states were still alive. A zero-sized state-lifetime marker now
-increments an atomic destruction epoch, including on the parser thread. Each
-UI thread remembers its last completed sweep epoch and skips redundant walks
-when no state has died. Below the original trigger, cleanup remains deferred.
-Live layouts are never evicted, capacity is not raised and text/selection/fade
-or source mappings do not change. A destruction during a sweep remains visible
-to the next sweep because the pre-walk epoch is recorded.
+Base 0.8.1 now owns a destruction epoch and a coalesced UI cleanup task, including
+states dropped on a parser thread. The migrated patch uses those upstream
+mechanisms instead of the previous local zero-sized lifetime marker. Each UI
+thread remembers its last completed sweep epoch and skips redundant walks when
+no state has died, including above 4096 live entries. Dead entries can now be
+cleaned below that threshold without waiting for another paint. Live layouts
+are never evicted and text/selection/fade or source mappings do not change.
+A destruction during a sweep remains visible to the next sweep because the
+pre-walk epoch is recorded. Weak identity checks are unchanged.
 
 Two test-support-only edits expose the actual cleanup invariant assertion to the
 desktop's library tests (dependency packages cannot run their dev-tests as
 non-workspace members). This seam is absent from normal builds; it adds no tool,
-transport or host capability. The ordinary threshold/dead-entry/live-entry and
-cross-thread-drop regression therefore runs against the real patched code.
+transport or host capability. The 4096-live-entry and cross-thread-drop
+regression therefore runs against the real patched code, with the upstream
+cleanup semantics rather than the old deferred-below-threshold behavior.
 
 ## Dropdown dismissal focus
 
