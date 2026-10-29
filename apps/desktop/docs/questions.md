@@ -57,7 +57,10 @@ first reply cannot answer a newer question.
 - `local_model.rs`: snapshot/prefix/run/user boundaries, head-qualified history
   restoration and metadata observed even when visual row admission is full.
 - `local_client.rs`: one coalesced, fenced question projection.
-- `local_view.rs`: one final source-scoped composer sync beside activity.
+- `local_view.rs`: one final source-scoped composer sync beside activity. A
+  Working chat is fresh for replies only while its stream reports that the live
+  run awaits the projected ask (`question_awaited`); the summary state alone
+  never admits one.
 - `chat_questions.rs` and `chat_editor.rs`: retained input/focus owner,
   source-scoped controls, preedit/unsaved deferral and explicit confirmation.
 - `delivery_store.rs` and `interaction.rs`: optional legacy-default purpose

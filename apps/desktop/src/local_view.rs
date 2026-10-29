@@ -1,6 +1,9 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 #[path = "archived_composer.rs"]
 mod archived_composer;
+#[cfg(feature = "native-probes")]
+#[path = "awaited_question_probe.rs"]
+pub(crate) mod awaited_question_probe;
 #[path = "chat_actions_navigation.rs"]
 mod chat_actions_navigation;
 #[cfg(feature = "native-probes")]
@@ -2069,12 +2072,18 @@ impl LocalViewer {
         self.editor.update(cx, |editor, cx| {
             editor.activity(self.state.thinking && self.selected.is_some(), cx)
         });
+        // An ended turn takes a reply; a working one only for the ask its run awaits.
         let question_fresh = self.state.generation == self.generation
             && self.state.loaded
             && !self.state.page_busy
             && self.selected.as_ref().is_some_and(|id| {
                 self.state.chats.iter().any(|chat| {
-                    &chat.id == id && matches!(chat.state.as_str(), "idle" | "parked" | "failed")
+                    &chat.id == id
+                        && match chat.state.as_str() {
+                            "idle" | "parked" | "failed" => true,
+                            "working" => self.state.question_awaited,
+                            _ => false,
+                        }
                 })
             });
         self.editor.update(cx, |editor, cx| {

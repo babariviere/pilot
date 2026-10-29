@@ -554,4 +554,6 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
         }
     }
     assert_eq!(cases, 4, "Nonzero exact native matrix");
+    // The same composer inside the production Local root, as a run awaits it.
+    crate::local_view::awaited_question_probe::run(cx);
 }

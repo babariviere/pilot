@@ -307,6 +307,8 @@ pub(crate) struct Presentation {
     pub(crate) failure_run_serial: u64,
     pub(crate) todos: crate::session_todos::Feed,
     pub(crate) question: crate::question::Projection,
+    /// The live run awaits `question`; see `LiveTranscript::question_awaited`.
+    pub(crate) question_awaited: bool,
     pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
     /// Mission titles from the session socket. `None` until the daemon sends
     /// its mission list (older daemons may not).
@@ -945,6 +947,7 @@ async fn run(
         } else {
             model.question()
         };
+        view.question_awaited = !fenced && model.question_awaited();
         #[cfg(test)]
         {
             view.test_publications += 1;

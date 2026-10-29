@@ -463,6 +463,12 @@ impl LiveTranscript {
             Err(error) => Projection::Invalid(error),
         }
     }
+    /// The live run awaits the projected question (a blocking `ask_user`), so
+    /// the chat reads Working while its reply is still admitted.
+    pub(crate) fn question_awaited(&self) -> bool {
+        self.question_run_active
+            && matches!(self.question(), crate::question::Projection::Pending(_))
+    }
     fn key(&mut self) -> u64 {
         self.next_key += 1;
         (1 << 63) + self.next_key
@@ -1600,9 +1606,11 @@ mod tests {
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"snapshot","entries":[blocking(4)],"run":run}));
         assert_eq!(pending_question_id(&model), Some(4));
+        assert!(model.question_awaited(), "Its live run awaits it");
         // A legacy turn-ending ask still never presents during a run.
         model.apply(&json!({"type":"snapshot","entries":[question_entry(4,1)],"run":run}));
         assert_eq!(pending_question_id(&model), None);
+        assert!(!model.question_awaited());
         // Publication inside the running turn, then ordinary run activity.
         let mut model = LiveTranscript::default();
         model.apply(&json!({"type":"snapshot","entries":[]}));
@@ -1634,6 +1642,7 @@ mod tests {
         model.apply(&json!({"type":"snapshot","entries":[blocking(4)],"run":run}));
         model.apply(&json!({"type":"run_end"}));
         assert_eq!(pending_question_id(&model), Some(4));
+        assert!(!model.question_awaited(), "Stopped: no run awaits it");
         model.apply(&json!({"type":"run_start"}));
         assert_eq!(pending_question_id(&model), None);
         model.apply(&json!({"type":"run_error"}));
