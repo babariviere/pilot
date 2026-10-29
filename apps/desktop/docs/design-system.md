@@ -421,7 +421,8 @@ lives in `sidebar_memory.rs`, a private per-machine file next to the draft store
 from `lastUserMessageAt` (else creation), because the daemon also stamps
 automatic notices there, and then moves only when the user sends to it from this
 app. A thread sorts by its coordinator, or by the user's sends to its members.
-Members sort by creation. The same file records the latest reply (`outcomeAt`
+Members sort by creation within the unfinished group, then the revealed finished
+group at the bottom. The same file records the latest reply (`outcomeAt`
 of a done, question or failed result, never `updatedAt`) seen in each chat for
 the filled "new reply" circle; replies older than the file's first baseline never light
 up. Selection follows the row's key (chat id, `mission:<id>`, `fold:<id>`,

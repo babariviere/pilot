@@ -4,8 +4,9 @@
 //! Chats holds mission threads and standalone chats, newest first by your own
 //! activity (`sidebar_memory`), never by agent activity or state. A thread is
 //! one level: its parent is the mission's coordinator chat (else the mission
-//! alone), then its members in creation order. Finished members fold into
-//! "+N finished". A search lists matching chats flat, without threads.
+//! alone), then its unfinished members and revealed finished members, each in
+//! creation order. Finished members fold into "+N finished". A search lists
+//! matching chats flat, without threads.
 //!
 //! Across all projects, Chats is split into flat project sections (a label row
 //! each, then its rows), once there are two or more. A chat without a project
@@ -316,27 +317,36 @@ pub(crate) fn build(input: &Input) -> Tree {
                 .then(b.1.total_cmp(&a.1))
                 .then_with(|| a.2.cmp(&b.2))
         });
-        let emit = |rows: &mut Vec<Row>, row: Row| {
-            rows.push(row);
-            let Row::Parent(t) = row else {
-                return;
-            };
-            let thread = &threads[t];
-            if thread.collapsed {
-                return;
-            }
-            for member in &thread.members {
-                if thread.show_finished || !finished(&chats[*member], opened, memory) {
-                    rows.push(Row::Member {
-                        chat: *member,
-                        thread: t,
-                    });
+        let emit =
+            |rows: &mut Vec<Row>, row: Row| {
+                rows.push(row);
+                let Row::Parent(t) = row else {
+                    return;
+                };
+                let thread = &threads[t];
+                if thread.collapsed {
+                    return;
                 }
-            }
-            if thread.finished > 0 {
-                rows.push(Row::Fold(t));
-            }
-        };
+                // Reveal finished chats as a bottom group, not back among active
+                // members. Keep creation order within each group and the stored
+                // member order (also used to choose coordinator-less group scope).
+                for group_finished in [false, true] {
+                    if group_finished && !thread.show_finished {
+                        break;
+                    }
+                    for member in thread.members.iter().filter(|member| {
+                        finished(&chats[**member], opened, memory) == group_finished
+                    }) {
+                        rows.push(Row::Member {
+                            chat: *member,
+                            thread: t,
+                        });
+                    }
+                }
+                if thread.finished > 0 {
+                    rows.push(Row::Fold(t));
+                }
+            };
         // Rows are already in your order, so each section first appears at its
         // latest send.
         let lead = |row: Row| match row {

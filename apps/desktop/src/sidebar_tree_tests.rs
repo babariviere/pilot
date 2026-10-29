@@ -142,14 +142,90 @@ fn finished_members_fold_unless_unread_or_open_and_parents_collapse() {
     f.show_finished.insert("m".into());
     let rows = f.rows();
     assert_eq!(rows.len(), 1 + 121 + 1);
-    assert_eq!(rows[1], "  done-000");
-    assert_eq!(rows[121], "  live");
+    assert_eq!(rows[1], "  live");
+    assert_eq!(rows[2], "  done-000");
+    assert_eq!(rows[121], "  done-119");
     assert_eq!(rows[122], "  hide");
     f.collapsed.insert("m".into());
     assert_eq!(f.rows(), ["> coord"]);
     let tree = f.tree();
     assert_eq!(tree.threads[0].rollup.counts(), [(Mark::Working, 1)]);
     assert_eq!(tree.threads[0].rollup.words(), "1 working");
+}
+
+#[test]
+fn revealed_finished_members_stay_below_unfinished_in_each_creation_order() {
+    let mut f = Fixture::new(vec![
+        plain("newer-thread", 100.),
+        coord("coord", "m", 1.),
+        member("done-old", "m", 2.),
+        json!({"id":"live-old","title":"live-old","missionId":"m","createdAt":3,"state":"working"}),
+        member("done-new", "m", 4.),
+        json!({"id":"live-new","title":"live-new","missionId":"m","createdAt":5,"state":"failed"}),
+    ]);
+    let folded = [
+        "newer-thread",
+        "> coord",
+        "  live-old",
+        "  live-new",
+        "  +2",
+    ];
+    assert_eq!(f.rows(), folded);
+    f.show_finished.insert("m".into());
+    let revealed = [
+        "newer-thread",
+        "> coord",
+        "  live-old",
+        "  live-new",
+        "  done-old",
+        "  done-new",
+        "  hide",
+    ];
+    assert_eq!(f.rows(), revealed);
+    // Transitions repartition only this thread, retaining creation order in both groups.
+    f.set(member("live-old", "m", 3.));
+    assert_eq!(
+        f.rows(),
+        [
+            "newer-thread",
+            "> coord",
+            "  live-new",
+            "  done-old",
+            "  live-old",
+            "  done-new",
+            "  hide"
+        ]
+    );
+    f.set(json!({"id":"live-old","title":"live-old","missionId":"m","createdAt":3,"state":"working","updatedAt":9000}));
+    assert_eq!(f.rows(), revealed);
+    // Keyboard selection keeps the canonical member identity across reveal/collapse.
+    let key = "done-new";
+    let tree = f.tree();
+    assert_eq!(
+        tree.key(tree.rows[tree.find(key, &f.chats).unwrap()], &f.chats),
+        key
+    );
+    // An opened quiet member retains the existing unfinished exemption.
+    f.opened = Some(key.into());
+    assert_eq!(
+        f.rows(),
+        [
+            "newer-thread",
+            "> coord",
+            "  live-old",
+            "  done-new",
+            "  live-new",
+            "  done-old",
+            "  hide"
+        ]
+    );
+    f.opened = None;
+    f.collapsed.insert("m".into());
+    assert_eq!(f.rows(), ["newer-thread", "> coord"]);
+    f.collapsed.clear();
+    assert_eq!(f.rows(), revealed);
+    f.show_finished.clear();
+    assert_eq!(f.rows(), folded);
 }
 
 #[test]

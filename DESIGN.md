@@ -212,7 +212,8 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
 - **Mission threads, one level.** A mission's coordinator chat is the parent row, titled with the mission name
   (Compass and name in the accent) with its state on the right. Its members follow as one-line rows (title, then
   state word and mark) in creation order, joined to the Compass by a faint stem with a short rounded branch to each
-  member; the stem ends at the last member. Quiet members you have already seen fold into "+N finished". The
+  member; the stem ends at the last member. Quiet members you have already seen fold into "+N finished";
+  revealing them keeps them below unfinished members, in creation order within each group. The
   chevron in the row's leading gutter, before the Compass, or Left collapses a thread, and its second line then
   rolls up its members' marks and new replies; Right
   expands it, and opening a member expands its thread. A thread whose coordinator chat is not listed keeps a

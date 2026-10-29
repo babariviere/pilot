@@ -562,9 +562,14 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
     for i in 0..30 {
         chats.push(crate::local_model::chat(&json!({"id":format!("solo-{i:02}"),"title":format!("Standalone chat {i}"),"state":"idle","createdAt":400 - i})).unwrap());
     }
-    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+    for (width, mode) in [
+        (680., ThemeMode::Light),
+        (680., ThemeMode::Dark),
+        (1100., ThemeMode::Light),
+        (1100., ThemeMode::Dark),
+    ] {
         cx.update(|cx| Theme::change(mode, None, cx));
-        let (handle, view) = open_rows(cx, 1100., chats.clone(), None);
+        let (handle, view) = open_rows(cx, width, chats.clone(), None);
         let rows = |cx: &mut HeadlessAppContext| {
             cx.update(|cx| view.read(cx).chats.read(cx).delegate().tree.rows.len())
         };
@@ -585,7 +590,7 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
         if let Some(dir) = captures {
             cx.capture_screenshot(handle)
                 .unwrap()
-                .save(dir.join(format!("1100-{}-thread.png", mode.name())))
+                .save(dir.join(format!("{}-{}-thread.png", width as u32, mode.name())))
                 .unwrap();
         }
         let toggle = |cx: &mut HeadlessAppContext, f: &dyn Fn(&mut super::ChatList)| {
@@ -600,10 +605,99 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
             })
             .unwrap();
         };
-        toggle(cx, &|l| l.toggle_finished("big"));
+        // The real disclosure preserves both creation-ordered groups, even
+        // though finished members were created between the active members.
+        cx.update_window(handle, |_, w, cx| w.click("chat-row-fold:big", cx))
+            .unwrap();
+        pulse(cx, handle, 12, 16);
         assert_eq!(rows(cx), 1 + 120 + 1 + 30);
+        cx.update(|cx| {
+            let l = view.read(cx).chats.read(cx).delegate();
+            let members: Vec<_> = l
+                .tree
+                .rows
+                .iter()
+                .filter_map(|row| match row {
+                    crate::sidebar_tree::Row::Member { chat, .. } => Some(l.all[*chat].id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let expected: Vec<_> = (0..120)
+                .filter(|i| i % 12 == 0)
+                .chain((0..120).filter(|i| i % 12 != 0))
+                .map(|i| format!("big-{i:03}"))
+                .collect();
+            assert_eq!(members, expected);
+        });
+        // Inspect the boundary and the final branch in actual virtualized rows.
+        for (id, last) in [("big-108", false), ("big-119", true)] {
+            cx.update_window(handle, |_, w, cx| {
+                view.read(cx).chats.clone().update(cx, |l, cx| {
+                    let ix = l.delegate().index(id).unwrap();
+                    l.set_selected_index(Some(ix), w, cx);
+                    l.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center, w, cx);
+                });
+            })
+            .unwrap();
+            pulse(cx, handle, 12, 16);
+            cx.update_window(handle, |_, w, _| {
+                let scope = w.within(format!("chat-row-{id}"));
+                assert!(scope.try_find("sidebar-thread-elbow").is_some());
+                assert_eq!(scope.try_find("sidebar-thread-continues").is_none(), last);
+                if last {
+                    assert!(
+                        w.find("chat-row-big-119").bounds().bottom()
+                            <= w.find("chat-row-fold:big").bounds().top() + px(0.5)
+                    );
+                } else {
+                    assert!(
+                        w.find("chat-row-big-108").bounds().bottom()
+                            <= w.find("chat-row-big-001").bounds().top() + px(0.5)
+                    );
+                }
+            })
+            .unwrap();
+        }
+        toggle(cx, &|l| l.toggle_finished("big"));
+        assert_eq!(rows(cx), 1 + 10 + 1 + 30);
+        toggle(cx, &|l| l.toggle_finished("big"));
+        // Opening a quiet member still expands its parent and keeps that exact
+        // canonical chat visible, including after the finished group is hidden.
+        toggle(cx, &|l| l.set_collapsed("big", true));
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.page = crate::app_shell::Page::Chat;
+                v.selected = Some("big-119".into());
+                v.rebuild_nav(w, cx);
+            });
+        })
+        .unwrap();
+        pulse(cx, handle, 12, 16);
+        toggle(cx, &|l| l.toggle_finished("big"));
+        cx.update(|cx| {
+            let l = view.read(cx).chats.read(cx).delegate();
+            assert!(!l.collapsed.contains("big"));
+            assert_eq!(l.at(l.index("big-119").unwrap()).unwrap().id, "big-119");
+        });
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.selected = None;
+                v.page = crate::app_shell::Page::Home;
+                v.rebuild_nav(w, cx);
+            });
+        })
+        .unwrap();
         toggle(cx, &|l| l.set_collapsed("big", true));
         assert_eq!(rows(cx), 1 + 30);
+        cx.update_window(handle, |_, w, cx| {
+            view.read(cx).chats.clone().update(cx, |l, cx| {
+                let ix = l.delegate().index("big-coord").unwrap();
+                l.set_selected_index(Some(ix), w, cx);
+                l.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center, w, cx);
+            });
+        })
+        .unwrap();
+        pulse(cx, handle, 12, 16);
         cx.update_window(handle, |_, window, _| {
             assert!(window.try_find("mission-rollup-NeedsYou").is_none());
             assert!(window.try_find("mission-rollup-Failed").is_some());
@@ -636,12 +730,16 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
         if let Some(dir) = captures {
             cx.capture_screenshot(handle)
                 .unwrap()
-                .save(dir.join(format!("1100-{}-thread-collapsed.png", mode.name())))
+                .save(dir.join(format!(
+                    "{}-{}-thread-collapsed.png",
+                    width as u32,
+                    mode.name()
+                )))
                 .unwrap();
         }
         println!(
             "{}",
-            json!({"mode":mode.name(),"members":120,"rows_folded":42,"rows_expanded":152,"rows_collapsed":31})
+            json!({"width":width,"mode":mode.name(),"members":120,"rows_folded":42,"rows_expanded":152,"rows_collapsed":31,"finished_bottom":true,"branch_endpoint":true,"opened_member_expands":true})
         );
         cx.update_window(handle, |_, window, _| window.remove_window())
             .unwrap();
