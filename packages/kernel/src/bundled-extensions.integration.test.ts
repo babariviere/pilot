@@ -94,7 +94,7 @@ async function fixture(t: TestContext) {
 test("clean configuration has all bundled tools and required auth across reload", async (t) => {
 	const f = await fixture(t);
 	const adapter = await f.open();
-	for (const name of ["applyPatch", "web", "browser", "todo", "jobs", "subagent"])
+	for (const name of ["applyPatch", "web", "browser", "todo", "jobs", "subagent", "code_search", "code_symbols"])
 		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
 	assert.deepEqual(
 		adapter.extension.tools?.map((tool) => tool.name),
@@ -105,7 +105,7 @@ test("clean configuration has all bundled tools and required auth across reload"
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
 	assert.deepEqual(await adapter.jobs(), []);
 	await adapter.session.reload();
-	for (const name of ["jobs", "subagent", "todo", "web"])
+	for (const name of ["jobs", "subagent", "todo", "web", "code_search", "code_symbols"])
 		assert.ok(adapter.session.getCallableToolNames().includes(name));
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
 });
@@ -194,6 +194,7 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 }, async (t) => {
 	const f = await fixture(t);
 	const marker = join(f.root, "child-profile.json");
+	await writeFile(join(f.root, "child-fixture.tsx"), "export const ChildFixture = () => <button />;");
 	const publication = join(f.root, "child-publication");
 	const todos: TodoRecord[] = [];
 	const policy = join(f.root, "subscription-policy.json");
@@ -247,7 +248,7 @@ export default pi => {
 	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async (_id, {command}) => { appendFileSync(${JSON.stringify(publication)}, command + "\\n"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
  const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
  faux.setResponses([
-  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'for (const parts of [["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const symbols = await tools.code_symbols({query:"ChildFixture",exact:true,path:"child-fixture.tsx"}); if (symbols.results[0]?.name !== "ChildFixture") throw new Error("child exploration failed"); for (const parts of [["jj","git","push","--bookmark","fix/child"],["gh","pr","create"],["gh","pr","merge","1"],["gh","repo","delete","fixture/repo","--yes"]]) { try { await tools.bash({command:parts.join(" ")}); } catch {} } const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
   fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
   fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
  ]);
@@ -342,7 +343,8 @@ export default pi => {
 	await packet("ready");
 	const observed = JSON.parse(await readFile(marker, "utf8"));
 	assert.equal(observed.auth, "function");
-	for (const name of ["web", "browser", "todo", "applyPatch"]) assert.ok(observed.tools.includes(name), name);
+	for (const name of ["web", "browser", "todo", "applyPatch", "code_search", "code_symbols"])
+		assert.ok(observed.tools.includes(name), name);
 	for (const name of ["jobs", "subagent"]) assert.ok(!observed.tools.includes(name), name);
 	for (const id of ["first", "second"]) {
 		child.send({ type: "input", id, message: "Reply", followUp: false });

@@ -1,7 +1,7 @@
 /** Runs from the relocated production tree with its bundled Node. Offline, no user accounts/config. */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -69,8 +69,16 @@ try {
 		settingsManager: SettingsManager.inMemory(),
 		sessionOptions: { modelRuntime: models, model: faux.getModel() },
 	});
-	for (const name of ["applyPatch", "web", "browser", "jobs", "subagent"])
+	for (const name of ["applyPatch", "web", "browser", "jobs", "subagent", "code_search", "code_symbols"])
 		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
+	await writeFile(join(isolated, "fixture.tsx"), "export const RuntimeFixture = () => <button />;");
+	const { runExploration } = await import("./packages/kernel/src/exploration-runner.ts");
+	const explored = await runExploration(
+		{ source: isolated },
+		{ tool: "code_symbols", path: "fixture.tsx", query: "RuntimeFixture", exact: true },
+	);
+	assert.equal(explored.results[0]?.name, "RuntimeFixture");
+	assert.equal(explored.results[0]?.coverage, "parsed");
 	const { prepareArtifact, getLibrary } = await import("@pilot/artifacts");
 	const artifact = await prepareArtifact({
 		title: "Linux production smoke",

@@ -509,6 +509,14 @@ Ask can inspect the current checkout, including local changes, without switching
 origin-branch snapshot stays pinned for that chat. **Start a Build chat** carries the discussion into a
 new implementation chat; it does not give the existing Ask chat write access.
 
+Ask and Build include first-party `code_search` and `code_symbols` tools through Pi, including
+codemode. They rank literal matches and find parsed TS/TSX/JS/JSX declaration candidates with source
+spans, snippets and content hashes. Each query reads its own current workspace (including uncommitted
+edits), or Ask's explicitly pinned snapshot. Other text is lexical-only; these are not semantic
+reference/impact queries. Coverage, exclusions, failures and bounded pagination are reported, and edits
+invalidate page cursors. No project activation, external CLI, runtime install or persistent index is
+required. See [the exploration contract](docs/code-exploration.md) for limits and freshness guarantees.
+
 ![An Ask chat exploring durable session resume without repository write access](docs/screenshots/readme-ask.png)
 
 ### Workspaces and pull requests

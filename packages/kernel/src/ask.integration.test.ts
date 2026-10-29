@@ -149,7 +149,7 @@ test("Ask uses bundled web and never executes personal, project, explicit or inl
 			.getAllTools()
 			.map((tool) => tool.name)
 			.sort(),
-		["codemode", "find", "grep", "ls", "read", "web"],
+		["code_search", "code_symbols", "codemode", "find", "grep", "ls", "read", "web"],
 	);
 	assert.match(
 		adapter.session.getAllTools().find((tool) => tool.name === "web")?.description ?? "",
@@ -426,7 +426,7 @@ text(await tools.artifact({action:'list'}));
 			.getAllTools()
 			.map((tool) => tool.name)
 			.sort(),
-		["artifact", "ask_user", "codemode", "find", "grep", "ls", "read", "web"],
+		["artifact", "ask_user", "code_search", "code_symbols", "codemode", "find", "grep", "ls", "read", "web"],
 	);
 	assert.match(output, /registered.*artifact.*find.*grep.*ls.*read/);
 	await native.session.reload();

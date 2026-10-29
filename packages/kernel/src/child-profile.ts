@@ -5,6 +5,7 @@ import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
+import { createExplorationTools } from "./exploration-tools.ts";
 import { subscriptionRecovery } from "./subscription-limit.ts";
 import { callParentSubscriptionLimit, callParentTodo, callParentUsage, callParentUsageEpoch } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
@@ -15,6 +16,8 @@ export default async function childProfile(pi: ExtensionAPI): Promise<void> {
 	installChildUsageCapture(callParentUsage, callParentUsageEpoch);
 	nativeToolPolicy(inheritedExecutionPermission(process.env.PILOT_EXECUTION_PERMISSION))(pi);
 	await installCredentialBrokerHooks();
+	// The child adapter owns cwd. Never inherit a parent workspace/index or process.cwd().
+	for (const tool of createExplorationTools((ctx) => ({ source: ctx.cwd }))) pi.registerTool(tool);
 	for (const name of ["sandbox", "apply-patch", "web", "browser"]) {
 		const path = fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_CHILD_PROFILE_PATH)));
 		const { default: factory } = await import(path);

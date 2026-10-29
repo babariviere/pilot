@@ -55,6 +55,8 @@ const INVESTIGATE_TOOLS = new Set([
 	"read",
 	"find",
 	"grep",
+	"code_search",
+	"code_symbols",
 	"ls",
 	"web",
 	"artifact",
