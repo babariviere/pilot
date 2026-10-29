@@ -313,6 +313,18 @@ impl WorkUi {
             .state
             .clone()
     }
+    /// A section's inner scroll offset, negative once scrolled down.
+    #[cfg(test)]
+    pub(crate) fn body_offset(
+        &self,
+        id: &str,
+        label: &str,
+        cx: &gpui_kit::App,
+    ) -> gpui_kit::Pixels {
+        self.steps[&format!("call:{id}")].read(cx).bodies[label]
+            .scroll
+            .offset()
+    }
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn group_open(&self, id: u64, cx: &gpui_kit::App) -> bool {
         self.groups[&id].read(cx).open()
@@ -859,6 +871,8 @@ struct Body {
     /// What the parser holds.
     parsed: String,
     state: Entity<TextViewState>,
+    /// Long text scrolls inside the section.
+    scroll: crate::nested_scroll::NestedScroll,
 }
 
 pub(crate) struct StepView {
@@ -893,6 +907,7 @@ impl StepView {
                 parsed: source.as_ref().clone(),
                 source,
                 state,
+                scroll: Default::default(),
             },
         );
         self.open = true;
@@ -936,7 +951,7 @@ impl StepView {
             errors,
         } = block;
         let id = step_id(&self.step);
-        let state = {
+        let (state, scroll) = {
             let shown = shown.unwrap_or(source.as_str()).to_owned();
             let parsed = if plain {
                 // Failing lines get a quiet danger wash; the text is unchanged.
@@ -972,10 +987,14 @@ impl StepView {
                         source: source.clone(),
                         parsed,
                         state,
+                        scroll: Default::default(),
                     },
                 );
             }
-            self.bodies[label].state.clone()
+            (
+                self.bodies[label].state.clone(),
+                self.bodies[label].scroll.clone(),
+            )
         };
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
@@ -1028,27 +1047,28 @@ impl StepView {
             .child(header)
             .map(|this| {
                 this.child(
-                    div()
-                        .id(SharedString::from(format!("body-{id}-{label}")))
-                        .test_support()
-                        .max_h(px(260.))
-                        .overflow_y_scroll()
-                        .min_w_0()
-                        .child(
-                            crate::typography::rich(
-                                TextView::new(&state),
-                                crate::typography::current(cx),
-                                if plain {
-                                    crate::typography::Content::Code
-                                } else {
-                                    crate::typography::Content::Chat
-                                },
-                                cx,
-                            )
-                            .selectable(true)
-                            .scrollable(false)
-                            .on_link_click(|_, _, _, _| {}),
-                        ),
+                    scroll.area(
+                        div()
+                            .id(SharedString::from(format!("body-{id}-{label}")))
+                            .test_support()
+                            .max_h(px(260.))
+                            .min_w_0()
+                            .child(
+                                crate::typography::rich(
+                                    TextView::new(&state),
+                                    crate::typography::current(cx),
+                                    if plain {
+                                        crate::typography::Content::Code
+                                    } else {
+                                        crate::typography::Content::Chat
+                                    },
+                                    cx,
+                                )
+                                .selectable(true)
+                                .scrollable(false)
+                                .on_link_click(|_, _, _, _| {}),
+                            ),
+                    ),
                 )
             })
     }

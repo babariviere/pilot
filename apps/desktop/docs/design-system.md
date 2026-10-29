@@ -92,6 +92,9 @@ not inside or below its editor/actions. Never mount an empty recovery region.
 The transcript opts into Kit's scrolling scrollbar mode, even when global chrome
 requests permanent scrollbars: wheel input reveals it, a visible track supports
 hover/drag, and idle fades it away without changing layout or scroll ownership.
+Scrollbar tracks are transparent everywhere (`appearance` sets the Kit
+`scrollbar` track token to clear); only the thumb paints, at rest, on hover and
+while dragging (`tests/scrollbar_track.rs`).
 
 Plan critique: a generic card grid or a second accent would compete with the
 conversation and fail the approved brief. Keep the neutral hierarchy, the one
@@ -207,7 +210,11 @@ sections split by hairlines and never folded: the command or script code, the
 output with its outcome (Failed, Running, Status unknown) and failing lines on a
 faint danger wash, then any patch preview. Arguments show only for tools with
 neither source nor preview, since a script's or command's only repeat it. Long
-sections scroll inside. Text is monospace. A script's codemode header (status,
+sections scroll inside (`nested_scroll.rs`): the scroller under the pointer when
+a wheel gesture starts keeps the whole gesture, so an output that can move takes
+it, an output at its end or a short one leaves it to the transcript, and a
+transcript gesture that slides an output under the pointer stays with the
+transcript. Text is monospace. A script's codemode header (status,
 wall time, `Output:`) is dropped from the shown text only when it matches
 exactly; the wall time moves to the caption. Every section copies its exact
 source, header included. A call that is running now shows three bouncing dots in its glyph

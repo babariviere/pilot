@@ -796,6 +796,10 @@ impl TranscriptView {
         self.text_states[ix].as_ref().unwrap().clone()
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_scroll_to_end(&mut self, cx: &mut Context<Self>) {
+        self.scroller.update(cx, |s, cx| s.scroll_to_end(cx));
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn history_probe_anchor(&self, cx: &App) -> (usize, f32, bool, f32) {
         let state = self.scroller.read(cx);
         let top = state.logical_scroll_top();
@@ -1156,7 +1160,9 @@ impl Render for TranscriptView {
                         cx.emit(HistoryTop(scope));
                     }
                 },
-            ));
+            ))
+            // First, so nested tool output knows where each wheel gesture began.
+            .child(crate::nested_scroll::tracker());
         #[cfg(any(test, feature = "native-probes"))]
         let viewport = {
             use gpui_kit::test::TestSupportExt;

@@ -167,6 +167,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "scrollbar_track"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "controls"
 path = "tests/controls.rs"
 harness = false

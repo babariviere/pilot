@@ -361,6 +361,8 @@ fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
             colors.list_active = s(muted);
             colors.list_active_border = s("#00000000");
             colors.list_hover = s(muted);
+            // Scrollbar tracks stay see-through over every surface; only the thumb paints.
+            colors.scrollbar = s("#00000000");
             colors.accent = s(muted);
             colors.accent_foreground = s(ink);
             colors.selection = s(accent.selection);
@@ -562,6 +564,9 @@ mod tests {
                 assert_eq!(hex(cx.theme().list_active), hex(muted.into()));
                 assert!(list.a < 0.1);
                 assert_eq!(cx.theme().ring.a, 0.);
+                // Only the scrollbar thumb paints; its track never covers a surface.
+                assert_eq!(cx.theme().scrollbar.a, 0.);
+                assert!(cx.theme().scrollbar_thumb.a > 0.);
             }
         });
     }

@@ -914,3 +914,218 @@ fn explicit_closed_work_survives_virtualization_and_canonical_regroup(cx: &mut T
     })
     .unwrap();
 }
+
+fn script_rows(output: &str) -> (Vec<Message>, u64) {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    let calls = json!([{"type":"toolCall","id":"s","name":"codemode","arguments":{"code":"// Print rows\nreturn rows;"}}]);
+    model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
+    end(&mut model, "s", 21, false, output);
+    model.apply(&json!({"type":"run_end"}));
+    let work = model.rows();
+    let id = work[0].id();
+    // Earlier replies make the transcript itself scrollable above the call.
+    let mut rows: Vec<Message> = (1..=6)
+        .map(|n| Message::live(n, "assistant".into(), "Earlier reply. ".repeat(60)))
+        .collect();
+    rows.extend(work);
+    (rows, id)
+}
+/// Opens the call, then shows the end of the transcript, where it sits.
+fn open_script(
+    rows: Vec<Message>,
+    id: u64,
+    cx: &mut TestAppContext,
+) -> (gpui_kit::AnyWindowHandle, Entity<TranscriptView>) {
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    for key in [
+        SharedString::from(format!("work-toggle-{id}")),
+        "step-toggle-call:s".into(),
+    ] {
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |v, cx| {
+                v.scroller.update(cx, |s, cx| s.scroll_to_end(cx))
+            });
+            window.draw(cx).clear(cx);
+            window.render_frame(cx);
+            window.click(key, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |v, cx| {
+            v.scroller.update(cx, |s, cx| s.scroll_to_end(cx))
+        });
+        window.draw(cx).clear(cx);
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
+    (handle, view)
+}
+fn wheel(
+    cx: &mut TestAppContext,
+    handle: gpui_kit::AnyWindowHandle,
+    at: gpui_kit::Point<gpui_kit::Pixels>,
+    delta: ScrollDelta,
+    touch_phase: gpui_kit::TouchPhase,
+) {
+    use gpui_kit::InputEvent;
+    cx.update_window(handle, |_, window, cx| {
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position: at,
+                delta,
+                touch_phase,
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.draw(cx).clear(cx);
+    })
+    .unwrap();
+}
+fn pixels(dy: f32) -> ScrollDelta {
+    ScrollDelta::Pixels(point(px(0.), px(dy)))
+}
+
+#[gpui_kit::test]
+fn expanded_output_scrolls_inside_and_each_gesture_keeps_one_scroller(cx: &mut TestAppContext) {
+    use gpui_kit::TouchPhase::{Moved, Started};
+    let wide = format!("{}END", "wide-column ".repeat(40));
+    let output = (0..200)
+        .map(|n| {
+            if n == 3 {
+                wide.clone()
+            } else {
+                format!("line {n}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (rows, id) = script_rows(&output);
+    let (handle, view) = open_script(rows, id, cx);
+    let state = |cx: &mut TestAppContext| {
+        cx.update_window(handle, |_, window, cx| {
+            let block = window.find("body-call:s-Output").bounds();
+            let viewport = window.find("viewport").bounds();
+            (
+                block,
+                viewport,
+                view.read(cx).work_ui.body_offset("s", "Output", cx),
+            )
+        })
+        .unwrap()
+    };
+    let (block, viewport, offset) = state(cx);
+    assert_eq!(offset, px(0.));
+    assert!(
+        block.top() >= viewport.top() && block.bottom() <= viewport.bottom(),
+        "the whole output is in view: {block:?} {viewport:?}"
+    );
+    assert!(
+        block.size.height <= px(260.) && block.right() <= viewport.right(),
+        "bounded, long lines inside"
+    );
+    let over = point(block.left() + px(40.), block.center().y);
+    let following = |cx: &mut TestAppContext| {
+        view.read_with(cx, |v, cx| v.scroller.read(cx).is_following_tail())
+    };
+    let followed = following(cx);
+
+    // Over the output, a gesture scrolls the output and not the transcript.
+    wheel(cx, handle, over, pixels(0.), Started);
+    wheel(cx, handle, over, pixels(-40.), Moved);
+    let (moved, _, offset) = state(cx);
+    assert_eq!(offset, px(-40.));
+    assert_eq!(moved.top(), block.top(), "the transcript stays put");
+    // Past its end the output stops; the rest of the gesture does not chain.
+    for _ in 0..200 {
+        wheel(cx, handle, over, pixels(-60.), Moved);
+    }
+    let (moved, _, bottom) = state(cx);
+    assert!(bottom < px(-2000.), "reaches the last line: {bottom:?}");
+    assert_eq!(moved.top(), block.top());
+    assert_eq!(
+        following(cx),
+        followed,
+        "inner scrolling leaves follow mode alone"
+    );
+
+    // Horizontal packets never move the output vertically.
+    wheel(
+        cx,
+        handle,
+        over,
+        ScrollDelta::Pixels(point(px(-50.), px(0.))),
+        Started,
+    );
+    assert_eq!(state(cx).2, bottom);
+
+    // A new upward gesture scrolls the output back.
+    wheel(cx, handle, over, pixels(0.), Started);
+    wheel(cx, handle, over, pixels(30.), Moved);
+    assert_eq!(state(cx).2, bottom + px(30.));
+    // Mouse wheel notches decide one at a time: at the top, the next goes
+    // to the transcript.
+    let notch = ScrollDelta::Lines(point(0., 3.));
+    for _ in 0..100 {
+        if state(cx).2 == px(0.) {
+            break;
+        }
+        wheel(cx, handle, over, notch, Moved);
+    }
+    let (still, _, offset) = state(cx);
+    assert_eq!(offset, px(0.));
+    assert_eq!(
+        still.top(),
+        block.top(),
+        "the output absorbed every notch it could"
+    );
+    wheel(cx, handle, over, notch, Moved);
+    let (moved, _, offset) = state(cx);
+    assert_eq!(offset, px(0.));
+    assert!(
+        moved.top() > block.top(),
+        "the transcript scrolled up: {moved:?} {block:?}"
+    );
+
+    // A transcript gesture that slides the output under a resting pointer
+    // stays with the transcript.
+    let (before, viewport, _) = state(cx);
+    let above = point(before.left() + px(40.), viewport.top() + px(4.));
+    assert!(above.y < before.top());
+    let at_top = point(before.left() + px(40.), before.top() + px(8.));
+    wheel(cx, handle, above, pixels(0.), Started);
+    wheel(cx, handle, above, pixels(-20.), Moved);
+    for _ in 0..4 {
+        wheel(cx, handle, at_top, pixels(-20.), Moved);
+    }
+    let (after, _, offset) = state(cx);
+    assert_eq!(offset, px(0.), "the output did not take over mid-gesture");
+    assert!(after.top() < before.top(), "the transcript kept scrolling");
+}
+
+#[gpui_kit::test]
+fn short_output_leaves_the_wheel_to_the_transcript(cx: &mut TestAppContext) {
+    use gpui_kit::TouchPhase::{Moved, Started};
+    let (rows, id) = script_rows("done\n2 rows");
+    let (handle, view) = open_script(rows, id, cx);
+    let block = cx
+        .update_window(handle, |_, window, _| {
+            window.find("body-call:s-Output").bounds()
+        })
+        .unwrap();
+    let over = point(block.left() + px(10.), block.center().y);
+    wheel(cx, handle, over, pixels(0.), Started);
+    wheel(cx, handle, over, pixels(40.), Moved);
+    cx.update_window(handle, |_, window, cx| {
+        assert!(
+            window.find("body-call:s-Output").bounds().top() > block.top(),
+            "the transcript scrolled"
+        );
+        assert_eq!(view.read(cx).work_ui.body_offset("s", "Output", cx), px(0.));
+    })
+    .unwrap();
+}

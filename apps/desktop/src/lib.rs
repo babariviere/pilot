@@ -249,6 +249,7 @@ mod usage_overview_fixture;
 mod usage_overview_probe;
 mod usage_overview_reader;
 mod usage_overview_view;
+mod nested_scroll;
 mod work_view;
 #[cfg(feature = "native-probes")]
 pub use catalog_probe::run_catalog_probe;
@@ -292,6 +293,10 @@ pub use local_view::sidebar_scroll_native::run_visible as run_visible_sidebar_sc
 pub use local_view::side_panel_probe::run_side_panel_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
+#[cfg(feature = "native-probes")]
+mod scrollbar_track_probe;
+#[cfg(feature = "native-probes")]
+pub use scrollbar_track_probe::run_scrollbar_track_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::workbench_probe::run_workbench_probe;
 pub use local_view::{LocalViewer, PreviewState};
