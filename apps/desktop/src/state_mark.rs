@@ -4,10 +4,11 @@
 //! Marks never loop. A changed state cross-fades once on the shared
 //! `transition::Transition` clock, instantly under reduced motion. Colour only
 //! for amber Needs you, red Failed and green Ready; Working stays neutral.
+//! Working and Background have no glyph: the state word beside it says it.
 use crate::{app_icon::AppIcon, local_model::Chat, transition::Transition};
 use gpui_kit::{
-    AnyElement, App, Div, Hsla, IntoElement, ParentElement, Styled, Window, component::ActiveTheme,
-    div, px, rgb,
+    AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled,
+    TestSupportExt, Window, component::ActiveTheme, div, px, rgb,
 };
 use std::time::Duration;
 
@@ -34,7 +35,7 @@ impl Signal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
     Working,
-    /// Only background jobs are running: the same ring, fainter.
+    /// Only background jobs are running.
     Background,
     NeedsYou,
     Question,
@@ -88,18 +89,12 @@ pub(crate) const FADE: Duration = Duration::from_millis(180);
 /// Mark glyphs sit in a 12pt slot.
 pub(crate) const SLOT: f32 = 12.;
 
-/// A still 12pt glyph: ring Working (faint for background), amber dot Needs
-/// you, red triangle Failed, green pull request Ready.
-pub(crate) fn glyph(mark: Mark, cx: &App) -> AnyElement {
+/// A still 12pt glyph: amber dot Needs you, red triangle Failed, green pull
+/// request Ready. Working and Background draw none; their word carries them.
+pub(crate) fn glyph(mark: Mark, cx: &App) -> Option<AnyElement> {
     let color = mark.color(cx);
-    match mark {
-        Mark::Working | Mark::Background => div()
-            .size(px(9.))
-            .rounded_full()
-            .border(px(1.5))
-            .border_color(color)
-            .when_background(mark == Mark::Background)
-            .into_any_element(),
+    Some(match mark {
+        Mark::Working | Mark::Background => return None,
         Mark::NeedsYou | Mark::Question => div()
             .size(px(7.))
             .rounded_full()
@@ -115,36 +110,36 @@ pub(crate) fn glyph(mark: Mark, cx: &App) -> AnyElement {
             .size_3()
             .text_color(color)
             .into_any_element(),
-    }
-}
-trait Faint {
-    fn when_background(self, faint: bool) -> Self;
-}
-impl Faint for Div {
-    fn when_background(self, faint: bool) -> Self {
-        if faint { self.opacity(0.5) } else { self }
-    }
+    })
 }
 
 /// A centered 12pt slot holding the current glyph, with the previous one
 /// fading out on top while a change settles.
 pub(crate) fn slot(shown: Option<Mark>, previous: Option<Mark>, t: f32, cx: &App) -> Div {
     let layer = |mark: Mark, opacity: f32| {
-        div()
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .opacity(opacity)
-            .child(glyph(mark, cx))
+        glyph(mark, cx).map(|glyph| {
+            div()
+                .id("state-glyph")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(opacity)
+                .child(glyph)
+        })
     };
     div()
         .relative()
         .flex_none()
         .size(px(SLOT))
-        .children(shown.map(|mark| layer(mark, t)))
-        .children(previous.filter(|_| t < 1.).map(|mark| layer(mark, 1. - t)))
+        .children(shown.and_then(|mark| layer(mark, t)))
+        .children(
+            previous
+                .filter(|_| t < 1.)
+                .and_then(|mark| layer(mark, 1. - t)),
+        )
 }
 
 /// The small neutral "new reply since you looked" dot.

@@ -230,8 +230,10 @@ Dither is atmosphere only: the Home sky (`home_sky`). Rows, the composer,
 buttons, progress bars and cards never carry it; the working line covers live work.
 Chat state on sidebar and Inbox rows is a still mark (`state_mark`, which also
 owns `Signal` and its tints for task status, attention, chat order and mission
-overview): ring Working (neutral, half opacity for background jobs), amber dot
-Needs you and questions, red triangle Failed, green pull request Ready. Marks
+overview): amber dot Needs you and questions, red triangle Failed, green pull
+request Ready. Working and Background have no glyph (their neutral state word
+carries them; a collapsed mission's roll-up says "N working"), so their trailing
+slot stays empty but keeps the column. Marks
 never loop. `state_mark::Fade` cross-fades a changed mark once (180 ms) on the
 `transition::Transition` clock, requesting frames only while it runs; a first
 sight never fades and reduced motion swaps at once. The `style` native target
@@ -330,18 +332,24 @@ right under it (a row with nothing to caption is one line): the project (across 
 only for amber, red or green states. Its still mark sits in the trailing slot on
 the title line. The accessible name keeps the full state, mission and "new
 reply". A thread's parent is the coordinator chat titled with the mission name
-(Compass and name in the accent, then its disclosure chevron, shown while
-collapsed or on hover and keyboard selection, state word and mark on the
-right); its second line holds the project (outside project sections) and, while collapsed, the roll-up of
-member marks. Members are one-line 28pt rows indented to the mission name under a
-hairline guide, then "+N finished" for quiet, seen members. Rows have fixed
+(Compass and name in the accent, state word and mark on the right). Its fold
+chevron sits in the row's 7pt leading gutter before the Compass (the Compass
+stays on the text edge), shown while collapsed or on hover and keyboard
+selection; its target spans the gutter and the Compass, and the rest of the row
+opens the chat. Its second line holds the project (outside project sections) and, while collapsed, the roll-up of
+member marks. Members are one-line 28pt rows indented to the mission name. A
+faint `border` stem runs down from the Compass's center, with a short branch
+(4pt radius) to each member's title line that stops 4pt short of the title; it
+ends with the last member's branch, and "+N finished" hangs off nothing. The
+pieces only touch at the fork, so the translucent hairline stays even. Rows have fixed
 heights per kind through the patched Kit list's `ListDelegate::item_height`
 (48pt two-line, 32pt for a chat or parent without a caption, 28pt member,
 24pt fold, 30pt project label). Left/Right
 (`SidebarCollapse`/`SidebarExpand`, bound ahead of the search field's caret
 moves and passed on when they do nothing) collapse, expand or move between a
 member and its parent; Enter opens a row's chat, opens a coordinator-less
-mission or shows/hides finished members. The small neutral "new reply" dot
+mission or shows/hides finished members. Needs you (here or rolled up) hides
+the "new reply" dot and its spoken words. The small neutral "new reply" dot
 follows the title. The row's … menu overhangs the trailing slot, replacing the
 mark (and a one-line row's state word), and shows only on hover or on the
 keyboard-selected row while the list has keyboard focus; the right-click menu

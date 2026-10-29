@@ -392,6 +392,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
                 }
             })
             .unwrap();
+            check_thread(cx, h, &view, &shot);
             let first = cx
                 .update_window(h, |_, w, _| w.find("chat-row-group:project:pilot").bounds())
                 .unwrap();
@@ -636,6 +637,196 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
     }
     run_many(cx, captures.as_deref());
     run_section_settings(cx);
+}
+
+fn thread_collapsed(view: &Entity<LocalViewer>, cx: &mut HeadlessAppContext) -> bool {
+    cx.update(|cx| {
+        view.read(cx)
+            .chats
+            .read(cx)
+            .delegate()
+            .collapsed
+            .contains("gpui")
+    })
+}
+
+/// The mission tree: the fold chevron sits in the leading gutter before the
+/// Compass, a stem runs from the Compass's center through rounded branches and
+/// ends at the last member, never "+N finished". State words stay beside
+/// empty Working slots; Needs you hides the "new reply" dot, also on the
+/// collapsed mission's roll-up.
+fn check_thread(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    shot: &dyn Fn(&mut HeadlessAppContext, &str),
+) {
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        let row = w.find("chat-row-coord").bounds();
+        let compass = w
+            .within("chat-row-coord")
+            .find("sidebar-mission-glyph")
+            .bounds();
+        let chevron = w.find("sidebar-mission-chevron").bounds();
+        assert!(
+            chevron.left() >= row.left() && chevron.right() <= compass.left() + px(0.5),
+            "the chevron sits in the gutter before the Compass"
+        );
+        assert!((chevron.center().y - compass.center().y).abs() < px(1.));
+        let target = w.find("mission-disclosure-gpui").bounds();
+        assert!(target.left() >= row.left() && target.right() <= compass.right() + px(0.5));
+        let title = w
+            .within("chat-row-coord")
+            .find("sidebar-mission-title")
+            .bounds();
+        assert!(
+            target.right() <= title.left(),
+            "the title still opens the chat"
+        );
+        let stem = w.find("sidebar-thread-stem").bounds();
+        near(
+            stem.center().x,
+            compass.center().x,
+            "stem under the Compass",
+        );
+        assert!(stem.top() >= compass.bottom());
+        for (id, last) in [("m-q", false), ("m-f", false), ("m-x", true)] {
+            let row = w.find(format!("chat-row-{id}")).bounds();
+            let elbow = w
+                .within(format!("chat-row-{id}"))
+                .find("sidebar-thread-elbow")
+                .bounds();
+            let name = w
+                .within(format!("chat-row-{id}"))
+                .find("sidebar-chat-title")
+                .bounds();
+            let word = w
+                .within(format!("chat-row-{id}"))
+                .find("sidebar-state-word")
+                .bounds();
+            near(elbow.left() + px(0.5), stem.center().x, id);
+            assert!(
+                elbow.right() < name.left(),
+                "{id}: the branch stops before its title"
+            );
+            assert!(
+                (elbow.bottom() - px(0.5) - name.center().y).abs() < px(1.5),
+                "{id}: the branch meets the title line"
+            );
+            assert!(
+                name.right() <= word.left() + px(0.5),
+                "{id}: title and state never overlap"
+            );
+            assert!(word.right() <= w.find(format!("chat-mark-{id}")).bounds().right());
+            let continues = w
+                .within(format!("chat-row-{id}"))
+                .try_find("sidebar-thread-continues")
+                .map(|e| e.bounds());
+            assert_eq!(
+                continues.is_some(),
+                !last,
+                "{id}: the stem ends at the last member"
+            );
+            if let Some(below) = continues {
+                near(below.bottom(), row.bottom(), id);
+            }
+        }
+        assert!(
+            w.within("chat-row-fold:gpui")
+                .try_find("sidebar-thread-branch")
+                .is_none(),
+            "+N finished hangs off no branch"
+        );
+        // Needs you already asks for a look: no "new reply" dot beside it.
+        // Working keeps only its word.
+        assert!(w.try_find("chat-reply-m-q").is_none());
+        assert!(w.within("chat-mark-m-q").try_find("state-glyph").is_some());
+        for id in ["coord", "m-x", "fix", "bg"] {
+            assert!(
+                w.within(format!("chat-mark-{id}"))
+                    .try_find("state-glyph")
+                    .is_none(),
+                "{id}: no hollow Working glyph"
+            );
+        }
+        assert!(
+            w.within("chat-row-m-x")
+                .try_find("sidebar-state-word")
+                .is_some()
+        );
+        assert!(
+            w.within("chat-row-fix")
+                .try_find("sidebar-chat-state")
+                .is_some()
+        );
+        assert!(w.within("chat-mark-nix").try_find("state-glyph").is_some());
+    })
+    .unwrap();
+    // A click on the chevron folds the thread and opens nothing.
+    cx.update_window(h, |_, w, cx| w.click("mission-disclosure-gpui", cx))
+        .unwrap();
+    settle(cx, h);
+    assert!(thread_collapsed(view, cx));
+    assert!(cx.update(|cx| view.read(cx).selected.is_none()));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("chat-row-m-q").is_none());
+        assert!(w.try_find("sidebar-thread-stem").is_none());
+        let compass = w
+            .within("chat-row-coord")
+            .find("sidebar-mission-glyph")
+            .bounds();
+        assert!(w.find("sidebar-mission-chevron").bounds().right() <= compass.left() + px(0.5));
+        // The roll-up's amber dot stands in for its members' new replies.
+        assert!(w.try_find("chat-reply-coord").is_none());
+        assert!(
+            w.within("mission-rollup-NeedsYou")
+                .try_find("state-glyph")
+                .is_some()
+        );
+        assert!(
+            w.within("mission-rollup-Working")
+                .try_find("state-glyph")
+                .is_none()
+        );
+        let label = w
+            .find("coord")
+            .label()
+            .map(|l| l.to_string())
+            .unwrap_or_default();
+        assert!(
+            label.contains("1 need you") && !label.contains("new repl"),
+            "{label}"
+        );
+    })
+    .unwrap();
+    shot(cx, "thread-collapsed");
+    // Keyboard: Right expands, then enters; Left returns and collapses.
+    select(view, "coord", h, cx);
+    press("right", h, cx);
+    assert!(!thread_collapsed(view, cx));
+    press("right", h, cx);
+    assert_eq!(selected(view, cx).as_deref(), Some("m-q"));
+    press("left", h, cx);
+    assert_eq!(selected(view, cx).as_deref(), Some("coord"));
+    press("left", h, cx);
+    assert!(thread_collapsed(view, cx));
+    press("right", h, cx);
+    assert!(!thread_collapsed(view, cx));
+    cx.update_window(h, |_, w, cx| w.hover("chat-row-coord", cx))
+        .unwrap();
+    settle(cx, h);
+    shot(cx, "thread-hover");
+    cx.update_window(h, |_, w, cx| w.hover("new-local-chat", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update(|cx| {
+        view.read(cx).chats.clone().update(cx, |l, cx| {
+            l.delegate_mut().selected = None;
+            cx.notify();
+        })
+    });
+    settle(cx, h);
 }
 
 fn click_menu(w: &mut gpui_kit::Window, label: &str, cx: &mut gpui_kit::App) {

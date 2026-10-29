@@ -124,14 +124,16 @@ to right, like a typing indicator, fainter and half speed while only background 
 Chat motion plays on Core Animation (`LoopingLayerView`), never as per-frame SwiftUI updates, and changes only
 opacity, colour or a transform inside a fixed frame, so it never moves the layout.
 
-Pilot Next draws no row dither. A sidebar or Inbox row shows its state as one still mark in its trailing column,
-with words beside it or on its caption: an open ring for Working (neutral, fainter when only background jobs run),
-an amber dot for Needs you and questions, a red triangle for Failed and a green pull-request glyph for Ready to
-merge. Quiet chats draw nothing. Colour is only amber, red and green; Working stays neutral, and the words and the
+Pilot Next draws no row dither. A sidebar or Inbox row shows its state in words beside it or on its caption, plus
+one still mark in its trailing column: an amber dot for Needs you and questions, a red triangle for Failed and a
+green pull-request glyph for Ready to merge. Working and Background draw no mark; their neutral word says it, and a
+collapsed mission counts them in words ("2 working"). Quiet chats draw nothing. Colour is only amber, red and green;
+Working stays neutral, and the words and the
 accessible name always carry the state. Marks never loop: a change cross-fades once (180 ms), instantly under
 Reduce Motion, and never moves the row. A small neutral dot after a title means the agent replied since you last
 opened that chat. When you last looked is kept only on this machine (no read-status writes, nothing imported from
-Swift); opening the chat clears the dot, and a collapsed mission rolls up its members' dots.
+Swift); opening the chat clears the dot, and a collapsed mission rolls up its members' dots. A row that needs you
+shows no reply dot (its amber dot already asks for a look), nor does a collapsed mission with a member that needs you.
 
 ## Sidebar
 
@@ -206,8 +208,10 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
   machine only.
 - **Mission threads, one level.** A mission's coordinator chat is the parent row, titled with the mission name
   (Compass and name in the accent) with its state on the right. Its members follow as one-line rows (title, then
-  state word and mark) in creation order. Quiet members you have already seen fold into "+N finished". The
-  chevron or Left collapses a thread, and its second line then rolls up its members' marks and new replies; Right
+  state word and mark) in creation order, joined to the Compass by a faint stem with a short rounded branch to each
+  member; the stem ends at the last member. Quiet members you have already seen fold into "+N finished". The
+  chevron in the row's leading gutter, before the Compass, or Left collapses a thread, and its second line then
+  rolls up its members' marks and new replies; Right
   expands it, and opening a member expands its thread. A thread whose coordinator chat is not listed keeps a
   parent that opens the mission.
 - **Missions are not sidebar rows.** The sidebar lists chats; missions live in the Missions view, reached by its

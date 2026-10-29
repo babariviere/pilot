@@ -53,6 +53,13 @@ const GLYPH: f32 = 12.;
 const THREAD_INDENT: f32 = GLYPH + 6.;
 /// Titles align with the navigation glyph column.
 const ROW_INSET: f32 = 7.;
+/// The thread's tree: a stem down from the Compass's center, and a short
+/// rounded branch to each member, stopping short of its title.
+const STEM_X: f32 = ROW_INSET + GLYPH / 2.;
+const BRANCH_END: f32 = ROW_INSET + THREAD_INDENT - 4.;
+const BRANCH_RADIUS: f32 = 4.;
+/// The fold chevron sits in the row's leading gutter, before the Compass.
+const CHEVRON: f32 = 9.;
 /// A two-line row (title and caption); a row without a caption is one line.
 /// 48pt keeps the 2rem … button, centered on the title line, inside the row.
 pub(crate) const TWO_LINE_HEIGHT: f32 = 48.;
@@ -559,7 +566,7 @@ impl ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> ListItem {
         let mark_state = Mark::of(&chat);
-        let unread = self.memory.unread(&chat);
+        let unread = self.memory.unread(&chat) && !needs_you(mark_state);
         // RowLine: project (only across all projects), then the state reason.
         // Quiet chats say nothing rather than a raw "idle".
         let project = self.project_name(Some(&chat), ix.section);
@@ -716,8 +723,11 @@ impl ChatList {
             (None, None) => ("Mission name unavailable".to_owned(), false),
         };
         let mark = coordinator.as_ref().and_then(Mark::of);
-        let unread = coordinator.as_ref().is_some_and(|c| self.memory.unread(c))
-            || (t.collapsed && t.rollup.unread);
+        // Needs you, here or rolled up, already asks for a look.
+        let needs = needs_you(mark) || (t.collapsed && t.rollup.needs > 0);
+        let unread = !needs
+            && (coordinator.as_ref().is_some_and(|c| self.memory.unread(c))
+                || (t.collapsed && t.rollup.unread));
         let project = self.project_name(lead.as_ref(), ix.section);
         let counts = if t.collapsed {
             t.rollup.counts()
@@ -750,12 +760,23 @@ impl ChatList {
                 if t.members.len() == 1 { "" } else { "s" }
             ));
         }
-        if t.collapsed && !t.rollup.words().is_empty() {
-            spoken.push(t.rollup.words());
+        // Spoken like the dots: Needs you stands in for new replies.
+        let rollup = sidebar_tree::Rollup {
+            unread: t.rollup.unread && !needs,
+            ..t.rollup
+        };
+        if t.collapsed && !rollup.words().is_empty() {
+            spoken.push(rollup.words());
         }
         let spoken = label(&title, spoken.into_iter(), unread);
         let word = mark.map(|m| (m.word(), m));
         let accent_color = appearance::accent_mark(cx);
+        // The stem runs down to the members when they show.
+        let stem = !t.collapsed
+            && self
+                .position(ix)
+                .and_then(|p| self.tree.rows.get(p + 1))
+                .is_some_and(|row| matches!(row, Row::Member { thread: m, .. } if *m == thread));
         let trailing = self.trailing(ix, &key, coordinator.as_ref(), mark, true, window, cx);
         let menu = coordinator.is_some().then(|| self.menu_shown(ix, window));
         let keyboard = self.menu_shown(ix, window);
@@ -784,74 +805,103 @@ impl ChatList {
                         div()
                             .id("sidebar-mission-glyph")
                             .test_support()
+                            .relative()
                             .flex_none()
                             .w(px(GLYPH))
                             .mr(px(THREAD_INDENT - GLYPH))
                             .flex()
                             .justify_center()
                             .text_color(accent_color)
-                            .child(AppIcon::Coordinator.inline().size_3()),
+                            .child(AppIcon::Coordinator.inline().size_3())
+                            // The row clips the stem at its bottom edge.
+                            .when(stem, |d| {
+                                d.child(
+                                    div()
+                                        .id("sidebar-thread-stem")
+                                        .test_support()
+                                        .absolute()
+                                        .top(px(GLYPH + 3.))
+                                        .left(px(GLYPH / 2. - 0.5))
+                                        .w(px(1.))
+                                        .h(px(TWO_LINE_HEIGHT))
+                                        .bg(cx.theme().border),
+                                )
+                            }),
                     )
-                    .child(
-                        lane(
-                            div()
-                                .id("sidebar-mission-title")
-                                .test_support()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(TextRole::BODY))
-                                .font_medium()
-                                .when(accent, |d| d.text_color(accent_color))
-                                .child(SharedString::from(title)),
-                            unread.then(|| reply(&key, cx)),
-                        )
-                        // The chevron follows the name: always while collapsed,
-                        // else on hover or keyboard selection. It toggles the
-                        // thread; the row itself opens the chat.
-                        .when(expandable, |lane| {
-                            lane.child(
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "mission-disclosure-{}",
-                                        t.mission
-                                    )))
-                                    .test_support()
-                                    .flex_none()
-                                    .size(px(GLYPH))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_pointer()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .when(!t.collapsed && !keyboard, |d| {
-                                        d.opacity(0.).group_hover("chat-row", |s| s.opacity(1.))
-                                    })
-                                    .child(
-                                        gpui_kit::component::Icon::new(if t.collapsed {
-                                            IconName::ChevronRight
-                                        } else {
-                                            IconName::ChevronDown
-                                        })
-                                        .size_3(),
-                                    )
-                                    .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
-                                        w.prevent_default();
-                                        cx.stop_propagation();
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        let _ = list.update(cx, |list, cx| {
-                                            let collapsed =
-                                                !list.delegate().collapsed.contains(&mission);
-                                            list.delegate_mut().set_collapsed(&mission, collapsed);
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                        }),
-                    )
+                    .child(lane(
+                        div()
+                            .id("sidebar-mission-title")
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(TextRole::BODY))
+                            .font_medium()
+                            .when(accent, |d| d.text_color(accent_color))
+                            .child(SharedString::from(title)),
+                        unread.then(|| reply(&key, cx)),
+                    ))
                     .children(word.map(|(word, mark)| state_word(word, mark, menu, cx)))
-                    .child(trailing),
+                    .child(trailing)
+                    // The chevron sits in the leading gutter before the
+                    // Compass: always while collapsed, else on hover or
+                    // keyboard selection. Its target spans the gutter and the
+                    // Compass and toggles the thread; the rest of the row
+                    // opens the chat.
+                    .when(expandable, |line| {
+                        line.child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "mission-disclosure-{}",
+                                    t.mission
+                                )))
+                                .test_support()
+                                .absolute()
+                                .left(px(-ROW_INSET))
+                                .top(px(-8.))
+                                .bottom(px(-8.))
+                                .w(px(ROW_INSET + GLYPH))
+                                .cursor_pointer()
+                                .child(
+                                    div()
+                                        .id("sidebar-mission-chevron")
+                                        .test_support()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left_0()
+                                        .w(px(ROW_INSET))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .when(!t.collapsed && !keyboard, |d| {
+                                            d.opacity(0.).group_hover("chat-row", |s| s.opacity(1.))
+                                        })
+                                        .child(
+                                            gpui_kit::component::Icon::new(if t.collapsed {
+                                                IconName::ChevronRight
+                                            } else {
+                                                IconName::ChevronDown
+                                            })
+                                            .flex_none()
+                                            .size(px(CHEVRON)),
+                                        ),
+                                )
+                                .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
+                                    w.prevent_default();
+                                    cx.stop_propagation();
+                                })
+                                .on_click(move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    let _ = list.update(cx, |list, cx| {
+                                        let collapsed =
+                                            !list.delegate().collapsed.contains(&mission);
+                                        list.delegate_mut().set_collapsed(&mission, collapsed);
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                    }),
             )
             .when(caption, |d| {
                 d.child(
@@ -873,7 +923,9 @@ impl ChatList {
                                 .truncate()
                                 .child(SharedString::from(p))
                         }))
-                        .children(counts.into_iter().map(|(mark, n)| {
+                        .children(counts.iter().enumerate().map(|(i, &(mark, n))| {
+                            // Working is counted in words; it has no glyph.
+                            let working = mark == Mark::Working;
                             div()
                                 .id(SharedString::from(format!("mission-rollup-{:?}", mark)))
                                 .test_support()
@@ -881,13 +933,20 @@ impl ChatList {
                                 .h_flex()
                                 .items_center()
                                 .gap_0p5()
-                                .text_color(if mark == Mark::Working {
+                                .text_color(if working {
                                     cx.theme().muted_foreground
                                 } else {
                                     mark.color(cx)
                                 })
-                                .child(state_mark::slot(Some(mark), None, 1., cx))
-                                .child(n.to_string())
+                                .when(!working, |d| {
+                                    d.child(state_mark::slot(Some(mark), None, 1., cx))
+                                })
+                                .child(if working {
+                                    // A dot keeps it apart from a glyph's count.
+                                    format!("{}{n} working", if i > 0 { "· " } else { "" })
+                                } else {
+                                    n.to_string()
+                                })
                         })),
                 )
             });
@@ -902,7 +961,7 @@ impl ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> ListItem {
         let mark = Mark::of(&chat);
-        let unread = self.memory.unread(&chat);
+        let unread = self.memory.unread(&chat) && !needs_you(mark);
         let state = chat_order::row_state(&chat);
         // A member from another project than its thread's section names it.
         let elsewhere = (!self.tree.groups.is_empty()
@@ -924,13 +983,18 @@ impl ChatList {
             unread,
         );
         let quiet = mark.is_none();
+        // The last shown member ends the stem with its branch.
+        let last = !self
+            .position(ix)
+            .and_then(|p| self.tree.rows.get(p + 1))
+            .is_some_and(|row| matches!(row, Row::Member { thread: t, .. } if *t == thread));
         let trailing = self.trailing(ix, &chat.id, Some(&chat), mark, true, window, cx);
         let menu = Some(self.menu_shown(ix, window));
         let frame = self.frame(ix, &chat.id, Some(&chat), MEMBER_HEIGHT, cx);
         let row = frame
             .h_flex()
             .items_center()
-            .child(guide(cx))
+            .child(branch(last, cx))
             .child(div().flex_none().w(px(THREAD_INDENT)))
             .child(
                 lane(
@@ -992,7 +1056,6 @@ impl ChatList {
             frame
                 .h_flex()
                 .items_center()
-                .child(guide(cx))
                 .child(div().flex_none().w(px(THREAD_INDENT)))
                 .child(
                     div()
@@ -1024,8 +1087,10 @@ fn label(title: &str, parts: impl Iterator<Item = String>, unread: bool) -> Stri
 }
 /// A one-line row's state word. With row actions (`menu`), it gives way to
 /// the … button on hover or keyboard selection (`Some(true)`).
-fn state_word(word: &'static str, mark: Mark, menu: Option<bool>, cx: &App) -> Div {
+fn state_word(word: &'static str, mark: Mark, menu: Option<bool>, cx: &App) -> Observed {
     div()
+        .id("sidebar-state-word")
+        .test_support()
         .flex_none()
         .pl_1()
         .when(menu == Some(true), |d| d.opacity(0.))
@@ -1051,6 +1116,11 @@ fn lane(title: impl IntoElement, dot: Option<Observed>) -> Div {
         .child(title)
         .children(dot)
 }
+/// A Needs you (or question) mark already asks for a look, so its row shows
+/// no "new reply" dot beside the amber one.
+fn needs_you(mark: Option<Mark>) -> bool {
+    mark.map(Mark::bucket) == Some(Mark::NeedsYou)
+}
 /// The small neutral "replied since you looked" dot.
 fn reply(key: &str, cx: &App) -> Observed {
     div()
@@ -1059,15 +1129,53 @@ fn reply(key: &str, cx: &App) -> Observed {
         .flex_none()
         .child(state_mark::reply_dot(cx))
 }
-/// The thread guide under the parent's Compass.
-fn guide(cx: &App) -> Div {
+/// A member's part of the thread tree: the stem from the parent's Compass and
+/// a short rounded branch to the title. The last member's branch ends the stem.
+/// Pieces only touch at the fork, so the translucent hairline stays even.
+fn branch(last: bool, cx: &App) -> Observed {
+    let color = cx.theme().border;
+    let middle = MEMBER_HEIGHT / 2.;
+    let curve = middle - 2. * BRANCH_RADIUS;
+    let line = |top: f32, height: f32| {
+        div()
+            .absolute()
+            .left(px(STEM_X - 0.5))
+            .top(px(top))
+            .w(px(1.))
+            .h(px(height))
+            .bg(color)
+    };
     div()
+        .id("sidebar-thread-branch")
+        .test_support()
         .absolute()
-        .top_0()
-        .bottom_0()
-        .left(px(ROW_INSET + GLYPH / 2. - 0.5))
-        .w(px(1.))
-        .bg(cx.theme().border)
+        .inset_0()
+        .child(line(0., curve))
+        .child(
+            div()
+                .id("sidebar-thread-elbow")
+                .test_support()
+                .absolute()
+                .left(px(STEM_X - 0.5))
+                .top(px(curve))
+                .w(px(BRANCH_END - STEM_X + 0.5))
+                .h(px(2. * BRANCH_RADIUS + 0.5))
+                .border_l_1()
+                .border_b_1()
+                .border_color(color)
+                .rounded_bl(px(BRANCH_RADIUS)),
+        )
+        // Below the curve's start, the stem carries on to the next member.
+        .when(!last, |d| {
+            d.child(
+                line(
+                    middle - BRANCH_RADIUS + 2.,
+                    MEMBER_HEIGHT - (middle - BRANCH_RADIUS + 2.),
+                )
+                .id("sidebar-thread-continues")
+                .test_support(),
+            )
+        })
 }
 
 impl ListDelegate for ChatList {

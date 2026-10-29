@@ -128,7 +128,9 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 .update_window(handle, |_, window, cx| {
                     window.render_frame(cx);
                     let v = view.read(cx);
-                    // Every state draws its still mark; quiet rows draw none.
+                    // Every state keeps its trailing slot. Attention, failure
+                    // and ready draw a still glyph; Working and Background draw
+                    // none (their state word says it); quiet rows draw none.
                     for id in [
                         "style-fg",
                         "style-bg",
@@ -149,7 +151,35 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                             (mark.center().y - title.center().y).abs() < px(1.5),
                             "{id}: mark sits on the title line"
                         );
+                        let glyph = window
+                            .within(format!("chat-mark-{id}"))
+                            .try_find("state-glyph")
+                            .is_some();
+                        let working = matches!(id, "style-fg" | "style-bg");
+                        assert_eq!(glyph, !working, "{id}: glyph only beyond Working");
+                        if working {
+                            assert!(
+                                window
+                                    .within(format!("chat-row-{id}"))
+                                    .try_find("sidebar-chat-state")
+                                    .is_some(),
+                                "{id}: the state word stays"
+                            );
+                        }
                     }
+                    // The coordinator's Working word stays; its slot is empty.
+                    assert!(
+                        window
+                            .within("chat-row-style-coord")
+                            .try_find("sidebar-state-word")
+                            .is_some()
+                    );
+                    assert!(
+                        window
+                            .within("chat-mark-style-coord")
+                            .try_find("state-glyph")
+                            .is_none()
+                    );
                     // A thread: the coordinator row is titled with the mission, its
                     // members are one-line rows indented under it.
                     let parent = window.find("chat-row-style-coord").bounds();
@@ -566,6 +596,19 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
             assert!(window.try_find("mission-rollup-NeedsYou").is_none());
             assert!(window.try_find("mission-rollup-Failed").is_some());
             assert!(window.try_find("mission-rollup-Working").is_some());
+            // Working rolls up in words, without a hollow glyph.
+            assert!(
+                window
+                    .within("mission-rollup-Working")
+                    .try_find("state-glyph")
+                    .is_none()
+            );
+            assert!(
+                window
+                    .within("mission-rollup-Failed")
+                    .try_find("state-glyph")
+                    .is_some()
+            );
         })
         .unwrap();
         if let Some(dir) = captures {
