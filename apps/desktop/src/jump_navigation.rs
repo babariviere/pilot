@@ -13,6 +13,20 @@ impl LocalViewer {
             projects: self.state.projects.clone(),
             scope: self.project_scope.clone(),
             selected: self.selected.clone(),
+            archive: (self.page == Page::Chat
+                && self.state.list_loaded
+                && (self.state.status.starts_with("Connected")
+                    || self.state.status.starts_with("Synthetic")))
+            .then(|| {
+                self.selected.as_ref().and_then(|id| {
+                    self.state
+                        .chats
+                        .iter()
+                        .find(|chat| &chat.id == id && !chat.archived && !chat.local_draft)
+                        .map(|chat| chat.id.clone())
+                })
+            })
+            .flatten(),
             loaded: self.state.list_loaded,
             projects_error: self.state.projects_error.is_some(),
         }
@@ -69,6 +83,9 @@ impl LocalViewer {
                         Destination::Chat(id) => {
                             v.state.chats.iter().any(|c| &c.id == id && !c.local_draft)
                         }
+                        Destination::ArchiveChat(id) => {
+                            v.jump_source().archive.as_ref() == Some(id)
+                        }
                         _ => true,
                     };
                     if !valid {
@@ -86,6 +103,7 @@ impl LocalViewer {
                                 v.open(chat, w, cx);
                             }
                         }
+                        Destination::ArchiveChat(id) => v.archive_current_chat(id, w, cx),
                     }
                 }
             }

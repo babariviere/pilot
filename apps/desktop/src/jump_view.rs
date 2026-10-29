@@ -124,6 +124,7 @@ impl ListDelegate for JumpList {
             Destination::Chats | Destination::Chat(_) => AppIcon::Chats,
             Destination::Overview(_) => AppIcon::Overview,
             Destination::Project(_) => AppIcon::Project,
+            Destination::ArchiveChat(_) => AppIcon::Chats,
         };
         let epoch = self.epoch;
         Some(

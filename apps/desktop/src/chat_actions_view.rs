@@ -66,6 +66,10 @@ pub(crate) struct Actions {
 }
 impl EventEmitter<Changed> for Actions {}
 impl Actions {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_error(&self) -> Option<Failure> {
+        self.error
+    }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     /// A rename or action still waiting for Local, or the open rename dialog's unsent title.
     /// Settled and Unknown outcomes are not held: nothing resends them after a restart.

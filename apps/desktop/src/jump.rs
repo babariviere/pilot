@@ -84,12 +84,14 @@ pub(crate) enum Destination {
     Overview(String),
     Project(String),
     Chat(String),
+    ArchiveChat(String),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
     Page,
     Project,
     Chat,
+    Action,
 }
 impl Kind {
     pub(crate) fn title(self, suggested: bool) -> &'static str {
@@ -98,6 +100,7 @@ impl Kind {
             Self::Project => "Projects",
             Self::Chat if suggested => "Recent chats",
             Self::Chat => "Chats",
+            Self::Action => "Actions",
         }
     }
 }
@@ -107,6 +110,7 @@ pub(crate) struct Snapshot {
     pub(crate) projects: Arc<Vec<Project>>,
     pub(crate) scope: Option<String>,
     pub(crate) selected: Option<String>,
+    pub(crate) archive: Option<String>,
     pub(crate) loaded: bool,
     pub(crate) projects_error: bool,
 }
@@ -116,6 +120,7 @@ impl Snapshot {
             && Arc::ptr_eq(&self.projects, &other.projects)
             && self.scope == other.scope
             && self.selected == other.selected
+            && self.archive == other.archive
             && self.loaded == other.loaded
             && self.projects_error == other.projects_error
     }
@@ -173,6 +178,7 @@ pub(crate) struct Catalog {
     projects: Weak<Vec<Project>>,
     scope: Option<String>,
     selected: Option<String>,
+    archive: Option<String>,
 }
 pub(crate) struct Group {
     pub(crate) kind: Kind,
@@ -189,6 +195,7 @@ impl Catalog {
             && self.projects.ptr_eq(&Arc::downgrade(&s.projects))
             && self.scope == s.scope
             && self.selected == s.selected
+            && self.archive == s.archive
     }
     // Invoked off the UI thread. Weak allocation identities cannot alias a reused
     // address and do not retain the full summary/cwd payload in the catalog.
@@ -222,6 +229,17 @@ impl Catalog {
                 true,
             ),
         ];
+        if let Some(id) = &s.archive {
+            entries.push(Entry::new(
+                "action:archive-current".into(),
+                Destination::ArchiveChat(id.clone()),
+                Kind::Action,
+                "Archive current chat".into(),
+                "Archive this chat".into(),
+                vec!["archive".into()],
+                false,
+            ));
+        }
         if let Some(p) = s
             .projects
             .iter()
@@ -307,6 +325,7 @@ impl Catalog {
             projects: Arc::downgrade(&s.projects),
             scope: s.scope.clone(),
             selected: s.selected.clone(),
+            archive: s.archive.clone(),
         }
     }
     pub(crate) fn detail(&self, entry: &Entry, query: &Query) -> String {
@@ -439,7 +458,25 @@ mod tests {
             json!({"id":"prefix","title":"Atlas notes","state":"idle","projectId":"a"}),
             json!({"id":"exact","title":"Atlas","state":"idle"}),
             json!({"id":"archived","title":"Old notes","state":"idle","archivedAt":1}),
-        ].iter().map(|v|crate::local_model::chat(v).unwrap()).collect()),scope:None,selected:Some("current".into()),loaded:true,projects_error:false}
+        ].iter().map(|v|crate::local_model::chat(v).unwrap()).collect()),scope:None,selected:Some("current".into()),archive:Some("current".into()),loaded:true,projects_error:false}
+    }
+    #[test]
+    fn archive_action_search_targets_current_only() {
+        let mut s = snapshot();
+        let c = Catalog::new(&s);
+        let matches = c.search(&Query::new("archive current chat"));
+        let row = matches.groups[0].rows[0];
+        assert_eq!(
+            c.entries[row].destination,
+            Destination::ArchiveChat("current".into())
+        );
+        s.archive = None;
+        assert!(
+            Catalog::new(&s)
+                .search(&Query::new("archive current chat"))
+                .groups
+                .is_empty()
+        );
     }
     #[test]
     fn resource_priority_exact_chat_unicode_and_archives() {
@@ -584,6 +621,7 @@ mod tests {
     #[test]
     fn bounded_catalog_matches_and_weak_source_fences() {
         let mut s = snapshot();
+        s.archive = None;
         s.projects = Arc::new(
             (0..256)
                 .map(|i| Project {

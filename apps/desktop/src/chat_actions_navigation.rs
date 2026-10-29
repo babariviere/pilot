@@ -4,6 +4,80 @@ use crate::chat_actions::{Action, Evidence, Target};
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 
 impl LocalViewer {
+    pub(super) fn archive_current_chat(
+        &mut self,
+        id: String,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let result = (|| {
+            let chat = self
+                .state
+                .chats
+                .iter()
+                .find(|c| c.id == id && !c.archived && !c.local_draft)
+                .cloned()
+                .ok_or("This chat is unavailable. Nothing was submitted.")?;
+            let target = self
+                .chat_actions
+                .read(cx)
+                .target(chat)
+                .ok_or("Chat actions aren't available right now.")?;
+            if self.page != Page::Chat
+                || self.selected.as_ref() != Some(&id)
+                || !self.chat_action_ready(&target, w, cx)
+            {
+                return Err(
+                    "The original chat changed or Local is unavailable. Nothing was submitted.",
+                );
+            }
+            if let Some(reason) = self.chat_actions.read(cx).blocked_reason(&id) {
+                return Err(reason);
+            }
+            let known_ack = self.chat_actions.read(cx).inspection_ack(&id);
+            let rx = self
+                .chat_actions
+                .read(cx)
+                .worker
+                .as_ref()
+                .ok_or("Chat actions aren't available right now.")?
+                .inspect(target)?;
+            Ok((rx, known_ack))
+        })();
+        let (rx, known_ack) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                self.chat_actions.update(cx, |a, cx| a.error(error, cx));
+                return;
+            }
+        };
+        cx.spawn_in(w, async move |viewer, cx| {
+            let result = rx
+                .recv()
+                .await
+                .unwrap_or(Err("Chat actions aren't available right now."));
+            let _ = viewer.update_in(cx, |v, w, cx| match result {
+                Ok(evidence)
+                    if v.page == Page::Chat
+                        && v.selected.as_ref() == Some(&id)
+                        && evidence.archive
+                        && evidence.can_archive =>
+                {
+                    v.chat_actions
+                        .update(cx, |a, _| a.inspected(&evidence, known_ack));
+                    v.chat_row_action(evidence, Action::Archive, w, cx);
+                }
+                Ok(_) => v.chat_actions.update(cx, |a, cx| {
+                    a.error(
+                        "This chat cannot be archived right now. Nothing was submitted.",
+                        cx,
+                    )
+                }),
+                Err(error) => v.chat_actions.update(cx, |a, cx| a.error(error, cx)),
+            });
+        })
+        .detach();
+    }
     /// Opens the row's own linked mission, by the summary's mission ID as the
     /// sidebar mission link does. Unlinked or unknown associations get none.
     fn open_mission_item(owner: gpui_kit::WeakEntity<Self>, chat: &Chat) -> Option<PopupMenuItem> {

@@ -28,6 +28,24 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         v.selected=Some("source".into());v.title="Selected idle source".into();v.transcript.update(cx,|t,cx|t.replace_readonly(rows.clone(),true,cx));v.editor.update(cx,|e,cx|e.select("chat:source".into(),true,false,w,cx));v.rebuild_nav(w,cx);v.listen_writes(updates,w,cx);v
     }))).unwrap();
     until(cx, h, |_, cx| view.read(cx).editor.read(cx).ready());
+    cx.update_window(h, |_, _, cx| {
+        view.update(cx, |v, _| {
+            assert_eq!(v.jump_source().archive.as_deref(), Some("source"));
+            v.selected = None;
+            assert!(v.jump_source().archive.is_none());
+            v.selected = Some("source".into());
+            let original = v.state.chats.clone();
+            let mut archived = f::source();
+            archived["archivedAt"] = json!(1);
+            v.state.chats = Arc::new(vec![crate::local_model::chat(&archived).unwrap()]);
+            assert!(v.jump_source().archive.is_none());
+            v.state.chats = original;
+            v.state.status = "Disconnected".into();
+            assert!(v.jump_source().archive.is_none());
+            v.state.status = "Synthetic Local fixture".into();
+        });
+    })
+    .unwrap();
     let (editor, transcript) = cx.update(|cx| {
         (
             view.read(cx).editor.clone(),
@@ -69,9 +87,29 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         assert_eq!(current.0, anchor.0);
         assert!((current.1 - anchor.1).abs() < 1.);
     };
-    menu(cx, h, "Archive");
-    cx.update_window(h, |_, w, cx| click_label(w, "Archive", cx))
+    let palette_archive = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, cx| {
+            w.press("secondary-k", cx);
+            w.input("archive current chat", cx);
+        })
         .unwrap();
+        until(cx, h, |_, cx| {
+            view.read(cx).jump.as_ref().is_some_and(|p| {
+                let state = p.read(cx).probe(cx);
+                state.2 && state.3.as_deref() == Some("action:archive-current")
+            })
+        });
+        cx.update_window(h, |_, w, cx| w.press("enter", cx))
+            .unwrap();
+    };
+    server.seen.lock().unwrap().source["title"] = json!("Changed elsewhere");
+    palette_archive(cx);
+    until(cx, h, |_, cx| {
+        view.read(cx).chat_actions.read(cx).probe_error().is_some()
+    });
+    assert_eq!(server.posts(), 0);
+    server.seen.lock().unwrap().source = f::source();
+    palette_archive(cx);
     until(cx, h, |_, cx| {
         server.posts() == 1
             && view
@@ -121,15 +159,16 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     cx.update_window(h, |_, w, cx| preserved(w, cx, Some(false)))
         .unwrap();
     server.seen.lock().unwrap().behavior = Behavior::Lost;
-    menu(cx, h, "Archive");
-    cx.update_window(h, |_, w, cx| click_label(w, "Archive", cx))
-        .unwrap();
+    palette_archive(cx);
     until(cx, h, |_, cx| {
         view.read(cx).chat_actions.read(cx).outcome("source")
             == Some(&crate::chat_actions::Outcome::Unknown)
     });
     cx.update_window(h, |_, w, cx| preserved(w, cx, Some(true)))
         .unwrap();
+    palette_archive(cx);
+    settle(cx, h);
+    assert_eq!(server.posts(), 3, "Unknown must not be repeated");
     publish(cx);
     menu(cx, h, "Restore");
     cx.update_window(h, |_, w, cx| {
