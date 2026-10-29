@@ -342,6 +342,30 @@ pub(crate) struct Presentation {
     pub(crate) test_publications: u64,
 }
 
+/// The daemon behind the live Local control socket, from the hello that admitted
+/// that socket. Never the bundled runtime, a staged capsule or a release listing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ConnectedDaemon {
+    /// Connecting, reconnecting, refused or stopped: no daemon is known to be live.
+    #[default]
+    NotConnected,
+    /// `None` when the daemon reported no usable version (older or malformed hello).
+    Connected(Option<Arc<str>>),
+}
+
+/// Display-safe `daemonVersion` from a verified hello, else `None`.
+fn daemon_version(hello: &Value) -> Option<Arc<str>> {
+    hello["daemonVersion"]
+        .as_str()
+        .filter(|v| {
+            !v.is_empty()
+                && v.len() <= 64
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".-+_".contains(&b))
+        })
+        .map(Arc::from)
+}
+
 /// Drop closes the command source; the runtime aborts every task and socket.
 /// No joins, HTTP reads or file I/O occur on the UI thread.
 pub(crate) struct LocalClient {
@@ -349,6 +373,8 @@ pub(crate) struct LocalClient {
     /// `generation << 1 | holding`: the reader holds older rows of that
     /// window. A shared value, so position reports never queue behind reads.
     holding: Arc<std::sync::atomic::AtomicU64>,
+    /// Written by the read worker as the control socket connects and drops.
+    daemon: Arc<std::sync::Mutex<ConnectedDaemon>>,
 }
 impl LocalClient {
     #[cfg(any(test, feature = "native-probes"))]
@@ -358,6 +384,7 @@ impl LocalClient {
             Self {
                 commands,
                 holding: Default::default(),
+                daemon: Default::default(),
             },
             receiver,
         )
@@ -368,6 +395,8 @@ impl LocalClient {
         let replace = output.clone();
         let holding = Arc::<std::sync::atomic::AtomicU64>::default();
         let worker_holding = holding.clone();
+        let daemon = Arc::<std::sync::Mutex<ConnectedDaemon>>::default();
+        let worker_daemon = daemon.clone();
         std::thread::Builder::new()
             .name("local-read-viewer".into())
             .spawn(move || {
@@ -375,14 +404,42 @@ impl LocalClient {
                     .enable_all()
                     .build()
                 {
-                    runtime.block_on(run(options, receiver, updates, replace, worker_holding));
+                    runtime.block_on(run(
+                        options,
+                        receiver,
+                        updates,
+                        replace,
+                        worker_holding,
+                        worker_daemon,
+                    ));
                 }
             })
             .expect("start isolated read worker");
-        (Self { commands, holding }, output)
+        (
+            Self {
+                commands,
+                holding,
+                daemon,
+            },
+            output,
+        )
     }
     pub(crate) fn command(&self, command: Command) -> bool {
         self.commands.try_send(command).is_ok()
+    }
+    /// The daemon this client is connected to right now.
+    pub(crate) fn daemon(&self) -> ConnectedDaemon {
+        self.daemon
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+    #[cfg(all(test, target_os = "macos"))]
+    pub(crate) fn set_synthetic_daemon(&self, daemon: ConnectedDaemon) {
+        *self
+            .daemon
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = daemon;
     }
     /// Report whether the reader follows the newest rows of `generation`.
     pub(crate) fn follow(&self, generation: u64, following: bool) {
@@ -411,6 +468,8 @@ impl Inbox {
 
 enum Incoming {
     Fatal(Failure),
+    /// The control socket connected; the version comes from its admitting hello.
+    Daemon(Option<Arc<str>>),
     Wire {
         generation: u64,
         chat: bool,
@@ -590,7 +649,8 @@ fn socket_task(
                 chat: is_chat,
                 text,
             };
-            if let Err(error) = gate(&client, &options).await {
+            let admitted = hello(&client, &options).await;
+            if let Err(error) = admitted {
                 if error.contains("identity") || error.contains("incompatible") {
                     let _ = inbox.send(Incoming::Fatal(error)).await;
                     return;
@@ -606,7 +666,7 @@ fn socket_task(
                 if error.contains("identity") || error.contains("incompatible") || failures >= 7 {
                     return;
                 }
-            } else {
+            } else if let Ok(hello) = admitted {
                 let Ok(path) = options.ws_path(id.as_deref(), resume.as_ref()) else {
                     return;
                 };
@@ -631,6 +691,9 @@ fn socket_task(
                 if let Ok(Ok(mut socket)) =
                     tokio::time::timeout(Duration::from_secs(5), connected).await
                 {
+                    if !is_chat {
+                        let _ = inbox.send(Incoming::Daemon(daemon_version(&hello))).await;
+                    }
                     let _ = inbox.send(status("Connected · Local")).await;
                     let mut welcomed = !is_chat;
                     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
@@ -776,7 +839,13 @@ async fn run(
     updates: async_channel::Sender<Presentation>,
     replace: async_channel::Receiver<Presentation>,
     holding: Arc<std::sync::atomic::AtomicU64>,
+    daemon: Arc<std::sync::Mutex<ConnectedDaemon>>,
 ) {
+    let set_daemon = |value: ConnectedDaemon| {
+        *daemon
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = value;
+    };
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -838,6 +907,7 @@ async fn run(
                 }
                 Ok(Command::Reconnect) => {
                     model.thinking=false; model.stale();
+                    set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
                     inbox.epoch+=1; fenced=false;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
@@ -857,6 +927,7 @@ async fn run(
                 Ok((epoch,_)) if epoch != inbox.epoch => continue,
                 Ok((_,Incoming::Fatal(text))) => {
                     model.stop_thinking(); model.stale();
+                    set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
@@ -868,8 +939,12 @@ async fn run(
                     if chat { if generation != view.generation { continue; }
                         view.chat_issue = text!="Connected · Local";
                         if view.chat_issue{view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
-                    else { view.status = text.into(); }
+                    else {
+                        if text != "Connected · Local" { set_daemon(ConnectedDaemon::NotConnected); }
+                        view.status = text.into();
+                    }
                 }
+                Ok((_, Incoming::Daemon(version))) => set_daemon(ConnectedDaemon::Connected(version)),
                 Ok((_, Incoming::Page { generation,before,result })) => {
                     if generation != view.generation { continue; }
                     view.page_busy = false;
@@ -1085,6 +1160,28 @@ mod tests {
         }
         assert_eq!(rx.len(), 1);
         assert_eq!(rx.try_recv().unwrap().generation, 9999);
+    }
+    #[test]
+    fn daemon_version_is_bounded_display_text_or_unknown() {
+        assert_eq!(
+            daemon_version(&json!({"daemonVersion":"1.91.0"})).as_deref(),
+            Some("1.91.0")
+        );
+        assert_eq!(
+            daemon_version(&json!({"daemonVersion":"2.0.0-rc.1+abc"})).as_deref(),
+            Some("2.0.0-rc.1+abc")
+        );
+        for hello in [
+            json!({}),
+            json!({"daemonVersion":null}),
+            json!({"daemonVersion":1}),
+            json!({"daemonVersion":""}),
+            json!({"daemonVersion":"1.0\n0"}),
+            json!({"daemonVersion":"1.0.0 (latest)"}),
+            json!({"daemonVersion":"9".repeat(65)}),
+        ] {
+            assert_eq!(daemon_version(&hello), None, "{hello}");
+        }
     }
 }
 

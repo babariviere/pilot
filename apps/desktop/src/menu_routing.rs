@@ -34,6 +34,15 @@ pub(crate) fn main_window(cx: &App) -> Option<AnyWindowHandle> {
         .map(|owner| owner.window)
 }
 
+/// The daemon behind the main window's live Local connection, read for About.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn connected_daemon(cx: &App) -> crate::local_client::ConnectedDaemon {
+    cx.try_global::<QuitOwner>()
+        .and_then(|owner| owner.view.upgrade())
+        .and_then(|view| view.read(cx).client.as_ref().map(LocalClient::daemon))
+        .unwrap_or_default()
+}
+
 /// App-level Quit from the menu or an auxiliary window (Settings, Usage).
 /// Deferred because the dispatching window is borrowed during dispatch, and the
 /// main owner may need to ask the Settings window before anything quits.
@@ -222,6 +231,61 @@ mod tests {
     }
     fn clipboard(cx: &mut TestAppContext) -> Option<String> {
         cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn about_reports_the_connected_daemon_in_one_alert(cx: &mut TestAppContext) {
+        use crate::local_client::ConnectedDaemon;
+        let (writer, _commands) = Interaction::recording();
+        let (h, v) = main_owner(cx, writer);
+        let (client, _local) = LocalClient::synthetic_commands();
+        client.set_synthetic_daemon(ConnectedDaemon::Connected(Some("1.91.0".into())));
+        v.update(cx, |v, _| v.client = Some(client));
+        let about = |cx: &mut TestAppContext| {
+            cx.update_window(h, |_, w, cx| {
+                w.dispatch_action(Box::new(crate::app_menu::About), cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+        };
+        let set = |cx: &mut TestAppContext, daemon: ConnectedDaemon| {
+            v.read_with(cx, |v, _| {
+                v.client.as_ref().unwrap().set_synthetic_daemon(daemon)
+            })
+        };
+        let app = format!(
+            "Pilot Next: {} (",
+            crate::diagnostics::Build::current().version()
+        );
+        about(cx);
+        let (title, detail) = cx.pending_prompt().expect("About alert");
+        assert_eq!(title, "Pilot Next");
+        assert!(detail.starts_with(&app), "{detail}");
+        assert!(detail.ends_with("\nDaemon: 1.91.0"), "{detail}");
+        assert!(!detail.contains("Experimental"));
+        // A repeat request while the alert is open does not queue another one.
+        about(cx);
+        cx.simulate_prompt_answer("OK");
+        cx.run_until_parked();
+        assert!(!cx.has_pending_prompt());
+        // Each opening reads the connection then: disconnected, then an older daemon.
+        for (daemon, row) in [
+            (ConnectedDaemon::NotConnected, "Daemon: Not connected"),
+            (ConnectedDaemon::Connected(None), "Daemon: Version unknown"),
+            (
+                ConnectedDaemon::Connected(Some("1.92.0".into())),
+                "Daemon: 1.92.0",
+            ),
+        ] {
+            set(cx, daemon);
+            about(cx);
+            let detail = cx.pending_prompt().expect("About alert").1;
+            assert!(detail.ends_with(row), "{detail}");
+            cx.simulate_prompt_answer("OK");
+            cx.run_until_parked();
+        }
+        assert!(!cx.has_pending_prompt());
     }
 
     #[gpui_kit::test]

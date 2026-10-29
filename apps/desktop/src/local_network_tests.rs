@@ -32,6 +32,8 @@ enum Scenario {
     MissionTitles,
     LargeFrame,
     LargeFragmentedMessage,
+    /// Hello reports 1.91.0, then 1.92.0 once the daemon "restarts" upgraded.
+    DaemonVersion,
 }
 
 #[tokio::test]
@@ -149,6 +151,7 @@ impl Mock {
         let sockets = Arc::new(AtomicUsize::new(0));
         let (record, active) = (requests.clone(), sockets.clone());
         let attempts = Arc::new(AtomicUsize::new(0));
+        let hellos = Arc::new(AtomicUsize::new(0));
         let (step, steps) = async_channel::bounded::<()>(2);
         let task = tokio::spawn(async move {
             let mut handlers = tokio::task::JoinSet::new();
@@ -157,6 +160,7 @@ impl Mock {
                     accepted=listener.accept() => {
                         let Ok((stream,_))=accepted else { break; };
                         let (record,active,attempts)=(record.clone(),active.clone(),attempts.clone());
+                        let hellos=hellos.clone();
                         let steps=steps.clone();
                         handlers.spawn(async move {
                             let mut reader=BufReader::new(stream);
@@ -178,7 +182,11 @@ impl Mock {
                                 if matches!(scenario,Scenario::Redirect) {
                                     stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap(); return;
                                 }
-                                let body=json!({"daemonId":if matches!(scenario,Scenario::BadIdentity) {"wrong"}else{"synthetic-daemon"},"lineageId":"synthetic-lineage","protocolVersion":1,"minimumClientProtocolVersion":if matches!(scenario,Scenario::Incompatible) {2}else{1},"capabilities":{"independentExecution":true}}).to_string();
+                                let mut body=json!({"daemonId":if matches!(scenario,Scenario::BadIdentity) {"wrong"}else{"synthetic-daemon"},"lineageId":"synthetic-lineage","protocolVersion":1,"minimumClientProtocolVersion":if matches!(scenario,Scenario::Incompatible) {2}else{1},"capabilities":{"independentExecution":true}});
+                                if matches!(scenario,Scenario::DaemonVersion) {
+                                    body["daemonVersion"]=json!(if hellos.fetch_add(1,Ordering::SeqCst)==0 {"1.91.0"} else {"1.92.0"});
+                                }
+                                let body=body.to_string();
                                 let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
                                 stream.write_all(response.as_bytes()).await.unwrap(); return;
                             }
@@ -437,6 +445,38 @@ async fn mission_titles_follow_the_session_socket_mission_list() {
             .iter()
             .all(|r| r.starts_with("GET ") && !r.contains("mission"))
     );
+}
+
+#[tokio::test]
+async fn connected_daemon_follows_the_live_control_socket_hello() {
+    // An older daemon without a version is connected but unknown, never assumed.
+    let legacy = Mock::start(Scenario::Normal).await;
+    let (legacy_client, legacy_rx) = LocalClient::start(legacy.options.clone());
+    assert_eq!(legacy_client.daemon(), ConnectedDaemon::NotConnected);
+    until(&legacy_rx, |_| {
+        legacy_client.daemon() != ConnectedDaemon::NotConnected
+    })
+    .await;
+    assert_eq!(legacy_client.daemon(), ConnectedDaemon::Connected(None));
+
+    let mock = Mock::start(Scenario::DaemonVersion).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let connected = until(&rx, |_| client.daemon() != ConnectedDaemon::NotConnected).await;
+    assert_eq!(connected.status, "Connected · Local");
+    assert_eq!(
+        client.daemon(),
+        ConnectedDaemon::Connected(Some("1.91.0".into()))
+    );
+    // Reconnecting reports the daemon now answering, not the one seen before.
+    assert!(client.command(Command::Reconnect));
+    until(&rx, |_| {
+        client.daemon() == ConnectedDaemon::Connected(Some("1.92.0".into()))
+    })
+    .await;
+    // A vanished daemon is not connected; its last version is not kept.
+    drop(mock);
+    let gone = until(&rx, |_| client.daemon() == ConnectedDaemon::NotConnected).await;
+    assert_ne!(gone.status, "Connected · Local");
 }
 
 #[tokio::test]

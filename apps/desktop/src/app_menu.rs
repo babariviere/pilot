@@ -1,5 +1,6 @@
 //! Native macOS menus. Editing remains owned by the focused Kit control.
-use crate::local_view::menu_routing::{Minimize, Zoom, main_window};
+use crate::local_client::ConnectedDaemon;
+use crate::local_view::menu_routing::{Minimize, Zoom, connected_daemon, main_window};
 use gpui_kit::base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType};
 
@@ -25,6 +26,38 @@ pub fn init(cx: &mut App) {
 struct AboutOpen;
 impl Global for AboutOpen {}
 
+/// The executing binary's build, fixed when it was compiled. Never read from the
+/// app bundle on disk, which an installed update may already have replaced.
+struct RunningApp {
+    version: String,
+    /// The signed release build; `None` for development builds without one.
+    build: Option<String>,
+}
+impl RunningApp {
+    fn current() -> Self {
+        Self {
+            version: crate::diagnostics::Build::current().version().into(),
+            build: pilot_desktop_updater::helper::compiled_trust()
+                .ok()
+                .map(|trust| trust.current_build),
+        }
+    }
+}
+
+/// One labeled row each for this app and the daemon it is connected to.
+fn about_detail(app: &RunningApp, daemon: &ConnectedDaemon) -> String {
+    let app = match &app.build {
+        Some(build) => format!("{} (Build {build})", app.version),
+        None => format!("{} (development build)", app.version),
+    };
+    let daemon = match daemon {
+        ConnectedDaemon::Connected(Some(version)) => version.to_string(),
+        ConnectedDaemon::Connected(None) => "Version unknown".into(),
+        ConnectedDaemon::NotConnected => "Not connected".into(),
+    };
+    format!("Pilot Next: {app}\nDaemon: {daemon}")
+}
+
 /// Deferred: the window that dispatched About is borrowed during dispatch.
 fn show_about(cx: &mut App) {
     if cx.has_global::<AboutOpen>() {
@@ -33,13 +66,14 @@ fn show_about(cx: &mut App) {
     let Some(window) = cx.active_window().or_else(|| main_window(cx)) else {
         return;
     };
+    let detail = about_detail(&RunningApp::current(), &connected_daemon(cx));
     let answer = window.update(cx, |_, w, cx| {
         w.activate_window();
         // Platform alert, not a new application window or a second UI owner.
         w.prompt(
             gpui_kit::PromptLevel::Info,
             "Pilot Next",
-            Some("Experimental native desktop app.\nThe original Pilot app remains available."),
+            Some(&detail),
             &["OK"],
             cx,
         )
@@ -116,6 +150,50 @@ pub fn run_native_probe() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release(build: Option<&str>) -> RunningApp {
+        RunningApp {
+            version: "1.92.0".into(),
+            build: build.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn about_names_the_running_app_and_the_connected_daemon_separately() {
+        // A different daemon is shown as itself, never assumed to match the app.
+        assert_eq!(
+            about_detail(
+                &release(Some("4210.1")),
+                &ConnectedDaemon::Connected(Some("1.91.0".into()))
+            ),
+            "Pilot Next: 1.92.0 (Build 4210.1)\nDaemon: 1.91.0"
+        );
+        // An older daemon without a usable version is unknown, not the app's version.
+        assert_eq!(
+            about_detail(&release(Some("4210.1")), &ConnectedDaemon::Connected(None)),
+            "Pilot Next: 1.92.0 (Build 4210.1)\nDaemon: Version unknown"
+        );
+        assert_eq!(
+            about_detail(&release(None), &ConnectedDaemon::NotConnected),
+            "Pilot Next: 1.92.0 (development build)\nDaemon: Not connected"
+        );
+    }
+
+    #[test]
+    fn about_app_row_is_the_compiled_binary_not_a_bundle_on_disk() {
+        // Both values are compile-time constants of this executable, so an update
+        // that replaces the app bundle cannot change what the running app reports.
+        let package: serde_json::Value =
+            serde_json::from_str(include_str!("../../../package.json")).unwrap();
+        let app = RunningApp::current();
+        assert_eq!(app.version, package["version"].as_str().unwrap());
+        assert_eq!(
+            app.build.as_deref(),
+            option_env!("PILOT_NEXT_UPDATER_BUILD")
+                .filter(|_| pilot_desktop_updater::helper::compiled_trust().is_ok())
+        );
+    }
+
     #[test]
     fn menu_actions_keep_focused_editing_and_guarded_quit() {
         let menus = menus();

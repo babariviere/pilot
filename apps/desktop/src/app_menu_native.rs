@@ -83,6 +83,9 @@ pub(super) fn run() {
                 assert_eq!(string(new_chat, c"keyEquivalent"), "n");
                 assert!(available(delegate, new_chat), "synthetic handler is available");
                 let app_menu = object(at(menu, 0), c"submenu");
+                let about = at(app_menu, 0);
+                assert_eq!(string(about, c"title"), "About Pilot Next");
+                assert!(available(delegate, about), "About is app-wide");
                 assert_eq!(string(at(app_menu, 2), c"keyEquivalent"), ",");
                 assert!(!available(delegate, at(app_menu, 2)), "Settings unavailable without a Local owner");
                 assert_eq!(string(at(app_menu, 10), c"keyEquivalent"), "q");
@@ -113,11 +116,18 @@ pub(super) fn run() {
                 // does not need a key window, activation, keyboard events or UI.
                 let send: unsafe extern "C" fn(Id, Sel, Id) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
                 send(delegate, sel_registerName(c"handleGPUIMenuItem:".as_ptr()), new_chat);
+                // Without a window About has no home: no alert, window or open guard.
+                send(delegate, sel_registerName(c"handleGPUIMenuItem:".as_ptr()), about);
             }
             cx.update(|cx| {
                 assert_eq!(dispatched.get(), 1, "native item dispatches exactly once");
                 assert!(cx.windows().is_empty(), "probe never creates a window");
-                println!("native_menus: AppKit hierarchy, standard shortcuts and single dispatch passed (no windows)");
+                assert!(!cx.has_global::<super::AboutOpen>(), "About opened nothing");
+                // The running binary's own build; no Local owner means no daemon.
+                let detail = super::about_detail(&super::RunningApp::current(), &super::connected_daemon(cx));
+                assert!(detail.starts_with(&format!("Pilot Next: {} (", crate::diagnostics::Build::current().version())), "{detail}");
+                assert!(detail.ends_with("\nDaemon: Not connected"), "{detail}");
+                println!("native_menus: AppKit hierarchy, standard shortcuts, single dispatch and About passed (no windows)");
                 cx.quit();
             });
         }).detach();

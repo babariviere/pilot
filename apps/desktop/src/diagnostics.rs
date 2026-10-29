@@ -38,13 +38,18 @@ pub(crate) struct Build {
     desktop_source_sha256: String,
 }
 impl Build {
-    fn current() -> Self {
+    /// This executable's compile-time build, not any app bundle on disk.
+    pub(crate) fn current() -> Self {
         let package: serde_json::Value =
             serde_json::from_str(include_str!("../../../package.json")).expect("package version");
         Self {
             version: package["version"].as_str().unwrap_or("0.0.0").into(),
             desktop_source_sha256: env!("PILOT_DESKTOP_SOURCE_SHA256").into(),
         }
+    }
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn version(&self) -> &str {
+        &self.version
     }
     fn valid(&self) -> bool {
         !self.version.is_empty()
