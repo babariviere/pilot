@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.93.0](https://github.com/babariviere/pilot/compare/v1.92.0...v1.93.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** add explicit passive mission completion ([df71124](https://github.com/babariviere/pilot/commit/df71124778161365bf83f4ec0aa337c10aa15892))
+* **desktop:** add project General and Workspace settings ([d4a86cd](https://github.com/babariviere/pilot/commit/d4a86cd469bf72d2b38f0bc5f9d6bf851f62ffd5))
+* **desktop:** archive current chat from palette ([4895116](https://github.com/babariviere/pilot/commit/48951161030a8577eb73942bee2b27785323fefa))
+* **desktop:** create new chats in build mode ([1b619bd](https://github.com/babariviere/pilot/commit/1b619bd9faea2c141086547a555d849b333ff7f2))
+* **desktop:** filter finished tasks and fold phase groups ([81e0ea5](https://github.com/babariviere/pilot/commit/81e0ea521c9364d8f914e19a04cddf45da7d5b00))
+* **desktop:** group sidebar chats by project and folder ([d3e1c2c](https://github.com/babariviere/pilot/commit/d3e1c2c7ea3bda14ae5f8866ab5bccf2207cd29c))
+* **desktop:** open current-chat links from command palette ([838f03a](https://github.com/babariviere/pilot/commit/838f03afd61787e0f378bbd596603fb1ceab1d20))
+* **desktop:** show running app and daemon versions in About ([cf3094b](https://github.com/babariviere/pilot/commit/cf3094bd120297baa597f49a770f7b29e0b355eb))
+* **desktop:** show running versions in update settings ([a90f4d0](https://github.com/babariviere/pilot/commit/a90f4d010c22218dc40a0b62c9312834db8be51c))
+* **desktop:** threaded chat sidebar with still state marks ([3d20ceb](https://github.com/babariviere/pilot/commit/3d20ceb2b55f3bd9ee660952c36d2e4eb9890497))
+* **power:** add daemon-owned KDE sleep inhibition ([19205cb](https://github.com/babariviere/pilot/commit/19205cbf151f311d23173c2c5a9ac23d631012fa))
+
+
+### Bug Fixes
+
+* **daemon:** maintain main views and reconcile workspace cleanup ([6295db7](https://github.com/babariviere/pilot/commit/6295db764531052d22e67290806f5728d08b2fd3))
+* **desktop:** align phase headers with task rows ([352b22b](https://github.com/babariviere/pilot/commit/352b22bc0032eaafb7802a2b3654b17d033fd470))
+* **desktop:** center inbox content in main pane ([9d05232](https://github.com/babariviere/pilot/commit/9d05232d633cbe5ab8cf13ab8b4bff66fc0669fd))
+* **desktop:** compact pending questions and prioritize attention ([89800a1](https://github.com/babariviere/pilot/commit/89800a17c62c8e22980654d98f079e614ed0527a))
+* **desktop:** distinguish dropped tasks ([996c75a](https://github.com/babariviere/pilot/commit/996c75af9ee665c9c92b607d6066c3988c9579d0))
+* **desktop:** render answered questions as inline replies ([fb9ee9d](https://github.com/babariviere/pilot/commit/fb9ee9d856e464be022741bf5e49b063e62c52a6))
+* **desktop:** resolve selection against current text geometry ([411a147](https://github.com/babariviere/pilot/commit/411a14777ace0fae59157b7cb7db1d9e9a9ec4b6))
+* **desktop:** retain full received tool arguments ([5ffc0e7](https://github.com/babariviere/pilot/commit/5ffc0e73cb5f248498dd211f8b00101b0beec13b))
+* **kernel:** reserve coordinator tracking for mission tasks ([28187e7](https://github.com/babariviere/pilot/commit/28187e7fe5eac9d95f8e2144bcf1c95bc2cb3570))
+
 ## [1.92.0](https://github.com/babariviere/pilot/compare/v1.91.0...v1.92.0) (2026-10-29)
 
 
