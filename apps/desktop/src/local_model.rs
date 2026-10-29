@@ -725,6 +725,17 @@ impl LiveTranscript {
                     ));
                 }
             }
+        } else if let Some(event) = crate::compaction_event::Event::read(entry) {
+            // A context marker, one quiet line like Swift's event row. Its
+            // summary is the agent's context, never a message from the user.
+            let message = &entry["model"][0];
+            let row =
+                Message::compaction(id * 64, event).with_sent(crate::message_time::read(message));
+            rows.push(if message.is_object() {
+                row.anchored(crate::model::ReaderKey::model(id, 0, None))
+            } else {
+                row
+            });
         } else if kind == "pilot.activity" && entry["model"].as_array().is_none_or(|m| m.is_empty())
         {
             // A kernel activity note, one folded line like Swift's event row.
@@ -1552,6 +1563,63 @@ mod tests {
         assert_eq!(pending_question_id(&model), Some(21));
         model.apply(&json!({"type":"entry_appended","entry":{"id":23,"kind":"pilot.activity","model":[{"role":"user","content":"Continue"}]}}));
         assert_eq!(pending_question_id(&model), None);
+    }
+    #[test]
+    fn compaction_and_reset_markers_are_one_event_row_never_user_input() {
+        let compaction = json!({"id":3,"head":2,"kind":"pi.compaction",
+            "model":[{"role":"user","timestamp":5_000,"content":[{"type":"text","text":"The conversation history before this point was compacted into the following summary:\n\n<summary>\n## Goal\nShip\n</summary>"}]}],
+            "data":{"reason":"manual","tokensBefore":120_000,"tokensAfter":30_000,"tokensEstimated":true}});
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[compaction.clone(), entry(4, "after")]}));
+        let rows = model.rows();
+        assert_eq!(rows.len(), 2);
+        let row = &rows[0];
+        let event = row.compaction_event().expect("compaction row");
+        assert_eq!(row.label(), "Context compacted");
+        assert_eq!(
+            event.sentence(),
+            "Context compacted · about 120k to 30k tokens"
+        );
+        assert_eq!(row.source(), "## Goal\nShip");
+        assert!(
+            event
+                .text
+                .as_deref()
+                .unwrap()
+                .starts_with("The conversation history")
+        );
+        assert_eq!(row.sent(), Some(5_000));
+        assert_eq!(
+            row.reader_key(),
+            Some(crate::model::ReaderKey::model(3, 0, None))
+        );
+        assert!(row.automatic().is_none());
+        // A repeated append of the same entry stays one row.
+        model.apply(&json!({"type":"entry_appended","entry":compaction}));
+        assert_eq!(
+            model
+                .rows()
+                .iter()
+                .filter(|r| r.compaction_event().is_some())
+                .count(),
+            1
+        );
+        // An older history page with a plain reset marker reads it as an event.
+        model.page(
+            2,
+            &json!({"entries":[{"id":1,"head":"self","kind":"pi.reset"}],"more":false}),
+        );
+        let rows = model.rows();
+        let reset = rows
+            .iter()
+            .find(|r| r.label() == "Context reset")
+            .expect("reset row");
+        assert!(reset.compaction_event().unwrap().text.is_none());
+        assert_eq!(model.unsupported, 0);
+        assert!(
+            rows.iter()
+                .all(|r| !r.label().starts_with("You") && !r.source().contains("Structured entry"))
+        );
     }
     #[test]
     fn question_projection_same_head_history_restore_different_head_reset() {

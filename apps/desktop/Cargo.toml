@@ -450,6 +450,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "compaction_events"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "message_footer"
 harness = false
 required-features = ["native-probes"]

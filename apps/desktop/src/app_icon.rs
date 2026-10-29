@@ -9,7 +9,7 @@ use gpui_kit::{
 // The full catalog enum is larger than Kit's default asset bundle. Only embed
 // the additional glyphs used here; preserve default icons for Kit controls.
 icon_assets!(pub(crate) AppIconAssets, [
-    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch,
+    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch, Minimize2, Eraser,
 ]);
 
 macro_rules! app_icons {
@@ -77,6 +77,10 @@ app_icons! {
     Error => TriangleAlert,
     Info => Info,
     Close => Close,
+    // Context compacted (Swift arrow.down.right.and.arrow.up.left).
+    Compaction => Minimize2,
+    // Context reset (Swift eraser).
+    Reset => Eraser,
 }
 impl AppIcon {
     /// Row/toolbar glyph: one rem, without an entity or independent animation.

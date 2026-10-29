@@ -1,3 +1,5 @@
+#[path = "compaction_event_view.rs"]
+pub(crate) mod compaction_event_view;
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
 #[path = "github_event_view.rs"]
@@ -64,6 +66,7 @@ pub struct TranscriptView {
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
     questions: question_entry_view::Disclosures,
+    compactions: compaction_event_view::Disclosures,
     github_open: github_event_view::Open,
     images: conversation_images_view::Preview,
     inline_visuals: inline_visual::State,
@@ -199,6 +202,7 @@ impl TranscriptView {
             fold_focus: Default::default(),
             fold_retired: Vec::new(),
             questions: Default::default(),
+            compactions: Default::default(),
             github_open: Default::default(),
             transcript,
             images: Default::default(),
@@ -913,6 +917,9 @@ impl TranscriptView {
         }
         if row.question_data().is_some() {
             return self.question_row(ix, cx, owner);
+        }
+        if row.compaction_event().is_some() {
+            return self.compaction_row(ix, cx, owner);
         }
         if row.github_event().is_some() {
             return self.github_row(ix, cx, owner);

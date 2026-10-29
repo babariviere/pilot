@@ -195,9 +195,12 @@ mod project_registration;
 mod project_registration_fixture;
 mod question;
 mod question_entry;
+mod compaction_event;
 mod github_event;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::question_entry_view::probe::run_question_entry_probe;
+#[cfg(feature = "native-probes")]
+pub use transcript_view::compaction_event_view::probe::run_compaction_event_probe;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::github_event_view::probe::run_github_event_probe;
 #[cfg(feature = "native-probes")]

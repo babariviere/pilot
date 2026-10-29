@@ -53,6 +53,8 @@ pub(crate) struct Message {
     automatic: Option<Arc<crate::automatic_input::Automatic>>,
     /// A GitHub audit event: one quiet inline line, not a message.
     github: Option<Arc<crate::github_event::Event>>,
+    /// A context compaction or reset marker: a quiet disclosure line.
+    compaction: Option<Arc<crate::compaction_event::Event>>,
 }
 
 impl Message {
@@ -85,6 +87,7 @@ impl Message {
             question: None,
             automatic: None,
             github: None,
+            compaction: None,
         }
     }
     pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
@@ -192,6 +195,19 @@ impl Message {
     }
     pub(crate) fn github_event(&self) -> Option<&Arc<crate::github_event::Event>> {
         self.github.as_ref()
+    }
+    /// A compaction or reset row. Its source is the summary shown when
+    /// expanded (or the line when there is none); Copy keeps the exact text.
+    pub(crate) fn compaction(id: u64, event: crate::compaction_event::Event) -> Self {
+        let source = event
+            .detail()
+            .map_or_else(|| event.sentence(), str::to_owned);
+        let mut row = Self::live(id, event.heading().into(), source);
+        row.compaction = Some(Arc::new(event));
+        row
+    }
+    pub(crate) fn compaction_event(&self) -> Option<&Arc<crate::compaction_event::Event>> {
+        self.compaction.as_ref()
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.source.len()
@@ -393,6 +409,7 @@ impl Transcript {
             question: None,
             automatic: None,
             github: None,
+            compaction: None,
         });
     }
 
@@ -485,6 +502,7 @@ fn history_message(ix: usize) -> Message {
         question: None,
         automatic: None,
         github: None,
+        compaction: None,
     }
 }
 
