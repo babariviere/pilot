@@ -552,6 +552,20 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(posts[2].2["draft"], false);
                 assert_eq!(posts[2].2["coordinator"], false);
             }
+            // Publish the conversion's updated identity as the live stream would.
+            let raw = server.seen.lock().unwrap().source.clone();
+            assert_eq!(raw["missionId"], "mission-exact");
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    let mut chats = (*v.state.chats).clone();
+                    *chats.iter_mut().find(|c| c.id == "source").unwrap() =
+                        crate::local_model::chat(&raw).unwrap();
+                    v.state.chats = Arc::new(chats);
+                    v.rebuild_nav(w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
             if width == 1100. && mode == ThemeMode::Dark {
                 menu(cx, h, "Archive");
                 cx.update_window(h, |_, w, cx| {
