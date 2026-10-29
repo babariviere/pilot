@@ -46,6 +46,9 @@ pub(crate) mod history_probe;
 pub(crate) mod inbox_probe;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
+#[cfg(all(test, target_os = "macos"))]
+#[path = "history_shortcut_tests.rs"]
+mod history_shortcut_tests;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
@@ -832,6 +835,13 @@ impl LocalViewer {
             ),
             KeyBinding::new("secondary-[", NavigateBack, None),
             KeyBinding::new("secondary-]", NavigateForward, None),
+            // macOS history aliases, registered after the brackets so the Go menu
+            // keeps showing ⌘[/⌘]. GPUI ranks context-free bindings as deepest, so
+            // exclude text fields explicitly: there these keys stay line start/end.
+            #[cfg(target_os = "macos")]
+            KeyBinding::new("cmd-left", NavigateBack, Some("!Input")),
+            #[cfg(target_os = "macos")]
+            KeyBinding::new("cmd-right", NavigateForward, Some("!Input")),
             KeyBinding::new("secondary-,", crate::settings_view::OpenSettings, None),
             KeyBinding::new(
                 "secondary-w",

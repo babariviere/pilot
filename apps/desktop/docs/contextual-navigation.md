@@ -7,7 +7,8 @@ commands remain reachable without a permanent row of text buttons.
 
 - Back/Forward use the shared named icon actions beside the app title. The group
   appears only when history exists; each direction retains its disabled state,
-  tooltip and Command-[ / Command-] route.
+  tooltip and Command-[ / Command-] route. On macOS, Command-Left / Command-Right
+  are also Back/Forward outside text fields (see [native menus](native-menus.md)).
 - Chat filters opens a native checked Include archived menu item. Archived
   included remains visible beside the list when active. Filtering keeps the
   canonical list selection where still visible and never navigates or retargets

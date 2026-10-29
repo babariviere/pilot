@@ -86,6 +86,14 @@ pub(super) fn run() {
                 assert_eq!(string(at(app_menu, 2), c"keyEquivalent"), ",");
                 assert!(!available(delegate, at(app_menu, 2)), "Settings unavailable without a Local owner");
                 assert_eq!(string(at(app_menu, 10), c"keyEquivalent"), "q");
+                // Command-Left/Right are extra history keys outside text fields; the
+                // menu keeps showing ⌘[/⌘] so AppKit never claims the line-edit keys.
+                let go = object(at(menu, 3), c"submenu");
+                for (index, title, key) in [(0, "Back", "["), (1, "Forward", "]")] {
+                    let item = at(go, index);
+                    assert_eq!(string(item, c"title"), title);
+                    assert_eq!(string(item, c"keyEquivalent"), key);
+                }
                 let edit = object(at(menu, 2), c"submenu");
                 for (index, title, key) in [(0,"Undo","z"), (1,"Redo","z"), (3,"Cut","x"), (4,"Copy","c"), (5,"Paste","v"), (6,"Select All","a")] {
                     let item = at(edit, index);

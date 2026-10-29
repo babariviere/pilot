@@ -8,6 +8,9 @@ Kit and application bindings are registered. There is no drawn menu-bar substitu
 - **File:** New Chat (⌘N), opening the existing local draft flow, not sending it.
 - **Edit:** Undo, Redo, Cut, Copy, Paste and Select All with standard shortcuts.
 - **Go:** Back/Forward (⌘[/⌘]), Home, Chats, Missions and Jump (⌘K).
+  ⌘← and ⌘→ also go Back/Forward when no text field has focus. In the composer,
+  search, dialogs and Settings they keep moving to the start/end of the line, and
+  marked IME text keeps them. The menu shows only ⌘[/⌘]. Linux has no ⌘ aliases.
 - **Window:** Minimize (⌘M) and Zoom, plus system-managed window entries.
 
 Application commands reuse the existing guarded handlers. Commands without an
