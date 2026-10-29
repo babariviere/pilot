@@ -123,6 +123,61 @@ pub fn selected_fill(cx: &App) -> Hsla {
     cx.theme().list_active
 }
 
+/// A draggable edge (`gpui_kit::base::resize_handle` on an app-owned pane such
+/// as the sidebar): the resting hairline that `rule` draws, with Kit's
+/// indicator pill easing in while the pointer hovers, holds or drags it.
+/// Kit's own appearance draws a full-point line, heavier than our hairlines.
+pub(crate) fn divider_appearance() -> gpui_kit::base::ResizeHandleRenderer {
+    use gpui_kit::base::{ResizeHandleContext, ResizeHandleState as State, Transition, transition};
+    std::rc::Rc::new(
+        |handle: &ResizeHandleContext, window: &mut Window, cx: &mut App| {
+            let (length, opacity) = match handle.state() {
+                State::Idle => (0., 0.),
+                State::Hovered => (20., 0.35),
+                State::Pressed => (28., 0.6),
+                State::Dragging => (44., 0.9),
+            };
+            let motion = cx.theme().motion_tokens();
+            let policy = Transition::new(motion.duration_fast).easing(motion.easing_move.clone());
+            let length = transition(
+                "divider-pill-length",
+                px(length),
+                policy.clone(),
+                window,
+                cx,
+            );
+            let opacity =
+                transition("divider-pill-opacity", opacity, policy, window, cx).clamp(0., 1.);
+            let line = crate::appearance::hairline(window);
+            let thickness = px(3.);
+            Some(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .w(line)
+                    .h_full()
+                    .bg(cx.theme().border)
+                    .when(length > px(0.5), |this| {
+                        // Deferred so the half overhanging the edge isn't painted over by
+                        // the neighbouring pane, as Kit does for hugging handles.
+                        this.child(gpui_kit::deferred(
+                            div()
+                                .flex_none()
+                                .w(thickness)
+                                .h(length)
+                                .ml((line - thickness) * 0.5)
+                                .rounded(cx.theme().radius_full())
+                                .bg(cx.theme().muted_foreground)
+                                .opacity(opacity),
+                        ))
+                    })
+                    .into_any_element(),
+            )
+        },
+    )
+}
+
 /// Shared task status ladder (DESIGN.md): label, pie fill and row colour.
 /// Empty to do, one-third in progress, two-thirds in review, full done.
 pub fn task_status(status: &str, cx: &App) -> (SharedString, f32, Hsla) {

@@ -307,6 +307,8 @@ pub struct LocalViewer {
     nav_drafts: Vec<(String, String)>,
     /// The latest write of the machine-local sidebar memory; writes chain in order.
     memory_save: Option<Task<()>>,
+    /// A dragged sidebar width is written once the drag settles.
+    sidebar_width_save: Option<Task<()>>,
     refreshing: bool,
     earlier_attempt: Option<(u64, u64)>,
     earlier_request: Option<(u64, u64, u64)>,
@@ -1444,6 +1446,7 @@ impl LocalViewer {
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
             memory_save: None,
+            sidebar_width_save: None,
             refreshing: false,
             earlier_attempt: None,
             earlier_request: None,

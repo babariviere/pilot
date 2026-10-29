@@ -154,11 +154,9 @@ impl LocalViewer {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<super::side_panel::SidePanel> {
-        // Reserve the existing workbench's maximum physical sidebar extent
-        // (workbench_view::sidebar). At the side-pane threshold its actual width
-        // is232pt; below it this conservative budget always chooses the dock.
+        // Reserve the sidebar's actual width (workbench_view::sidebar_extent).
         let (side, extent) = crate::mission_inspector::placement(
-            f32::from(w.viewport_size().width) - 232.,
+            f32::from(w.viewport_size().width) - self.sidebar_width(w, cx),
             f32::from(w.viewport_size().height),
         );
         self.mission_context

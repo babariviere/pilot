@@ -2,9 +2,52 @@
 use super::*;
 use crate::app_icon::AppIcon;
 use crate::appearance::{Space, TextRole};
-use gpui_kit::EntityInputHandler;
+use gpui_kit::{EntityInputHandler, base::InteractiveElementExt as _};
+
+/// The narrowest sidebar (also its narrow-window default) and the widest.
+const SIDEBAR_MIN: f32 = 184.;
+const SIDEBAR_MAX: f32 = 400.;
+/// The conversation always keeps at least this much of the window.
+const MAIN_MIN: f32 = 480.;
+
+/// The sidebar's width: the one you dragged to, else the responsive default,
+/// clamped on every frame so a smaller window narrows it without forgetting it.
+pub(crate) fn sidebar_extent(viewport: f32, chosen: Option<f32>) -> f32 {
+    let preferred = chosen.unwrap_or(if viewport < 800. { SIDEBAR_MIN } else { 232. });
+    preferred.min(SIDEBAR_MAX).min(viewport - MAIN_MIN).max(SIDEBAR_MIN)
+}
+
+/// The drag payload of the sidebar's edge. It renders nothing under the pointer.
+pub(crate) struct SidebarResize;
+impl Render for SidebarResize {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui_kit::Empty
+    }
+}
 
 impl LocalViewer {
+    pub(super) fn sidebar_width(&self, w: &Window, cx: &App) -> f32 {
+        sidebar_extent(
+            f32::from(w.viewport_size().width),
+            self.chats.read(cx).delegate().memory.sidebar_width(),
+        )
+    }
+    /// Keep the width you dragged to (clamped as shown), or None for the
+    /// default; saved once the drag has settled rather than on every move.
+    pub(super) fn resize_sidebar(&mut self, width: Option<f32>, w: &mut Window, cx: &mut Context<Self>) {
+        let width = width.map(|width| sidebar_extent(f32::from(w.viewport_size().width), Some(width)));
+        if !self
+            .chats
+            .update(cx, |list, _| list.delegate_mut().memory.set_sidebar_width(width))
+        {
+            return;
+        }
+        cx.notify();
+        self.sidebar_width_save = Some(cx.spawn(async move |view, cx| {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            let _ = view.update(cx, |view, cx| view.save_sidebar_memory(cx));
+        }));
+    }
     pub(super) fn open_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A separate passive page preserves the current chat/draft and navigation.
         if !self.project_choices_ready(window, cx) {
@@ -185,11 +228,7 @@ impl LocalViewer {
         cx.notify();
     }
     pub(super) fn sidebar(&self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let width = px(if w.viewport_size().width < px(800.) {
-            184.
-        } else {
-            232.
-        });
+        let width = px(self.sidebar_width(w, cx));
         let archived = self.chats.read(cx).delegate().archived;
         let folder = self.chats.read(cx).delegate().folder.clone();
         let folders_ready = self.chats.read(cx).delegate().memory.loaded();
@@ -212,8 +251,15 @@ impl LocalViewer {
             || self.state.status.starts_with("Read-only captured");
         // Compose belongs with Home, as in Swift's SidebarHeader. Project
         // management lives in the disclosed selector, not a permanent row.
-        div().id("chat-sidebar").test_support().v_flex().w(width).min_w(width).max_w(width).h_full()
-            .bg(cx.theme().sidebar).border_r(appearance::hairline(w)).border_color(cx.theme().border)
+        div().id("chat-sidebar").test_support().relative().v_flex().w(width).min_w(width).max_w(width).h_full()
+            .bg(cx.theme().sidebar)
+            // The trailing edge's handle draws the hairline; dragging it resizes.
+            .on_drag_move(cx.listener(|v,e:&gpui_kit::DragMoveEvent<SidebarResize>,w,cx|{
+                if cx.active_drag_cursor_style().is_none() {
+                    cx.set_active_drag_cursor_style(gpui_kit::CursorStyle::ResizeLeftRight,w);
+                }
+                v.resize_sidebar(Some(f32::from(e.event.position.x-e.bounds.left())),w,cx);
+            }))
             .child(div().id("global-navigation").test_support().v_flex().px(px(Space::SIDEBAR)).pt_2().gap_0p5().flex_shrink_0()
                 .child(div().h_flex().min_w_0()
                     .child(sidebar_row("nav-home","Home",AppIcon::Home).flex_1().selected(self.page==Page::Home)
@@ -295,6 +341,12 @@ impl LocalViewer {
             .children((!healthy).then(||div().id("sidebar-connection").test_support().v_flex().p(px(Space::SIDEBAR)).gap(px(Space::CONTROL)).flex_shrink_0().border_t(appearance::hairline(w)).border_color(cx.theme().border)
                 .child(div().text_size(px(TextRole::CAPTION)).text_color(cx.theme().danger).child(SharedString::from(self.state.status.clone())))
                 .child(Button::new("reconnect").ghost().small().label("Reconnect").icon(AppIcon::Retry.asset()).disabled(self.client.is_none()).on_click(cx.listener(|v,_,_,_|{if let Some(c)=&v.client{c.command(Command::Reconnect);}})))))
+            // Last, so it sits above the list. Double-click restores the default width.
+            .child(gpui_kit::base::resize_handle::<SidebarResize,SidebarResize>("sidebar-resize",gpui_kit::Axis::Horizontal)
+                .inside(gpui_kit::base::HandleEdge::Trailing)
+                .with_appearance(crate::ui::divider_appearance())
+                .on_drag(SidebarResize,|_,_,_,cx|cx.new(|_|SidebarResize))
+                .on_double_click(cx.listener(|v,_,w,cx|v.resize_sidebar(None,w,cx))))
     }
 }
 

@@ -285,6 +285,14 @@ Add project and press Return; Escape closes the existing guarded sheet and
 returns focus to mounted sidebar search. Opening, cancelling or browsing choices
 never creates a project or chooses a new-chat folder.
 
+The sidebar's trailing hairline is a drag handle (`resize_handle` with
+`ui::divider_appearance`: the resting hairline plus Kit's pill while engaged).
+Its width defaults to 232pt (184pt below 800pt windows), drags between 184 and
+400pt and always leaves the conversation 480pt; window resizes clamp it without
+forgetting your width. Double-click restores the default. The width is saved in
+`sidebar-v1.json` once a drag settles. Rows, scroll, focus and glass are untouched.
+The `workbench` native target checks drag limits, window clamping and restart.
+
 Navigation, scope choices and footer use the same 12pt outer inset, one-rem
 glyph slot, half-rem gap and two-rem control height (28pt at the app's 14pt rem).
 Chat rows have no phantom glyph column: their title and status align with the

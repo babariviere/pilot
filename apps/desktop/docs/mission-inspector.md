@@ -15,8 +15,8 @@ state. Explicitly choosing an available member uses normal guarded navigation.
   button also closes it without stealing focus into the pane on open.
 
 The wide companion is 280–300pt only while reserving at least 420pt for the
-conversation. The shell budgets its existing maximum 232pt sidebar extent, which
-is its actual extent at the side-pane breakpoint. Narrow windows keep the same
+conversation. The shell budgets the sidebar's actual (possibly dragged) width.
+Narrow windows keep the same
 conversation mounted above a lower dock, at most one third of window height or
 240pt, reserving at least 360pt for the conversation. This does not change the
 composer's editor/tray contrast or 76/34 metrics. Actual mounted bounds, not a

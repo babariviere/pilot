@@ -1,6 +1,7 @@
 //! Machine-local sidebar memory: when you last looked at each chat (for the
-//! "new reply" dot), your own activity order, your project folders and which
-//! project sections you collapsed. Stored privately on this machine only; never
+//! "new reply" dot), your own activity order, your project folders, which
+//! project sections you collapsed and the width you dragged the sidebar to.
+//! Stored privately on this machine only; never
 //! sent to the daemon, never a read-status write and never imported from Swift.
 //!
 //! Order: the daemon's `lastUserMessageAt` also moves on automatic notices, so
@@ -39,6 +40,10 @@ pub(crate) struct Saved {
     /// Collapsed project sections, by `sidebar_tree::group_key`.
     #[serde(default)]
     pub(crate) collapsed_projects: HashSet<String>,
+    /// The width you dragged the sidebar to, in points. None keeps the
+    /// responsive default; the window still clamps it (`workbench_view`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sidebar_width: Option<f32>,
 }
 
 pub(crate) struct Memory {
@@ -136,6 +141,19 @@ impl Memory {
             self.saved.collapsed_projects.remove(key)
         };
         self.dirty |= changed;
+    }
+    pub(crate) fn sidebar_width(&self) -> Option<f32> {
+        self.saved.sidebar_width.filter(|width| width.is_finite())
+    }
+    /// Whole points, so a drag settles on one stable value. None restores the default.
+    pub(crate) fn set_sidebar_width(&mut self, width: Option<f32>) -> bool {
+        let width = width.map(f32::round);
+        if !self.loaded || width == self.saved.sidebar_width {
+            return false;
+        }
+        self.saved.sidebar_width = width;
+        self.dirty = true;
+        true
     }
     pub(crate) fn note_sent(&mut self, id: &str, now: f64) {
         if self.sent(id).is_some_and(|sent| sent >= now) {

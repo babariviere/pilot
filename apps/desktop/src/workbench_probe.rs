@@ -362,6 +362,204 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
             }
         }
     }
+    if !baseline {
+        sidebar_resize(cx, &captures);
+    }
+}
+
+/// Drag the sidebar's edge: its limits, clamping to the window, focus left
+/// alone, the double-click default and the private file across a restart.
+/// Headless windows can't be resized in place, so each window size reopens on
+/// the same file; the clamp is the same per-frame viewport computation.
+fn sidebar_resize(cx: &mut HeadlessAppContext, captures: &Option<std::path::PathBuf>) {
+    use gpui_kit::{InputEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point};
+    cx.update(|cx| Theme::change(ThemeMode::Light, None, cx));
+    let dir =
+        std::env::temp_dir().join(format!("pilot-next-sidebar-width-{}", uuid::Uuid::new_v4()));
+    let path = dir.join(crate::sidebar_memory::FILE);
+    let open = |cx: &mut HeadlessAppContext, window: f32| {
+        let path = path.clone();
+        let (h, v) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(window), px(760.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        v.load_sidebar_memory(path, w, cx);
+                        v.rebuild_nav(w, cx);
+                        v
+                    })
+                },
+            )
+            .unwrap()
+        });
+        settle(cx, h);
+        (h, v)
+    };
+    let width = |cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle| {
+        cx.update_window(h, |_, w, cx| {
+            w.render_frame(cx);
+            let sidebar = w.find("chat-sidebar").bounds();
+            let main = w.find("conversation").bounds();
+            assert!(
+                (main.left() - sidebar.right()).abs() < px(0.5),
+                "the conversation starts at the edge"
+            );
+            assert!(
+                w.find("nav-home").bounds().right() <= sidebar.right(),
+                "rows follow the edge"
+            );
+            f32::from(sidebar.size.width)
+        })
+        .unwrap()
+    };
+    let send = |cx: &mut HeadlessAppContext,
+                h: gpui_kit::AnyWindowHandle,
+                event: gpui_kit::PlatformInput| {
+        cx.update_window(h, |_, w, cx| {
+            w.dispatch_event(event, cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    let y = px(400.);
+    let press = |x: f32, click_count| {
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(x), y),
+            modifiers: Default::default(),
+            click_count,
+            first_mouse: false,
+        }
+        .to_platform_input()
+    };
+    let release = |x: f32, click_count| {
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position: point(px(x), y),
+            modifiers: Default::default(),
+            click_count,
+        }
+        .to_platform_input()
+    };
+    let hover = |x: f32, pressed| {
+        MouseMoveEvent {
+            position: point(px(x), y),
+            pressed_button: pressed,
+            modifiers: Default::default(),
+        }
+        .to_platform_input()
+    };
+    // Grab the band 2pt inside the edge, then move in steps, as a pointer would.
+    let drag = |cx: &mut HeadlessAppContext, h, to: f32| {
+        let edge = width(cx, h) - 2.;
+        send(cx, h, hover(edge, None));
+        send(cx, h, press(edge, 1));
+        for step in 1..=4 {
+            send(
+                cx,
+                h,
+                hover(
+                    edge + (to - edge) * step as f32 / 4.,
+                    Some(MouseButton::Left),
+                ),
+            );
+        }
+        send(cx, h, release(to, 1));
+    };
+    let saved = |want: Option<f32>| {
+        crate::sidebar_memory::read(&path).is_some_and(|s| s.sidebar_width == want)
+    };
+    let wait_for = |cx: &mut HeadlessAppContext, want: Option<f32>| {
+        for _ in 0..200 {
+            cx.advance_clock(Duration::from_millis(50));
+            cx.run_until_parked();
+            if saved(want) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the sidebar width {want:?} was not saved");
+    };
+
+    let close = |cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle| {
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+    };
+
+    let (h, v) = open(cx, 1100.);
+    assert_eq!(width(cx, h), 232., "the responsive default until you drag");
+    // Focus stays in the composer while the edge is dragged.
+    let focused = cx
+        .update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| v.editor.update(cx, |e, cx| e.focus(w, cx)));
+            w.focused(cx)
+        })
+        .unwrap();
+    assert!(focused.is_some());
+    drag(cx, h, 300.);
+    assert_eq!(width(cx, h), 300.);
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(w.focused(cx), focused, "dragging never moves focus")
+    })
+    .unwrap();
+    // Hovering the edge shows the indicator; capture it for review.
+    send(cx, h, hover(298., None));
+    settle(cx, h);
+    capture(cx, h, captures, "1100-light-sidebar-resized.png".into());
+    drag(cx, h, 2000.);
+    assert_eq!(width(cx, h), 400., "the widest sidebar");
+    drag(cx, h, 40.);
+    assert_eq!(width(cx, h), 184., "the narrowest sidebar");
+    drag(cx, h, 360.);
+    assert_eq!(width(cx, h), 360.);
+    wait_for(cx, Some(360.));
+    close(cx, h);
+
+    // A narrower window narrows the sidebar so the conversation keeps 480pt,
+    // without rewriting your width.
+    let (h, _) = open(cx, 700.);
+    assert_eq!(width(cx, h), 220.);
+    close(cx, h);
+    let (h, _) = open(cx, 640.);
+    assert_eq!(width(cx, h), 184., "never below the narrowest sidebar");
+    close(cx, h);
+    assert!(saved(Some(360.)), "a window size never rewrites your width");
+
+    // A wide window after a restart brings it back from the same private file.
+    let (h, _) = open(cx, 1100.);
+    assert_eq!(width(cx, h), 360.);
+    // Double-click restores the default.
+    let edge = 358.;
+    send(cx, h, hover(edge, None));
+    for click_count in [1, 2] {
+        send(cx, h, press(edge, click_count));
+        send(cx, h, release(edge, click_count));
+    }
+    assert_eq!(width(cx, h), 232.);
+    wait_for(cx, None);
+    close(cx, h);
+    // Dragging in a narrow window stops where the conversation keeps 480pt.
+    let (h, _) = open(cx, 700.);
+    assert_eq!(width(cx, h), 184.);
+    drag(cx, h, 600.);
+    assert_eq!(width(cx, h), 220.);
+    close(cx, h);
+    std::fs::remove_dir_all(&dir).unwrap();
+    println!(
+        "{}",
+        json!({"sidebar_resize":{"default":232,"min":184,"max":400,"window_clamp":[220,184],"restored":360,"double_click_default":232}})
+    );
 }
 
 // Assert measured columns, not arbitrary wider allowances after adding glyphs.

@@ -95,6 +95,11 @@ fn memory_round_trips_privately_and_a_bad_file_starts_fresh() {
     folders.assign("pilot", Some("Work 仕事"));
     memory.set_folders(folders.clone());
     memory.set_group_collapsed("project:pilot", true);
+    assert!(memory.set_sidebar_width(Some(287.6)));
+    assert!(
+        !memory.set_sidebar_width(Some(288.)),
+        "whole points, no rewrite"
+    );
     let (target, bytes) = memory.take_save().unwrap();
     assert!(memory.take_save().is_none(), "one write per change");
     write(&target, &bytes).unwrap();
@@ -115,6 +120,7 @@ fn memory_round_trips_privately_and_a_bad_file_starts_fresh() {
     assert_eq!(reopened.key(&other), 200.);
     assert_eq!(reopened.folders(), &folders);
     assert!(reopened.group_collapsed("project:pilot"));
+    assert_eq!(reopened.sidebar_width(), Some(288.));
     // A corrupt file is ignored, never trusted, and starts at its own baseline.
     std::fs::write(&path, b"{not json").unwrap();
     let mut fresh_start = Memory::at(path.clone());
@@ -154,4 +160,23 @@ fn folder_edits_wait_for_the_saved_file() {
     memory.restore(None, 1.);
     memory.set_folders(folders.clone());
     assert_eq!(memory.folders(), &folders);
+}
+
+#[test]
+fn sidebar_width_is_optional_and_waits_for_the_saved_file() {
+    let mut memory = Memory::at(std::env::temp_dir().join("never-written.json"));
+    assert!(
+        !memory.set_sidebar_width(Some(300.)),
+        "the file would replace it"
+    );
+    // Older files have no width: the responsive default stands.
+    memory.restore(serde_json::from_str(r#"{"baseline":1}"#).ok(), 1.);
+    assert_eq!(memory.sidebar_width(), None);
+    assert!(memory.set_sidebar_width(Some(300.)));
+    assert!(
+        memory.set_sidebar_width(None),
+        "double-click restores the default"
+    );
+    let (_, bytes) = memory.take_save().unwrap();
+    assert!(!String::from_utf8(bytes).unwrap().contains("sidebarWidth"));
 }
