@@ -16,8 +16,19 @@ async function permissions(path: string, writable: boolean): Promise<void> {
 	} else await chmod(path, entry.mode & 0o111 ? (writable ? 0o700 : 0o500) : writable ? 0o600 : 0o400);
 }
 
+async function directory(path: string): Promise<boolean> {
+	return lstat(path).then(
+		(entry) => entry.isDirectory(),
+		(error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+			return false;
+		},
+	);
+}
+
 export class MainViewStore {
-	private readonly queues = new Map<string, Promise<string>>();
+	private readonly queues = new Map<string, Promise<unknown>>();
+	private readonly maintained = new Map<string, number>();
 	private readonly home: string;
 	private readonly runner: Runner;
 	constructor(home: string, runner: Runner = run) {
@@ -27,16 +38,18 @@ export class MainViewStore {
 
 	/** Git-only projects use a daemon-owned object store, never fetch into the user's checkout. */
 	async fetch(projectId: string, upstream: string): Promise<{ repository: string; head: string }> {
-		const repository = join(this.home, "main-views", projectId, "objects.git");
-		await mkdir(repository, { recursive: true, mode: 0o700 });
-		await this.runner("git", ["init", "--bare", "--quiet", "--template=", repository], this.home);
-		await this.runner(
-			"git",
-			["-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", upstream, "+HEAD:refs/heads/main"],
-			repository,
-		);
-		const head = (await this.runner("git", ["rev-parse", "refs/heads/main"], repository)).trim();
-		return { repository, head };
+		return this.queue(projectId, async () => {
+			const repository = join(this.home, "main-views", projectId, "objects.git");
+			await mkdir(repository, { recursive: true, mode: 0o700 });
+			await this.runner("git", ["init", "--bare", "--quiet", "--template=", repository], this.home);
+			await this.runner(
+				"git",
+				["-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", upstream, "+HEAD:refs/heads/main"],
+				repository,
+			);
+			const head = (await this.runner("git", ["rev-parse", "refs/heads/main"], repository)).trim();
+			return { repository, head };
+		});
 	}
 
 	path(projectId: string): string {
@@ -45,41 +58,77 @@ export class MainViewStore {
 
 	update(projectId: string, repository: string, head: string, upstream: string): Promise<string> {
 		if (!/^[0-9a-f]{40}$/.test(head)) throw new Error("Invalid main view head");
-		const previous = this.queues.get(projectId) ?? Promise.resolve("");
-		const task = previous
-			.catch(() => "")
-			.then(async () => {
-				const path = this.path(projectId);
-				const marker = join(this.home, "main-views", projectId, "head");
-				if (
-					(await readFile(marker, "utf8").catch(() => "")) === head &&
-					(await lstat(join(path, ".git", "HEAD")).catch(() => undefined))?.isFile()
-				)
-					return path;
-				await mkdir(path, { recursive: true, mode: 0o700 });
-				await permissions(path, true);
-				try {
-					// No worktree registration, jj metadata, hooks, task ref or writable shared object store.
-					await this.runner("git", ["init", "--quiet", path], this.home);
-					await this.runner(
-						"git",
-						["-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", repository, head],
-						path,
-					);
-					await this.runner(
-						"git",
-						["-c", "core.hooksPath=/dev/null", "checkout", "--detach", "--force", head],
-						path,
-					);
-					await this.runner("git", ["config", "remote.origin.url", upstream], path);
-					await this.runner("git", ["config", "remote.origin.pushurl", "file:///dev/null/read-only"], path);
-					await this.runner("git", ["config", "core.hooksPath", "/dev/null"], path);
-				} finally {
-					await permissions(path, false);
-				}
-				await writeFile(marker, head, { mode: 0o600 });
+		return this.queue(projectId, async () => {
+			const path = this.path(projectId);
+			const marker = join(this.home, "main-views", projectId, "head");
+			if (
+				(await readFile(marker, "utf8").catch(() => "")) === head &&
+				(await lstat(join(path, ".git", "HEAD")).catch(() => undefined))?.isFile()
+			)
 				return path;
-			});
+			await mkdir(path, { recursive: true, mode: 0o700 });
+			await permissions(path, true);
+			try {
+				// No worktree registration, jj metadata, hooks, task ref or writable shared object store.
+				await this.runner("git", ["init", "--quiet", path], this.home);
+				await this.runner("git", ["-c", "core.hooksPath=/dev/null", "fetch", "--no-tags", repository, head], path);
+				await this.runner("git", ["-c", "core.hooksPath=/dev/null", "checkout", "--detach", "--force", head], path);
+				await this.runner("git", ["config", "remote.origin.url", upstream], path);
+				await this.runner("git", ["config", "remote.origin.pushurl", "file:///dev/null/read-only"], path);
+				await this.runner("git", ["config", "core.hooksPath", "/dev/null"], path);
+			} finally {
+				await permissions(path, false);
+			}
+			await writeFile(marker, head, { mode: 0o600 });
+			return path;
+		});
+	}
+
+	/** Git-only views are not covered by shared-repository jj GC. Never prune immediately. */
+	async maintain(now = Date.now(), signal?: AbortSignal): Promise<void> {
+		const root = join(this.home, "main-views");
+		const projects = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+			return [];
+		});
+		for (const project of projects) {
+			if (signal?.aborted) return;
+			if (!project.isDirectory()) continue;
+			try {
+				await this.queue(project.name, async () => {
+					if (signal?.aborted) return;
+					const day = 86_400_000;
+					const marker = join(root, project.name, "gc-at");
+					const previous =
+						this.maintained.get(project.name) ?? Number(await readFile(marker, "utf8").catch(() => ""));
+					if (Number.isFinite(previous) && previous > 0 && now - previous < day) return;
+					// Failed maintenance retries tomorrow, not on every minute's sweep.
+					this.maintained.set(project.name, now);
+					const source = this.path(project.name);
+					if ((await directory(source)) && (await directory(join(source, ".git")))) {
+						const metadata = join(source, ".git");
+						try {
+							await permissions(metadata, true);
+							await this.runner("git", ["-c", "core.hooksPath=/dev/null", "gc"], source, 10 * 60_000, signal);
+						} finally {
+							// Source stays read-only throughout; reseal new Git files too.
+							await permissions(metadata, false);
+						}
+					}
+					const objects = join(root, project.name, "objects.git");
+					if (await directory(objects))
+						await this.runner("git", ["-c", "core.hooksPath=/dev/null", "gc"], objects, 10 * 60_000, signal);
+					if (signal?.aborted) return;
+					await writeFile(marker, String(now), { mode: 0o600 });
+				});
+			} catch (error) {
+				if (!signal?.aborted) console.warn(`pilotd: could not maintain main view ${project.name}: ${error}`);
+			}
+		}
+	}
+
+	private queue<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+		const task = (this.queues.get(projectId) ?? Promise.resolve()).catch(() => {}).then(operation);
 		this.queues.set(projectId, task);
 		void task
 			.finally(() => {

@@ -562,6 +562,10 @@ dependency output (such as `node_modules` and Rust `target`) from an archived ch
 the retention period, it can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume.
 Dependencies may need reinstalling after either. Once a day, while none of its chats is working, each shared
 repository also runs `jj util gc`, which packs Git objects with `git gc`.
+Separate Git-only main-view stores receive daily `git gc` too, without immediate pruning.
+Archived build-output pruning is revisited daily, including recognized outputs under ignored parent
+directories. Live work, terminals and viewers still block workspace cleanup. Unexpected extra checkouts
+in archived session directories are reported as cleanup errors for review, not deleted automatically.
 Ignored content does not block jj workspace reclamation and is discarded, except for bounded regular
 mise local configs saved for recovery. Track any other files you need to retain.
 

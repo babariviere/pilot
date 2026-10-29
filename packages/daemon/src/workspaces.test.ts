@@ -22,6 +22,7 @@ import {
 	pruneRegenerable,
 	workspaceBorrowsObjects,
 	workspaceBranch,
+	workspaceLeftovers,
 } from "./workspaces.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -652,6 +653,74 @@ test("prune deletes only ignored regenerable directories without tracked files o
 		} finally {
 			rmSync(outside, { recursive: true, force: true });
 		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("pruning discovers build outputs beneath collapsed ignored parents without deleting other inputs", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-collapsed-"));
+	const outside = mkdtempSync(join(tmpdir(), "pilot-prune-collapsed-outside-"));
+	try {
+		git(root, "init", "--quiet");
+		writeFileSync(join(root, ".gitignore"), "scratch/\n");
+		git(root, "add", ".gitignore");
+		git(root, "commit", "--quiet", "-m", "base");
+		for (const path of [
+			"scratch/rust/target",
+			"scratch/swift/.build",
+			"scratch/nested/target",
+			"scratch/target/.git",
+			"scratch/metadata/.jj/target",
+		]) {
+			mkdirSync(join(root, path), { recursive: true });
+			writeFileSync(join(root, path, "output"), "generated\n");
+		}
+		mkdirSync(join(root, "scratch/nested/.git"));
+		writeFileSync(join(root, "scratch", "secret"), "keep\n");
+		mkdirSync(join(outside, "target"));
+		writeFileSync(join(outside, "target", "output"), "outside\n");
+		symlinkSync(outside, join(root, "scratch", "linked"));
+		assert.deepEqual((await pruneRegenerable(root)).sort(), ["scratch/rust/target", "scratch/swift/.build"]);
+		for (const path of [
+			"scratch/secret",
+			"scratch/nested/target/output",
+			"scratch/metadata/.jj/target/output",
+			"scratch/target/.git/output",
+		])
+			assert.ok(existsSync(join(root, path)), path);
+		assert.ok(existsSync(join(outside, "target", "output")));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
+	}
+});
+
+test("leftover discovery reports extra checkouts, not managed data or symlink targets", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-leftovers-"));
+	try {
+		for (const path of ["workspace/.jj", "durable/.git", "artifacts/.git", "extra/.jj", "plain"])
+			mkdirSync(join(root, path), { recursive: true });
+		mkdirSync(join(root, "worktree"));
+		writeFileSync(join(root, "worktree", ".git"), "gitdir: elsewhere\n");
+		symlinkSync(join(root, "extra"), join(root, "linked"));
+		assert.deepEqual(await workspaceLeftovers(root), ["extra", "worktree"]);
+		assert.ok(existsSync(join(root, "extra", ".jj")), "discovery is read-only");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("build-output discovery fails boundedly before deleting any candidates", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-limit-"));
+	try {
+		mkdirSync(join(root, "target"));
+		writeFileSync(join(root, "target", "output"), "keep until discovery completes\n");
+		await assert.rejects(
+			pruneRegenerable(root, async () => "target/\0".repeat(10_001)),
+			/discovery limit reached/,
+		);
+		assert.ok(existsSync(join(root, "target", "output")));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -1,6 +1,6 @@
 /** Private working copies: each project session works in its own clone. */
 import { constants, existsSync } from "node:fs";
-import { appendFile, copyFile, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, lstat, mkdir, opendir, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
@@ -134,6 +134,19 @@ const regenerablePaths: ReadonlySet<string> = new Set(["apps/macos/Vendor/libgho
 export const isRegenerableDirectory = (path: string): boolean =>
 	regenerableDirectories.has(basename(path)) || regenerablePaths.has(path);
 
+/** Unexpected checkouts are evidence to review, never authority to delete or unregister them. */
+export async function workspaceLeftovers(directory: string): Promise<string[]> {
+	const leftovers: string[] = [];
+	for (const entry of await readdir(directory, { withFileTypes: true })) {
+		if (!entry.isDirectory() || ["workspace", "workspace-recovery", "durable", "artifacts"].includes(entry.name))
+			continue;
+		const path = join(directory, entry.name);
+		if ((await statIfExists(join(path, ".jj")))?.isDirectory() || (await statIfExists(join(path, ".git"))))
+			leftovers.push(entry.name);
+	}
+	return leftovers.sort();
+}
+
 /**
  * Free disk space without losing work: delete only ignored regenerable directories that contain no tracked files.
  * History, tracked and untracked files and other ignored inputs stay. Returns the removed paths, relative to cwd.
@@ -156,11 +169,36 @@ export async function pruneRegenerable(cwd: string, runner: Runner = run): Promi
 			ignored.push(`${path}/`);
 	}
 	const removed: string[] = [];
-	for (const entry of ignored) {
-		const path = entry.slice(0, -1);
+	const candidates = new Set<string>();
+	let visited = 0;
+	const visit = () => {
+		if (++visited > 10_000) throw new Error("Ignored build-output discovery limit reached; cleanup needs review");
+	};
+	const discover = async (path: string): Promise<void> => {
 		const parts = path.split("/");
-		if (!isRegenerableDirectory(path) || parts.some((part) => !part || part === "." || part === "..")) continue;
-		if (parts[0] === ".git" || parts[0] === ".jj") continue;
+		if (parts.some((part) => !part || part === "." || part === ".." || part === ".git" || part === ".jj")) return;
+		visit();
+		const target = join(root, path);
+		if (!(await statIfExists(target))?.isDirectory()) return;
+		if ((await realpath(dirname(target))) !== dirname(target)) return;
+		// Even a checkout named "target" is not disposable. Only the exact generated vendor path is exempt.
+		if (
+			!regenerablePaths.has(path) &&
+			((await statIfExists(join(target, ".git"))) || (await statIfExists(join(target, ".jj"))))
+		)
+			return;
+		if (isRegenerableDirectory(path)) {
+			candidates.add(path);
+			return; // Never enumerate dependency or build-output contents.
+		}
+		for await (const child of await opendir(target)) {
+			visit();
+			if (child.isDirectory()) await discover(`${path}/${child.name}`);
+		}
+	};
+	// Git collapses wholly ignored parents. Discover known outputs beneath those too, preserving other inputs.
+	for (const entry of ignored) await discover(entry.slice(0, -1));
+	for (const path of candidates) {
 		const target = join(root, path);
 		// Never follow a symlinked directory or parent out of the workspace.
 		if (!(await statIfExists(target))?.isDirectory()) continue;

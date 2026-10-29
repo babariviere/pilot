@@ -1,7 +1,7 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise private lifecycle, persistence and store seams.
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Conflict } from "./errors.ts";
@@ -230,6 +230,7 @@ test("repository maintenance prefers idle repositories and runs busy ones after 
 	const created = await f.spawn();
 	const meta = f.sessions["metas"].get(created.id)!;
 	const maintain = t.mock.method(f.sessions["sharedWorkspaces"], "maintain", async () => true);
+	const mainViews = t.mock.method(f.sessions["mainViews"], "maintain", async () => {});
 	let pty = false;
 	f.sessions.setWorkspaceProcessGuard((id) => id === created.id && pty);
 	meta.working = true;
@@ -249,6 +250,67 @@ test("repository maintenance prefers idle repositories and runs busy ones after 
 		],
 		"working chats and live terminals stretch the interval to three days",
 	);
+	assert.equal(mainViews.mock.callCount(), 3, "the same sweep maintains separate Git-only main views");
+});
+
+test("reclaimed sessions still report extra workspaces without deleting their changes", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	await f.sessions.archive(created.id);
+	await f.sessions.reclaimWorkspace(created.id);
+	const extra = join(f.home, "sessions", created.id, "custom-workspace");
+	await mkdir(join(extra, ".jj"), { recursive: true });
+	await writeFile(join(extra, "draft.txt"), "uncommitted work\n");
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const warnings = t.mock.method(console, "warn", () => {});
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.match((await f.stored(created.id)).workspaceCleanupError!, /Additional workspace.*custom-workspace/);
+	assert.equal(await readFile(join(extra, "draft.txt"), "utf8"), "uncommitted work\n");
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(warnings.mock.callCount(), 1, "repeat sweeps do not repeat the audit or warning");
+	await rm(extra, { recursive: true });
+	now += DAY;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal((await f.stored(created.id)).workspaceCleanupError, undefined);
+});
+
+test("reclaimed metadata does not silently hide a reappearing primary workspace", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	await f.sessions.archive(created.id);
+	await f.sessions.reclaimWorkspace(created.id);
+	const meta = f.sessions["metas"].get(created.id)!;
+	meta.archivedAt = Date.now() - DAY;
+	await mkdir(created.cwd);
+	await writeFile(join(created.cwd, "new-input"), "keep\n");
+	t.mock.method(console, "warn", () => {});
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.match((await f.stored(created.id)).workspaceCleanupError!, /partial removal needs review/);
+	assert.equal(await readFile(join(created.cwd, "new-input"), "utf8"), "keep\n");
+});
+
+test("archived legacy build outputs are revisited daily but live processes still block pruning", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	await writeFile(join(created.cwd, ".gitignore"), "target/\n");
+	await f.sessions.archive(created.id);
+	delete f.sessions["metas"].get(created.id)!.workspace!.shared;
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	await mkdir(join(created.cwd, "target"));
+	await writeFile(join(created.cwd, "target", "binary"), "regenerated\n");
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.ok(existsSync(join(created.cwd, "target")), "not rescanned every minute");
+	now += DAY;
+	f.sessions.setWorkspaceProcessGuard((id) => id === created.id);
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.ok(existsSync(join(created.cwd, "target")), "live processes veto even daily cleanup");
+	f.sessions.setWorkspaceProcessGuard(() => false);
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(existsSync(join(created.cwd, "target")), false);
+	assert.equal((await f.stored(created.id)).workspacePrunedAt, now);
 });
 
 test("legacy pruning uses per-session backoff, conflicts stay quiet and restoration resets the budget", async (t) => {

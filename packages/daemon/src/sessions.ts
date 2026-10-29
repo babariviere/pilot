@@ -167,6 +167,7 @@ import {
 	type Workspace,
 	workspaceBorrowsObjects,
 	workspaceBranch,
+	workspaceLeftovers,
 } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
@@ -1373,6 +1374,7 @@ export class SessionManager {
 		string,
 		{ archivedAt: number; failures: number; until: number }
 	>();
+	private readonly workspaceAudits = new Map<string, { archivedAt: number; at: number }>();
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly runner: Runner;
 	/** One branch read per session at a time. Hints during a read ask for one more afterwards. */
@@ -2053,23 +2055,32 @@ export class SessionManager {
 				meta.coordinatorView ||
 				!meta.workspace ||
 				meta.archivedAt === undefined ||
-				hasActivePullRequest(meta) ||
-				meta.workspaceRecovery?.phase === "reclaimed"
+				hasActivePullRequest(meta)
+			)
+				continue;
+			const audit = this.workspaceAudits.get(meta.id);
+			if (
+				meta.workspaceRecovery?.phase === "reclaimed" &&
+				audit?.archivedAt === meta.archivedAt &&
+				Date.now() - audit.at < DAY_MS
 			)
 				continue;
 			// Shared workspaces are removed after retention. Until then, and for legacy clones that are never
 			// removed, only regenerable dependency and build outputs go, as soon as the chat is archived.
-			const reclaim = meta.workspace.shared !== undefined && meta.archivedAt <= staleBefore;
+			const reclaim =
+				meta.workspace.shared !== undefined &&
+				meta.archivedAt <= staleBefore &&
+				(meta.workspaceRecovery?.phase !== "reclaimed" || existsSync(meta.cwd));
 			const prune =
 				!reclaim &&
-				meta.workspacePrunedAt === undefined &&
+				(meta.workspacePrunedAt === undefined || meta.workspacePrunedAt <= Date.now() - DAY_MS) &&
 				!meta.workspaceRecovery &&
 				meta.mode !== "ask" &&
 				meta.cwd === join(this.dir(meta.workspaceOriginId ?? meta.id), "workspace");
-			if (!reclaim && !prune) continue;
 			try {
 				if (prune) await this.pruneWorkspace(meta.id);
-				else await this.reclaimWorkspace(meta.id, staleBefore);
+				else if (reclaim) await this.reclaimWorkspace(meta.id, staleBefore);
+				await this.auditWorkspaceLeftovers(meta);
 				this.workspaceCleanupBackoff.delete(meta.id);
 			} catch (error) {
 				// Busy sessions and update leases are retried by the next sweep.
@@ -2092,6 +2103,35 @@ export class SessionManager {
 		}
 	}
 
+	/** Reclaimed metadata does not prove other checkouts in the session directory disappeared. */
+	private async auditWorkspaceLeftovers(meta: SessionMeta): Promise<void> {
+		const archivedAt = meta.archivedAt;
+		if (archivedAt === undefined) return;
+		const previous = this.workspaceAudits.get(meta.id);
+		if (previous?.archivedAt === archivedAt && Date.now() - previous.at < DAY_MS) return;
+		const end = this.updateGate.begin();
+		try {
+			const origin = meta.workspaceOriginId ?? meta.id;
+			if (!ID_PATTERN.test(origin)) throw new Error("Invalid session workspace origin");
+			const leftovers = await workspaceLeftovers(this.dir(origin));
+			if (meta.archivedAt !== archivedAt) return;
+			const prefix = "Additional workspace directories need review:";
+			const notice = leftovers.length
+				? `${prefix} ${leftovers.map((name) => JSON.stringify(name)).join(", ")}`.slice(0, 512)
+				: undefined;
+			if (meta.workspaceCleanupError && !meta.workspaceCleanupError.startsWith(prefix)) return;
+			if (notice !== meta.workspaceCleanupError) {
+				meta.workspaceCleanupError = notice;
+				await this.save(meta);
+				this.emit(meta);
+				if (notice) console.warn(`pilotd: workspace cleanup for ${meta.id}: ${notice}`);
+			}
+			this.workspaceAudits.set(meta.id, { archivedAt, at: Date.now() });
+		} finally {
+			end();
+		}
+	}
+
 	/**
 	 * Daily jj/Git collection for each shared repository, preferably while none of its chats is doing work. A busy
 	 * repository is still collected once its last run is three days old: git and jj both tolerate concurrent
@@ -2110,6 +2150,7 @@ export class SessionManager {
 				console.warn(`pilotd: could not maintain shared repository ${repository}: ${error}`);
 			}
 		}
+		if (!this.closing) await this.mainViews.maintain(Date.now(), this.shutdownSignal.signal);
 	}
 
 	/** Whether agents, terminals or refreshes may be running commands in the repository. */
@@ -2156,7 +2197,7 @@ export class SessionManager {
 					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
 					if (hasActivePullRequest(meta))
 						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
-					if (meta.workspaceRecovery?.phase === "reclaimed") return this.summary(meta);
+					if (meta.workspaceRecovery?.phase === "reclaimed" && !existsSync(meta.cwd)) return this.summary(meta);
 					this.assertWorkspaceQuiescent(meta);
 					try {
 						const worker = this.workers.get(id);
@@ -2230,7 +2271,7 @@ export class SessionManager {
 					if (this.closing) throw new Conflict("pilotd is shutting down");
 					if (
 						meta.archivedAt === undefined ||
-						meta.workspacePrunedAt !== undefined ||
+						(meta.workspacePrunedAt !== undefined && meta.workspacePrunedAt > Date.now() - DAY_MS) ||
 						meta.workspaceRecovery ||
 						!meta.workspace ||
 						hasActivePullRequest(meta)
@@ -3685,6 +3726,7 @@ export class SessionManager {
 					autoArchivedPullRequest,
 				});
 				this.workspaceCleanupBackoff.delete(id);
+				this.workspaceAudits.delete(id);
 				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 				this.emit(meta);
 				return this.summary(meta);
@@ -5133,6 +5175,7 @@ export class SessionManager {
 			if (saving) await saving.catch(() => undefined);
 			this.metas.delete(id);
 			this.workspaceCleanupBackoff.delete(id);
+			this.workspaceAudits.delete(id);
 			// Membership notifications can queue lifecycle evidence and AI usage state before admission fails.
 			// Finish those writes too, so they cannot recreate a file during recursive removal.
 			await this.lifecycle.flush();
