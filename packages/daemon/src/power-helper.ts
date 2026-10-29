@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ServiceUnavailable } from "./errors.ts";
@@ -54,8 +55,17 @@ export function powerHelperPath(): string {
 		process.env.PILOT_POWER_HELPER ??
 		(source.includes("/Contents/Resources/runtime/")
 			? resolve(source.split("/Contents/Resources/runtime/")[0]!, "Contents/Helpers/PilotPower")
-			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotPower"))
+			: developmentPowerHelperPath(resolve(source, "../../..")))
 	);
+}
+
+/** Prefer the standalone helper; keep the Swift development build during coexistence. */
+export function developmentPowerHelperPath(root: string): string {
+	for (const profile of ["release", "debug"]) {
+		const binary = resolve(root, "apps/power/target", profile, "PilotPower");
+		if (existsSync(binary)) return binary;
+	}
+	return resolve(root, "apps/macos/build/Pilot.app/Contents/Helpers/PilotPower");
 }
 
 export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {

@@ -158,7 +158,7 @@ jobs:
             apps/desktop/.tools/downloads
           # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
       - name: Linux build dependencies (ephemeral runner only)
         if: steps.changes.outputs.rust == 'true'
         run: |
@@ -190,6 +190,9 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 35
         run: env -u DISPLAY -u WAYLAND_DISPLAY bash apps/desktop/scripts/ci.sh check
+      - name: Portable injected power model, no Linux power helper support
+        if: steps.changes.outputs.rust == 'true'
+        run: bash apps/desktop/scripts/ci.sh power-check
 
       - name: Native Linux updater signatures, atomic exchange and process exit
         if: steps.changes.outputs.rust == 'true'
@@ -250,7 +253,7 @@ jobs:
             apps/desktop/.tools/downloads
           # Exact input identity, no fallback/restore prefix; build outputs are cached separately.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
       - name: Bootstrap pinned Rust and helper engine
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -265,6 +268,9 @@ jobs:
           key: desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-${{ github.sha }}
           restore-keys: |
             desktop-rust-target-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/Cargo.lock', 'apps/desktop/updater/Cargo.lock', 'apps/desktop/rust-toolchain.toml', 'apps/desktop/patches/**', 'apps/desktop/scripts/prepare-patches.py') }}-
+      - name: Standalone macOS power helper build and injected tests
+        if: steps.changes.outputs.rust == 'true'
+        run: bash apps/desktop/scripts/ci.sh power-check
       - name: Standalone updater macOS Security, ACL, stage, swap and helper tests
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 10
@@ -365,7 +371,7 @@ jobs:
             apps/desktop/.tools/downloads
           # Exact input identity, no fallback/restore prefix or build-output cache.
           # Cargo.lock and preparation scripts independently verify archives.
-          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
+          key: desktop-rust-downloads-v1-${{ runner.os }}-${{ runner.arch }}-rust1.98.1-${{ hashFiles('apps/power/Cargo.lock', 'apps/desktop/**', '!apps/desktop/**/__pycache__/**', '!apps/desktop/.tools/**', '!apps/desktop/target/**', '!apps/desktop/.patched/**', '!apps/desktop/evidence/**', 'apps/macos/Sources/PilotVisualEngine/**', 'packages/artifacts/src/visual/**', 'packages/protocol/fixtures/visual/**', '.cargo/**', 'Cargo.*', 'rust-toolchain*', '.github/workflows/tests.yaml', '.github/workflows/pr.yaml', '.github/workflows/main.yaml') }}
       - name: Bootstrap pinned Rust and helper engine
         timeout-minutes: 10
         run: bash apps/desktop/scripts/ci.sh bootstrap

@@ -202,101 +202,93 @@ class CapsuleIdentityTests(unittest.TestCase):
 
 
 class NativeSnapshotTests(unittest.TestCase):
-    def snapshot(self, root, layout, fault=None):
+    def snapshot(self, root, fault=None):
         staged = root / "staged"
         source = "a" * 40
-        builds = []
+        host = root / "host"
+        (host / "apps/desktop/.tools/rustup").mkdir(parents=True)
+        (host / "apps/desktop/.tools/bin").mkdir()
+        (host / "apps/desktop/.tools/bin/mbx").write_text("tool, not source")
 
         def command(args, **kwargs):
             if args[:2] == ["git", "archive"]:
                 self.assertEqual(args[-1], source)
                 with tarfile.open(fileobj=kwargs["stdout"], mode="w"):
                     pass
-            else:
-                package = Path(args[1]).parents[1]
-                self.assertEqual(args, ["/bin/bash", str(package / "scripts/build.sh"),
-                                        "-c", "release", "--product", args[-1]])
-                builds.append(args[-1])
-                bin_path = package / layout
-                bin_path.mkdir(parents=True, exist_ok=True)
-                helper = bin_path / args[-1]
-                helper.write_text("snapshot " + args[-1])
+                return
+            script, bin_path = Path(args[1]), Path(args[2])
+            checkout = script.parents[3]
+            self.assertEqual(args, ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"),
+                                    str(checkout / "apps/desktop/target/native-helpers")])
+            self.assertNotEqual(checkout, host)
+            self.assertTrue((checkout / "apps/desktop/.tools/rustup").is_symlink())
+            self.assertTrue((checkout / "apps/desktop/.tools/bin/mbx").is_symlink())
+            if fault == "escaped-directory":
+                bin_path.parent.mkdir(parents=True)
+                bin_path.symlink_to(root, target_is_directory=True)
+                return
+            bin_path.mkdir(parents=True)
+            for name in ("PilotPower", "PilotSystemEvents"):
+                helper = bin_path / name
+                helper.write_text("snapshot " + name)
                 helper.chmod(0o755)
+                if fault == "missing-" + name:
+                    helper.unlink()
+            helper = bin_path / "PilotPower"
+            if fault in ("escaped-helper", "directory-helper"):
+                helper.unlink()
+                if fault == "escaped-helper":
+                    external = root / "external"
+                    external.write_text("live checkout poison")
+                    external.chmod(0o755)
+                    helper.symlink_to(external)
+                else:
+                    helper.mkdir()
+            if fault == "nonexecutable-helper":
+                helper.chmod(0o644)
 
         def query(*args, **kwargs):
             if args[:2] == ("/usr/bin/uname", "-m"):
                 return "arm64"
-            if args[:2] == ("git", "cat-file"):
-                return "commit"
-            self.assertEqual(builds, ["PilotPower", "PilotSystemEvents"])
-            self.assertEqual(args[:2], ("/bin/bash", "-c"))
-            self.assertIn('source "$1/scripts/swift-env.sh"', args[2])
-            self.assertIn('swift build --package-path "$1" -c release --show-bin-path', args[2])
-            self.assertEqual(kwargs["timeout"], 60)
-            package = Path(args[-1])
-            self.assertEqual(package, (kwargs["cwd"] / "apps/macos").resolve())
-            bin_path = package / layout
-            if fault == "alias":
-                alias = package / ".build/release"
-                alias.symlink_to(bin_path.relative_to(alias.parent), target_is_directory=True)
-                return str(alias)
-            if fault in ("empty", "relative", "multiline"):
-                return {"empty": "", "relative": layout, "multiline": str(bin_path) + "\nextra"}[fault]
-            if fault == "outside-directory":
-                return str(root)
-            if fault == "escaped-directory-link":
-                alias = package / ".build/release"
-                alias.symlink_to(root, target_is_directory=True)
-                return str(alias)
-            if fault == "missing-directory":
-                return str(package / "missing")
-            helper = bin_path / "PilotSystemEvents"
-            if fault == "file-directory":
-                return str(helper)
-            if fault in ("missing-helper", "escaped-helper", "directory-helper"):
-                helper.unlink()
-                if fault == "escaped-helper":
-                    external = root / "external"
-                    external.write_text("not from the immutable source")
-                    external.chmod(0o755)
-                    helper.symlink_to(external)
-                elif fault == "directory-helper":
-                    helper.mkdir()
-            if fault == "nonexecutable-helper":
-                helper.chmod(0o644)
-            return str(bin_path)
+            self.assertEqual(args[:2], ("git", "cat-file"))
+            return "commit"
 
-        with patch.object(bundle.sys, "platform", "darwin"), \
+        with patch.object(bundle, "ROOT", host), \
+             patch.object(bundle.sys, "platform", "darwin"), \
              patch.object(bundle, "run", side_effect=query), \
              patch.object(bundle.subprocess, "run", side_effect=command):
             bundle.snapshot_build(source, staged, native=True)
         return staged
 
-    def test_swiftpm_reported_legacy_new_and_release_alias_layouts(self):
-        for layout, fault in ((".build/arm64-apple-macosx/release", None),
-                              (".build/out/Products/Release", None),
-                              (".build/out/Products/Release", "alias")):
-            with self.subTest(layout=layout, fault=fault), tempfile.TemporaryDirectory() as temporary:
-                staged = self.snapshot(Path(temporary), layout, fault)
-                receipt = bundle.read_json(staged / "manifest.json")
-                self.assertEqual(receipt["source"], "a" * 40)
-                self.assertEqual(receipt["target"], "aarch64-apple-darwin")
-                for entry in receipt["binaries"]:
-                    helper = staged / entry["name"]
-                    self.assertEqual(helper.read_text(), "snapshot " + entry["name"])
-                    self.assertEqual(entry["sha256"], bundle.digest(helper))
-                    self.assertEqual(entry["bytes"], helper.stat().st_size)
-                    self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
+    def test_helper_only_build_and_source_matched_receipts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.snapshot(Path(temporary))
+            receipt = bundle.read_json(staged / "manifest.json")
+            self.assertEqual(receipt["source"], "a" * 40)
+            self.assertEqual(receipt["target"], "aarch64-apple-darwin")
+            for entry in receipt["binaries"]:
+                helper = staged / entry["name"]
+                self.assertEqual(helper.read_text(), "snapshot " + entry["name"])
+                self.assertEqual(entry["sha256"], bundle.digest(helper))
+                self.assertEqual(entry["bytes"], helper.stat().st_size)
+                self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
 
-    def test_invalid_paths_and_helpers_fail_before_staging(self):
-        for fault in ("empty", "relative", "multiline", "outside-directory", "escaped-directory-link",
-                      "missing-directory", "file-directory", "missing-helper", "escaped-helper",
-                      "directory-helper", "nonexecutable-helper"):
+    def test_invalid_paths_and_missing_helpers_fail_before_staging(self):
+        for fault in ("escaped-directory", "missing-PilotPower", "missing-PilotSystemEvents",
+                      "escaped-helper", "directory-helper", "nonexecutable-helper"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 with self.assertRaises((ValueError, FileNotFoundError)):
-                    self.snapshot(root, ".build/out/Products/Release", fault)
+                    self.snapshot(root, fault)
                 self.assertFalse((root / "staged").exists())
+
+    def test_native_build_has_no_swift_gui_or_vendor_dependency(self):
+        script = (bundle.ROOT / "apps/desktop/scripts/build-native-helpers.sh").read_text()
+        self.assertIn('apps/power/scripts/cargo.sh" build --locked --release', script)
+        self.assertIn('xcrun swiftc', script)
+        self.assertIn('Sources/PilotSystemEvents/main.swift', script)
+        for obsolete in ("apps/macos/scripts/build.sh", "swift build", "Package.swift", "vendor-", "Ghostty", "QuickJS"):
+            self.assertNotIn(obsolete, script)
 
 
 class BundleRuntimeTests(unittest.TestCase):
@@ -436,6 +428,24 @@ class BundleRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "receipt mismatch"):
             self.assemble()
         self.assertFalse(self.output.exists())
+
+    def test_power_helper_missing_or_source_mismatched_is_refused(self):
+        path = self.native / "PilotPower"
+        original = path.read_bytes()
+        for replacement in (None, b"different Rust helper"):
+            if replacement is None:
+                path.unlink()
+            else:
+                path.write_bytes(replacement)
+            with self.assertRaisesRegex(ValueError, "receipt mismatch"):
+                self.assemble()
+            self.assertFalse(self.output.exists())
+            path.write_bytes(original)
+        receipt = bundle.read_json(self.native / "manifest.json")
+        receipt["tested_sha"] = "b" * 40
+        bundle.write_json(self.native / "manifest.json", receipt)
+        with self.assertRaisesRegex(ValueError, "source/target mismatch"):
+            self.assemble()
 
     def test_version_helper_and_exact_runtime_policy_are_sealed_resources(self):
         self.assemble()
@@ -646,7 +656,9 @@ class BundleRuntimeTests(unittest.TestCase):
                                  (self.native, ["PilotPower", "PilotSystemEvents"])]:
             entries = []
             for name in names:
-                shutil.copyfile(binary, directory / name)
+                actual_power = os.environ.get("PILOT_DESKTOP_POWER_BINARY_TEST") == "1" and name == "PilotPower"
+                shutil.copyfile(bundle.ROOT / "apps/power/target/release/PilotPower" if actual_power else binary,
+                                directory / name)
                 (directory / name).chmod(0o755)
                 entries.append(dict(name=name, bytes=(directory / name).stat().st_size, sha256=bundle.digest(directory / name)))
             bundle.write_json(directory / "manifest.json", dict(tested_sha=self.source, target="aarch64-apple-darwin", updater_configuration=dict(schema=1, mode="unconfigured"), binaries=entries))

@@ -42,7 +42,8 @@ import fnmatch, os, subprocess
 def is_input(path):
     if path.startswith('apps/desktop/evidence/'):
         return False
-    roots = ('apps/desktop/', 'apps/macos/Sources/PilotVisualEngine/',
+    roots = ('apps/desktop/', 'apps/power/', 'apps/macos/Sources/PilotSystemEvents/',
+             'apps/macos/Sources/PilotPowerSupport/', 'apps/macos/Sources/PilotVisualEngine/',
              'packages/artifacts/src/visual/', 'packages/protocol/fixtures/visual/', '.cargo/')
     workflows = {'.github/workflows/tests.yaml', '.github/workflows/pr.yaml',
                  '.github/workflows/main.yaml', '.github/workflows/desktop-rust.yml'}
@@ -63,6 +64,16 @@ with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
 PY
     ;;
   host) host ;;
+  power-check)
+    host
+    # Linux executes the portable injected model only, never native power operations.
+    bash ../power/scripts/cargo.sh fmt -- --check
+    bash ../power/scripts/cargo.sh clippy --locked --all-targets -- -D warnings
+    bash ../power/scripts/cargo.sh test --locked
+    if [[ "$(uname -s)" == Darwin ]]; then
+      bash ../power/scripts/cargo.sh build --locked
+    fi
+    ;;
   bootstrap)
     host
     bash scripts/bootstrap.sh

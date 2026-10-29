@@ -125,6 +125,26 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(self.calls(), [["scripts/linux_gui_package_native.py", "--binaries", "target/dev/debug",
                                        "--source", self.env["GITHUB_SHA"], "--output", "target/ci-linux-gui-fixture.json"]])
 
+    def test_power_check_runs_injected_models_on_linux_native_build_only_on_macos(self):
+        desktop = self.root / "nested/desktop"
+        power = self.root / "nested/power/scripts"
+        (desktop / "scripts").mkdir(parents=True)
+        power.mkdir(parents=True)
+        shutil.copyfile(SCRIPT, desktop / "scripts/ci.sh")
+        (power / "cargo.sh").write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+        for platform in ("Linux", "Darwin"):
+            with self.subTest(platform=platform):
+                self.calls_path = self.root / ("power-calls-" + platform)
+                result = subprocess.run([self.BASH, str(desktop / "scripts/ci.sh"), "power-check"],
+                                        env=dict(self.env, FAKE_OS=platform, FAKE_ARCH="x86_64" if platform == "Linux" else "arm64",
+                                                 CALLS=str(self.calls_path)), capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                commands = self.calls_path.read_text().splitlines()
+                self.assertEqual(commands[:3], ["fmt -- --check", "clippy --locked --all-targets -- -D warnings", "test --locked"])
+                self.assertEqual(commands[3:], ["build --locked"] if platform == "Darwin" else [])
+        workflow = WORKFLOW.read_text()
+        self.assertEqual(workflow.count("run: bash apps/desktop/scripts/ci.sh power-check"), 2)
+
     def test_linux_gui_ci_has_owned_compositor_and_no_release_enablement(self):
         workflow = WORKFLOW.read_text().split("  rust:", 1)[1].split("  rust-macos-native:", 1)[0]
         self.assertIn("sway libgl1-mesa-dri mesa-vulkan-drivers", workflow)
@@ -378,6 +398,9 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
                      "apps/desktop/updater/native/platform.m", "apps/desktop/updater/tests/owned.rs",
                      "apps/desktop/Cargo.lock", "apps/desktop/Cargo.toml", "apps/desktop/patches/base.json",
                      "apps/desktop/rust-toolchain.toml", "apps/desktop/scripts/ci.sh",
+                     "apps/power/src/main.rs", "apps/power/Cargo.lock",
+                     "apps/macos/Sources/PilotSystemEvents/main.swift",
+                     "apps/macos/Sources/PilotPowerSupport/SleepOverride.swift",
                      "apps/desktop/fixtures/reply.md", "apps/desktop/visual-worker/build.rs",
                      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h",
                      "packages/artifacts/src/visual/runtime.js", "packages/protocol/fixtures/visual/conformance.json",

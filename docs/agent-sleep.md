@@ -84,6 +84,14 @@ grant, first turn closed-lid work off, then remove `/etc/sudoers.d/pilot-power` 
 
 ## Verification
 
+Pilot Next builds the standalone Rust helper in `apps/power`, retaining the same
+`Contents/Helpers/PilotPower` identity and daemon wire/grant/ownership contracts.
+The legacy Swift helper remains for coexistence. Next's native helper build no
+longer resolves/builds the Swift GUI; the independent `PilotSystemEvents` helper
+is still required. See [port mapping and verification boundaries](../apps/power/PORTING.md).
+Rust compilation and injected pipe/override/authorization tests do not qualify
+physical sleep/lid behavior or authorize changing this host's power settings.
+
 Automated tests use synthetic state, temporary stores and injected override writers. They do not
 install sudoers entries, alter this Mac's power settings, call sleep/lock APIs, or use model accounts.
 The 10,000-update streaming regression verifies unchanged activity generates no additional native

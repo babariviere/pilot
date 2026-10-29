@@ -403,22 +403,24 @@ def snapshot_build(expected_source, output, native=False):
         with tarfile.open(archive) as tar:
             tar.extractall(checkout, filter="data")
         if native:
-            for product in ("PilotPower", "PilotSystemEvents"):
-                subprocess.run(["/bin/bash", str(checkout / "apps/macos/scripts/build.sh"), "-c", "release", "--product", product], env=subprocess_env(), check=True, timeout=1200)
-            package = (checkout / "apps/macos").resolve()
-            # Use the same SDK selection as build.sh, without rerunning its vendor steps.
-            reported = run("/bin/bash", "-c",
-                           'set -e\nsource "$1/scripts/swift-env.sh"\nexec swift build --package-path "$1" -c release --show-bin-path',
-                           "next-native-bin-path", str(package), cwd=checkout, timeout=60)
-            if not reported or len(reported.splitlines()) != 1 or not Path(reported).is_absolute():
-                raise ValueError("SwiftPM must report one absolute native helper bin path")
-            bin_path = Path(reported).resolve(strict=True)
-            if not bin_path.is_relative_to(package) or not bin_path.is_dir():
-                raise ValueError("Native helper bin path escapes the source package or is not a directory")
+            checkout = checkout.resolve(strict=True)
+            tools = ROOT / "apps/desktop/.tools"
+            if not (tools / "rustup").is_dir():
+                raise ValueError("Bootstrap the pinned build-host Rust tools first")
+            snapshot_tools = checkout / "apps/desktop/.tools"
+            (snapshot_tools / "bin").mkdir(parents=True)
+            (snapshot_tools / "rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
+            if (tools / "bin/mbx").is_file():
+                (snapshot_tools / "bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
+            bin_path = checkout / "apps/desktop/target/native-helpers"
+            subprocess.run(["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path)], env=subprocess_env(), check=True, timeout=1200)
+            bin_path = bin_path.resolve(strict=True)
+            if not bin_path.is_relative_to(checkout) or not bin_path.is_dir():
+                raise ValueError("Native helper bin path escapes the source snapshot or is not a directory")
             helpers = []
             for name in ("PilotPower", "PilotSystemEvents"):
                 helper = (bin_path / name).resolve(strict=True)
-                if not helper.is_relative_to(package) or not helper.is_file() or not os.access(helper, os.X_OK):
+                if not helper.is_relative_to(checkout) or not helper.is_file() or not os.access(helper, os.X_OK):
                     raise ValueError("Native helper must be a source-contained executable file: " + name)
                 helpers.append(helper)
             output.mkdir()

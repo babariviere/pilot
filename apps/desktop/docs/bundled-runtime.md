@@ -16,8 +16,12 @@ No signing secrets, existing application identifiers or permissions are changed.
 
 ## Build from one immutable source
 
-Run on a macOS arm64 **build/CI host**. Native helper builds use the existing
-Swift build wrapper; do not run them in a no-local-Swift lane.
+Run on a macOS arm64 **build/CI host**. Native helper builds use the standalone
+Rust `apps/power` crate and direct Swift compilation of retained `PilotSystemEvents`
+via `scripts/build-native-helpers.sh`, not the Swift GUI package/build/vendor closure.
+The Swift compiler is still required for System Events. See
+[`apps/power/PORTING.md`](../../power/PORTING.md) for protocol/grant compatibility
+and the injected-test versus hardware-qualification boundary.
 Rust executables must have `manifest.json` identifying the same immutable
 40-character commit, configuration and binary hashes. The `rust` subcommand builds
 unconfigured development inputs from git objects using the pinned Rust/mbx tools.
