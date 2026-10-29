@@ -200,13 +200,14 @@ impl Rows {
                                 .h_flex()
                                 .items_center()
                                 .gap(px(Space::CONTROL))
-                                .child(ui::status_pie(fill, color))
+                                .child(ui::task_status_mark(&t.status, fill, color))
                                 .child(
                                     ResourceLabel::new(SharedString::from(format!(
                                         "#{} {}",
                                         t.number, t.title
                                     )))
-                                    .detail(detail),
+                                    .detail(detail)
+                                    .muted(t.status == "dropped"),
                                 ),
                         )
                         // Shown on hover and on the highlighted row, which keeps

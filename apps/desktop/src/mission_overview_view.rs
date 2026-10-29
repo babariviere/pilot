@@ -361,7 +361,7 @@ impl Browser {
                         .min_w_0()
                         .items_center()
                         .gap(px(Space::CONTROL))
-                        .child(ui::status_pie(fill, color))
+                        .child(ui::task_status_mark(&t.work_status, fill, color))
                         .child(
                             ui::text(Text::Caption, SharedString::from(format!("#{}", t.number)))
                                 .flex_none()
@@ -369,6 +369,9 @@ impl Browser {
                         )
                         .child(
                             ui::text(Text::Body, SharedString::from(t.title.clone()))
+                                .when(t.work_status == "dropped", |d| {
+                                    d.text_color(cx.theme().muted_foreground)
+                                })
                                 .flex_1()
                                 .min_w_0()
                                 .text_left()

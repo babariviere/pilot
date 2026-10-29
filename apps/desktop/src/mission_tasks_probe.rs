@@ -228,6 +228,16 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     .save(d.join(format!("{name}-legend.png")))
                     .unwrap();
             }
+            // Open, dropped and done keep the same row geometry and labels.
+            cx.update_window(h, |_, w, _| {
+                let rows = [0, 1, 3].map(|n| {
+                    let row = w.find(gpui_kit::SharedString::from(format!("mission-tasks-row-exact-{n}")));
+                    let b = row.bounds();
+                    assert!(row.label().is_some());
+                    b
+                });
+                assert!(rows.iter().all(|b| b.left() == rows[0].left() && b.size.height == rows[0].size.height));
+            }).unwrap();
             // The tab spans the page, not the Overview's reading column.
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("mission-tasks-list").bounds();

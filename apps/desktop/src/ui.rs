@@ -10,7 +10,9 @@ use gpui_kit::{
         ActiveTheme, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
     },
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 
 /// Shared conversation/editor outer cap; responsive parents may shrink below it.
@@ -139,6 +141,40 @@ pub fn task_status(status: &str, cx: &App) -> (SharedString, f32, Hsla) {
         other => (SharedString::from(other.to_owned()), 0., muted),
     }
 }
+/// Task row mark. Dropped is distinct from the empty progress ring.
+fn task_status_icon(status: &str) -> Option<crate::app_icon::AppIcon> {
+    (status == "dropped").then_some(crate::app_icon::AppIcon::Dropped)
+}
+pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
+    if let Some(icon) = task_status_icon(status) {
+        div()
+            .size(px(14.))
+            .flex_none()
+            .text_color(color)
+            .child(icon.inline().size(px(14.)))
+    } else {
+        status_pie(fill, color)
+    }
+}
+#[cfg(test)]
+mod task_status_mark_tests {
+    #[test]
+    fn dropped_alone_uses_circled_cross() {
+        use super::task_status_icon;
+        use crate::app_icon::AppIcon;
+        assert_eq!(task_status_icon("dropped"), Some(AppIcon::Dropped));
+        for status in [
+            "todo",
+            "done",
+            "blocked",
+            "in_progress",
+            "in_review",
+            "delegated",
+        ] {
+            assert_eq!(task_status_icon(status), None, "{status}");
+        }
+    }
+}
 /// 14pt status pie: outline ring plus a clockwise sector from 12 o'clock.
 pub fn status_pie(fraction: f32, color: Hsla) -> Div {
     use gpui_kit::{PathBuilder, canvas, point};
@@ -263,6 +299,7 @@ pub struct ResourceLabel {
     title: SharedString,
     detail: Option<SharedString>,
     glyph: Option<IconRole>,
+    muted: bool,
 }
 impl ResourceLabel {
     pub fn new(title: impl Into<SharedString>) -> Self {
@@ -270,6 +307,7 @@ impl ResourceLabel {
             title: title.into(),
             detail: None,
             glyph: None,
+            muted: false,
         }
     }
     pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
@@ -280,15 +318,25 @@ impl ResourceLabel {
         self.glyph = Some(glyph);
         self
     }
+    pub fn muted(mut self, muted: bool) -> Self {
+        self.muted = muted;
+        self
+    }
 }
 impl RenderOnce for ResourceLabel {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let mut labels = div().v_flex().min_w_0().flex_1().text_left().child(
-            text(Text::Body, self.title)
-                .id("resource-title")
-                .test_support()
-                .truncate(),
-        );
+        let mut labels = div()
+            .v_flex()
+            .min_w_0()
+            .flex_1()
+            .text_left()
+            .when(self.muted, |d| d.text_color(cx.theme().muted_foreground))
+            .child(
+                text(Text::Body, self.title)
+                    .id("resource-title")
+                    .test_support()
+                    .truncate(),
+            );
         if let Some(detail) = self.detail {
             labels = labels.child(
                 text(Text::Caption, detail)

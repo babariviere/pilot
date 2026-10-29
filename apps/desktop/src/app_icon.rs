@@ -29,6 +29,7 @@ app_icons! {
     Tasks => ListTodo,
     Todo => Circle,
     Complete => Check,
+    Dropped => CircleX,
     Working => Ellipsis,
     Expand => ChevronDown,
     Collapse => ChevronUp,
