@@ -154,11 +154,15 @@ pub(crate) fn rich(view: TextView, fonts: FontPreferences, content: Content, cx:
         fonts.chat_size
     };
     let mut view = view;
-    if !f.name().is_empty() && available(f, cx) {
+    // Code is always monospace: the chosen code family, else the theme's.
+    if code_body || (!f.name().is_empty() && available(f, cx)) {
         view = view.font_family(family(f, code_body, cx));
     }
     if let Some(size) = size {
         view = view.text_size(px(size as f32 / 2.));
+    } else if code_body {
+        // Unset code size: the 12pt shell step, smaller than prose.
+        view = view.text_size(px(12.));
     }
     let mut block = gpui_kit::StyleRefinement::default();
     let block_family = if plain_chat {
@@ -171,11 +175,13 @@ pub(crate) fn rich(view: TextView, fonts: FontPreferences, content: Content, cx:
     } else {
         fonts.code_size
     };
-    if !block_family.name().is_empty() && available(block_family, cx) {
+    if code_body || (!block_family.name().is_empty() && available(block_family, cx)) {
         block = block.font_family(family(block_family, !plain_chat, cx));
     }
     if let Some(size) = block_size {
         block = block.text_size(px(size as f32 / 2.));
+    } else if code_body {
+        block = block.text_size(px(12.));
     }
     view.style(TextViewStyle::default().code_block(block))
 }

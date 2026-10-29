@@ -328,7 +328,7 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 "stream",
                 "copy",
                 "settled",
-                "cell",
+                "call",
             ] {
                 cx.update_window(handle, |_, window, cx| {
                     // The live tail shows under an open chevron: closing is explicit.
@@ -344,32 +344,41 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                         model.apply(&json!({"type":"run_end"}));
                         view.update(cx,|v,cx|v.transcript.update(cx,|v,cx|v.replace_readonly(model.rows(),false,cx)));
                     }
-                    if phase=="cell" {
-                        window.click(key.clone(),cx);
-                        window.click("work-cell-call:probe",cx);
+                    if phase=="call" {
+                        window.click("step-toggle-call:command",cx);
+                        window.click("step-toggle-call:probe",cx);
+                        window.click("step-toggle-call:failed-early",cx);
                     }
                 }).unwrap();
                 cx.run_until_parked();
+                if phase=="call" {
+                    // Bring the opened call's output into view, as a reader would.
+                    cx.update_window(handle,|_,_,cx| view.update(cx,|v,cx|v.transcript.update(cx,|t,cx|t.latest(cx)))).unwrap();
+                    cx.run_until_parked();
+                }
                 cx.update_window(handle,|_,window,cx| {
                     window.draw(cx).clear(cx);
                     let viewport=window.find("viewport").bounds();
                     assert!(viewport.right()<=px(width) && viewport.size.width>px(0.));
                     let (_,_,_,open,current)=view.read(cx).transcript.read(cx).disclosure_probe_state(group,cx);
                     if let Some(old)=entity { assert_eq!(current,old,"canonical group entity must survive"); } else { entity=Some(current); }
-                    assert_eq!(open,!matches!(phase,"live"|"collapsed"|"cell"));
+                    assert_eq!(open,!matches!(phase,"live"|"collapsed"));
                     let (shape,units)=view.read(cx).transcript.read(cx).disclosure_probe_shape(group,cx);
                     if phase=="live" { assert_eq!((shape,units.len()),(crate::work_view::Mode::Tail,crate::work_view::TAIL),"latest five while live"); }
                     let header=window.find(key.clone()).bounds();
-                    let ribbon=window.find(("work-ribbon",group)).bounds();
-                    assert!(ribbon.left()>=header.right() && ribbon.right()<=viewport.right(),"{phase}: ribbon sits right of the line, inside the column");
-                    for call in ["failed-early","read","command","patch","search","script","reads","probe"] {
-                        let cell=window.find(SharedString::from(format!("work-cell-call:{call}"))).bounds();
-                        assert!(cell.size.width>px(0.) && cell.left()>=ribbon.left() && cell.right()<=ribbon.right(),"{phase}: every call keeps a ribbon cell");
-                    }
-                    if phase=="cell" {
-                        assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("probe",cx).0,"a cell opens just its call");
+                    assert!(header.right()<=viewport.right() && window.find_all(("work-ribbon",group)).is_empty(),"{phase}: one line, no ribbon");
+                    // Running calls bounce in the tail; settled ones keep their glyph.
+                    if matches!(phase,"live"|"expanded") { assert!(window.find("work-dots-call:probe").bounds().size.width>px(0.)); }
+                    if matches!(phase,"settled"|"call") { assert!(window.find_all("work-dots-call:probe").is_empty()); }
+                    if phase=="call" {
+                        assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("probe",cx).0,"the row opens its call");
                         assert!(window.find("step-toggle-call:probe").label().unwrap().starts_with("Run the disclosure probe and show the failure"));
-                        assert!(window.find_all("step-toggle-call:read").is_empty());
+                        // The script waits behind its own toggle, with exact copy.
+                        assert!(window.find("show-call:probe-Code").bounds().right()<=viewport.right());
+                        assert!(window.find_all("body-call:probe-Code").is_empty());
+                        assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("failed-early",cx).0,"a failed call opens with its output");
+                        window.click("copy-call:probe-Code",cx);
+                        assert!(cx.read_from_clipboard().unwrap().text().unwrap().starts_with("// @options"));
                     }
                     if matches!(phase,"detail"|"stream"|"copy"|"settled") { assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("command",cx).0); }
                     if phase=="copy" {

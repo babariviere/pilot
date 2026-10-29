@@ -3,6 +3,7 @@ use crate::local_model::LiveTranscript;
 use crate::work_view::{Mode, TAIL};
 use gpui_kit::{ScrollDelta, TestAppContext, point, px, test::TestWindowExt};
 use serde_json::json;
+use std::time::Duration;
 fn end(model: &mut LiveTranscript, id: &str, entry: u64, error: bool, text: &str) {
     model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"isError":error,"entry":{"id":entry,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":id,"isError":error,"content":[{"type":"text","text":text}]}]}}));
 }
@@ -80,11 +81,8 @@ fn a_live_group_previews_its_latest_five_steps_until_the_user_chooses(cx: &mut T
         );
         assert!(window.find_all("step-toggle-call:c1").is_empty());
         assert!(window.find("step-toggle-call:c6").bounds().size.height > px(0.));
-        // The ribbon reaches every call, including the ones above the tail.
-        for i in 0..7 {
-            let cell = window.find(SharedString::from(format!("work-cell-call:c{i}")));
-            assert!(cell.bounds().size.width > px(0.));
-        }
+        // Earlier calls are one click away, behind Show earlier.
+        assert!(window.find_all(("work-ribbon", id)).is_empty());
         let header = window.find(SharedString::from(format!("work-toggle-{id}")));
         assert!(
             header
@@ -194,66 +192,157 @@ fn an_explicit_choice_overrides_the_live_tail_through_activity(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn the_ribbon_is_one_tab_stop_with_arrows_enter_and_escape(cx: &mut TestAppContext) {
-    let mut model = live(3);
-    end(&mut model, "c2", 40, false, "done");
-    model.apply(&json!({"type":"run_end"}));
+fn many_calls_read_as_one_line_and_only_the_running_call_bounces(cx: &mut TestAppContext) {
+    // Screenshot scale: dozens of mixed calls, a few failed, the last running.
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    for i in 0..60u64 {
+        let (name, args) = match i % 3 {
+            0 => ("bash", json!({"command": format!("echo step-{i}")})),
+            1 => ("read", json!({"path": format!("src/f{i}.rs")})),
+            _ => (
+                "edit",
+                json!({"path": format!("src/e{i}.rs"), "oldText": "a", "newText": "b"}),
+            ),
+        };
+        model.apply(&json!({"type":"entry_appended","entry":{"id":20+2*i,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":format!("c{i}"),"name":name,"arguments":args}]}]}}));
+        model.apply(
+            &json!({"type":"tool_execution_start","toolCallId":format!("c{i}"),"toolName":name}),
+        );
+        if i < 59 {
+            end(
+                &mut model,
+                &format!("c{i}"),
+                21 + 2 * i,
+                i % 17 == 4,
+                "done",
+            );
+        }
+    }
     let rows = model.rows();
     let id = rows[0].id();
     let (handle, view) = super::readonly_tests::setup(cx, rows);
-    let focus = cx.update(|cx| view.read(cx).work_ui.ribbon_focus(id, cx));
+    let tops = |cx: &mut TestAppContext, ms: u64| -> Vec<f32> {
+        cx.executor().advance_clock(Duration::from_millis(ms));
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            (0..3usize)
+                .map(|i| {
+                    f32::from(
+                        window
+                            .within("work-dots-call:c59")
+                            .find(("work-dot", i))
+                            .bounds()
+                            .top(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap()
+    };
     cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        window.focus(&focus, cx);
-        window.press("left", cx);
-        window.press("enter", cx);
+        window.draw(cx).clear(cx);
+        // No ribbon or icon grid: one line, then the latest five steps.
+        assert!(window.find_all(("work-ribbon", id)).is_empty());
+        assert!(window.find_all("work-cell-call:c0").is_empty());
+        let header = window.find(SharedString::from(format!("work-toggle-{id}")));
+        assert!(header.label().unwrap().starts_with("Working"));
+        assert!(header.bounds().size.height < px(40.), "one line");
+        // Only the running call has dots; finished and failed ones keep glyphs.
+        assert!(window.find("work-dots-call:c59").bounds().size.width > px(0.));
+        assert!(window.find_all("work-dots-call:c58").is_empty());
+        assert!(view.read(cx).work_ui.step_pulse("c59", cx));
+        assert!(!view.read(cx).work_ui.step_pulse("c58", cx));
     })
     .unwrap();
-    cx.run_until_parked();
+    assert_eq!(shape(cx, handle, &view, id).1.len(), TAIL);
+    let frames: Vec<_> = [0, 150, 150, 150, 150].map(|ms| tops(cx, ms)).into();
+    let base = frames.iter().flatten().fold(f32::MIN, |a, b| a.max(*b));
+    assert!(
+        frames.windows(2).any(|pair| pair[0] != pair[1]),
+        "the dots move between frames: {frames:?}"
+    );
+    assert!(
+        frames.iter().flatten().all(|top| base - top <= 3.),
+        "a small bounce within the glyph slot: {frames:?}"
+    );
+    // Reduced motion: still dots, no frame requests.
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let still: Vec<_> = [0, 150, 150].map(|ms| tops(cx, ms)).into();
+    assert!(still.windows(2).all(|pair| pair[0] == pair[1]), "{still:?}");
+    assert!(still[0].iter().all(|top| *top == still[0][0]));
+    cx.update(|cx| {
+        assert!(!view.read(cx).work_ui.step_pulse("c59", cx));
+        cx.set_reduce_motion(false)
+    });
+    // Open the full list, then finish the call: its dots settle into a glyph.
+    let key = SharedString::from(format!("work-toggle-{id}"));
+    for _ in 0..2 {
+        cx.update_window(handle, |_, window, cx| window.click(key.clone(), cx))
+            .unwrap();
+        cx.run_until_parked();
+    }
+    assert_eq!(shape(cx, handle, &view, id).0, Mode::List);
+    end(&mut model, "c59", 200, true, "Error: synthetic");
+    publish(cx, handle, &view, &mut model);
     cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(view.read(cx).work_ui.step_info("c1", cx).0);
-        assert!(window.find("step-toggle-call:c1").bounds().size.height > px(0.));
-        assert!(
-            window.find_all("step-toggle-call:c2").is_empty(),
-            "only that call"
-        );
-        window.press("escape", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(!view.read(cx).work_ui.step_info("c1", cx).0);
-        assert!(window.find_all("step-toggle-call:c1").is_empty());
-        assert!(
-            focus.is_focused(window),
-            "Escape returns focus to the ribbon"
-        );
-        window.press("home", cx);
-        window.press("space", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(view.read(cx).work_ui.step_info("c0", cx).0);
-        // Pointer: the same cell closes it again.
-        window.click("work-cell-call:c0", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert!(!view.read(cx).work_ui.step_info("c0", cx).0);
-        assert!(window.find_all("step-toggle-call:c0").is_empty());
+        window.draw(cx).clear(cx);
+        assert!(window.find_all("work-dots-call:c59").is_empty());
+        assert!(!view.read(cx).work_ui.step_pulse("c59", cx));
+        let status = window
+            .within("step-toggle-call:c59")
+            .find("disclosure-status")
+            .bounds();
+        assert!(status.size.width > px(0.));
     })
     .unwrap();
 }
 
 #[gpui_kit::test]
-fn script_code_folds_to_five_lines_with_exact_copy_and_merged_reads_open(cx: &mut TestAppContext) {
+fn a_stale_run_settles_running_dots(cx: &mut TestAppContext) {
+    let mut model = live(2);
+    let rows = model.rows();
+    let id = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(window.find("work-dots-call:c1").bounds().size.width > px(0.));
+        let key = SharedString::from(format!("work-toggle-{id}"));
+        window.click(key.clone(), cx);
+        window.click(key, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    model.stale();
+    publish(cx, handle, &view, &mut model);
+    cx.update_window(handle, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        assert!(window.find("step-toggle-call:c1").bounds().size.height > px(0.));
+        assert!(window.find_all("work-dots-call:c1").is_empty());
+        assert!(!view.read(cx).work_ui.step_pulse("c1", cx));
+        assert!(
+            window
+                .find("step-toggle-call:c1")
+                .label()
+                .unwrap()
+                .contains("Status unknown")
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mut TestAppContext) {
     let code = "// Count rows\nconst a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nconst e = 5;\nconst f = 6;\nreturn a + b;";
+    let printed = format!(
+        "{{\"output\":\"rg: {}missing.js: No such file or directory (os error 2)\\n785\",\"exit_code\":2}}",
+        "packages/kernel/node_modules/".repeat(6)
+    );
+    let error = "Error: Tool bash: exit code 2 日本語 👩‍💻";
+    let output = format!(
+        "Script failed\nWall time 0.4 seconds\nOutput:\n\n{printed}\nScript error:\n{error}"
+    );
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"run_start"}));
     let calls = json!([
@@ -264,17 +353,22 @@ fn script_code_folds_to_five_lines_with_exact_copy_and_merged_reads_open(cx: &mu
     model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":calls}]}}));
     end(&mut model, "r1", 21, false, "a");
     end(&mut model, "r2", 22, false, "b");
-    end(&mut model, "s", 23, false, "3");
+    end(&mut model, "s", 23, true, &output);
     model.apply(&json!({"type":"run_end"}));
     let rows = model.rows();
     let id = rows[0].id();
+    assert_eq!(
+        rows[0].work_data().unwrap().first_error(),
+        Some((2, error.to_owned())),
+        "the fold names the script's error, not its raw printed JSON"
+    );
     let (handle, view) = super::readonly_tests::setup(cx, rows);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        // Two reads merge into one counted cell; the script has its own.
-        assert!(window.find("work-cell-call:r1").bounds().size.width > px(0.));
-        assert!(window.find_all("work-cell-call:r2").is_empty());
-        window.click("work-cell-call:s", cx);
+        let viewport = window.find("viewport").bounds();
+        let first = window.find(("work-first-error", id)).bounds();
+        assert!(first.right() <= viewport.right() && first.size.height < px(24.));
+        window.click(("work-first-error", id), cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -282,14 +376,31 @@ fn script_code_folds_to_five_lines_with_exact_copy_and_merged_reads_open(cx: &mu
         window.render_frame(cx);
         let step = window.find("step-toggle-call:s");
         assert!(step.label().unwrap().starts_with("Count rows"));
-        let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
-        let shown = code_state.read(cx).rendered_text().source().to_string();
-        assert!(
-            shown.contains("const d = 4;") && !shown.contains("const e = 5;"),
-            "{shown}"
-        );
+        // Output shows without the wrapper; code waits behind its own toggle.
+        assert_eq!(view.read(cx).work_ui.step_info("s", cx), (true, 1));
+        let shown = view.read(cx).work_ui.body_state("s", "Output", cx);
+        let shown = shown.read(cx).rendered_text().source().to_string();
+        assert!(!shown.contains("Wall time") && !shown.contains("Script failed"));
+        assert!(shown.contains("os error 2") && shown.contains("日本語"));
+        assert!(window.find_all("body-call:s-Code").is_empty());
+        let block = window.find("body-call:s-Output").bounds();
+        let viewport = window.find("viewport").bounds();
+        assert!(block.right() <= viewport.right(), "long lines stay inside");
+        assert!(window.find("show-call:s-Code").bounds().bottom() <= block.top());
+        window.click("copy-call:s-Output", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), output);
         window.click("copy-call:s-Code", cx);
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), code);
+        window.click("show-call:s-Code", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).work_ui.step_info("s", cx), (true, 2));
+        let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
+        let source = code_state.read(cx).rendered_text().source().to_string();
+        assert!(source.contains("const e = 5;") && source.contains("return a + b;"));
         window.click("copy-call:s-Arguments", cx);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(
@@ -298,21 +409,6 @@ fn script_code_folds_to_five_lines_with_exact_copy_and_merged_reads_open(cx: &mu
             .unwrap(),
             json!({"code":code})
         );
-        window.click("show-all-call:s-Code", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
-        assert!(
-            code_state
-                .read(cx)
-                .rendered_text()
-                .source()
-                .contains("return a + b;")
-        );
-        assert!(window.find_all("show-all-call:s-Code").is_empty());
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();

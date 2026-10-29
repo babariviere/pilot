@@ -180,26 +180,32 @@ a glyph: assert actual slot width, gap, containment and original leading inset.
 
 ### Work line
 
-`work_view` shows a turn's tool work as one effects-first line (D92): edited
+`work_view` shows a turn's tool work as one effects-first line (D94): edited
 files and their +/−, then outcomes in words (a failed command by name, unknown
 status), then a faint count of reads, searches and fetches. While its run is live
-it reads Working and the current call. A right-aligned ribbon has a cell per
-top-level call; adjacent successful reads or searches share a counted cell, and
-failed, unknown and live calls never merge. A cell opens just its call, the
-chevron the full list, which keeps every call on its own row. While the run is
+it reads Working and the current call. There is no per-call ribbon. The chevron
+opens the full list, which keeps every call on its own row. While the run is
 live and the user has not chosen, the latest five steps show under the line
 (D93: Swift's step count, consecutive successful reads as one), with Show N
 earlier; an explicit open or close always wins. A folded finished group keeps
-its first error line. The ribbon is one tab stop: arrows, Home and End move,
-Enter or Space opens, Escape closes and returns focus to the ribbon.
+its first error line (a failed script's own error, not its printed output),
+which opens just that call.
 
 Working follows the run (`run_start`/`run_end`, snapshot, stale connection),
 not gaps between tool events; a committed reply or a new user turn ends it.
 Codemode names (`tool_script.rs`) come only from literal nested `tools.*` calls
 or a leading `//` comment, never from execution, and the status is always the
-outer script's. Code shows five lines before Show all; copy is exact and the
-JSON arguments are a secondary copy. Nothing animates: a live cell is a static
-ellipsis.
+outer script's. An opened call is one quiet panel on the code tint, its
+sections split by hairlines: the command (a script's code collapsed, so its
+output leads), the output with its outcome (Failed, Running, Status unknown)
+and failing lines on a faint danger wash, any patch preview, then collapsed
+arguments. Text is monospace. A script's codemode header (status, wall time,
+`Output:`) is dropped from the shown text only when it matches exactly; the
+wall time moves to the caption. Every section copies its exact source, header
+included. A call that is running now shows three bouncing dots in its glyph
+slot (`transition::Pulse`, frame-driven only while painted); they hold still
+under reduced motion and give way to the kind or error glyph when the call ends,
+fails or its run goes stale.
 
 Kit owns existing word fade; `dither_view` owns its bounded per-window activity
 clock/leases, reduced/hidden/offscreen/idle behavior. These components add neither

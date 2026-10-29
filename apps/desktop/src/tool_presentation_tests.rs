@@ -152,12 +152,12 @@ fn script_status_is_the_outer_call_only_never_a_nested_one() {
     model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![call("s","codemode",json!({"code":code}))])}));
     model.apply(&json!({"type":"tool_execution_start","toolCallId":"s","toolName":"codemode"}));
     let work = model.rows()[0].work_data().unwrap().clone();
-    assert_eq!(work.cells()[0].mark, Mark::Live);
+    assert_eq!(work.mark(work.calls().next().unwrap()), Mark::Live);
     assert_eq!(work.line()[1].text, "ran cargo test");
     model.apply(&json!({"type":"tool_execution_end","toolCallId":"s","isError":true,"entry":result_entry(2,"s",true,"Error: Tool bash: exit code 101")}));
     model.apply(&json!({"type":"run_end"}));
     let work = model.rows()[0].work_data().unwrap().clone();
-    assert_eq!(work.cells()[0].mark, Mark::Failed);
+    assert_eq!(work.mark(work.calls().next().unwrap()), Mark::Failed);
     assert_eq!(work.title, "cargo test failed");
     assert_eq!(
         work.first_error(),
@@ -205,19 +205,17 @@ fn steps_count_like_swift_with_consecutive_successful_reads_merged() {
         "six mixed steps: merged reads, note, failure, live read, read, failed read"
     );
     assert!(work.active);
-    // The ribbon has one cell per call: successful adjacent reads share one.
-    let cells = work.cells();
+    // Each call keeps its own outcome; failures stay distinct.
     assert_eq!(
-        cells
-            .iter()
-            .map(|c| (c.steps.clone(), c.mark))
-            .collect::<Vec<_>>(),
+        work.calls().map(|tool| work.mark(tool)).collect::<Vec<_>>(),
         [
-            (vec![0, 1, 2], Mark::Done),
-            (vec![4], Mark::Failed),
-            (vec![5], Mark::Live),
-            (vec![6], Mark::Done),
-            (vec![7], Mark::Failed),
+            Mark::Done,
+            Mark::Done,
+            Mark::Done,
+            Mark::Failed,
+            Mark::Live,
+            Mark::Done,
+            Mark::Failed,
         ]
     );
     assert_eq!(work.failures, 2);
@@ -278,7 +276,7 @@ fn working_follows_the_run_not_gaps_and_ends_on_reply_turn_or_staleness() {
     let work = rows[0].work_data().unwrap();
     assert!(!work.active, "a stale connection never keeps Working");
     assert_eq!(
-        work.cells()[0].mark,
+        work.mark(work.calls().next().unwrap()),
         Mark::Unknown,
         "a live call off a live run is unknown"
     );
@@ -527,5 +525,25 @@ fn executable_input_is_prepared_once_budgeted_and_cleared_on_omission() {
         tools.update(&id, key, &json!({"set":"o".repeat(OUTPUT_CAP)}));
         tools.end_unknown(&id, key, false);
         assert!(tools.items.values().map(|tool| tool.bytes()).sum::<usize>() <= DETAIL_CAP);
+    }
+}
+
+#[test]
+fn codemode_output_splits_only_its_exact_header() {
+    let script =
+        script_output("Script completed\nWall time 0.1 seconds\nOutput:\n\n{\"a\":1}\nlast")
+            .unwrap();
+    assert!(script.ok);
+    assert_eq!((script.wall, script.body), ("0.1", "{\"a\":1}\nlast"));
+    let failed = script_output("Script failed\nWall time 12.0 seconds\nOutput:\n").unwrap();
+    assert_eq!((failed.ok, failed.body), (false, ""));
+    // Anything else is shown as is.
+    for other in [
+        "Script completed\nWall time soon seconds\nOutput:\n",
+        "Script completed\nOutput:\n",
+        "script completed\nWall time 0.1 seconds\nOutput:\n",
+        "Ran it\nWall time 0.1 seconds\nOutput:\n",
+    ] {
+        assert!(script_output(other).is_none(), "{other}");
     }
 }

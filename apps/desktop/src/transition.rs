@@ -1,6 +1,7 @@
 //! One-shot UI transitions on the executor clock: deterministic under test
 //! clocks, frame-driven while running, instant under reduced motion. No timers,
-//! tasks or per-control clocks. Only `Reveal` (chat side panels) animates layout.
+//! tasks or per-control clocks. Pulse loops a running indicator and holds still
+//! under reduced motion. Only `Reveal` (chat side panels) animates layout.
 use gpui_kit::{App, Window};
 use std::time::{Duration, Instant};
 
@@ -30,6 +31,35 @@ impl Transition {
         t
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn running(&self) -> bool {
+        self.start.is_some()
+    }
+}
+
+/// A looping phase for an indicator that is live now (running dots): frame
+/// driven while shown, so it costs nothing offscreen. None under reduced
+/// motion, where the indicator holds still.
+#[derive(Default)]
+pub(crate) struct Pulse {
+    start: Option<Instant>,
+}
+impl Pulse {
+    /// Phase in 0..1 of the current period. Requests the next frame.
+    pub(crate) fn phase(&mut self, period: Duration, window: &mut Window, cx: &App) -> Option<f32> {
+        if cx.reduce_motion() {
+            self.start = None;
+            return None;
+        }
+        let now = cx.background_executor().now();
+        let start = *self.start.get_or_insert(now);
+        window.request_animation_frame();
+        Some((now.saturating_duration_since(start).as_secs_f32() / period.as_secs_f32()).fract())
+    }
+    /// The indicator is gone: the next start begins a fresh period.
+    pub(crate) fn stop(&mut self) {
+        self.start = None;
+    }
+    #[cfg(test)]
     pub(crate) fn running(&self) -> bool {
         self.start.is_some()
     }

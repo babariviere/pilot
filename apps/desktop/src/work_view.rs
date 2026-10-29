@@ -1,23 +1,21 @@
 //! Presentation only. Hidden argument/output parsers are never built or updated.
 //!
-//! A work group is one effects-first line with a ribbon of its top-level calls
-//! on the right. While its run is live and the user has not chosen, its latest
-//! steps show under the line. A ribbon cell opens just its call; the chevron
-//! opens the full quiet list.
+//! A work group is one effects-first line. While its run is live and the user
+//! has not chosen, its latest steps show under the line; the chevron opens the
+//! full quiet list. An opened call shows its output first, then its code.
 use crate::{
     app_icon::AppIcon,
-    tool_presentation::{Cell, Kind, Mark, Status, Step, Tone, Unit, Work, sentence},
+    tool_presentation::{Kind, Status, Step, Tone, Unit, Work},
     transcript_view::TranscriptView,
 };
 use gpui_kit::{
-    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, InteractiveElement,
-    IntoElement, KeyBinding, ParentElement, Render, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, TestSupportExt, WeakEntity, Window,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    TestSupportExt, WeakEntity, Window,
     component::{
         ActiveTheme, Icon, IconName, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         text::{TextView, TextViewState},
-        tooltip::Tooltip,
     },
     div,
     prelude::FluentBuilder,
@@ -30,35 +28,8 @@ use std::{
     sync::Arc,
 };
 
-gpui_kit::actions!(
-    work_ribbon,
-    [
-        PreviousCall,
-        NextCall,
-        FirstCall,
-        LastCall,
-        OpenCall,
-        CloseCall
-    ]
-);
-
 /// Steps shown under a live line before "Show earlier" (D93; Swift shows 4).
 pub(crate) const TAIL: usize = 5;
-/// Executable source shows this many lines before "Show all".
-const CODE_LINES: usize = 5;
-
-pub(crate) fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("left", PreviousCall, Some("WorkRibbon")),
-        KeyBinding::new("right", NextCall, Some("WorkRibbon")),
-        KeyBinding::new("home", FirstCall, Some("WorkRibbon")),
-        KeyBinding::new("end", LastCall, Some("WorkRibbon")),
-        KeyBinding::new("enter", OpenCall, Some("WorkRibbon")),
-        KeyBinding::new("space", OpenCall, Some("WorkRibbon")),
-        KeyBinding::new("escape", CloseCall, Some("WorkRibbon")),
-        KeyBinding::new("escape", CloseCall, Some("WorkCall")),
-    ]);
-}
 
 #[derive(Clone)]
 pub(crate) enum Change {
@@ -72,7 +43,7 @@ pub(crate) enum Change {
 struct Choices {
     sequence: u64,
     groups: BTreeMap<String, (u64, bool)>,
-    /// Calls opened from the ribbon: one cell per group.
+    /// The call opened from the folded first error, one per group.
     selected: BTreeSet<String>,
     /// Calls of merged read steps the user opened.
     reads: BTreeSet<String>,
@@ -156,6 +127,58 @@ pub(crate) fn disclosure(
     icon: Option<AppIcon>,
     cx: &gpui_kit::App,
 ) -> Button {
+    disclosure_lead(
+        id,
+        caption,
+        open,
+        icon.map(|icon| icon.inline().into_any_element()),
+        cx,
+    )
+}
+/// Bounce period of the running dots.
+const DOTS_PERIOD: std::time::Duration = std::time::Duration::from_millis(1200);
+/// Three dots that bounce beside a call that is running now, in the glyph's
+/// slot. The phase is None under reduced motion: the dots hold still.
+fn dots(id: &str, phase: Option<f32>, cx: &gpui_kit::App) -> gpui_kit::AnyElement {
+    let color = cx.theme().muted_foreground;
+    div()
+        .id(SharedString::from(format!("work-dots-{id}")))
+        .test_support()
+        .flex_shrink_0()
+        .size(gpui_kit::rems(0.875))
+        .h_flex()
+        .items_center()
+        .justify_center()
+        .gap(px(1.5))
+        .children((0..3usize).map(|index| {
+            // Each dot rises and lands in the first 40% of its turn, a
+            // little after the one before it.
+            let lift = phase.map_or(0., |phase| {
+                let at = (phase - index as f32 * 0.15).rem_euclid(1.) / 0.4;
+                if at < 1. {
+                    (at * std::f32::consts::PI).sin() * 2.5
+                } else {
+                    0.
+                }
+            });
+            div()
+                .id(("work-dot", index))
+                .test_support()
+                .relative()
+                .top(px(-lift))
+                .size(px(3.))
+                .rounded_full()
+                .bg(color)
+        }))
+        .into_any_element()
+}
+fn disclosure_lead(
+    id: SharedString,
+    caption: Caption,
+    open: bool,
+    lead: Option<gpui_kit::AnyElement>,
+    cx: &gpui_kit::App,
+) -> Button {
     let title = [
         &caption.verb,
         &caption.subject,
@@ -189,7 +212,7 @@ pub(crate) fn disclosure(
                         .gap_1()
                         .items_center()
                         .child(chevron(open))
-                        .when_some(icon, |this, icon| this.child(icon.inline())),
+                        .when_some(lead, |this, lead| this.child(lead)),
                 )
                 .child(
                     div()
@@ -264,20 +287,20 @@ fn kind_icon(kind: Kind) -> AppIcon {
 impl WorkUi {
     pub(crate) fn parsers_ready(&self, cx: &gpui_kit::App) -> bool {
         self.steps.values().all(|step| {
-            step.read(cx).bodies.values().all(|body| {
-                body.state.read(cx).rendered_text().source()
-                    == if body.plain {
-                        escape(&body.shown)
-                    } else {
-                        body.shown.clone()
-                    }
-            })
+            step.read(cx)
+                .bodies
+                .values()
+                .all(|body| body.state.read(cx).rendered_text().source() == body.parsed)
         })
     }
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn step_info(&self, id: &str, cx: &gpui_kit::App) -> (bool, usize) {
         let step = self.steps[&format!("call:{id}")].read(cx);
         (step.open, step.bodies.len())
+    }
+    #[cfg(test)]
+    pub(crate) fn step_pulse(&self, id: &str, cx: &gpui_kit::App) -> bool {
+        self.steps[&format!("call:{id}")].read(cx).pulse.running()
     }
     #[cfg(test)]
     pub(crate) fn body_state(
@@ -293,10 +316,6 @@ impl WorkUi {
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn group_open(&self, id: u64, cx: &gpui_kit::App) -> bool {
         self.groups[&id].read(cx).open()
-    }
-    #[cfg(test)]
-    pub(crate) fn ribbon_focus(&self, id: u64, cx: &gpui_kit::App) -> FocusHandle {
-        self.groups[&id].read(cx).focus.clone()
     }
     /// The group's mode and the step indices of its visible units.
     #[cfg(any(test, feature = "native-probes"))]
@@ -344,9 +363,10 @@ impl WorkUi {
                         step: step.clone(),
                         active: work.active,
                         open: false,
-                        full: BTreeSet::new(),
+                        expanded: BTreeSet::new(),
                         bodies: BTreeMap::new(),
                         subscriptions: Vec::new(),
+                        pulse: crate::transition::Pulse::default(),
                     });
                     let subscription = cx.subscribe(&view, |view, _, change: &Change, cx| {
                         view.work_changed(change, cx)
@@ -385,13 +405,11 @@ impl WorkUi {
                 let id = work.id;
                 let choices = self.choices.clone();
                 let owner = cx.weak_entity();
-                let view = cx.new(|cx| WorkView {
+                let view = cx.new(|_| WorkView {
                     owner,
                     data: work,
                     children,
                     choices,
-                    focus: cx.focus_handle().tab_stop(true),
-                    cursor: None,
                 });
                 self.subscriptions.insert(
                     format!("group:{id}"),
@@ -424,13 +442,12 @@ impl WorkUi {
         choices.reads.retain(|id| step_ids.contains(id));
     }
 }
-/// What changes a group's height: its line, steps and ribbon, not output text.
-fn shape(work: &Work) -> (bool, String, Vec<Unit>, Vec<Cell>, Option<String>) {
+/// What changes a group's height: its line and steps, not output text.
+fn shape(work: &Work) -> (bool, String, Vec<Unit>, Option<String>) {
     (
         work.active,
         work.title.clone(),
         work.units(),
-        work.cells(),
         work.first_error().map(|(_, text)| text),
     )
 }
@@ -445,10 +462,6 @@ pub(crate) struct WorkView {
     data: Arc<Work>,
     children: Vec<Entity<StepView>>,
     choices: Rc<RefCell<Choices>>,
-    /// The ribbon's single tab stop; arrows move the cursor between cells.
-    focus: FocusHandle,
-    /// The keyboard cursor's cell, by its first call.
-    cursor: Option<String>,
 }
 impl EventEmitter<Change> for WorkView {}
 impl WorkView {
@@ -497,72 +510,38 @@ impl WorkView {
             }
         }
     }
-    fn selected_cell(&self, cells: &[Cell]) -> Option<usize> {
+    /// The call opened from the folded first error, shown alone under the line.
+    fn selected(&self, cx: &App) -> Option<usize> {
         let choices = self.choices.borrow();
-        cells.iter().position(|cell| {
-            cell.steps.iter().any(|index| {
-                call_key(&self.data, *index).is_some_and(|key| choices.selected.contains(&key))
-            })
+        (0..self.data.steps.len()).find(|index| {
+            call_key(&self.data, *index).is_some_and(|key| choices.selected.contains(&key))
+                && self
+                    .children
+                    .get(*index)
+                    .is_some_and(|step| step.read(cx).open)
         })
     }
-    fn cell_of(&self, cells: &[Cell], key: &str) -> Option<usize> {
-        cells.iter().position(|cell| {
-            cell.steps
-                .iter()
-                .any(|index| call_key(&self.data, *index).as_deref() == Some(key))
-        })
-    }
-    /// Opens just this cell's calls, or closes them when already open.
-    fn toggle_cell(&mut self, key: String, cx: &mut Context<Self>) {
-        let cells = self.data.cells();
-        let target = self.cell_of(&cells, &key);
-        let selected = self.selected_cell(&cells);
-        self.select(if target == selected { None } else { target }, cx);
-    }
-    fn select(&mut self, target: Option<usize>, cx: &mut Context<Self>) {
-        let cells = self.data.cells();
-        let prior = self.selected_cell(&cells);
-        if prior == target {
+    /// Opens just this call under the line, or closes it when already open.
+    fn toggle_call(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(key) = call_key(&self.data, index) else {
             return;
-        }
-        self.hold(cx);
-        let keys = |cell: &Cell| -> Vec<String> {
-            cell.steps
-                .iter()
-                .filter_map(|index| call_key(&self.data, *index))
-                .collect()
         };
-        if let Some(prior) = prior {
-            let cell = &cells[prior];
+        let prior = self.selected(cx);
+        let open = prior != Some(index);
+        self.hold(cx);
+        if let Some(prior) = prior.filter(|prior| *prior != index) {
+            self.children[prior].update(cx, |step, cx| step.set_open(false, cx));
+        }
+        {
             let mut choices = self.choices.borrow_mut();
-            for key in keys(cell) {
-                choices.selected.remove(&key);
+            for other in (0..self.data.steps.len()).filter_map(|i| call_key(&self.data, i)) {
+                choices.selected.remove(&other);
             }
-            drop(choices);
-            if let [index] = cell.steps[..] {
-                self.children[index].update(cx, |step, cx| step.set_open(false, cx));
+            if open {
+                choices.selected.insert(key);
             }
         }
-        if let Some(target) = target {
-            let cell = &cells[target];
-            let mut choices = self.choices.borrow_mut();
-            choices.selected.extend(keys(cell));
-            // A call inside merged reads opens its sentence too.
-            for unit in self.data.units() {
-                if let Unit::Reads(items) = &unit
-                    && cell.steps.iter().any(|index| items.contains(index))
-                {
-                    choices
-                        .reads
-                        .extend(items.iter().filter_map(|i| call_key(&self.data, *i)));
-                }
-            }
-            drop(choices);
-            if let [index] = cell.steps[..] {
-                self.children[index].update(cx, |step, cx| step.set_open(true, cx));
-            }
-            self.cursor = keys(cell).into_iter().next();
-        }
+        self.children[index].update(cx, |step, cx| step.set_open(open, cx));
         cx.notify();
     }
     /// Open when chosen, or while one of its calls is open, so an opened call
@@ -598,41 +577,6 @@ impl WorkView {
             }
         }
         cx.notify();
-    }
-    fn cursor_index(&self, cells: &[Cell]) -> usize {
-        self.cursor
-            .as_deref()
-            .and_then(|key| self.cell_of(cells, key))
-            .or_else(|| self.selected_cell(cells))
-            .unwrap_or(cells.len().saturating_sub(1))
-    }
-    fn move_cursor(&mut self, to: impl FnOnce(usize, usize) -> usize, cx: &mut Context<Self>) {
-        let cells = self.data.cells();
-        if cells.is_empty() {
-            return;
-        }
-        let next = to(self.cursor_index(&cells), cells.len()).min(cells.len() - 1);
-        self.cursor = call_key(&self.data, cells[next].steps[0]);
-        cx.notify();
-    }
-    fn open_cursor(&mut self, cx: &mut Context<Self>) {
-        let cells = self.data.cells();
-        if cells.is_empty() {
-            return;
-        }
-        let index = self.cursor_index(&cells);
-        self.select(Some(index), cx);
-    }
-    /// Escape closes the opened call and returns focus to its ribbon cell.
-    fn close_call(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cells = self.data.cells();
-        let Some(selected) = self.selected_cell(&cells) else {
-            cx.propagate();
-            return;
-        };
-        self.cursor = call_key(&self.data, cells[selected].steps[0]);
-        self.select(None, cx);
-        window.focus(&self.focus, cx);
     }
     fn line(&self, mode: Mode, cx: &mut Context<Self>) -> Button {
         let segments = self.data.line();
@@ -704,141 +648,6 @@ impl WorkView {
                 view.choose(open, cx);
             }))
     }
-    fn ribbon(&self, cells: &[Cell], window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self.selected_cell(cells);
-        let cursor = self
-            .focus
-            .is_focused(window)
-            .then(|| self.cursor_index(cells));
-        let mut ribbon = div()
-            .id(("work-ribbon", self.data.id))
-            .test_support()
-            .track_focus(&self.focus)
-            .key_context("WorkRibbon")
-            .on_action(cx.listener(|view, _: &PreviousCall, _, cx| {
-                view.move_cursor(|at, _| at.saturating_sub(1), cx)
-            }))
-            .on_action(
-                cx.listener(|view, _: &NextCall, _, cx| view.move_cursor(|at, _| at + 1, cx)),
-            )
-            .on_action(cx.listener(|view, _: &FirstCall, _, cx| view.move_cursor(|_, _| 0, cx)))
-            .on_action(
-                cx.listener(|view, _: &LastCall, _, cx| view.move_cursor(|_, len| len - 1, cx)),
-            )
-            .on_action(cx.listener(|view, _: &OpenCall, _, cx| view.open_cursor(cx)))
-            .on_action(cx.listener(|view, _: &CloseCall, window, cx| view.close_call(window, cx)))
-            .flex_shrink_0()
-            .max_w(gpui_kit::relative(0.5))
-            .h_flex()
-            .flex_wrap()
-            .justify_end()
-            .items_center()
-            .gap(px(4.));
-        for (index, cell) in cells.iter().enumerate() {
-            ribbon =
-                ribbon.child(self.cell(cell, selected == Some(index), cursor == Some(index), cx));
-        }
-        ribbon
-    }
-    fn cell(
-        &self,
-        cell: &Cell,
-        selected: bool,
-        cursor: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let key = call_key(&self.data, cell.steps[0]).unwrap_or_default();
-        let theme = cx.theme();
-        let (icon, color, wash) = match cell.mark {
-            Mark::Failed => (AppIcon::Error, theme.danger, theme.danger.opacity(0.12)),
-            Mark::Live => (
-                AppIcon::Working,
-                theme.foreground,
-                theme.muted_foreground.opacity(0.08),
-            ),
-            Mark::Unknown => (
-                AppIcon::Info,
-                theme.muted_foreground,
-                theme.muted_foreground.opacity(0.08),
-            ),
-            Mark::Done => (
-                kind_icon(cell.kind),
-                theme.muted_foreground,
-                theme.muted_foreground.opacity(0.08),
-            ),
-        };
-        let wash = if selected || cursor {
-            match cell.mark {
-                Mark::Failed => theme.danger.opacity(0.2),
-                _ => theme.muted_foreground.opacity(0.2),
-            }
-        } else {
-            wash
-        };
-        let tip = cell
-            .steps
-            .iter()
-            .filter_map(|index| match self.data.steps.get(*index) {
-                Some(Step::Tool(tool)) => Some(tool),
-                _ => None,
-            })
-            .take(8)
-            .map(|tool| {
-                let status = match self.data.mark(tool) {
-                    Mark::Failed => " · Failed",
-                    Mark::Unknown => " · Status unknown",
-                    Mark::Live => " · Running…",
-                    Mark::Done => "",
-                };
-                format!("{}{status}", sentence(tool))
-            })
-            .chain((cell.steps.len() > 8).then(|| format!("{} more", cell.steps.len() - 8)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let count = cell.steps.len();
-        div()
-            .id(SharedString::from(format!("work-cell-{key}")))
-            .test_support()
-            .relative()
-            .h(px(20.))
-            .min_w(px(22.))
-            .px(px(4.))
-            .h_flex()
-            .items_center()
-            .justify_center()
-            .gap(px(2.))
-            .rounded(px(5.))
-            .border_1()
-            .border_color(if cursor {
-                theme.muted_foreground
-            } else {
-                gpui_kit::transparent_black()
-            })
-            .bg(wash)
-            .text_color(color)
-            .cursor_pointer()
-            .child(icon.inline())
-            .when(count > 1, |this| {
-                this.child(crate::ui::text(crate::ui::Text::Caption, count.to_string()))
-            })
-            .when(selected, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left(px(4.))
-                        .right(px(4.))
-                        .bottom(px(-4.))
-                        .h(px(2.))
-                        .rounded(px(1.))
-                        .bg(theme.foreground),
-                )
-            })
-            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.cursor = Some(key.clone());
-                view.toggle_cell(key.clone(), cx);
-            }))
-    }
     fn reads_row(&self, items: &[usize], cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let open = self.reads_open(items, cx);
         let first = call_key(&self.data, items[0]).unwrap_or_default();
@@ -887,10 +696,9 @@ impl WorkView {
     }
 }
 impl Render for WorkView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode();
-        let cells = self.data.cells();
-        let selected = self.selected_cell(&cells);
+        let selected = self.selected(cx);
         let (units, hidden) = self.shown(mode);
         let mut visible = BTreeSet::new();
         for unit in &units {
@@ -904,52 +712,40 @@ impl Render for WorkView {
                 Unit::Reads(_) => {}
             }
         }
-        let mut header = div()
-            .h_flex()
+        let mut root = div()
+            .v_flex()
+            .gap_2()
             .w_full()
             .min_w_0()
-            .items_center()
-            .gap_2()
-            .child(div().flex_1().min_w_0().child(self.line(mode, cx)));
-        if !cells.is_empty() {
-            header = header.child(self.ribbon(&cells, window, cx));
-        }
-        let mut root = div().v_flex().gap_2().w_full().min_w_0().child(header);
-        // A folded, finished group keeps its first error readable.
+            .child(div().w_full().min_w_0().child(self.line(mode, cx)));
+        // A folded, finished group keeps its first error readable: one
+        // clipped line that opens just that call.
         if mode == Mode::Folded
             && selected.is_none()
             && self.choices.borrow().choice(&self.data).is_none()
             && let Some((index, error)) = self.data.first_error()
         {
-            let key = call_key(&self.data, index).unwrap_or_default();
             root = root.child(
                 div()
                     .id(("work-first-error", self.data.id))
                     .test_support()
                     .pl_4()
+                    .w_full()
                     .min_w_0()
+                    .overflow_hidden()
                     .truncate()
                     .text_xs()
                     .font_family(cx.theme().mono_font_family.clone())
                     .text_color(cx.theme().danger)
                     .cursor_pointer()
                     .child(error)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.cursor = Some(key.clone());
-                        view.toggle_cell(key.clone(), cx);
-                    })),
+                    .on_click(cx.listener(move |view, _, _, cx| view.toggle_call(index, cx))),
             );
         }
         let extra: Vec<usize> = selected
-            .map(|cell| {
-                cells[cell]
-                    .steps
-                    .iter()
-                    .copied()
-                    .filter(|index| !visible.contains(index))
-                    .collect()
-            })
-            .unwrap_or_default();
+            .filter(|index| !visible.contains(index))
+            .into_iter()
+            .collect();
         if units.is_empty() && extra.is_empty() {
             return root;
         }
@@ -960,11 +756,6 @@ impl Render for WorkView {
             .border_l_1()
             .border_color(cx.theme().border)
             .min_w_0();
-        if selected.is_some() {
-            steps = steps.key_context("WorkCall").on_action(
-                cx.listener(|view, _: &CloseCall, window, cx| view.close_call(window, cx)),
-            );
-        }
         if hidden > 0 {
             steps = steps.child(
                 Button::new(("work-earlier", self.data.id))
@@ -996,21 +787,81 @@ impl Render for WorkView {
         root.child(steps)
     }
 }
-fn escape(text: &str) -> String {
+/// What one panel section shows.
+struct Block<'a> {
+    label: &'static str,
+    source: Arc<String>,
+    /// Shown instead of the source, such as output without its header.
+    shown: Option<&'a str>,
+    /// Monospace panel text (HTML pre) rather than Markdown prose.
+    plain: bool,
+    detail: Option<String>,
+    /// Outcome beside the label, and whether it is a failure.
+    status: Option<(&'static str, bool)>,
+    collapsible: bool,
+    /// Wash the lines that read as failures.
+    errors: bool,
+}
+impl Block<'_> {
+    fn code(label: &'static str, source: Arc<String>) -> Self {
+        Self {
+            label,
+            source,
+            shown: None,
+            plain: true,
+            detail: None,
+            status: None,
+            collapsible: false,
+            errors: false,
+        }
+    }
+}
+/// A line that reads as a failure, for a presentational wash only.
+fn failing(line: &str) -> bool {
+    let line = line.to_ascii_lowercase();
+    ["error", "fail", "panic"]
+        .iter()
+        .any(|word| line.contains(word))
+}
+fn escape_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+/// Monospace text as HTML pre, washing failing lines when given a colour.
+fn code_html(text: &str, wash: Option<&str>) -> String {
+    let Some(wash) = wash else {
+        return format!("<pre>{}</pre>", escape_text(text));
+    };
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            if failing(line) && !line.trim().is_empty() {
+                format!("<mark color=\"{wash}\">{}</mark>", escape_text(line))
+            } else {
+                escape_text(line)
+            }
+        })
+        .collect();
+    format!("<pre>{}</pre>", lines.join("\n"))
+}
+fn hex(color: gpui_kit::Hsla) -> String {
+    let rgba = gpui_kit::Rgba::from(color);
+    let byte = |v: f32| (v.clamp(0., 1.) * 255.).round() as u8;
     format!(
-        "<pre>{}</pre>",
-        text.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
+        "#{:02x}{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b),
+        byte(rgba.a)
     )
 }
 struct Body {
     /// The exact source, for copy.
     source: Arc<String>,
-    /// What the parser holds: the source, or its first lines while folded.
-    shown: String,
+    /// What the parser holds.
+    parsed: String,
     state: Entity<TextViewState>,
-    plain: bool,
 }
 
 pub(crate) struct StepView {
@@ -1019,10 +870,12 @@ pub(crate) struct StepView {
     /// The group follows a live run, so live calls read as running.
     active: bool,
     open: bool,
-    /// Executable sources the user unfolded past their first lines.
-    full: BTreeSet<&'static str>,
+    /// Collapsible blocks (code, command, arguments) the user opened.
+    expanded: BTreeSet<&'static str>,
     bodies: BTreeMap<&'static str, Body>,
     subscriptions: Vec<Subscription>,
+    /// Clock of the running dots, while this call runs.
+    pulse: crate::transition::Pulse,
 }
 impl EventEmitter<Change> for StepView {}
 impl StepView {
@@ -1042,10 +895,9 @@ impl StepView {
         self.bodies.insert(
             "Note",
             Body {
-                shown: source.as_ref().clone(),
+                parsed: source.as_ref().clone(),
                 source,
                 state,
-                plain: false,
             },
         );
         self.open = true;
@@ -1074,36 +926,39 @@ impl StepView {
             cx.notify();
         }
     }
-    fn body(
-        &mut self,
-        label: &'static str,
-        source: Arc<String>,
-        plain: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let lines = source.lines().count();
-        let folded =
-            matches!(label, "Code" | "Command") && lines > CODE_LINES && !self.full.contains(label);
-        let shown = if folded {
-            source
-                .lines()
-                .take(CODE_LINES)
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            source.as_ref().clone()
-        };
-        let changed = self
-            .bodies
-            .get(label)
-            .is_none_or(|body| body.source != source || body.shown != shown);
-        if changed {
-            let parsed = if plain { escape(&shown) } else { shown.clone() };
+    /// One section of a call's panel: a caption (label, detail, status) with
+    /// exact copy, then the text. Copy is always the exact source; the shown
+    /// text can drop a matched header. A collapsible section starts closed and
+    /// builds no parser until the user opens it.
+    fn body(&mut self, block: Block<'_>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let Block {
+            label,
+            source,
+            shown,
+            plain,
+            detail,
+            status,
+            collapsible,
+            errors,
+        } = block;
+        let id = step_id(&self.step);
+        let open = !collapsible || self.expanded.contains(label);
+        let state = if open {
+            let shown = shown.unwrap_or(source.as_str()).to_owned();
+            let parsed = if plain {
+                // Failing lines get a quiet danger wash; the text is unchanged.
+                let wash = errors.then(|| hex(cx.theme().danger.opacity(0.16)));
+                code_html(&shown, wash.as_deref())
+            } else {
+                shown.clone()
+            };
             if let Some(body) = self.bodies.get_mut(label) {
-                body.source = source.clone();
-                body.shown = shown;
-                body.state
-                    .update(cx, |state, cx| state.set_text(&parsed, cx));
+                if body.source != source || body.parsed != parsed {
+                    body.source = source.clone();
+                    body.parsed = parsed.clone();
+                    body.state
+                        .update(cx, |state, cx| state.set_text(&parsed, cx));
+                }
             } else {
                 let state = cx.new(|cx| {
                     (if plain {
@@ -1122,116 +977,127 @@ impl StepView {
                     label,
                     Body {
                         source: source.clone(),
-                        shown,
+                        parsed,
                         state,
-                        plain,
                     },
                 );
             }
-        }
-        let state = self.bodies[label].state.clone();
-        let id = step_id(&self.step);
-        let language = match (&self.step, label) {
-            (Step::Tool(tool), "Code") if tool.name == "codemode" => "JavaScript · ",
-            (_, "Command") => "Shell · ",
-            _ => "",
+            Some(self.bodies[label].state.clone())
+        } else {
+            None
         };
-        let detail = matches!(label, "Code" | "Command").then(|| {
-            format!(
-                "{language}{lines} line{}",
-                if lines == 1 { "" } else { "s" }
-            )
-        });
+        let muted = cx.theme().muted_foreground;
+        let danger = cx.theme().danger;
+        let caption = div()
+            .h_flex()
+            .gap_2()
+            .items_center()
+            .child(crate::ui::text(crate::ui::Text::Caption, label).text_color(muted))
+            .when_some(status, |this, (status, error)| {
+                this.child(
+                    crate::ui::text(crate::ui::Text::Caption, status).text_color(if error {
+                        danger
+                    } else {
+                        muted
+                    }),
+                )
+            })
+            .when_some(detail, |this, detail| {
+                this.child(
+                    crate::ui::text(crate::ui::Text::Caption, detail)
+                        .text_color(muted)
+                        .opacity(0.75),
+                )
+            });
+        let name = label.to_lowercase();
+        let header = div()
+            .h_flex()
+            .gap_2()
+            .items_center()
+            .min_w_0()
+            .map(|this| {
+                if collapsible {
+                    this.child(
+                        Button::new(SharedString::from(format!("show-{id}-{label}")))
+                            .ghost()
+                            .xsmall()
+                            // Cancel the button's inset so the chevron sits
+                            // in the panel's label column.
+                            .ml(px(-8.))
+                            .accessibility_label(SharedString::from(format!(
+                                "{} {name}",
+                                if open { "Hide" } else { "Show" }
+                            )))
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .text_color(muted)
+                                    .child(chevron(open))
+                                    .child(caption),
+                            )
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                if !view.expanded.remove(label) {
+                                    view.expanded.insert(label);
+                                }
+                                cx.emit(Change::Disclosure(step_id(&view.step)));
+                                cx.notify();
+                            })),
+                    )
+                } else {
+                    this.child(caption)
+                }
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new(SharedString::from(format!("copy-{id}-{label}")))
+                    .ghost()
+                    .xsmall()
+                    .icon(AppIcon::Copy.asset())
+                    .accessibility_label(SharedString::from(format!("Copy {name}")))
+                    .tooltip(SharedString::from(format!("Copy {name}")))
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(source.as_ref().clone()))
+                    }),
+            );
         div()
             .v_flex()
             .gap_1()
             .min_w_0()
-            .child(
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(label),
-                    )
-                    .when_some(detail, |this, detail| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .opacity(0.75)
-                                .child(detail),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .child(
-                        Button::new(SharedString::from(format!("copy-{id}-{label}")))
-                            .ghost()
-                            .small()
-                            .icon(AppIcon::Copy.asset())
-                            .accessibility_label(SharedString::from(format!(
-                                "Copy {}",
-                                label.to_lowercase()
-                            )))
-                            .tooltip(SharedString::from(format!("Copy {}", label.to_lowercase())))
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    source.as_ref().clone(),
-                                ))
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .id(SharedString::from(format!("body-{id}-{label}")))
-                    .test_support()
-                    .max_h(px(260.))
-                    .overflow_y_scroll()
-                    .min_w_0()
-                    .when(plain, |this| {
-                        this.p(px(10.))
-                            .bg(crate::appearance::code(cx))
-                            .rounded(px(crate::appearance::Radius::CONTROL))
-                            .border_1()
-                            .border_color(cx.theme().border)
-                    })
-                    .child(
-                        crate::typography::rich(
-                            TextView::new(&state),
-                            crate::typography::current(cx),
-                            if plain {
-                                crate::typography::Content::Code
-                            } else {
-                                crate::typography::Content::Chat
-                            },
-                            cx,
-                        )
-                        .selectable(true)
-                        .scrollable(false)
-                        .on_link_click(|_, _, _, _| {}),
-                    ),
-            )
-            .when(folded, |this| {
+            // Panel sections carry their own inset; a note reads as prose.
+            .when(plain, |this| this.px(px(12.)).py(px(6.)))
+            .child(header)
+            .when_some(state, |this, state| {
                 this.child(
-                    Button::new(SharedString::from(format!("show-all-{id}-{label}")))
-                        .ghost()
-                        .small()
-                        .self_start()
-                        .label(format!("Show all {lines} lines"))
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.full.insert(label);
-                            cx.emit(Change::Disclosure(step_id(&view.step)));
-                            cx.notify();
-                        })),
+                    div()
+                        .id(SharedString::from(format!("body-{id}-{label}")))
+                        .test_support()
+                        .max_h(px(260.))
+                        .overflow_y_scroll()
+                        .min_w_0()
+                        .child(
+                            crate::typography::rich(
+                                TextView::new(&state),
+                                crate::typography::current(cx),
+                                if plain {
+                                    crate::typography::Content::Code
+                                } else {
+                                    crate::typography::Content::Chat
+                                },
+                                cx,
+                            )
+                            .selectable(true)
+                            .scrollable(false)
+                            .on_link_click(|_, _, _, _| {}),
+                        ),
                 )
             })
     }
 }
+
 impl Render for StepView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = step_id(&self.step);
         // A live call outside a live run has an unknown outcome.
         let stale = matches!(&self.step, Step::Tool(tool) if tool.status.live()) && !self.active;
@@ -1291,12 +1157,22 @@ impl Render for StepView {
                 false,
             ),
         };
-        let icon = match &self.step {
-            Step::Tool(_) if caption.error => Some(AppIcon::Error),
-            Step::Tool(tool) if tool.status.live() && self.active => Some(AppIcon::Working),
-            Step::Tool(tool) => Some(kind_icon(tool.kind)),
+        // Only a call running in a live run bounces; its outcome or a
+        // stale run settles it.
+        let running = !caption.error
+            && self.active
+            && matches!(&self.step, Step::Tool(tool) if tool.status.live());
+        let lead = match &self.step {
+            Step::Tool(_) if caption.error => Some(AppIcon::Error.inline().into_any_element()),
+            Step::Tool(_) if running => {
+                Some(dots(&id, self.pulse.phase(DOTS_PERIOD, window, cx), cx))
+            }
+            Step::Tool(tool) => Some(kind_icon(tool.kind).inline().into_any_element()),
             Step::Note { .. } => None,
         };
+        if !running {
+            self.pulse.stop();
+        }
         let mut root = div().v_flex().gap_2().min_w_0().w_full().child(
             div()
                 .h_flex()
@@ -1304,11 +1180,11 @@ impl Render for StepView {
                 .items_center()
                 .child(
                     div().flex_1().min_w_0().child(
-                        disclosure(
+                        disclosure_lead(
                             SharedString::from(format!("step-toggle-{id}")),
                             caption,
                             self.open,
-                            icon,
+                            lead,
                             cx,
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
@@ -1325,51 +1201,119 @@ impl Render for StepView {
             let mut details = div().v_flex().gap_2().pl_4().min_w_0();
             match step {
                 Step::Tool(tool) => {
+                    let script = (tool.name == "codemode")
+                        .then(|| crate::tool_presentation::script_output(&tool.output))
+                        .flatten();
+                    let failed = tool.status == Status::Error;
+                    let mut sections: Vec<gpui_kit::AnyElement> = Vec::new();
+                    // The command reads first; a script's code waits behind
+                    // its own toggle so its output leads.
                     if let Some((label, source)) = &tool.input {
-                        details = details.child(self.body(label, source.clone(), true, cx));
+                        let lines = source.lines().count();
+                        let script = *label == "Code";
+                        let language = if tool.name == "codemode" {
+                            "JavaScript · "
+                        } else if *label == "Command" {
+                            "Shell · "
+                        } else {
+                            ""
+                        };
+                        sections.push(
+                            self.body(
+                                Block {
+                                    detail: script.then(|| {
+                                        format!(
+                                            "{language}{lines} line{}",
+                                            if lines == 1 { "" } else { "s" }
+                                        )
+                                    }),
+                                    collapsible: script,
+                                    ..Block::code(label, source.clone())
+                                },
+                                cx,
+                            )
+                            .into_any_element(),
+                        );
+                    }
+                    let shown = script.as_ref().map(|script| script.body);
+                    let status = if failed {
+                        Some(("Failed", true))
+                    } else if stale {
+                        Some((Status::Interrupted.label(), false))
+                    } else if tool.status.live() {
+                        Some((Status::Running.label(), false))
+                    } else {
+                        None
+                    };
+                    if !tool.output.is_empty() && shown.is_none_or(|shown| !shown.trim().is_empty())
+                    {
+                        sections.push(
+                            self.body(
+                                Block {
+                                    shown: shown.or(Some(tool.output.as_str())),
+                                    detail: script
+                                        .as_ref()
+                                        .map(|script| format!("{} s", script.wall)),
+                                    status,
+                                    errors: failed,
+                                    ..Block::code("Output", tool.output.clone())
+                                },
+                                cx,
+                            )
+                            .into_any_element(),
+                        );
                     }
                     if !tool.diff.is_empty() {
-                        details = details.child(self.body(
-                            "Replacement / patch preview",
-                            tool.diff.clone(),
-                            true,
-                            cx,
-                        ));
-                    }
-                    if !tool.output.is_empty() {
-                        details = details.child(self.body("Output", tool.output.clone(), true, cx));
+                        sections.push(
+                            self.body(
+                                Block::code("Replacement / patch preview", tool.diff.clone()),
+                                cx,
+                            )
+                            .into_any_element(),
+                        );
                     }
                     if !tool.arguments.is_empty() {
-                        if tool.input.is_some() {
-                            // For executable source, the JSON envelope is
-                            // metadata, not a reading surface: copy only.
-                            let arguments = tool.arguments.clone();
-                            details = details.child(
-                                Button::new(SharedString::from(format!("copy-{id}-Arguments")))
-                                    .ghost()
-                                    .small()
-                                    .self_start()
-                                    .icon(AppIcon::Copy.asset())
-                                    .label("Copy arguments")
-                                    .tooltip("Copy the call's JSON arguments")
-                                    .on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            arguments.as_ref().clone(),
-                                        ))
-                                    }),
-                            );
-                        } else {
-                            details = details.child(self.body(
-                                "Arguments",
-                                tool.arguments.clone(),
-                                true,
+                        sections.push(
+                            self.body(
+                                Block {
+                                    collapsible: true,
+                                    ..Block::code("Arguments", tool.arguments.clone())
+                                },
                                 cx,
-                            ));
-                        }
+                            )
+                            .into_any_element(),
+                        );
                     }
+                    // One quiet panel; hairlines separate its sections.
+                    let border = cx.theme().border;
+                    details = details.child(
+                        div()
+                            .id(SharedString::from(format!("panel-{id}")))
+                            .test_support()
+                            .v_flex()
+                            .min_w_0()
+                            .py(px(2.))
+                            .bg(crate::appearance::code(cx))
+                            .border_1()
+                            .border_color(border)
+                            .rounded(px(crate::appearance::Radius::CONTROL))
+                            .overflow_hidden()
+                            .children(sections.into_iter().enumerate().map(|(index, section)| {
+                                div()
+                                    .min_w_0()
+                                    .when(index > 0, |this| this.border_t_1().border_color(border))
+                                    .child(section)
+                            })),
+                    );
                 }
                 Step::Note { text, .. } => {
-                    details = details.child(self.body("Note", text, false, cx));
+                    details = details.child(self.body(
+                        Block {
+                            plain: false,
+                            ..Block::code("Note", text)
+                        },
+                        cx,
+                    ));
                 }
             }
             if limited {
@@ -1445,5 +1389,20 @@ mod preview_tests {
         assert_eq!(choices.choice(&a), Some(false));
         assert_eq!(choices.choice(&b), Some(false));
         assert_eq!(choices.groups.len(), 2, "no render-ID or event-key growth");
+    }
+    #[test]
+    fn failing_lines_get_a_wash_and_text_stays_exact() {
+        assert_eq!(code_html("a < b\nok", None), "<pre>a &lt; b\nok</pre>");
+        assert_eq!(
+            code_html(
+                "Running\nthread 'x' panicked\n\ntest result: FAILED",
+                Some("#ff000029")
+            ),
+            "<pre>Running\n<mark color=\"#ff000029\">thread 'x' panicked</mark>\n\n<mark color=\"#ff000029\">test result: FAILED</mark></pre>"
+        );
+        assert_eq!(
+            hex(gpui_kit::Hsla::from(gpui_kit::rgb(0xff0000)).opacity(0.5)),
+            "#ff000080"
+        );
     }
 }

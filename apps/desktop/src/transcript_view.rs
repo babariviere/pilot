@@ -116,7 +116,6 @@ impl TranscriptView {
             KeyBinding::new("secondary-l", FocusComposer, None),
         ]);
         cx.on_action(|_: &Quit, cx| crate::local_view::menu_routing::quit(cx));
-        crate::work_view::bind_keys(cx);
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {

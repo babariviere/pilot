@@ -325,32 +325,6 @@ impl Work {
         }
         units
     }
-    /// One cell per top-level call. Adjacent successful reads or searches
-    /// share a counted cell; failed, unknown and live calls stay distinct.
-    pub(crate) fn cells(&self) -> Vec<Cell> {
-        let mut cells: Vec<Cell> = Vec::new();
-        for (index, step) in self.steps.iter().enumerate() {
-            let Step::Tool(tool) = step else {
-                continue;
-            };
-            let mark = self.mark(tool);
-            if mark == Mark::Done
-                && matches!(tool.kind, Kind::Read | Kind::Search)
-                && let Some(last) = cells.last_mut()
-                && last.mark == Mark::Done
-                && last.kind == tool.kind
-            {
-                last.steps.push(index);
-                continue;
-            }
-            cells.push(Cell {
-                steps: vec![index],
-                kind: tool.kind,
-                mark,
-            });
-        }
-        cells
-    }
     /// The folded line: what changed, then command outcomes in words, then a
     /// faint count of reads and searches. While live: Working and the current call.
     pub(crate) fn line(&self) -> Vec<Segment> {
@@ -501,14 +475,26 @@ impl Work {
         line
     }
     /// The first failed call and its first error line, kept visible on the fold.
+    /// A failed script names its own error, below the output it printed.
     pub(crate) fn first_error(&self) -> Option<(usize, String)> {
         let index = self
             .steps
             .iter()
             .position(|step| matches!(step, Step::Tool(tool) if tool.status == Status::Error))?;
         let tool = self.tool(index)?;
+        let mut output = tool.output.as_str();
+        if tool.name == "codemode"
+            && let Some(script) = script_output(output)
+        {
+            output = script.body;
+            if !script.ok
+                && let Some((_, error)) = output.rsplit_once("Script error:\n")
+            {
+                output = error;
+            }
+        }
         let lines = || {
-            tool.output
+            output
                 .lines()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())
@@ -542,13 +528,6 @@ pub(crate) enum Mark {
     Live,
     Failed,
     Unknown,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Cell {
-    /// Step indices of the calls this cell represents, in order.
-    pub(crate) steps: Vec<usize>,
-    pub(crate) kind: Kind,
-    pub(crate) mark: Mark,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tone {
@@ -1047,6 +1026,33 @@ fn replacement(path: &str, old: &str, new: &str) -> String {
         out.push('\n');
     }
     cut(&out, DIFF_CAP)
+}
+/// A codemode result: its fixed header, then the script's own output.
+pub(crate) struct ScriptOutput<'a> {
+    pub(crate) ok: bool,
+    /// Seconds, as the header wrote them.
+    pub(crate) wall: &'a str,
+    pub(crate) body: &'a str,
+}
+/// Splits the header codemode writes before a script's output
+/// (`Script completed|failed`, `Wall time N seconds`, `Output:`). None
+/// unless the output starts with exactly that header.
+pub(crate) fn script_output(output: &str) -> Option<ScriptOutput<'_>> {
+    let (status, rest) = output.split_once('\n')?;
+    let ok = match status {
+        "Script completed" => true,
+        "Script failed" => false,
+        _ => return None,
+    };
+    let (wall, rest) = rest.split_once('\n')?;
+    let wall = wall.strip_prefix("Wall time ")?.strip_suffix(" seconds")?;
+    if wall.is_empty() || !wall.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return None;
+    }
+    let body = rest.strip_prefix("Output:\n")?;
+    // The header is its own content item; items join with a newline.
+    let body = body.strip_prefix('\n').unwrap_or(body);
+    Some(ScriptOutput { ok, wall, body })
 }
 pub(crate) fn text(value: &Value) -> String {
     if let Some(s) = value["content"].as_str() {
