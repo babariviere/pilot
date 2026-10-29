@@ -45,6 +45,53 @@ pub struct Staged {
     pub(crate) lock: File,
 }
 
+/// Helper-local proof of a freshly extracted payload. Never serialized or recovered.
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub(crate) struct PreparedPayload<'a> {
+    staged: &'a Staged,
+    bundle: PathBuf,
+    identity: String,
+}
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+impl PreparedPayload<'_> {
+    /// Only a helper that never received COMMIT may remove its fresh preparation.
+    pub(crate) fn discard(self) -> Result<(), Error> {
+        let _guard = journal_guard(&self.staged.root)?;
+        if read_journal(&self.staged.root)?.phase != Phase::Ready {
+            return Err(Error::RecoveryRequired);
+        }
+        fs::remove_dir_all(self.bundle.parent().ok_or(Error::Filesystem)?)
+            .map_err(|_| Error::Filesystem)?;
+        sync_directory(&self.staged.root)
+    }
+
+    pub(crate) fn apply_after_exit(
+        self,
+        trust: &Trust,
+        platform: &impl Platform,
+        parent_exited: crate::helper::ExitedParent,
+        check: impl FnOnce(&Path) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        self.staged.apply_with_payload_after_exit_checked(
+            trust,
+            platform,
+            parent_exited,
+            || {
+                let phase = crate::timing::Phase::start();
+                // Include every path, mode, byte and relative link, including resources
+                // outside the native seal. Never adopt a digest from a writable journal.
+                validate_target(&self.bundle, trust)?;
+                if crate::runtime::identity(&self.bundle)? != self.identity {
+                    return Err(Error::Identity);
+                }
+                phase.finish("exited_closure_hash");
+                Ok(self.bundle)
+            },
+            check,
+        )
+    }
+}
+
 fn verify_source(bundle: &Path, manifest: &crate::manifest::Manifest) -> Result<(), Error> {
     let Some(source) = manifest.source.as_deref() else {
         return Ok(());
@@ -585,6 +632,48 @@ impl Staged {
         })
     }
 
+    fn extract_install_payload(&self, trust: &Trust) -> Result<PathBuf, Error> {
+        archive::extract(
+            &self.root.join("archive.zip"),
+            &self.root.join("install-payload"),
+            &trust.bundle_name,
+            &Cancellation::default(),
+        )
+    }
+
+    /// Fresh helper-owned extraction while the GUI is still alive. Readiness does
+    /// not commit intent; every security/owner gate runs again after actual exit.
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    pub(crate) fn prepare_payload(
+        &self,
+        trust: &Trust,
+        platform: &impl Platform,
+    ) -> Result<PreparedPayload<'_>, Error> {
+        if read_journal(&self.root)?.phase != Phase::Ready {
+            return Err(Error::RecoveryRequired);
+        }
+        let phase = crate::timing::Phase::start();
+        verify_archive(
+            &self.root.join("archive.zip"),
+            &self.verified,
+            &Cancellation::default(),
+        )?;
+        phase.finish("prepared_archive_verify");
+        let phase = crate::timing::Phase::start();
+        let bundle = self.extract_install_payload(trust)?;
+        phase.finish("prepared_extract_sync");
+        let phase = crate::timing::Phase::start();
+        platform.verify_candidate(&bundle, trust, self.verified.manifest())?;
+        validate_target(&bundle, trust)?;
+        let identity = crate::runtime::identity(&bundle)?;
+        phase.finish("prepared_candidate_closure_verify");
+        Ok(PreparedPayload {
+            staged: self,
+            bundle,
+            identity,
+        })
+    }
+
     /// Invoked ONLY after COMMIT and OS-observed parent exit. No on-quit observer.
     /// The old bundle is retained, not deleted, at payload/<bundle_name> after swap.
     pub fn apply_after_exit(
@@ -603,6 +692,28 @@ impl Staged {
         parent_exited: crate::helper::ExitedParent,
         check: impl FnOnce(&Path) -> Result<(), Error>,
     ) -> Result<(), Error> {
+        self.apply_with_payload_after_exit_checked(
+            trust,
+            platform,
+            parent_exited,
+            || {
+                let phase = crate::timing::Phase::start();
+                let candidate = self.extract_install_payload(trust)?;
+                phase.finish("exited_extract_sync");
+                Ok(candidate)
+            },
+            check,
+        )
+    }
+
+    fn apply_with_payload_after_exit_checked(
+        &self,
+        trust: &Trust,
+        platform: &impl Platform,
+        parent_exited: crate::helper::ExitedParent,
+        payload: impl FnOnce() -> Result<PathBuf, Error>,
+        check: impl FnOnce(&Path) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         parent_exited.consume();
         let mut journal = read_journal(&self.root)?;
         if journal.phase != Phase::Committed {
@@ -612,23 +723,27 @@ impl Staged {
         if original.dev() != journal.original_device || original.ino() != journal.original_inode {
             return Err(Error::RecoveryRequired);
         }
+        let phase = crate::timing::Phase::start();
         platform.verify(&self.target, trust, &trust.current_build, None)?;
+        phase.finish("exited_target_verify");
         let parent_path = self.target.parent().ok_or(Error::Filesystem)?;
         validate_parents(parent_path)?;
         let parent = open_directory(parent_path)?;
         let held_parent = parent.metadata().map_err(|_| Error::Filesystem)?;
-        // Re-extract to a new private directory after parent exit. Do not trust any
-        // staged bundle that could have been changed while awaiting user confirmation.
+        // Archive authentication remains fresh after exit even when extraction
+        // was prepared before quit. Prepared payloads require an exact closure match.
         let cancel = Cancellation::default();
+        let phase = crate::timing::Phase::start();
         verify_archive(&self.root.join("archive.zip"), &self.verified, &cancel)?;
-        let candidate = archive::extract(
-            &self.root.join("archive.zip"),
-            &self.root.join("install-payload"),
-            &trust.bundle_name,
-            &cancel,
-        )?;
+        phase.finish("exited_archive_verify");
+        let candidate = payload()?;
+        let phase = crate::timing::Phase::start();
         platform.verify_candidate(&candidate, trust, self.verified.manifest())?;
+        phase.finish("exited_candidate_verify");
+        let phase = crate::timing::Phase::start();
         check(&candidate)?;
+        phase.finish("exited_guard_verify");
+        let phase = crate::timing::Phase::start();
         // Keep the old app in the same directory as the actually swapped candidate.
         let relative = candidate
             .strip_prefix(self.target.parent().ok_or(Error::Filesystem)?)
@@ -667,10 +782,13 @@ impl Staged {
         journal.phase = Phase::RelaunchRequested;
         write_journal(&self.root, &journal)?;
         drop(journal_guard);
+        phase.finish("swap_journal_sync");
+        let phase = crate::timing::Phase::start();
         // open success is NOT startup acknowledgement or a promise of rollback.
         if platform.relaunch(&self.target, &self.root).is_err() {
             return Err(Error::RecoveryRequired);
         }
+        phase.finish("relaunch_command");
         Ok(())
     }
 

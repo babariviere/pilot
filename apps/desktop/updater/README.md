@@ -45,7 +45,11 @@ helper. No default points at the Swift application, its feed, credentials or key
   permanent per-target lock, explicit durable COMMIT, then kqueue NOTE_EXIT on the actual
   spawning parent. No COMMIT means ordinary quit/EOF cannot install. A timer can abort
   waiting, but never quits/kills the app or permits installation. The helper rechecks
-  signed archive bytes, re-extracts privately and verifies the full bundle before swapping.
+  signed archive bytes and verifies the full bundle before swapping. On macOS it
+  freshly extracts/syncs a second private payload before READY, retains its exact
+  tree digest only in helper memory, then rehashes the closed tree after OS exit.
+  Changed/additional files, modes or links refuse installation, including resources
+  outside the native seal. Linux retains post-exit extraction.
 - `src/lib.rs`: typed cancellable scheduler/controller. One flight until quiescent
   cancellation acknowledgement, operation generations fence old callbacks, hourly
   checks, bounded exponential failure backoff60s→1h, explicit manual checks. Downloads
@@ -214,7 +218,14 @@ Cleanup/explicit rollback with running-process checks remains later recovery int
 
 Cancellation is cooperative between bounded reads; it can take up to the HTTP timeout
 during a blocked read. ZIP/file operations are bounded and off-UI. Helper readiness timeout
-is30s, COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs without exit.
+is120s on macOS (includes full pre-quit extraction/sync), 30s on Linux;
+COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs without exit.
+The longer readiness bound does not grant more COMMIT, reservation or exit time.
+Pre-COMMIT cancellation removes only that helper's fresh preparation while the
+journal is still Ready, allowing another explicit attempt. Committed/uncertain
+evidence is retained; a new helper never adopts a prior prepared-payload digest.
+See [critical-path timings](../docs/update-timings.md) for the deadline audit and
+synthetic measurements, not a claim about production GUI blackout.
 Helper EOF/abort is delivered through a blocking status watcher with generation fencing,
 not an idle polling timer; prepared/authorized UI cannot remain falsely ready after
 helper death. A lost COMMIT receipt is uncertain, not an undo of durable intent.

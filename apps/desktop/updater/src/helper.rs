@@ -121,7 +121,15 @@ impl PreparedExit {
         }
         let (control, child_control) = UnixStream::pair().map_err(|_| Error::Native)?;
         control
-            .set_read_timeout(Some(Duration::from_secs(30)))
+            .set_read_timeout(Some(Duration::from_secs(
+                if cfg!(all(target_os = "macos", feature = "native-macos")) {
+                    // Full extraction/fsync moved before READY, not into blackout.
+                    // This only bounds preparation; COMMIT/exit/lease gates are unchanged.
+                    120
+                } else {
+                    30
+                },
+            )))
             .map_err(|_| Error::Native)?;
         control
             .set_write_timeout(Some(Duration::from_secs(1)))
@@ -180,6 +188,8 @@ impl PreparedExit {
                 std::env::var_os("PILOT_NEXT_UPDATER_FIXTURE").ok_or(Error::Identity)?,
             );
         }
+        #[cfg(feature = "lifecycle-timings")]
+        command.stderr(Stdio::inherit());
         let child = command.spawn().map_err(|_| Error::Native)?;
         // Release closure-owned copies of the child's endpoint before waiting for
         // READY. Otherwise a failed child cannot produce EOF on our parent socket.
@@ -414,6 +424,7 @@ pub fn run_native(
     #[cfg(feature = "fixture")]
     let validation_started = std::time::Instant::now();
     use crate::installer::{NativePlatform, Platform};
+    let ready_timing = crate::timing::Phase::start();
     let trust = compiled_trust()?; // no journal access at all in development/unconfigured builds
     let executable = std::env::current_exe().map_err(|_| Error::Unconfigured)?;
     let target = executable
@@ -517,6 +528,8 @@ pub fn run_native(
             validation_started.elapsed().as_secs_f64()
         );
     }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    let payload = staged.prepare_payload(&trust, &NativePlatform)?;
     // SAFETY: checked descriptor is the inherited private handshake socket.
     let mut control = unsafe { UnixStream::from_raw_fd(control_fd) };
     control
@@ -525,10 +538,16 @@ pub fn run_native(
     control
         .set_write_timeout(Some(Duration::from_secs(1)))
         .map_err(|_| Error::Native)?;
+    ready_timing.finish("helper_prepare");
+    let commit_timing = crate::timing::Phase::start();
     if let Err(error) = await_commit(&mut control, &staged) {
+        #[cfg(all(target_os = "macos", feature = "native-macos"))]
+        payload.discard()?;
         let _ = control.write_all(b"ABORTED\n");
         return Err(error);
     }
+    commit_timing.finish("commit_wait");
+    let exit_timing = crate::timing::Phase::start();
     let exit = match watch.wait(Duration::from_secs(120)) {
         Ok(exit) => exit,
         Err(error) => {
@@ -536,12 +555,21 @@ pub fn run_native(
             return Err(error);
         }
     };
-    staged.apply_after_exit_checked(&trust, &NativePlatform, exit, |candidate| {
+    exit_timing.finish("parent_exit_wait");
+    let check = |candidate: &std::path::Path| {
         // Successful verification after OS-observed parent exit proves the same
         // reservation remained uninterrupted through exit. Expiry/owner death
         // refuses installation even if COMMIT had already been acknowledged.
         crate::app_update::ExitGuard::load(&root, candidate, staged.build(), &trust).map(|_| ())
-    })
+    };
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    {
+        payload.apply_after_exit(&trust, &NativePlatform, exit, check)
+    }
+    #[cfg(all(target_os = "linux", feature = "native-linux"))]
+    {
+        staged.apply_after_exit_checked(&trust, &NativePlatform, exit, check)
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

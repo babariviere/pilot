@@ -996,6 +996,131 @@ fn failed_swap_and_post_stage_tampering_leave_installed_bundle_unchanged() {
         Err(Error::Signature)
     );
 }
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn prepared_payload_moves_extraction_before_commit_but_never_trusts_mutable_staging() {
+    for change in ["none", "file", "extra", "mode", "link", "archive"] {
+        let temp = Temp::new();
+        let staged = fixture_stage(&temp);
+        let platform = FakePlatform::default();
+        let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
+        let bundle = staged.root.join("install-payload/Pilot Next.app");
+        assert!(
+            bundle.is_dir(),
+            "extraction finishes while parent is still alive"
+        );
+        assert_eq!(
+            installer::recovery_phase(staged.root()).unwrap(),
+            installer::Phase::Ready
+        );
+        assert_eq!(
+            fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+            "100.1"
+        );
+        match change {
+            "file" => fs::write(bundle.join("Contents/build"), "changed").unwrap(),
+            "extra" => fs::write(bundle.join("Contents/unsealed-extra"), "extra").unwrap(),
+            "mode" => fs::set_permissions(
+                bundle.join("Contents/id"),
+                fs::Permissions::from_mode(0o755),
+            )
+            .unwrap(),
+            "link" => {
+                fs::remove_file(bundle.join("Contents/id")).unwrap();
+                std::os::unix::fs::symlink("build", bundle.join("Contents/id")).unwrap();
+            }
+            "archive" => fs::write(staged.root.join("archive.zip"), "changed").unwrap(),
+            _ => {}
+        }
+        commit(&staged);
+        let result = prepared.apply_after_exit(
+            &trust(),
+            &platform,
+            helper::ExitedParent::synthetic(),
+            |_| Ok(()),
+        );
+        if change == "none" {
+            result.unwrap();
+            assert_eq!(
+                fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+                "101.1"
+            );
+            assert_eq!(
+                fs::read_to_string(bundle.join("Contents/build")).unwrap(),
+                "100.1"
+            );
+            assert_eq!(
+                installer::recovery_phase(staged.root()).unwrap(),
+                installer::Phase::RelaunchRequested
+            );
+        } else {
+            assert!(result.is_err(), "{change} must refuse before swap");
+            assert_eq!(
+                fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+                "100.1"
+            );
+            assert_eq!(
+                installer::recovery_phase(staged.root()).unwrap(),
+                installer::Phase::Committed
+            );
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn prepared_payload_cancellation_can_retry_but_commit_never_discards_evidence() {
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    let platform = FakePlatform::default();
+    staged
+        .prepare_payload(&trust(), &platform)
+        .unwrap()
+        .discard()
+        .unwrap();
+    assert!(!staged.root.join("install-payload").exists());
+    let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
+    commit(&staged);
+    assert_eq!(prepared.discard(), Err(Error::RecoveryRequired));
+    assert!(staged.root.join("install-payload").exists());
+    assert!(matches!(
+        staged.prepare_payload(&trust(), &platform),
+        Err(Error::RecoveryRequired)
+    ));
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn prepared_payload_still_requires_commit_and_fresh_post_exit_guard() {
+    for committed in [false, true] {
+        let temp = Temp::new();
+        let staged = fixture_stage(&temp);
+        let platform = FakePlatform::default();
+        let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
+        if committed {
+            commit(&staged);
+        }
+        let result = prepared.apply_after_exit(
+            &trust(),
+            &platform,
+            helper::ExitedParent::synthetic(),
+            |_| Err(Error::RuntimeUnverified),
+        );
+        assert_eq!(
+            result,
+            Err(if committed {
+                Error::RuntimeUnverified
+            } else {
+                Error::RecoveryRequired
+            })
+        );
+        assert_eq!(
+            fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+            "100.1"
+        );
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn os_exit_monitor_observes_only_real_owned_child_exit_and_never_kills_it() {

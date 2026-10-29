@@ -27,6 +27,7 @@ pub mod linux;
 pub mod manifest;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub mod runtime;
+mod timing;
 pub mod transport;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),

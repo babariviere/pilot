@@ -106,15 +106,21 @@ authentication for the ordinary loopback API.
    ordinary clean Settings Save remains a no-op.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
-   same-volume transaction and start the matching helper, which waits for COMMIT.
+   same-volume transaction and start the matching helper. On macOS the helper
+   re-authenticates/extracts/syncs its own private installation payload before
+   readiness, then waits for COMMIT. The GUI is still open during this work;
+   restart admission/editing fences remain held.
    Bundled UI-only reloads inspect the retained proof without reserving the daemon.
    External app-only updates record only their exact Local profile/port/hello pin.
 4. Revalidate fresh exact checkpoint receipts and the applicable reservation,
    retained proof or external identity pin before app-helper COMMIT.
    Only acknowledged `ExitAuthorized` requests a clean GUI quit. Uncertain COMMIT
    stays recovery-required and fenced; it is not an undo or permission to edit.
-5. The helper observes actual OS parent exit, verifies the same guard again,
-   then swaps the complete GUI bundle. Expiry/revocation before exit refuses the
+5. The helper observes actual OS parent exit and re-authenticates the archive.
+   On macOS it rehashes the exact helper-prepared closed payload; Linux retains
+   post-exit extraction. It rechecks native signature, source closure and the same
+   guard, then swaps the complete GUI bundle.
+   Expiry/revocation before exit refuses the
    swap even after COMMIT. The existing daemon and its capsule remain untouched.
 6. Relaunch carries a durable receipt. The new GUI restores the receipt-bound
    profile/port/denial-policy instead of trusting Launch Services environment,
@@ -172,3 +178,7 @@ Mounted Settings probes separately render real GPUI light/dark 680/1100 windows
 and check native controls/focus. Portable unit tests are not Linux GUI evidence.
 Linux GUI packaging/qualification is separate; Linux install/update stays disabled
 until independently implemented and verified. Swift remains installed and unchanged.
+
+The [restart timing audit](update-timings.md) separates pre-quit preparation,
+post-exit replacement/relaunch and startup ACK. Its isolated native fixtures do
+not establish the cause or resolution of a reported full-GUI one-minute blackout.

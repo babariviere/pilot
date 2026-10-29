@@ -88,6 +88,22 @@ fn safe_root(path: &Path) -> Result<PathBuf> {
     }
     Ok(path)
 }
+// Cross-process monotonic timestamps, stored only in the owned temporary fixture.
+fn event(root: &Path, name: &str) -> Result<()> {
+    let mut clock = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: valid output slot for the system monotonic clock.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, clock.as_mut_ptr()) } != 0 {
+        return Err("monotonic fixture clock unavailable".into());
+    }
+    // SAFETY: successful clock_gettime initialized the output.
+    let clock = unsafe { clock.assume_init() };
+    let seconds = clock.tv_sec as f64 + clock.tv_nsec as f64 / 1e9;
+    fs::write(
+        root.join(format!("timing-{name}.json")),
+        serde_json::to_vec(&seconds)?,
+    )?;
+    Ok(())
+}
 fn run(args: Vec<String>) -> Result<()> {
     let trust = trust()?;
     if args.len() == 2 && args[0] == "--updater-receipt" {
@@ -113,10 +129,12 @@ fn run(args: Vec<String>) -> Result<()> {
         if !transaction.starts_with(&root) {
             return Err("receipt escaped fixture".into());
         }
+        event(&root, "startup_entered")?;
         if root.join("fail-startup").exists() {
             return Err("owned startup failure injection".into());
         }
         ExitGuard::acknowledge_startup(&transaction, &target, &trust).map_err(err)?;
+        event(&root, "startup_ack")?;
         fs::write(
             root.join("startup-acknowledged"),
             b"actual native startup acknowledgement",
@@ -137,6 +155,7 @@ fn run(args: Vec<String>) -> Result<()> {
         let manifest: VerifiedManifest =
             VerifiedManifest::parse(&fs::read(root.join("envelope.json"))?, &trust, 12)
                 .map_err(err)?;
+        event(&root, "preparation_started")?;
         let (stage, lock) = installer::new_stage(&target, &trust, &NativePlatform).map_err(err)?;
         fs::copy(root.join("archive.zip"), stage.join("archive.zip"))?;
         let staged = installer::finish_stage(
@@ -190,6 +209,15 @@ fn run(args: Vec<String>) -> Result<()> {
             guard.cancel();
             return Ok(());
         }
+        if args[2] == "tamper" {
+            fs::write(
+                stage
+                    .join("install-payload")
+                    .join(&trust.bundle_name)
+                    .join("Contents/Resources/unsealed-extra"),
+                b"must refuse even outside sealed resources",
+            )?;
+        }
         if args[2] == "expired" {
             // Fault injection bypasses the GUI worker's own pre-COMMIT check.
             // The real helper must still refuse after OS-observed exit.
@@ -202,6 +230,7 @@ fn run(args: Vec<String>) -> Result<()> {
         }
         prepared.commit().map_err(err)?;
         fs::write(root.join("committed"), b"explicit acknowledged COMMIT")?;
+        event(&root, "exiting")?;
         // Actual process exit, not a forged ExitedParent fixture token.
         std::process::exit(0);
     }
@@ -209,24 +238,28 @@ fn run(args: Vec<String>) -> Result<()> {
         || !matches!(
             args[0].as_str(),
             "--verify"
+                | "--verify-timings"
                 | "--verify-external"
                 | "--verify-ui-only"
                 | "--verify-cancel"
                 | "--verify-expired"
                 | "--verify-interrupted"
                 | "--verify-startup-fails"
+                | "--verify-prepared-tamper"
         )
         || trust.current_build != "100.1"
     {
         return Err("Use --verify TEMP_ROOT INPUTS NODE with synthetic old-build trust".into());
     }
+    let timings = args[0] == "--verify-timings";
     let mode = match args[0].as_str() {
-        "--verify-external" => "external",
+        "--verify-external" | "--verify-timings" => "external",
         "--verify-ui-only" => "ui-only",
         "--verify-cancel" => "cancel",
         "--verify-expired" => "expired",
         "--verify-interrupted" => "interrupt",
         "--verify-startup-fails" => "launch-fails",
+        "--verify-prepared-tamper" => "tamper",
         _ => "success",
     };
     let root = safe_root(Path::new(&args[1]))?;
@@ -235,6 +268,9 @@ fn run(args: Vec<String>) -> Result<()> {
     }
     let inputs = Path::new(&args[2]).canonicalize()?;
     let node = Path::new(&args[3]).canonicalize()?;
+    if timings {
+        fs::write(root.join("many-files"), b"4096 synthetic small resources")?;
+    }
     let installed = root.join("Installed");
     fs::create_dir(&installed)?;
     let old = installed.join(trust.bundle_name.as_str());
@@ -359,21 +395,23 @@ fn run(args: Vec<String>) -> Result<()> {
     } else {
         wait_exit(&mut parent.0, Duration::from_secs(90))?;
     }
+    event(&root, "exit_observed")?;
     if !matches!(mode, "success" | "external" | "ui-only") {
         let transaction = PathBuf::from(String::from_utf8(fs::read(root.join("transaction"))?)?);
-        if mode == "launch-fails" {
-            let deadline = Instant::now() + Duration::from_secs(90);
-            while installer::recovery_phase(&transaction).map_err(err)?
-                != installer::Phase::RelaunchRequested
-            {
-                if Instant::now() >= deadline {
-                    return Err("owned relaunch phase timed out".into());
+        // The parent has actually exited. Acquiring its permanent inherited target
+        // lock proves the helper has also released ownership, not merely that two
+        // seconds elapsed while it was still verifying. Keep the faux daemon alive
+        // until refusal is settled, so owner death cannot mask a lease-expiry bug.
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let _settled = loop {
+            match installer::lock_target(&old) {
+                Ok(lock) => break lock,
+                Err(pilot_desktop_updater::Error::Busy) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                _ => return Err("owned helper did not release target ownership".into()),
             }
-        } else {
-            std::thread::sleep(Duration::from_secs(2));
-        }
+        };
         NativePlatform
             .verify(
                 &old,
@@ -440,6 +478,30 @@ fn run(args: Vec<String>) -> Result<()> {
     {
         return Err("old app not retained".into());
     }
+    let read_event = |name: &str| -> Result<f64> {
+        Ok(serde_json::from_slice(&fs::read(
+            root.join(format!("timing-{name}.json")),
+        )?)?)
+    };
+    let exiting = read_event("exiting")?;
+    // Exiting is recorded immediately before exit. The observer's polling interval
+    // brackets actual OS exit, rather than calling the pre-exit marker exact exit.
+    println!(
+        "lifecycle-phase preparation {:.6}",
+        exiting - read_event("preparation_started")?
+    );
+    println!(
+        "lifecycle-phase exit_observation_bound {:.6}",
+        read_event("exit_observed")? - exiting
+    );
+    println!(
+        "lifecycle-phase blackout_upper_bound {:.6}",
+        read_event("startup_entered")? - exiting
+    );
+    println!(
+        "lifecycle-phase blackout_through_ack_upper_bound {:.6}",
+        read_event("startup_ack")? - exiting
+    );
     println!(
         "PASS real native helper COMMIT -> OS parent exit -> verified whole-app swap -> actual startup ACK; daemon boot and immutable paths unchanged"
     );
@@ -519,6 +581,17 @@ fn bundle(
                 .args(["--force", "--sign", "-"])
                 .arg(file),
         )?;
+    }
+    if app
+        .parent()
+        .and_then(Path::parent)
+        .is_some_and(|root| root.join("many-files").exists())
+    {
+        let resources = contents.join("Resources/synthetic-small-files");
+        fs::create_dir(&resources)?;
+        for index in 0..4096 {
+            fs::write(resources.join(format!("{index:04}.txt")), [b'x'; 128])?;
+        }
     }
     fs::write(runtime.join("packages/daemon/src/runtime-owner.ts"), OWNER)?;
     fs::write(
