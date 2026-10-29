@@ -23,8 +23,8 @@ import {
 	type Span as SdkSpan,
 	type SpanExporter,
 	type SpanProcessor,
-} from "@opentelemetry/sdk-trace-base";
-import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+	TracerProvider,
+} from "@opentelemetry/sdk-trace";
 
 export const TELEMETRY_SCHEMA_VERSION = 3 as const;
 export const NODE_SPAN_QUEUE_LIMIT = 512;
@@ -667,8 +667,8 @@ class BoundedSpanProcessor implements SpanProcessor {
 
 export class NodeTelemetry {
 	readonly stats: TelemetryStats = { started: 0, invalid: 0, queued: 0, dropped: 0, exportFailures: 0 };
-	private readonly provider?: NodeTracerProvider;
-	private readonly tracer?: ReturnType<NodeTracerProvider["getTracer"]>;
+	private readonly provider?: TracerProvider;
+	private readonly tracer?: ReturnType<TracerProvider["getTracer"]>;
 	private readonly exportEnabled: boolean;
 	private readonly service: TelemetryServiceName;
 	private readonly observe?: (event: TelemetryInFlightEvent) => void;
@@ -684,7 +684,8 @@ export class NodeTelemetry {
 		if (options.hostId !== undefined && !/^[a-z0-9_-]{22}$/.test(options.hostId))
 			throw new Error("Invalid pseudonymous telemetry host id");
 		this.counted = new CountedExporter(sink, this.stats);
-		const processor = new BatchSpanProcessor(this.counted, {
+		const processor = new BatchSpanProcessor({
+			exporter: this.counted,
 			maxQueueSize: NODE_SPAN_QUEUE_LIMIT,
 			maxExportBatchSize: NODE_SPAN_BATCH_LIMIT,
 			scheduledDelayMillis: NODE_SPAN_SCHEDULE_MS,
@@ -692,7 +693,7 @@ export class NodeTelemetry {
 		});
 		this.provider = withoutOtelEnvironment(
 			() =>
-				new NodeTracerProvider({
+				new TracerProvider({
 					resource: resourceFromAttributes({
 						"service.namespace": "com.babariviere.pilot",
 						"service.name": options.serviceName,
@@ -708,11 +709,6 @@ export class NodeTelemetry {
 					}),
 					sampler: new AlwaysOnSampler(),
 					spanProcessors: [new BoundedSpanProcessor(processor, this.stats)],
-					forceFlushTimeoutMillis: NODE_SPAN_EXPORT_TIMEOUT_MS,
-					generalLimits: {
-						attributeCountLimit: ATTRIBUTE_LIMIT,
-						attributeValueLengthLimit: ATTRIBUTE_VALUE_BYTES,
-					},
 					spanLimits: {
 						attributeCountLimit: ATTRIBUTE_LIMIT,
 						attributeValueLengthLimit: ATTRIBUTE_VALUE_BYTES,
@@ -845,4 +841,4 @@ export function nodeTelemetry(): NodeTelemetry {
 }
 
 export { ExportResultCode } from "@opentelemetry/core";
-export type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace-base";
+export type { ReadableSpan, SpanExporter } from "@opentelemetry/sdk-trace";

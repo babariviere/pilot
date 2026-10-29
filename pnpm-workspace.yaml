@@ -5,6 +5,8 @@ overrides:
   # Keep every Pi SDK package on one release: mixed releases have incompatible APIs.
   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.4.0
   mermaid>katex: 0.19.1
+  # Pi 1.4 pins vulnerable undici 8.10.2; retain Pi and its downstream patches.
+  "@earendil-works/pi-coding-agent>undici": 8.12.3
   "@earendil-works/pi-codemode": 1.4.0
   "@earendil-works/chord": 1.4.0
   "@earendil-works/pi-agent-core": 1.4.0

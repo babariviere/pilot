@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 import { test } from "node:test";
+import { version as esbuildVersion } from "esbuild";
 import {
 	artifactLibraries,
 	getLibrary,
@@ -107,5 +109,23 @@ test("library assets carry a stable validator and prefer a matching prebuilt bun
 	const second = await getLibraryAsset("react");
 	assert.equal(first.etag, second.etag);
 	assert.match(first.etag, /^"react-[0-9a-f]{32}"$/);
-	assert.match(libraryBuildKey("mermaid"), /^mermaid@[\d.]+\+esbuild@[\d.]+$/);
+	const require = createRequire(import.meta.url);
+	const sanitizer = createRequire(require.resolve("mermaid"))("dompurify") as { version: string };
+	assert.equal(
+		libraryBuildKey("mermaid"),
+		`mermaid@${artifactLibraries.mermaid.version}+dompurify@${sanitizer.version}+esbuild@${esbuildVersion}`,
+	);
+	// A matching Mermaid/esbuild version alone must not admit an older sanitizer bundle.
+	assert.notEqual(
+		libraryBuildKey("mermaid"),
+		`mermaid@${artifactLibraries.mermaid.version}+esbuild@${esbuildVersion}`,
+	);
+});
+
+test("artifact library provenance matches the exact dependency pins", () => {
+	const require = createRequire(import.meta.url);
+	const { dependencies } = require("../package.json") as { dependencies: Record<string, string> };
+	for (const [name, library] of Object.entries(artifactLibraries)) {
+		assert.equal(library.version, dependencies[name], name);
+	}
 });

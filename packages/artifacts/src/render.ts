@@ -28,15 +28,15 @@ async function buildArtifact(options: BuildOptions & { write: false }) {
 }
 
 export const artifactLibraries: Record<ArtifactLibrary, { version: string; description: string; global: string }> = {
-	react: { version: "19.3.0", description: "Interactive component interfaces", global: "React" },
-	"react-dom": { version: "19.3.0", description: "React DOM rendering, including createRoot", global: "ReactDOM" },
+	react: { version: "19.3.1", description: "Interactive component interfaces", global: "React" },
+	"react-dom": { version: "19.3.1", description: "React DOM rendering, including createRoot", global: "ReactDOM" },
 	mermaid: {
-		version: "12.1.0",
+		version: "12.2.0",
 		description: "Flowcharts, sequence diagrams and dependency diagrams",
 		global: "mermaid",
 	},
 	echarts: { version: "6.1.0", description: "Charts, dashboards and graph visualizations", global: "echarts" },
-	motion: { version: "14.0.0", description: "Animation, including motion/react for JSX artifacts", global: "motion" },
+	motion: { version: "14.7.1", description: "Animation, including motion/react for JSX artifacts", global: "motion" },
 	d3: { version: "7.9.0", description: "Optional custom data visualization library", global: "d3" },
 	three: { version: "0.186.1", description: "Optional WebGL and 3D scenes", global: "THREE" },
 };
@@ -100,9 +100,12 @@ export interface LibraryAsset {
 /** Release bundles ship prebuilt libraries here (see scripts/build-libraries.ts); development builds lazily. */
 export const PREBUILT_LIBRARY_DIRECTORY = join(resolveDir, "..", "dist", "libraries");
 
-/** Identifies a prebuilt bundle: a different library or esbuild version must not reuse it. */
+/** Invalidate prebuilt bundles when a library, its sanitizer, or esbuild changes. */
 export function libraryBuildKey(name: ArtifactLibrary): string {
-	return `${name}@${artifactLibraries[name].version}+esbuild@${esbuildVersion}`;
+	// Resolve Mermaid's own sanitizer, including in the hoisted production runtime.
+	const sanitizer =
+		name === "mermaid" ? (createRequire(require.resolve("mermaid"))("dompurify") as { version: string }) : undefined;
+	return `${name}@${artifactLibraries[name].version}${sanitizer ? `+dompurify@${sanitizer.version}` : ""}+esbuild@${esbuildVersion}`;
 }
 
 /** Bundle one library as a classic script that installs its global. Used at runtime and at packaging time. */
