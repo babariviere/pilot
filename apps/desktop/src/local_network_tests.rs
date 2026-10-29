@@ -29,6 +29,7 @@ enum Scenario {
     Todos,
     ListAdmission,
     ListSnapshot,
+    MissionTitles,
     LargeFrame,
     LargeFragmentedMessage,
 }
@@ -216,6 +217,24 @@ impl Mock {
                                     }
                                     // Ordered marker proves the preceding new-session frames were consumed.
                                     socket.send(Frame::Text(json!({"type":"session","session":{"id":"old-0","title":"After new events","state":"idle","projectId":"p-a"}}).to_string().into())).await.unwrap();
+                                } else if matches!(scenario, Scenario::MissionTitles) {
+                                    // The daemon's own mission list frame: on connection, then after every change.
+                                    let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+                                    socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"coord","title":"Coordinator","state":"idle","projectId":"p-a","missionId":"m-0","missionCoordinator":true},{"id":"member","title":"Member","state":"idle","projectId":"p-a","missionId":"m-1"},{"id":"orphan","title":"Orphan","state":"idle","projectId":"p-a","missionId":"m-gone"}]}).to_string().into())).await.unwrap();
+                                    let mut missions: Vec<_> = (0..1500).map(|i| json!({"id":format!("m-{i}"),"projectId":"p-a","title":format!("Mission {i}"),"goal":"","status":"active","briefRevision":0,"needsYouCount":0,"tasksDone":0,"tasksTotal":0,"createdAt":i,"updatedAt":i})).collect();
+                                    missions.push(json!({"id":"m-bad","title":7}));
+                                    missions.push(json!({"title":"No identity"}));
+                                    if attempt > 0 { missions[0]["title"] = json!("Reconnected name"); }
+                                    socket.send(Frame::Text(json!({"type":"missions","missions":missions}).to_string().into())).await.unwrap();
+                                    if attempt == 0 {
+                                        if steps.recv().await.is_err() { return; }
+                                        missions[0]["title"] = json!("Renamed 日本語");
+                                        socket.send(Frame::Text(json!({"type":"missions","missions":missions}).to_string().into())).await.unwrap();
+                                        socket.send(Frame::Text(json!({"type":"session","session":{"id":"member","title":"Member","state":"idle","projectId":"p-a","missionId":"m-2"}}).to_string().into())).await.unwrap();
+                                        // A malformed list keeps the previous names rather than erasing them.
+                                        socket.send(Frame::Text(json!({"type":"missions","missions":{}}).to_string().into())).await.unwrap();
+                                        socket.send(Frame::Text(json!({"type":"session","session":{"id":"coord","title":"After mission frames","state":"idle","projectId":"p-a","missionId":"m-0","missionCoordinator":true}}).to_string().into())).await.unwrap();
+                                    }
                                 } else {
                                 socket.send(Frame::Text(json!({"type":"sessions","sessions":[{"id":"a","title":"Synthetic A","state":"working","projectId":"p-a"},{"id":"b","title":"Synthetic B","state":"idle","projectId":"p-b"}]}).to_string().into())).await.unwrap();
                                 }
@@ -359,6 +378,66 @@ async fn thinking_deltas_do_not_publish_transcripts_or_wake_the_ui() {
             .unwrap()
             .iter()
             .all(|r| r.starts_with("GET "))
+    );
+}
+
+#[tokio::test]
+async fn mission_titles_follow_the_session_socket_mission_list() {
+    // An older contract without a mission list leaves names unknown, not empty.
+    let old = Mock::start(Scenario::Normal).await;
+    let (_old_client, old_rx) = LocalClient::start(old.options.clone());
+    let listed = until(&old_rx, |v| v.list_loaded).await;
+    assert!(listed.mission_titles.is_none());
+
+    let mock = Mock::start(Scenario::MissionTitles).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let initial = until(&rx, |v| v.mission_titles.is_some()).await;
+    let titles = initial.mission_titles.clone().unwrap();
+    assert_eq!(titles.len(), 1500, "every mission is named, no count cap");
+    assert_eq!(titles.get("m-0").map(String::as_str), Some("Mission 0"));
+    assert_eq!(
+        titles.get("m-1499").map(String::as_str),
+        Some("Mission 1499")
+    );
+    assert!(!titles.contains_key("m-gone") && !titles.contains_key("m-bad"));
+    assert!(initial.list_loaded || until(&rx, |v| v.list_loaded).await.list_loaded);
+
+    mock.step.send(()).await.unwrap();
+    let renamed = until(&rx, |v| {
+        v.chats.iter().any(|c| c.title == "After mission frames")
+    })
+    .await;
+    let titles = renamed.mission_titles.clone().unwrap();
+    assert_eq!(
+        titles.get("m-0").map(String::as_str),
+        Some("Renamed 日本語")
+    );
+    assert_eq!(
+        titles.len(),
+        1500,
+        "malformed list keeps the previous names"
+    );
+    let member = renamed.chats.iter().find(|c| c.id == "member").unwrap();
+    assert_eq!(
+        member.mission,
+        crate::local_model::MissionAssociation::Linked("m-2".into())
+    );
+    assert_eq!(titles.get("m-2").map(String::as_str), Some("Mission 2"));
+
+    assert!(client.command(Command::Reconnect));
+    let recovered = until(&rx, |v| {
+        v.mission_titles
+            .as_ref()
+            .is_some_and(|t| t.get("m-0").map(String::as_str) == Some("Reconnected name"))
+    })
+    .await;
+    assert_eq!(recovered.mission_titles.unwrap().len(), 1500);
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.starts_with("GET ") && !r.contains("mission"))
     );
 }
 

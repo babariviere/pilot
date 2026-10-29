@@ -330,18 +330,30 @@ impl ListDelegate for ChatList {
             .and_then(|id| self.projects.iter().find(|p| &p.id == id))
             .map(|p| p.name.clone());
         let (state, full_state) = chat_order::row_state(&chat, section);
-        // Named only from the cached Local mission snapshot; no row reads.
+        // Named from the session socket's mission list, else the cached
+        // catalog; no row reads.
         let mark = mission_mark(&chat, |id| {
             let owner = self.action_owner.upgrade()?;
-            let missions = owner.read(cx).missions.read(cx);
-            missions
-                .sidebar_mission_name(id)
-                .map(|(title, current)| (title.to_owned(), current))
+            let owner = owner.read(cx);
+            sidebar_mission_title(
+                owner.state.mission_titles.as_deref(),
+                owner.local_online(),
+                id,
+                || {
+                    owner
+                        .missions
+                        .read(cx)
+                        .sidebar_mission_name(id)
+                        .map(|(title, current)| (title.to_owned(), current))
+                },
+            )
         });
         let link = mission_link_focus(&chat, window, cx).map(|(mission, focus)| {
             let (chat, owner) = (chat.id.clone(), self.action_owner.clone());
             let tab_stop = self.selected == Some(ix);
-            move |segment| mission_link(chat, mission, focus, tab_stop, owner, segment)
+            let focused = window.last_input_was_keyboard() && focus.is_focused(window);
+            let link = move |segment| mission_link(chat, mission, focus, tab_stop, owner, segment);
+            (focused, link)
         });
         let has_project = project.is_some();
         let detail = project
@@ -558,9 +570,10 @@ impl ListDelegate for ChatList {
                                             mark,
                                             !detail.is_empty(),
                                             appearance::accent_mark(cx),
+                                            link.as_ref().is_some_and(|(focused, _)| *focused),
                                         );
                                         match link {
-                                            Some(link) => d.child(link(segment)),
+                                            Some((_, link)) => d.child(link(segment)),
                                             None => d.child(segment),
                                         }
                                     }),
@@ -1959,6 +1972,7 @@ impl LocalViewer {
             self.state.projects_error = state.projects_error;
             self.state.chats = state.chats;
             self.state.mission_metadata = state.mission_metadata;
+            self.state.mission_titles = state.mission_titles;
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
@@ -2004,6 +2018,7 @@ impl LocalViewer {
             // An old chat never replaces the selected chat, even while switching quickly.
             self.state.chats = state.chats;
             self.state.mission_metadata = state.mission_metadata;
+            self.state.mission_titles = state.mission_titles;
             self.state.status = state.status;
             self.state.projects = state.projects;
             self.state.projects_loaded = state.projects_loaded;
@@ -2639,6 +2654,22 @@ impl MissionMark {
         (coordinator, coordinator && self.named)
     }
 }
+/// A linked mission's name and whether it is current. The daemon's mission
+/// list (`titles`, sent on connection and after every change) is
+/// authoritative once it arrives: a mission it doesn't list has no name.
+/// Until then, or from a daemon that never sends it, `catalog` supplies the
+/// lazily read catalog's name.
+pub(crate) fn sidebar_mission_title(
+    titles: Option<&std::collections::HashMap<String, String>>,
+    online: bool,
+    id: &str,
+    catalog: impl FnOnce() -> Option<(String, bool)>,
+) -> Option<(String, bool)> {
+    match titles {
+        Some(titles) => titles.get(id).map(|title| (title.clone(), online)),
+        None => catalog(),
+    }
+}
 /// `name` resolves a linked mission's cached name and whether it is current.
 pub(crate) fn mission_mark(
     chat: &Chat,
@@ -2699,6 +2730,8 @@ pub(crate) fn mission_mark(
 /// Makes a linked chat's mission segment open that mission: one click, or
 /// Enter/Space once Tab reaches it on the selected row. Only the summary's own
 /// mission ID is used; unavailable or unlinked marks stay plain text.
+/// The whole segment is the target; only the name underlines (see
+/// `mission_segment`).
 fn mission_link(
     chat: String,
     mission: String,
@@ -2719,8 +2752,7 @@ fn mission_link(
         .h_flex()
         .min_w(px(appearance::Space::SECTION * 2.))
         .cursor_pointer()
-        .hover(|s| s.text_decoration_1())
-        .focus_visible(|s| s.text_decoration_1())
+        .group(MISSION_LINK_GROUP)
         // Pointer use neither focuses the link nor selects the row.
         .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, _| w.prevent_default())
         .on_click(move |_, w, cx| {
@@ -2731,6 +2763,8 @@ fn mission_link(
         .on_action(move |_: &gpui_kit::base::actions::Confirm, w, cx| confirm(w, cx))
         .child(segment)
 }
+/// The mission link's hover group: its name underlines while it is hovered.
+const MISSION_LINK_GROUP: &str = "chat-mission-link";
 /// The summary's linked mission ID and the row link's focus handle.
 fn mission_link_focus(
     chat: &Chat,
@@ -2751,7 +2785,14 @@ fn mission_link_focus(
 /// project and state. A minimum width keeps a long project or state from
 /// hiding it; the full wording stays in the tooltip and the row's label.
 /// A coordinator's Compass and mission name take `accent`; nothing else does.
-fn mission_segment(mark: MissionMark, separated: bool, accent: gpui_kit::Hsla) -> impl IntoElement {
+/// Inside a mission link only the name underlines, on pointer hover or when
+/// the link has keyboard focus (`focused`), never the separator or glyph.
+fn mission_segment(
+    mark: MissionMark,
+    separated: bool,
+    accent: gpui_kit::Hsla,
+    focused: bool,
+) -> impl IntoElement {
     use gpui_kit::StatefulInteractiveElement as _;
     let (glyph_accent, name_accent) = mark.accents();
     let label = SharedString::from(mark.label);
@@ -2795,6 +2836,8 @@ fn mission_segment(mark: MissionMark, separated: bool, accent: gpui_kit::Hsla) -
                 .min_w_0()
                 .truncate()
                 .when(name_accent, |d| d.text_color(accent))
+                .when(focused, |d| d.text_decoration_1())
+                .group_hover(MISSION_LINK_GROUP, |s| s.text_decoration_1())
                 .child(SharedString::from(mark.text)),
         )
 }
@@ -2802,6 +2845,37 @@ fn mission_segment(mark: MissionMark, separated: bool, accent: gpui_kit::Hsla) -
 mod mission_association_mark_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn sidebar_names_come_from_the_session_socket_mission_list() {
+        let titles: std::collections::HashMap<String, String> = (0..5000)
+            .map(|i| (format!("m-{i}"), format!("Mission {i}")))
+            .collect();
+        let catalog = || Some(("Catalog name".to_owned(), true));
+        let unread = || -> Option<(String, bool)> { panic!("the socket list is authoritative") };
+        // Listed: current while connected, last known while offline.
+        assert_eq!(
+            sidebar_mission_title(Some(&titles), true, "m-4999", unread),
+            Some(("Mission 4999".to_owned(), true))
+        );
+        assert_eq!(
+            sidebar_mission_title(Some(&titles), false, "m-0", unread),
+            Some(("Mission 0".to_owned(), false))
+        );
+        // A mission the daemon doesn't list is really unavailable; an older
+        // lazily read catalog never revives it.
+        assert_eq!(
+            sidebar_mission_title(Some(&titles), true, "m-gone", unread),
+            None
+        );
+        // Before the list arrives (or from a daemon that never sends it), the
+        // existing cached catalog still names the mission.
+        assert_eq!(
+            sidebar_mission_title(None, true, "m-0", catalog),
+            Some(("Catalog name".to_owned(), true))
+        );
+        assert_eq!(sidebar_mission_title(None, true, "m-0", || None), None);
+    }
 
     #[test]
     fn mission_association_mark_uses_role_glyphs_and_honest_names() {

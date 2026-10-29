@@ -771,6 +771,30 @@ fn painted(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f3
     count
 }
 
+/// Pixels that differ between two captures of the same window within bounds.
+fn changed(
+    a: &image::RgbaImage,
+    b: &image::RgbaImage,
+    bounds: Bounds<gpui_kit::Pixels>,
+    scale: f32,
+) -> usize {
+    let (x0, y0) = (
+        (f32::from(bounds.left()) * scale).ceil() as u32,
+        (f32::from(bounds.top()) * scale).ceil() as u32,
+    );
+    let (x1, y1) = (
+        (f32::from(bounds.right()) * scale).floor() as u32,
+        (f32::from(bounds.bottom()) * scale).floor() as u32,
+    );
+    (y0..y1)
+        .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let (p, q) = (a.get_pixel(x, y).0, b.get_pixel(x, y).0);
+            (0..3).map(|c| p[c].abs_diff(q[c]) as u32).sum::<u32>() > 24
+        })
+        .count()
+}
+
 /// Pixels in `bounds` with the sky accent's hue (blue well above red, green
 /// between). Neutral metadata, titles and row washes have none in either mode.
 fn sky(image: &image::RgbaImage, bounds: Bounds<gpui_kit::Pixels>, scale: f32) -> usize {
@@ -1265,6 +1289,162 @@ fn sidebar_rows(
         "Coordinator · Mission: Renamed mission"
     );
     assert!(glyph(cx, "coord", Coordinator));
+    // The session socket's mission list names rows without opening Missions,
+    // wins over the lazily read catalog, follows renames, and leaves a mission
+    // it doesn't list honestly unavailable. Large lists are not capped.
+    let set_titles = |cx: &mut HeadlessAppContext, renamed: &str, status: &str| {
+        let mut titles: std::collections::HashMap<String, String> = (0..2000)
+            .map(|i| (format!("listed-{i}"), format!("Listed {i}")))
+            .collect();
+        titles.insert("mission-A".into(), renamed.into());
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                v.state.mission_titles = Some(Arc::new(titles));
+                v.state.status = status.into();
+                v.rebuild_nav(w, cx);
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    set_titles(cx, "Live mission 日本語", "Synthetic reconnected");
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission: Live mission 日本語"
+    );
+    for id in ["stall", "failed"] {
+        assert_eq!(
+            association(cx, id).unwrap().0,
+            "Mission linked · name unavailable",
+            "{id}: unlisted mission, even with a cached catalog name"
+        );
+    }
+    set_titles(cx, "Renamed live", "Synthetic reconnected");
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission: Renamed live"
+    );
+    set_titles(cx, "Renamed live", "Disconnected");
+    assert_eq!(
+        association(cx, "coord").unwrap().0,
+        "Coordinator · Mission (last known): Renamed live"
+    );
+    set_titles(cx, "Renamed live", "Synthetic reconnected");
+    // Hovering the link underlines the name only: never the separator or the
+    // Compass. Both captures hover the same row, so the row wash matches.
+    cx.update_window(h, |_, w, cx| {
+        let ix = v.read(cx).chats.read(cx).delegate().index("coord").unwrap();
+        v.update(cx, |v, cx| {
+            v.chats.update(cx, |l, cx| {
+                l.scroll_to_item(ix, gpui_kit::ScrollStrategy::Center, w, cx)
+            })
+        });
+    })
+    .unwrap();
+    settle(cx, h);
+    let link_parts = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| {
+            let scope = w.within("chat-row-coord");
+            let mark = scope.find("chat-mission-mark").bounds();
+            let glyph = scope.find("chat-mission-glyph-Coordinator").bounds();
+            let name = scope.find("chat-mission-name").bounds();
+            let separator =
+                Bounds::from_corners(mark.origin, gpui_kit::point(glyph.left(), mark.bottom()));
+            [separator, glyph, name]
+        })
+        .unwrap()
+    };
+    let parts = link_parts(cx);
+    assert!(
+        parts[0].size.width > px(2.),
+        "segment starts with its separator"
+    );
+    cx.update_window(h, |_, w, cx| {
+        w.within("chat-row-coord").hover("sidebar-chat-title", cx)
+    })
+    .unwrap();
+    settle(cx, h);
+    let rest = cx.capture_screenshot(h).unwrap();
+    cx.update_window(h, |_, w, cx| {
+        w.within("chat-row-coord").hover("chat-mission-name", cx)
+    })
+    .unwrap();
+    settle(cx, h);
+    let hovered = cx.capture_screenshot(h).unwrap();
+    let scale = rest.width() as f32 / width;
+    let [separator, compass, underline] = parts.map(|b| changed(&rest, &hovered, b, scale));
+    assert!(underline > 0, "hovered mission name underlines");
+    assert_eq!(
+        (separator, compass),
+        (0, 0),
+        "separator and Compass never underline"
+    );
+    capture(cx, h, captures, name("-mission-link-hover"));
+    // Keyboard focus on the link (Tab from its selected row) underlines the
+    // same text only.
+    let coord = cx.update(|cx| v.read(cx).chats.read(cx).delegate().index("coord").unwrap());
+    cx.update_window(h, |_, w, cx| {
+        w.hover("nav-home", cx);
+        v.update(cx, |v, cx| v.chats.update(cx, |l, cx| l.focus(w, cx)));
+        for _ in 0..12 {
+            let selected = v.read(cx).chats.read(cx).delegate().selected;
+            if selected == Some(coord) {
+                break;
+            }
+            w.press(
+                if selected.is_some_and(|s| (s.section, s.row) > (coord.section, coord.row)) {
+                    "up"
+                } else {
+                    "down"
+                },
+                cx,
+            );
+        }
+        assert_eq!(v.read(cx).chats.read(cx).delegate().selected, Some(coord));
+    })
+    .unwrap();
+    settle(cx, h);
+    let parts = link_parts(cx);
+    let selected = cx.capture_screenshot(h).unwrap();
+    let mut reached = false;
+    for _ in 0..6 {
+        cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+        settle(cx, h);
+        if cx
+            .update_window(h, |_, w, _| {
+                w.find("chat-mission-link-coord").focused() == Some(true)
+            })
+            .unwrap()
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab reaches the selected row's mission link");
+    let focused = cx.capture_screenshot(h).unwrap();
+    let [separator, compass, underline] = parts.map(|b| changed(&selected, &focused, b, scale));
+    assert!(underline > 0, "keyboard-focused mission name underlines");
+    assert_eq!(
+        (separator, compass),
+        (0, 0),
+        "focus underline stays on the name"
+    );
+    capture(cx, h, captures, name("-mission-link-focus"));
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.chats.update(cx, |l, cx| {
+                l.focus(w, cx);
+                l.scroll_to_item(
+                    gpui_kit::component::IndexPath::new(0),
+                    gpui_kit::ScrollStrategy::Top,
+                    w,
+                    cx,
+                )
+            })
+        });
+    })
+    .unwrap();
+    settle(cx, h);
     // Row actions: not built at rest, built and shown on hover, gone again after.
     let built = |cx: &mut HeadlessAppContext| {
         cx.update_window(h, |_, w, _| w.try_find("chat-menu-idle1").is_some())

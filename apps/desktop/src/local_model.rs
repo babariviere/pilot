@@ -346,6 +346,22 @@ pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
 }
 
+/// Mission titles by ID from the session socket's `missions` frame, which the
+/// daemon sends on connection and after every mission change. `None` for a
+/// malformed frame, so the previous names stay rather than being erased.
+pub(crate) fn mission_titles(value: &Value) -> Option<std::collections::HashMap<String, String>> {
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .filter_map(|m| {
+                let id = m["id"].as_str().filter(|id| valid_id(id))?;
+                Some((id.to_owned(), m["title"].as_str()?.to_owned()))
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn bounded(text: &str, cap: usize) -> String {
     if text.len() <= cap {
         return text.into();

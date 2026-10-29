@@ -311,6 +311,9 @@ pub(crate) struct Presentation {
     pub(crate) todos: crate::session_todos::Feed,
     pub(crate) question: crate::question::Projection,
     pub(crate) mission_metadata: Arc<crate::mission_inspector::Metadata>,
+    /// Mission titles from the session socket. `None` until the daemon sends
+    /// its mission list (older daemons may not).
+    pub(crate) mission_titles: Option<Arc<std::collections::HashMap<String, String>>>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
@@ -906,6 +909,8 @@ async fn run(
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         crate::chat_order::upsert(Arc::make_mut(&mut view.chats), chat);
+                    } else if value["type"] == "missions" && let Some(titles) = local_model::mission_titles(&value["missions"]) {
+                        view.mission_titles = Some(Arc::new(titles));
                     }
                 }
             }

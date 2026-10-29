@@ -103,8 +103,7 @@ impl LocalViewer {
             Page::Mission(key) => Some(crate::mission_reader::Route::Detail(key.clone())),
             _ => None,
         };
-        let online = self.state.status.starts_with("Connected")
-            || self.state.status.starts_with("Synthetic");
+        let online = self.local_online();
         self.missions.update(cx, |v, cx| {
             v.sync(
                 crate::mission_browser_view::Input {
@@ -119,6 +118,10 @@ impl LocalViewer {
                 cx,
             )
         });
+    }
+    /// Whether the Local daemon is connected, so its mission names are current.
+    pub(crate) fn local_online(&self) -> bool {
+        self.state.status.starts_with("Connected") || self.state.status.starts_with("Synthetic")
     }
     pub(super) fn can_make_mission(&self, cx: &App) -> bool {
         self.page == Page::Chat
