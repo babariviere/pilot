@@ -133,7 +133,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             actions.read(cx).outcome(&id) == Some(&Outcome::Acknowledged)
         });
         cx.update(|cx| {
-            actions.update(cx, |a, cx| {
+            actions.update(cx, |a, _cx| {
                 assert!(a.blocked("unknown"));
                 assert!(a.read_only("unknown"));
                 assert!(a.inspection_ack("unknown").is_none());
@@ -142,7 +142,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 // Unknown stays fenced for inspection, but a restart never resends it,
                 // so it does not hold an update.
                 #[cfg(target_os = "macos")]
-                assert_eq!(a.update_blocker(false, cx), None);
+                assert_eq!(a.update_blocker(false, _cx), None);
             })
         });
         submit(cx, unknown.clone());

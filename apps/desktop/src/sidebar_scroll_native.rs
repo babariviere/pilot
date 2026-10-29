@@ -5,8 +5,8 @@
 //! drawable back-pressure all count. Compositor latency is not observed.
 use super::*;
 use gpui_kit::{
-    Bounds, InputEvent, Pixels, ScrollDelta, ScrollEvent, WindowBounds, WindowOptions, point,
-    size, test::TestWindowExt,
+    Bounds, InputEvent, Pixels, ScrollDelta, ScrollEvent, WindowBounds, WindowOptions, point, size,
+    test::TestWindowExt,
 };
 use serde_json::json;
 use std::{cell::RefCell, rc::Rc, time::Instant};
@@ -23,17 +23,36 @@ fn thread_cpu_ms() -> f64 {
 
 /// Process-wide retired instructions and CPU cycles: separates more work
 /// from the same work at a lower clock.
+#[cfg(target_os = "macos")]
 fn instructions_cycles() -> (u64, u64) {
     // SAFETY: proc_pid_rusage fills the provided V4 struct for this process.
     unsafe {
         let mut info: libc::rusage_info_v4 = std::mem::zeroed();
-        libc::proc_pid_rusage(
+        let result = libc::proc_pid_rusage(
             libc::getpid(),
             libc::RUSAGE_INFO_V4,
             (&mut info as *mut libc::rusage_info_v4).cast(),
         );
+        assert_eq!(
+            result,
+            0,
+            "proc_pid_rusage failed: {}",
+            std::io::Error::last_os_error()
+        );
         (info.ri_instructions, info.ri_cycles)
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn instructions_cycles() -> (u64, u64) {
+    panic!("sidebar scroll instruction and cycle counters are unsupported on this platform")
+}
+
+#[cfg(all(test, not(target_os = "macos")))]
+#[test]
+#[should_panic(expected = "sidebar scroll instruction and cycle counters are unsupported")]
+fn unsupported_counters_fail_closed() {
+    instructions_cycles();
 }
 
 fn fixture() -> Vec<Chat> {
@@ -112,6 +131,8 @@ fn open(visible: bool, cx: &mut App) -> (gpui_kit::AnyWindowHandle, Entity<Local
 }
 
 pub fn run(cx: &mut App) {
+    #[cfg(not(target_os = "macos"))]
+    instructions_cycles();
     let dir = std::env::var_os("PILOT_NEXT_SIDEBAR_SCROLL_DIR").map(std::path::PathBuf::from);
     let (h, view) = open(false, cx);
     let executor = cx.background_executor().clone();
@@ -291,6 +312,8 @@ fn summarize(name: &str, frames: &[serde_json::Value], refresh: f64) -> serde_js
 
 /// Visible, focused window: frame pacing while wheeling, first scroll vs later.
 pub fn run_visible(cx: &mut App) {
+    #[cfg(not(target_os = "macos"))]
+    instructions_cycles();
     let dir = std::env::var_os("PILOT_NEXT_SIDEBAR_SCROLL_DIR").map(std::path::PathBuf::from);
     let delta: f32 = std::env::var("PILOT_NEXT_SIDEBAR_SCROLL_DELTA")
         .ok()

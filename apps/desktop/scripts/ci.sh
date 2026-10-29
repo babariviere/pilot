@@ -106,6 +106,8 @@ PY
     # Library suite plus the auto-discovered path-import harness settings_state (not part of --lib).
     nextest -p pilot-desktop --lib --test settings_state
     if [[ "$(uname -s)" == Linux ]]; then
+      # Compile native probes and verify unsupported instruction counters fail closed.
+      cargo test --locked -p pilot-desktop --features native-probes --lib unsupported_counters_fail_closed
       # Actual native request bytes over a socket pair, no compositor/display.
       cargo test --locked -p gpui-pre-linux --lib background_blur_tests
     fi

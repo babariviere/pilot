@@ -157,11 +157,11 @@ as a security advisory or claimed fixed.
 
 Linux verification uses an isolated aarch64 container with Rust 1.98.1,
 read-only sources, a private target and a CPU2/4 GiB host mbx reservation.
-The app's `native-probes` feature cannot be compiled on Linux because its
-existing sidebar memory probe unconditionally references macOS-only
-`libc::rusage_info_v4`/`proc_pid_rusage` (`sidebar_scroll_native.rs:29`). The
-normal all-target build is checked separately; this is not x86-64 release,
-Wayland compositor, confinement or native-probe qualification.
+At audit time, `native-probes` compilation failed because the sidebar scroll
+probe used macOS-only instruction and cycle counters. The probe now explicitly
+fails on Linux rather than reporting fabricated counters; Linux CI compiles the
+feature and tests that failure. This is not x86-64 release, Wayland compositor,
+confinement or Linux scroll-measurement qualification.
 
 Linux/aarch64 normal desktop/worker all-target compilation passes. Independent
 native-Linux updater and Power all-target Clippy pass; ten ZIP admission tests
