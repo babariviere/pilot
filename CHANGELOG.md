@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.90.0](https://github.com/babariviere/pilot/compare/v1.89.0...v1.90.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** supervise retained daemons with user services ([ffeacff](https://github.com/babariviere/pilot/commit/ffeacff135d096024df763ae8db6f541573210aa))
+
+
+### Bug Fixes
+
+* **build:** allow cold Linux GUI rendering on tagged retries ([e42139a](https://github.com/babariviere/pilot/commit/e42139a383dbad731dc23ca9b3c5f0dc050c8b35))
+* **runtime:** stamp Swift seeds for verified service migration ([75829be](https://github.com/babariviere/pilot/commit/75829be84e1a7639b265f51e01d01825469fdb33))
+
 ## [1.89.0](https://github.com/babariviere/pilot/compare/v1.88.0...v1.89.0) (2026-10-29)
 
 
