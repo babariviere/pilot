@@ -83,6 +83,7 @@ pub(crate) struct ChatEditor {
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
     jobs_entry: Option<gpui_kit::AnyView>,
+    subagents_entry: Option<gpui_kit::AnyView>,
     queue_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
     models: Option<model_picker::Models>,
@@ -177,6 +178,7 @@ impl ChatEditor {
             context_entry: None,
             todos_entry: None,
             jobs_entry: None,
+            subagents_entry: None,
             queue_entry: None,
             questions,
             models: None,
@@ -223,6 +225,9 @@ impl ChatEditor {
     }
     pub(crate) fn set_jobs_entry(&mut self, entry: gpui_kit::AnyView) {
         self.jobs_entry = Some(entry);
+    }
+    pub(crate) fn set_subagents_entry(&mut self, entry: gpui_kit::AnyView) {
+        self.subagents_entry = Some(entry);
     }
     fn prune_cache(&mut self) {
         self.cache.retain(|key, draft| {
@@ -675,7 +680,7 @@ impl ChatEditor {
         }
         if let Some(book) = &self.state.book {
             for (key, saved) in &book.drafts {
-                if key.starts_with("chat:")
+                if (key.starts_with("chat:") || key.starts_with("subagent:"))
                     && saved.text.is_empty()
                     && saved.pending.is_none()
                     && saved.recovered.is_empty()
@@ -1199,6 +1204,7 @@ impl Render for ChatEditor {
             return empty.into_any_element();
         };
         let is_new = key.starts_with("new:");
+        let is_subagent = key.starts_with("subagent:");
         if is_new {
             self.sync_project_rows_enabled(cx);
         }
@@ -1345,7 +1351,7 @@ impl Render for ChatEditor {
             .id("composer-stop-slot")
             .size_6()
             .flex_shrink_0()
-            .when(!is_new && self.busy, |slot| {
+            .when(!is_new && !is_subagent && self.busy, |slot| {
                 slot.child(self.stop_button("local-stop", cx))
             });
         #[cfg(any(test, feature = "native-probes"))]
@@ -1368,7 +1374,7 @@ impl Render for ChatEditor {
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .when(self.models.is_some(), |v| v.child(self.model_controls(cx)))
+                    .when(!is_subagent && self.models.is_some(), |v| v.child(self.model_controls(cx)))
                     // Routine autosave is silent; only states that block sending speak.
                     // Read-only is said by the placeholder, not repeated here.
                     // A chat message being sent says so in the conversation instead.
@@ -1385,7 +1391,7 @@ impl Render for ChatEditor {
                     .gap_2()
                     // Reserve the same small slot while idle. Work transitions
                     // neither move Send nor mount an irrelevant disabled action.
-                    .children((!is_new).then(|| self.context_entry.clone()).flatten())
+                    .children((!is_new && !is_subagent).then(|| self.context_entry.clone()).flatten())
                     .child(stop_slot)
                     .child({
                         let label = if settled && !draft.text.is_empty() {
@@ -1429,10 +1435,10 @@ impl Render for ChatEditor {
         // its tray. Keep every existing notice/Unknown guard and action owner.
         let mut recovery = Vec::new();
         recovery.extend(self.question_recovery(cx));
-        if !is_new {
+        if !is_new && !is_subagent {
             recovery.extend(self.subscription_row(cx));
         }
-        if self.models.is_some() && self.has_model_notice() {
+        if !is_subagent && self.models.is_some() && self.has_model_notice() {
             recovery.push(self.model_notices(cx).into_any_element());
         }
         if let Some(error) = self.error.or(self.state.error) {
@@ -1552,7 +1558,7 @@ impl Render for ChatEditor {
             let indicator = indicator.test_support();
             shell = shell.child(indicator);
         }
-        if !is_new {
+        if !is_new && !is_subagent {
             footer = footer.children(self.queue_entry.clone());
         }
         if let Some(question) = self.question_panel(cx) {
@@ -1575,8 +1581,21 @@ impl Render for ChatEditor {
                 let region = region.test_support();
                 shell.child(region)
             })
-            .children((!is_new).then(|| self.jobs_entry.clone()).flatten())
-            .children((!is_new).then(|| self.todos_entry.clone()).flatten())
+            .children(
+                (!is_new && !is_subagent)
+                    .then(|| self.jobs_entry.clone())
+                    .flatten(),
+            )
+            .children(
+                (!is_new && !is_subagent)
+                    .then(|| self.subagents_entry.clone())
+                    .flatten(),
+            )
+            .children(
+                (!is_new && !is_subagent)
+                    .then(|| self.todos_entry.clone())
+                    .flatten(),
+            )
             .relative()
             .children(self.path_suggestions(cx))
             .child(footer)

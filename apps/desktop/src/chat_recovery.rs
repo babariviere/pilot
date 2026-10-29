@@ -26,7 +26,7 @@ impl ChatEditor {
                             crate::ui::Action::Quiet,
                         )
                         .disabled(self.update_checkpoint.is_some())
-                        .tooltip("Check, send again or discard this draft"),
+                        .tooltip(if key.starts_with("subagent:") {"Copy or discard the retained message. Uncertain child messages are never retried."} else {"Check, send again or discard this draft"}),
                     )
                     .content(move |_, _, cx| {
                         editor
@@ -91,7 +91,7 @@ impl ChatEditor {
                 div()
                     .v_flex()
                     .gap_2()
-                    .when(intent.operation.is_some(), |actions| {
+                    .when(intent.operation.as_ref().is_some_and(|op| op.kind != "subagent-send"), |actions| {
                         actions
                             .child(
                                 Button::new("check-delivery")

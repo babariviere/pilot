@@ -260,11 +260,17 @@ enum ReadRoute {
         id: String,
         revision: u32,
     },
+    Subagent {
+        id: String,
+        name: String,
+    },
 }
 impl ReadRoute {
     fn budget(&self) -> Option<(usize, &'static str)> {
         match self {
-            Self::Hello | Self::History { .. } | Self::Session { .. } => None,
+            Self::Hello | Self::History { .. } | Self::Session { .. } | Self::Subagent { .. } => {
+                None
+            }
             // Pins may not carry a kind. Their revision can still be an image.
             Self::Artifact { .. } => Some((
                 crate::artifact_image::HTTP_CAP,
@@ -275,6 +281,18 @@ impl ReadRoute {
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
+            Self::Subagent { id, name } => {
+                let mut url = reqwest::Url::parse("http://localhost/").expect("static URL");
+                url.path_segments_mut().expect("HTTP URL").extend([
+                    "api",
+                    "sessions",
+                    id,
+                    "subagents",
+                    name,
+                    "transcript",
+                ]);
+                url.path().into()
+            }
             Self::Session { id } => format!("/api/sessions/{id}"),
             Self::Artifact {
                 owner,
@@ -582,6 +600,36 @@ async fn get_bytes(
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// Existing GET-only session contract, pinned before and after the read.
+pub(crate) async fn subagent_snapshot(
+    options: &LocalOptions,
+    id: &str,
+    name: &str,
+) -> Result<Vec<Message>, Failure> {
+    if !local_model::valid_id(id) || !crate::session_subagents::valid_name(name) {
+        return Err("Invalid subagent identity.");
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Local read unavailable.")?;
+    hello(&client, options).await?;
+    let value = get(
+        &client,
+        options,
+        ReadRoute::Subagent {
+            id: id.into(),
+            name: name.into(),
+        },
+    )
+    .await?;
+    hello(&client, options).await?;
+    crate::session_subagents::transcript(&value, name)
 }
 
 /// Existing GET-only session contract, pinned before and after the read.

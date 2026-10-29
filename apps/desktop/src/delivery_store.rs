@@ -256,9 +256,11 @@ pub(crate) fn token(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 pub(crate) fn valid_key(key: &str) -> bool {
-    key.strip_prefix("chat:")
-        .or_else(|| key.strip_prefix("new:"))
-        .is_some_and(token)
+    crate::session_subagents::Target::from_key(key).is_some()
+        || key
+            .strip_prefix("chat:")
+            .or_else(|| key.strip_prefix("new:"))
+            .is_some_and(token)
 }
 pub(crate) fn hash(value: &str) -> String {
     Sha256::digest(value.as_bytes())
@@ -376,7 +378,10 @@ impl Book {
             if let Some(last) = &draft.last
                 && (!token(&last.id)
                     || !token(&last.target)
-                    || !matches!(last.kind.as_str(), "chat-create" | "chat-send" | "stop")
+                    || !matches!(
+                        last.kind.as_str(),
+                        "chat-create" | "chat-send" | "subagent-send" | "stop"
+                    )
                     || !matches!(last.state.as_str(), "accepted" | "rejected" | "unknown")
                     || last.revision > draft.revision)
             {
@@ -424,6 +429,8 @@ impl Book {
             if let Some(op) = &intent.operation {
                 let expected_kind = if intent.key.starts_with("new:") {
                     "chat-create"
+                } else if intent.key.starts_with("subagent:") {
+                    "subagent-send"
                 } else {
                     "chat-send"
                 };
@@ -448,6 +455,13 @@ impl Book {
                 }
                 let payload: serde_json::Value = serde_json::from_str(&op.payload)
                     .map_err(|_| "Operation payload is corrupt")?;
+                if let Some(child) = crate::session_subagents::Target::from_key(&intent.key)
+                    && (child.parent != op.target_id
+                        || payload["name"] != child.name
+                        || payload["createdAt"] != child.created_at)
+                {
+                    return Err("Subagent message target ownership differs");
+                }
                 if payload["message"]
                     .as_str()
                     .is_none_or(|s| s.trim().is_empty())
@@ -716,6 +730,9 @@ impl Store {
         answer: Option<(crate::question::ReplyIdentity, String)>,
     ) -> Result<Intent, Failure> {
         validate_draft(key, captured)?;
+        if stop && crate::session_subagents::Target::from_key(key).is_some() {
+            return Err("Subagent Stop is not supported here");
+        }
         self.change(|book| {
             if stop&&serde_json::to_vec(book).map_err(|_|"Cannot budget Stop recovery")?.len()>STATE_CAP-RECOVER_CAP-1024*1024 {return Err("Private state has no room to retain withdrawn Stop text. Copy/review existing recovery first.");}
             let existing=book.drafts.get(key).cloned().unwrap_or_else(||captured.clone());
@@ -743,7 +760,8 @@ impl Store {
             }
             else if !book.drafts.contains_key(key) {book.drafts.insert(key.into(),existing.clone());}
             let id=Uuid::new_v4().to_string();
-            let target=if let Some(id)=key.strip_prefix("chat:") {id.into()} else if !stop {Uuid::new_v4().to_string()} else {return Err("Stop requires an existing Local chat");};
+            let child=crate::session_subagents::Target::from_key(key);
+            let target=if let Some(child)=&child {child.parent.clone()} else if let Some(id)=key.strip_prefix("chat:") {id.into()} else if !stop {Uuid::new_v4().to_string()} else {return Err("Stop requires an existing Local chat");};
             let operation=if stop {None} else {
                 let message=answer.as_ref().map_or(captured.text.as_str(),|(_,message)|message.as_str());
                 if message.trim().is_empty() {return Err("Message is empty");}
@@ -752,6 +770,7 @@ impl Store {
                 // Project ID is the supported SpawnRequest contract. No cwd
                 // override: the daemon owns project/workspace resolution.
                 let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":"build"})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
+                if let Some(child)=&child {payload["name"]=child.name.clone().into();payload["createdAt"]=child.created_at.into();}
                 if create&&let Some(choice)=&captured.model_choice{
                     if captured.project_id.as_deref()!=Some(choice.project_id.as_str())||captured.cwd!=choice.cwd{return Err("Model choice belongs to another project directory. Choose it again explicitly.");}
                     payload["model"]=choice.choice.model.clone().into();
@@ -760,7 +779,7 @@ impl Store {
                 let payload=payload.to_string();
                 if payload.len()>64*1024 {return Err("Encoded message exceeds the daemon's 64 KiB operation limit");}
                 let sequence=book.next_sequence;book.next_sequence+=1;
-                Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
+                Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else if child.is_some() {"subagent-send"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
             };
             let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None,answer:answer.as_ref().map(|(a,_)|a.clone())};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());

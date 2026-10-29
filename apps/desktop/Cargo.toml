@@ -506,3 +506,8 @@ required-features = ["native-probes"]
 name = "daemon_upgrade"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "session_subagents"
+harness = false
+required-features = ["native-probes"]

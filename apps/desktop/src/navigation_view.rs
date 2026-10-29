@@ -85,6 +85,23 @@ impl LocalViewer {
         }
         self.close_conversation_links(window, cx);
         self.close_workspace_changes(window, cx);
+        if self.subagent.take().is_some()
+            && let Some(chat) = self
+                .state
+                .chats
+                .iter()
+                .find(|c| Some(&c.id) == self.selected.as_ref())
+        {
+            self.editor.update(cx, |e, cx| {
+                e.select(
+                    format!("chat:{}", chat.id),
+                    chat.writable,
+                    chat.busy,
+                    window,
+                    cx,
+                )
+            });
+        }
         if self.session_failure_focus.contains_focused(window, cx) {
             self.focus_mission_chat_destination(window, cx);
         }
@@ -274,6 +291,7 @@ impl LocalViewer {
                     signal: None,
                     background_work: false,
                     order: Default::default(),
+                    subagents: Default::default(),
                     running_jobs: Default::default(),
                     cwd: String::new(),
                     project_id: None,

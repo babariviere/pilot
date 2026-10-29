@@ -637,6 +637,13 @@ impl ChatEditor {
         self.state.book.as_ref()?.model_changes.get(id)
     }
     pub(super) fn models_block_send(&self) -> bool {
+        if self
+            .selected
+            .as_deref()
+            .is_some_and(|key| key.starts_with("subagent:"))
+        {
+            return false;
+        }
         self.models.as_ref().is_some_and(|m| m.busy) || self.model_uncertain().is_some()
     }
     fn can_choose_model(&self) -> bool {

@@ -122,6 +122,11 @@ pub(crate) mod session_jobs_probe;
 #[path = "session_jobs_tray.rs"]
 mod session_jobs_tray;
 #[cfg(feature = "native-probes")]
+#[path = "session_subagents_probe.rs"]
+pub(crate) mod session_subagents_probe;
+#[path = "session_subagents_view.rs"]
+mod session_subagents_view;
+#[cfg(feature = "native-probes")]
 #[path = "session_todos_probe.rs"]
 pub(crate) mod session_todos_probe;
 #[path = "session_todos_tray.rs"]
@@ -302,6 +307,7 @@ pub struct LocalViewer {
     updates: Option<Task<()>>,
     writes: Option<Task<()>>,
     editor: Entity<ChatEditor>,
+    subagent: Option<Entity<session_subagents_view::Conversation>>,
     writer: Option<Interaction>,
     nav_chats: Arc<Vec<Chat>>,
     nav_drafts: Vec<(String, String)>,
@@ -579,6 +585,9 @@ impl LocalViewer {
                         {
                             cx.notify();
                         }
+                        if let Some(child) = view.subagent.clone() {
+                            child.update(cx, |child, cx| child.accept_write(&state, cx));
+                        }
                         view.editor
                             .update(cx, |editor, cx| editor.accept(state, window, cx));
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -623,6 +632,7 @@ impl LocalViewer {
                 signal: Some(Signal::Working),
                 background_work: false,
                 order: Default::default(),
+                subagents: Default::default(),
                 running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
@@ -647,6 +657,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 order: Default::default(),
+                subagents: Default::default(),
                 running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
@@ -671,6 +682,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 order: Default::default(),
+                subagents: Default::default(),
                 running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
@@ -872,6 +884,7 @@ impl LocalViewer {
             signal: Some(Signal::Failed),
             background_work: false,
             order: Default::default(),
+            subagents: Default::default(),
             running_jobs: Default::default(),
             cwd: String::new(),
             project_id: None,
@@ -1061,11 +1074,13 @@ impl LocalViewer {
         let context_entry = context_usage_view::entry(cx);
         let todos_entry = session_todos_tray::entry(window, cx);
         let jobs_entry = session_jobs_tray::entry(window, cx);
+        let subagents_entry = session_subagents_view::entry(window, cx);
         let queue_entry = queued_message_view::entry(window, cx);
         editor.update(cx, |editor, _| {
             editor.set_context_entry(context_entry.into());
             editor.set_todos_entry(todos_entry.into());
             editor.set_jobs_entry(jobs_entry.into());
+            editor.set_subagents_entry(subagents_entry.into());
             editor.set_queue_entry(queue_entry.into());
         });
         let mission =
@@ -1233,6 +1248,7 @@ impl LocalViewer {
                             signal: Some(Signal::Working),
                             background_work: false,
                             order: Default::default(),
+                            subagents: Default::default(),
                             running_jobs: Default::default(),
                             cwd: String::new(),
                             project_id: None,
@@ -1442,6 +1458,7 @@ impl LocalViewer {
             updates: None,
             writes: None,
             editor,
+            subagent: None,
             writer,
             nav_chats: Arc::new(Vec::new()),
             nav_drafts: Vec::new(),
@@ -1480,6 +1497,7 @@ impl LocalViewer {
 
     pub(crate) fn path_completion_source(&self) -> Option<crate::chat_editor::paths::Source> {
         if self.page != Page::Chat
+            || self.subagent.is_some()
             || self.state.generation != self.generation
             || !self.state.loaded
             || self.state.page_busy
@@ -1672,6 +1690,7 @@ impl LocalViewer {
             .selected
             .as_ref()
             .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            .filter(|_| self.subagent.is_none())
         {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
             self.editor.update(cx, |editor, cx| {
@@ -1685,12 +1704,16 @@ impl LocalViewer {
             });
         }
         self.editor.update(cx, |editor, cx| {
-            editor.activity(self.state.thinking && self.selected.is_some(), cx)
+            editor.activity(
+                self.subagent.is_none() && self.state.thinking && self.selected.is_some(),
+                cx,
+            )
         });
         // An ended turn takes a reply; a working one only for the ask its run awaits.
         let question_fresh = self
             .state
-            .question_fresh(self.selected.as_deref(), self.generation);
+            .question_fresh(self.selected.as_deref(), self.generation)
+            && self.subagent.is_none();
         self.editor.update(cx, |editor, cx| {
             editor.question_context(
                 self.selected.as_deref(),
@@ -2084,6 +2107,7 @@ impl LocalViewer {
                     signal: None,
                     background_work: false,
                     order: Default::default(),
+                    subagents: Default::default(),
                     running_jobs: Default::default(),
                     cwd: String::new(),
                     project_id: None,
@@ -2372,6 +2396,10 @@ impl Render for LocalViewer {
             .on_action(cx.listener(|view,_:&FocusChats,window,cx|{
                 use gpui_kit::component::WindowExt;
                 if window.has_active_dialog(cx) || window.has_active_sheet(cx) || !view.project_choices_ready(window,cx) { return; }
+                if let Some(child)=view.subagent.clone() {
+                    if view.editor.update(cx,|e,cx|e.marked(window,cx)) {return;}
+                    child.update(cx,|v,cx|v.open_find(window,cx));cx.stop_propagation();return;
+                }
                 // Preserve the existing sidebar Find shortcut outside the active
                 // conversation and its ordinary composer.
                 if view.page==Page::Chat && view.selected.is_some() && view.state.loaded && !view.artifacts_open
@@ -2394,6 +2422,9 @@ impl Render for LocalViewer {
                 } else if self.page!=Page::Chat {
                     div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else {
+                if let Some(child) = self.subagent.clone() {
+                    div().size_full().min_w_0().min_h_0().child(child).into_any_element()
                 } else {
                 let new_draft = self.editor.read(cx).navigation_key().is_some_and(|key| key.starts_with("new:"));
                 if new_draft {
@@ -2435,6 +2466,7 @@ impl Render for LocalViewer {
                     .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.composer_slot(window, cx)))
                         .into_any_element();
                 self.side_panel_shell(conversation, window, cx)
+                }
                 }
                 }
             )))
@@ -2957,6 +2989,7 @@ mod refresh_tests {
                         signal: None,
                         background_work: false,
                         order: Default::default(),
+                        subagents: Default::default(),
                         running_jobs: Default::default(),
                         cwd: String::new(),
                         project_id: None,

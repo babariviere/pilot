@@ -233,6 +233,7 @@ pub(crate) struct Chat {
     /// List order and grouping inputs (`chat_order`).
     pub(crate) order: crate::chat_order::Order,
     /// Live worker-owned jobs from the summary, in server order (session_jobs).
+    pub(crate) subagents: crate::session_subagents::Report,
     pub(crate) running_jobs: std::sync::Arc<[crate::session_jobs::Job]>,
 }
 impl Chat {
@@ -303,6 +304,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
             .filter(|id| valid_id(id))
             .map(str::to_owned),
         order: crate::chat_order::read(value, working(value)),
+        subagents: crate::session_subagents::read(value),
         running_jobs: crate::session_jobs::read(value),
     })
 }

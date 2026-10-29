@@ -39,6 +39,11 @@ mod provider_usage;
 mod provider_usage_probe;
 mod provider_usage_view;
 mod session_jobs;
+mod session_subagents;
+#[cfg(any(test, feature = "native-probes"))]
+mod session_subagents_fixture;
+#[cfg(feature = "native-probes")]
+pub use local_view::session_subagents_probe::run_session_subagents_probe;
 mod session_jobs_log;
 #[cfg(any(test, feature = "native-probes"))]
 mod session_jobs_fixture;

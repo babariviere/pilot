@@ -649,9 +649,15 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         Some(WriteCommand::ClearRecovery { key, revision }) => store
                             .clear_recovery(&key, revision)
                             .map(|_| "Recovered text removed locally."),
-                        Some(WriteCommand::Discard { key, revision }) => store
-                            .discard_draft(&key, revision)
-                            .map(|_| "Draft discarded. Nothing was sent."),
+                        Some(WriteCommand::Discard { key, revision }) => {
+                            store.discard_draft(&key, revision).map(|_| {
+                                if key.starts_with("subagent:") {
+                                    "Draft discarded locally. The earlier message may have arrived."
+                                } else {
+                                    "Draft discarded. Nothing was sent."
+                                }
+                            })
+                        }
                         Some(WriteCommand::DiscardNew { key, revision, .. }) => {
                             store.discard_new_draft(&key, revision).map(|_| "")
                         }
@@ -964,10 +970,69 @@ async fn submit(
             );
         }
     }
+    let child_target = crate::session_subagents::Target::from_key(key);
+    if let Some(target) = &child_target {
+        let summary = writable(client, options, &target.parent).await?;
+        let chat = crate::local_model::chat(&summary).ok_or("Subagent parent is unavailable")?;
+        if target.child(&chat).is_none_or(|child| child.retired) {
+            return Err("Subagent identity changed or retired. Nothing was sent.");
+        }
+        gate(client, options).await?;
+    }
     // No mutation is possible before this durable reservation succeeds.
     let intent = store.prepare(key, draft, follow_up, stop)?;
     prepared(store);
-    if stop {
+    if let Some(target) = child_target {
+        // This endpoint has a request ACK, not the courier's receipt API.
+        // Journal first, send once, and never turn a lost ACK into a retry.
+        let op = intent
+            .operation
+            .as_ref()
+            .ok_or("Missing subagent message intent")?;
+        let payload: Value =
+            serde_json::from_str(&op.payload).map_err(|_| "Corrupt subagent message")?;
+        *report = Some(DeliveryReport::new(&intent, None));
+        let diagnostic = report
+            .as_mut()
+            .unwrap()
+            .delivery
+            .diagnostic
+            .as_mut()
+            .unwrap();
+        let mut url =
+            reqwest::Url::parse(&options.loopback()).map_err(|_| "Local is unavailable")?;
+        url.path_segments_mut()
+            .map_err(|_| "Local is unavailable")?
+            .extend([
+                "api",
+                "sessions",
+                &target.parent,
+                "subagents",
+                &target.name,
+                "messages",
+            ]);
+        diagnostic.stage = Stage::Execute;
+        let response = read_json_with(client.post(url)
+            .header("Content-Type", "application/json")
+            .body(serde_json::json!({"message":payload["message"], "mode":payload["mode"], "requestId":intent.id}).to_string()),|status|status==reqwest::StatusCode::ACCEPTED).await;
+        let response = match response {
+            Ok((body, status)) => {
+                diagnostic.status = Some(status);
+                body
+            }
+            Err(error) => {
+                diagnostic.status = error.status;
+                diagnostic.category = error.category;
+                return Err(error.message());
+            }
+        };
+        if diagnostic.status != Some(202) || response["ok"] != true {
+            return Err("Subagent message was not confirmed. It was not retried.");
+        }
+        diagnostic.acknowledgment = Acknowledgment::Accepted;
+        store.finish(&intent.id, "accepted", None)?;
+        Ok("")
+    } else if stop {
         // Stop has no durable operation/receipt API. Never retry it automatically.
         let result = read_stop_json(
             client
@@ -1093,6 +1158,21 @@ async fn reconcile(
     let Some(op) = &intent.operation else {
         return Ok("Stop has no receipt API. Its uncertainty cannot be safely retried.");
     };
+    if op.kind == "subagent-send" {
+        if previous
+            .as_ref()
+            .and_then(|r| r.delivery.diagnostic)
+            .is_some_and(|d| d.acknowledgment == Acknowledgment::Accepted)
+        {
+            *report = previous;
+            store.finish(id, "accepted", None)?;
+            return Ok("");
+        }
+        *report = previous;
+        return Ok(
+            "Subagent messages have no receipt lookup. This uncertain message was not retried.",
+        );
+    }
     *report = Some(DeliveryReport::new(&intent, previous.as_ref()));
     let diagnostic = report
         .as_mut()
@@ -1182,6 +1262,10 @@ async fn reconcile(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "session_subagents_transport_tests.rs"]
+mod subagent_tests;
 
 fn adoption_failure(diagnostic: &mut Diagnostic, store: &Store, error: Failure) {
     diagnostic.stage = Stage::Adoption;
