@@ -114,7 +114,7 @@ test("newly linked terminal PRs reconcile tasks but do not announce historical m
 			[3, "closed"],
 		] as const) {
 			const task = store.addTask(id, { title: `Imported ${number}` });
-			store.claimTask(id, task.id, chat.id);
+			store.claimTask(id, task.id, chat.id, {});
 			const terminal = pr(number, state);
 			store.addResource(id, { taskId: task.id, url: terminal.url });
 			store.updatePullRequest(terminal, [chat]);

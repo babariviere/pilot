@@ -134,8 +134,10 @@ unchanged; outstanding accounting memory and release verification is documented 
   replica-only summaries remain read-only until current details can be loaded from the mission's home.
   Coordinators track work through mission tasks, without a separate chat todo tool. Other chats retain their todos.
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
-  open issues), readable through `mission get` with the task ID. Delivered members cannot claim new
-  tasks and stay in the chat list until archived. A user can explicitly assign with
+  open issues), readable through `mission get` with the task ID. Members may self-claim two additional
+  tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not
+  reset this allowance. Delivered members may claim follow-ups they create, but not unrelated work,
+  and stay in the chat list until archived. A user can explicitly assign with
   `overrideRetirement: true`; new tasks normally start fresh chats. Legacy task records remain unchanged.
   Agent tool writes allow 1000 Unicode code points for decision text, 200 for task titles, 4000 for
   task bodies and 12000 for briefs (including whitespace). Oversize writes must be summarized with

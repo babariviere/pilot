@@ -1545,7 +1545,7 @@ test("release resets active claims, preserves review/closed states and notifies 
 	missions.update(id, { coordinatorSessionId: "lead" });
 	const states = ["in_progress", "blocked", "in_review", "done", "dropped", "todo"] as const;
 	for (const [i, status] of states.entries()) {
-		missions.claimTask(id, i + 1, "owner");
+		missions.claimTask(id, i + 1, "owner", {});
 		missions.updateTask(id, String(i + 1), { status });
 	}
 	assert.throws(() => missions.releaseTask(id, "1", { sessionId: "other" }), /only the coordinator/);

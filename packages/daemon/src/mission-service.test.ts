@@ -2533,6 +2533,36 @@ test("multi-task creation and discovery require explicit attribution across serv
 	);
 });
 
+test("member tools allow two feedback follow-ups after delivery, then require a fresh chat", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Feedback",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Starting task" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	const completion = { commit: "a".repeat(40), checks: "Synthetic checks passed.", issues: "" };
+	await f.service.call(member.id, "complete", { id: "1", completion });
+	for (let i = 0; i < 2; i++) {
+		const task = (await f.service.call(member.id, "task", { title: `Feedback ${i}` })) as { id: string };
+		await f.service.call(member.id, "claim", { id: task.id });
+		await f.service.call(member.id, "complete", { id: task.id, completion });
+	}
+	const third = (await f.service.call(member.id, "task", { title: "Further feedback" })) as { id: string };
+	await assert.rejects(f.service.call(member.id, "claim", { id: third.id }), /two additional tasks/);
+	const batch = (await f.service.call(member.id, "claim", { ids: [third.id] })) as {
+		claimed: unknown[];
+		skipped: Array<{ reason: string }>;
+	};
+	assert.equal(batch.claimed.length, 0);
+	assert.match(batch.skipped[0]!.reason, /fresh chat/);
+	assert.equal(f.store.task(mission.id, third.id).sessionId, undefined);
+});
+
 test("multi-task claims handle ranges, partial success and context updates while preserving single claims", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();

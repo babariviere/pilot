@@ -136,7 +136,7 @@ export function missionPrompt(
 					'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with the reason in the task body, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
 				]),
 		"- The brief is the spec; tasks track progress and blockers; decisions record agreed choices; comments hold actionable discussion. Comment only when you need someone's answer or action; progress, evidence and results go in the task, not comments.",
-		"- Save delivery once with mission complete (landed commit, checks with brief rationale, open issues). No hash inventories, receipt files, duplicate handoffs or ACK-only replies. Start new chats for new features; delivered members retire.",
+		"- Save delivery once with mission complete (landed commit, checks with brief rationale, open issues). No hash inventories, receipt files, duplicate handoffs or ACK-only replies. Start new chats for new features; delivered members may self-claim their own feedback follow-ups, within two additional tasks per chat lifetime (starting assignments excluded; completion/release never resets it). Ask the coordinator for a fresh chat after that.",
 		'- Read extra decisions with `mission({action: "decisions"})`; changes arrive as notices. Post a handoff with log before stopping with unfinished work.',
 		...(mission.coordinator === "self"
 			? [

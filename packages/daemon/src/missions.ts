@@ -220,6 +220,13 @@ CREATE TABLE IF NOT EXISTS members (
 	joined_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS members_by_mission ON members (mission_id);
+-- Lifetime admission history deliberately survives task deletion and mission changes.
+CREATE TABLE IF NOT EXISTS member_task_claims (
+	session_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	additional INTEGER NOT NULL,
+	PRIMARY KEY (session_id, task_id)
+);
 CREATE TABLE IF NOT EXISTS session_continuations (
 	from_session_id TEXT PRIMARY KEY,
 	to_session_id TEXT NOT NULL
@@ -543,6 +550,11 @@ export class MissionStore {
 		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
+		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
+			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
+		// Existing assignments are grandfathered, not retroactively charged.
+		this.db.exec(`INSERT OR IGNORE INTO member_task_claims (session_id, task_id, additional)
+			SELECT session_id, id, 0 FROM tasks WHERE session_id IS NOT NULL`);
 		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_pr_safety_reports (
 			resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
 			mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -2855,6 +2867,8 @@ export class MissionStore {
 			now,
 			status === "done" ? now : null,
 		);
+		this.run("UPDATE tasks SET created_by_session_id = ? WHERE id = ?", actor.sessionId ?? null, taskId);
+		if (owner) this.rememberTaskClaim(owner, taskId, false);
 		this.event(id, "task", `Task #${number} added: ${title}`, actor, {
 			taskId,
 			at: now,
@@ -3076,6 +3090,7 @@ export class MissionStore {
 			throw new Error("Use complete with commit, checks and issues to finish a task");
 		const now = Date.now();
 		this.transaction(() => {
+			if (owner && owner !== before.sessionId) this.rememberTaskClaim(owner, before.id, false);
 			if (owner && owner !== before.sessionId && !actor.sessionId && write.overrideRetirement === true)
 				this.run("DELETE FROM retired_members WHERE session_id = ?", owner);
 			const phase = this.taskPhase(id, fields, actor);
@@ -3409,12 +3424,44 @@ export class MissionStore {
 					skipped.push({ ref, reason: `Task #${task.number} is blocked by earlier phases`, task });
 					continue;
 				}
+				const reason = this.additionalClaimRefusal(id, task, sessionId, actor);
+				if (reason) {
+					skipped.push({ ref, reason, task });
+					continue;
+				}
 				claimed.push(this.takeTask(id, task, sessionId, actor));
 			}
 			return { claimed, skipped };
 		});
 		if (result.claimed.length) this.changed(id, [sessionId]);
 		return result;
+	}
+
+	/** Only member-initiated, previously unseen tasks consume the lifetime allowance. */
+	private additionalClaimRefusal(
+		id: string,
+		task: MissionTask,
+		sessionId: string,
+		actor: MissionActor,
+	): string | undefined {
+		if (task.sessionId === sessionId || !actor.sessionId || this.require(id).coordinatorSessionId === sessionId)
+			return;
+		if (this.one("SELECT 1 FROM member_task_claims WHERE session_id = ? AND task_id = ?", sessionId, task.id)) return;
+		const count = num(
+			this.one("SELECT COUNT(*) AS n FROM member_task_claims WHERE session_id = ? AND additional = 1", sessionId)!
+				.n!,
+		);
+		if (count >= 2)
+			return "This chat has already self-claimed two additional tasks. Ask the coordinator to start a fresh chat.";
+	}
+
+	private rememberTaskClaim(sessionId: string, taskId: string, additional: boolean): void {
+		this.run(
+			"INSERT OR IGNORE INTO member_task_claims (session_id, task_id, additional) VALUES (?, ?, ?)",
+			sessionId,
+			taskId,
+			additional ? 1 : 0,
+		);
 	}
 
 	private takeTask(
@@ -3425,7 +3472,11 @@ export class MissionStore {
 		overridePhaseGating = false,
 	): MissionTask {
 		if (task.sessionId === sessionId) return task;
-		this.assertFreshMember(sessionId);
+		const creator = this.one("SELECT created_by_session_id FROM tasks WHERE id = ?", task.id)?.created_by_session_id;
+		// Delivery still fences unrelated work, but not the member's own feedback follow-ups.
+		if (actor.sessionId !== sessionId || creator !== sessionId) this.assertFreshMember(sessionId);
+		const refusal = this.additionalClaimRefusal(id, task, sessionId, actor);
+		if (refusal) throw new Conflict(refusal);
 		this.assertPhaseAdmission(task, overridePhaseGating && !actor.sessionId);
 		task = this.rawTask(task);
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
@@ -3437,6 +3488,11 @@ export class MissionStore {
 			status,
 			now,
 			task.id,
+		);
+		this.rememberTaskClaim(
+			sessionId,
+			task.id,
+			!!actor.sessionId && this.require(id).coordinatorSessionId !== sessionId,
 		);
 		this.event(id, "claim", `Task #${task.number} claimed: ${task.title}`, actor, { taskId: task.id, at: now });
 		return this.task(id, task.id);
@@ -4651,11 +4707,15 @@ export class MissionStore {
 		if (previous && previous.to_session_id !== to) throw new Conflict("Chat already continued elsewhere");
 		const id = this.missionOf(from);
 		if (!id) {
-			this.run(
-				"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
-				from,
-				to,
-			);
+			this.transaction(() => {
+				this.run(
+					"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
+					from,
+					to,
+				);
+				this.run("UPDATE member_task_claims SET session_id = ? WHERE session_id = ?", to, from);
+				this.run("UPDATE tasks SET created_by_session_id = ? WHERE created_by_session_id = ?", to, from);
+			});
 			return; // The same journal may be replayed after the transaction committed.
 		}
 		if (this.missionOf(to)) throw new Conflict("The continuation chat already belongs to a mission");
@@ -4665,6 +4725,8 @@ export class MissionStore {
 				from,
 				to,
 			);
+			this.run("UPDATE member_task_claims SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE tasks SET created_by_session_id = ? WHERE created_by_session_id = ?", to, from);
 			this.run("UPDATE members SET session_id = ? WHERE session_id = ?", to, from);
 			this.run("UPDATE tasks SET session_id = ? WHERE session_id = ?", to, from);
 			this.run("UPDATE missions SET coordinator_session_id = ? WHERE coordinator_session_id = ?", to, from);

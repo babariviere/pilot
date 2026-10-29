@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
 import { MissionNotices } from "./mission-notices.ts";
@@ -76,7 +77,7 @@ function setup(store = new MissionStore(":memory:")) {
 	store.join("lead", id);
 	store.join("member", id);
 	store.update(id, { coordinatorSessionId: "lead" });
-	store.claimTask(id, "1", "member");
+	store.claimStartTasks(id, ["1"], "member");
 	return { store, id };
 }
 
@@ -196,5 +197,120 @@ test("ACK-only writes do not wake; blockers and needs-you bypass routine settlem
 		assert.ok(store.prepareNotice(id, "lead", Date.now()));
 	} finally {
 		store.close();
+	}
+});
+
+test("feedback claims have a durable two-task lifetime allowance, excluding starting assignments", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-feedback-claims-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	const { store, id } = setup(new MissionStore(path));
+	store.completeTask(id, "1", "member", record);
+	const first = store.addTask(id, { title: "User feedback" }, { sessionId: "member" });
+	store.claimTask(id, first.id, "member");
+	store.claimTask(id, first.id, "member"); // Idempotent, not a second claim.
+	store.completeTask(id, first.id, "member", record);
+	const second = store.addTask(id, { title: "More feedback" }, { sessionId: "member" });
+	store.claimTask(id, second.id, "member");
+	store.releaseTask(id, second.id, { sessionId: "member" });
+	store.claimTask(id, second.id, "member"); // Reclaiming the same task is free.
+	store.releaseTask(id, second.id);
+	store.removeTask(id, first.id);
+	store.removeTask(id, second.id);
+	const third = store.addTask(id, { title: "Third feedback" }, { sessionId: "member" });
+	const before = store.events(id).length;
+	assert.throws(() => store.claimTask(id, third.id, "member"), /two additional tasks/);
+	assert.equal(store.events(id).length, before);
+	assert.equal(store.task(id, third.id).sessionId, undefined);
+	const batch = store.claimTasks(id, [third.id, third.id], "member");
+	assert.equal(batch.claimed.length, 0);
+	assert.equal(batch.skipped.length, 1);
+	assert.match(batch.skipped[0]!.reason, /fresh chat/);
+	await store.durable();
+	store.close();
+
+	const restored = new MissionStore(path);
+	try {
+		assert.throws(() => restored.claimTask(id, third.id, "member"), /two additional tasks/);
+		restored.continueSession("member", "continued");
+		assert.throws(() => restored.claimTask(id, third.id, "continued"), /two additional tasks/);
+		// Neither a user retirement override nor a mission move resets lifetime admission.
+		restored.updateTask(id, "2", { sessionId: "continued", overrideRetirement: true });
+		restored.releaseTask(id, "2");
+		assert.throws(() => restored.claimTask(id, third.id, "continued"), /two additional tasks/);
+		const other = restored.create({ projectId: "synthetic-project", title: "Another mission" });
+		restored.join("continued", other.id);
+		const task = restored.addTask(other.id, { title: "Feedback elsewhere" }, { sessionId: "continued" });
+		assert.throws(() => restored.claimTask(other.id, task.id, "continued"), /two additional tasks/);
+		restored.leave("continued");
+		restored.continueSession("continued", "detached-continuation");
+		restored.join("detached-continuation", other.id);
+		assert.throws(() => restored.claimTask(other.id, task.id, "detached-continuation"), /two additional tasks/);
+	} finally {
+		restored.close();
+	}
+});
+
+test("batch claims spend only available slots and leave coordinator assignments unrestricted", (t) => {
+	const { store, id } = setup();
+	t.after(() => store.close());
+	const tasks = Array.from({ length: 4 }, (_, i) =>
+		store.addTask(id, { title: `Follow-up ${i}` }, { sessionId: "member" }),
+	);
+	const batch = store.claimTasks(
+		id,
+		tasks.map((task) => task.id),
+		"member",
+	);
+	assert.deepEqual(
+		batch.claimed.map((task) => task.id),
+		tasks.slice(0, 2).map((task) => task.id),
+	);
+	assert.equal(batch.skipped.length, 2);
+	assert.ok(batch.skipped.every((item) => /two additional tasks/.test(item.reason)));
+	const lead = store.claimTasks(
+		id,
+		tasks.slice(2).map((task) => task.id),
+		"lead",
+	);
+	assert.equal(lead.claimed.length, 2);
+	const fresh = store.addTask(id, { title: "Starting assignment" });
+	store.join("fresh", id);
+	store.claimStartTasks(id, [fresh.id, "2"], "fresh");
+	const more = Array.from({ length: 3 }, (_, i) => store.addTask(id, { title: `Extra ${i}` }));
+	const extras = store.claimTasks(
+		id,
+		more.map((task) => task.id),
+		"fresh",
+	);
+	assert.equal(extras.claimed.length, 2);
+	assert.equal(extras.skipped.length, 1);
+});
+
+test("legacy assignments migrate without consuming follow-up allowance", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-claim-migration-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	const { store, id } = setup(new MissionStore(path));
+	store.claimTask(id, "2", "member", {});
+	await store.durable();
+	store.close();
+	// Reproduce the pre-allowance schema using only disposable fixture data.
+	const legacy = new DatabaseSync(path);
+	legacy.exec("DROP TABLE member_task_claims; ALTER TABLE tasks DROP COLUMN created_by_session_id");
+	legacy.close();
+	const restored = new MissionStore(path);
+	try {
+		const tasks = Array.from({ length: 3 }, (_, i) => restored.addTask(id, { title: `Follow-up ${i}` }));
+		const result = restored.claimTasks(
+			id,
+			tasks.map((task) => task.id),
+			"member",
+		);
+		assert.equal(result.claimed.length, 2);
+		assert.equal(result.skipped.length, 1);
+		assert.match(result.skipped[0]!.reason, /two additional tasks/);
+	} finally {
+		restored.close();
 	}
 });
