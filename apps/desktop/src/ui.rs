@@ -196,12 +196,21 @@ pub fn task_status(status: &str, cx: &App) -> (SharedString, f32, Hsla) {
         other => (SharedString::from(other.to_owned()), 0., muted),
     }
 }
-/// Task row mark. Dropped is distinct from the empty progress ring.
-fn task_status_icon(status: &str) -> Option<crate::app_icon::AppIcon> {
-    (status == "dropped").then_some(crate::app_icon::AppIcon::Dropped)
+/// Completed and dropped tasks use filled marks with contrasting cutouts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskStatusMark {
+    Check,
+    Cross,
+}
+fn task_status_icon(status: &str) -> Option<TaskStatusMark> {
+    match status {
+        "done" => Some(TaskStatusMark::Check),
+        "dropped" => Some(TaskStatusMark::Cross),
+        _ => None,
+    }
 }
 pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
-    if task_status_icon(status).is_some() {
+    if let Some(mark) = task_status_icon(status) {
         use gpui_kit::{PathBuilder, canvas, point};
         div().size(px(14.)).flex_none().child(
             canvas(
@@ -219,8 +228,8 @@ pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
                         }
                     }
                     path.close();
-                    // The X is a transparent cutout, so it contrasts on selected rows too.
-                    for (i, (x, y)) in [
+                    // Cutouts contrast against the actual row, including selection.
+                    let cross: &[(f32, f32)] = &[
                         (-3., -2.),
                         (-2., -3.),
                         (0., -1.),
@@ -233,10 +242,20 @@ pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
                         (-2., 3.),
                         (-3., 2.),
                         (-1., 0.),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
+                    ];
+                    let check: &[(f32, f32)] = &[
+                        (-3.5, 0.),
+                        (-2.5, -1.),
+                        (-0.8, 0.7),
+                        (2.7, -2.8),
+                        (3.7, -1.8),
+                        (-0.8, 2.7),
+                    ];
+                    let cutout = match mark {
+                        TaskStatusMark::Check => check,
+                        TaskStatusMark::Cross => cross,
+                    };
+                    for (i, &(x, y)) in cutout.iter().enumerate() {
                         let p = center + point(px(x), px(y));
                         if i == 0 {
                             path.move_to(p)
@@ -259,18 +278,11 @@ pub fn task_status_mark(status: &str, fill: f32, color: Hsla) -> Div {
 #[cfg(test)]
 mod task_status_mark_tests {
     #[test]
-    fn dropped_alone_uses_circled_cross() {
-        use super::task_status_icon;
-        use crate::app_icon::AppIcon;
-        assert_eq!(task_status_icon("dropped"), Some(AppIcon::Dropped));
-        for status in [
-            "todo",
-            "done",
-            "blocked",
-            "in_progress",
-            "in_review",
-            "delegated",
-        ] {
+    fn closed_statuses_use_distinct_filled_marks() {
+        use super::{TaskStatusMark, task_status_icon};
+        assert_eq!(task_status_icon("dropped"), Some(TaskStatusMark::Cross));
+        assert_eq!(task_status_icon("done"), Some(TaskStatusMark::Check));
+        for status in ["todo", "blocked", "in_progress", "in_review", "delegated"] {
             assert_eq!(task_status_icon(status), None, "{status}");
         }
     }
