@@ -98,15 +98,13 @@ fn open_preferences(cx: &mut HeadlessAppContext, h: AnyWindowHandle, b: &Entity<
     until(cx, h, |cx| !b.read(cx).busy);
     let pane = cx.update(|cx| b.read(cx).tasks_browser.clone());
     if !cx.update(|cx| pane.read(cx).opened) {
-        click(cx, h, "mission-tasks-toggle");
+        click(cx, h, "mission-tab-tasks");
     }
     until(cx, h, |cx| {
         !pane.read(cx).state.busy && pane.read(cx).state.snapshot.is_some()
     });
     click(cx, h, "mission-tasks-row-task-A");
-    click(cx, h, "mission-task-model");
-    cx.advance_clock(Duration::from_millis(300));
-    settle(cx, h);
+    crate::mission_tasks_probe::task_action(cx, h, "task-A", "Preferred model…");
 }
 
 fn choose(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str, down: usize) {
@@ -199,7 +197,7 @@ pub fn run_task_model_probe(cx: &mut HeadlessAppContext) {
         assert!(cx.update(|cx| pane.read(cx).model_form.is_none()));
         cx.update_window(h, |_, w, cx| assert!(pane.read(cx).owns_focus(w, cx)))
             .unwrap();
-        click(cx, h, "mission-task-model");
+        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Preferred model…");
         assert_eq!(
             cx.update(|cx| pane.read(cx).model_form.clone().unwrap()),
             form

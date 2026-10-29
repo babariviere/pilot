@@ -170,6 +170,8 @@ pub(crate) struct Task {
     pub(crate) work_status: String,
     pub(crate) owner: Option<String>,
     pub(crate) order: f64,
+    /// Position in the detail's phase order; None for no phase.
+    pub(crate) phase: Option<usize>,
 }
 /// Progress bar order: finished work first, then review, active, blocked and waiting.
 pub(crate) const BAR_ORDER: [&str; 6] = [
@@ -356,6 +358,9 @@ pub(crate) struct Detail {
     pub(crate) task_count: usize,
     pub(crate) counts: Option<(u64, u64)>,
     pub(crate) summary: Summary,
+    /// The Overview's phase rows: phases with tasks that count, in order, and
+    /// "No phase" last. Empty for a mission without phases.
+    pub(crate) phases: Vec<crate::mission_phases::Group>,
 }
 pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     let m = &v["mission"];
@@ -368,6 +373,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         .ok_or("Mission task context is unavailable.")?;
     let mut seen = HashSet::new();
     let mut tasks = Vec::with_capacity(raw.len());
+    let mut membership = Vec::with_capacity(raw.len());
     for t in raw {
         let id = id(&t["id"])?;
         if !seen.insert(id.clone()) {
@@ -394,14 +400,42 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
             status,
             owner: optional_id(&t["sessionId"])?,
             order,
+            phase: None,
         });
+        membership.push((t["phaseId"].as_str(), t["milestone"].as_str()));
     }
-    tasks.sort_by(|a, b| {
+    let mut tasks: Vec<_> = tasks.into_iter().zip(membership).collect();
+    tasks.sort_by(|(a, _), (b, _)| {
         a.order
             .total_cmp(&b.order)
             .then(a.number.cmp(&b.number))
             .then(a.id.cmp(&b.id))
     });
+    let index = crate::mission_phases::Index::new(&v["phases"], tasks.iter().map(|(_, m)| m.1))?;
+    let tasks: Vec<Task> = tasks
+        .into_iter()
+        .map(|(mut t, (phase, milestone))| {
+            t.phase = index.of(phase, milestone);
+            t
+        })
+        .collect();
+    let mut phases: Vec<_> = index
+        .groups(
+            &tasks
+                .iter()
+                .map(|t| (t.phase, t.work_status.as_str()))
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .filter(|g| g.total > 0)
+        .collect();
+    // A lone "No phase" row says less than the overall bar and legend.
+    if phases
+        .iter()
+        .all(|g: &crate::mission_phases::Group| g.phase.is_none())
+    {
+        phases.clear();
+    }
     let summary = Summary::new(&tasks);
     let mut clipped = false;
     let goal = clip_text(&m["goal"], 8192, &mut clipped)?;
@@ -432,6 +466,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         tasks: tasks.into_iter().take(DISPLAY_TASKS).collect(),
         counts: counts(m)?,
         summary,
+        phases,
     })
 }
 #[derive(Clone, Debug)]

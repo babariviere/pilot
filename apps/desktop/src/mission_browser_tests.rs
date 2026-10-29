@@ -152,6 +152,71 @@ fn overview_summary_covers_every_received_task_by_work_status() {
     v["tasks"] = json!([]);
     let d = detail(&key, &v).unwrap();
     assert!(d.summary.counts.is_empty() && d.summary.total() == 0);
+    assert!(d.phases.is_empty());
+}
+#[test]
+fn overview_phases_follow_phase_order_and_count_every_received_task() {
+    let key = f::key("mission-A");
+    let mut v = f::detail(&key.id);
+    let task = |i: usize, status: &str, phase: Option<&str>| {
+        let mut t = json!({"id":format!("task-{i}"),"number":i+1,"title":format!("Task {i}"),"status":status,"order":i});
+        if let Some(p) = phase {
+            t["phaseId"] = json!(p);
+        }
+        t
+    };
+    // Beyond the 24-row preview: the last task still counts toward its phase.
+    let mut tasks: Vec<_> = (0..30).map(|i| task(i, "done", Some("p-build"))).collect();
+    tasks.push(task(30, "in_progress", Some("p-ship")));
+    tasks.push(task(31, "dropped", Some("p-ship")));
+    let mut gated = task(32, "blocked", Some("p-ship"));
+    gated["storedStatus"] = json!("todo");
+    tasks.push(gated);
+    tasks.push(task(33, "todo", None));
+    tasks.push(task(34, "todo", Some("p-deleted")));
+    v["tasks"] = json!(tasks);
+    v["phases"] = json!([
+        {"id":"p-ship","missionId":key.id,"name":"Ship 日本語","order":2},
+        {"id":"p-build","missionId":key.id,"name":"Build","order":1},
+        {"id":"p-later","missionId":key.id,"name":"Later","order":3}
+    ]);
+    let d = detail(&key, &v).unwrap();
+    let rows: Vec<_> = d
+        .phases
+        .iter()
+        .map(|g| (g.name.as_str(), g.done, g.total, g.current))
+        .collect();
+    // Empty phases have no progress row; a missing phase is No phase.
+    assert_eq!(
+        rows,
+        [
+            ("Build", 30, 30, false),
+            ("Ship 日本語", 0, 2, true),
+            ("No phase", 0, 2, false)
+        ]
+    );
+    assert_eq!(d.phases[1].counts, [("in_progress", 1), ("todo", 1)]);
+    // Unphased work alone shows the overall bar, not a lone No phase row.
+    let mut v = f::detail(&key.id);
+    v["tasks"] = json!([task(0, "todo", None)]);
+    v["phases"] = json!([{"id":"p-later","missionId":key.id,"name":"Later","order":1}]);
+    assert!(detail(&key, &v).unwrap().phases.is_empty());
+    // An older daemon without phases: milestones stand in.
+    let mut v = f::detail(&key.id);
+    let mut a = task(0, "done", None);
+    a["milestone"] = json!("Alpha");
+    v["tasks"] = json!([a, task(1, "todo", None)]);
+    v.as_object_mut().unwrap().remove("phases");
+    let names: Vec<_> = detail(&key, &v)
+        .unwrap()
+        .phases
+        .iter()
+        .map(|g| g.name.clone())
+        .collect();
+    assert_eq!(names, ["Alpha", "No phase"]);
+    let mut v = f::detail(&key.id);
+    v["phases"] = json!("broken");
+    assert!(detail(&key, &v).is_err());
 }
 
 #[test]

@@ -381,7 +381,11 @@ pub fn run_mission_comments_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.read(w, cx)))
                 .unwrap();
             until(cx, h, &view, |v| !v.busy && v.error.is_none());
-            reveal(cx, h, "mission-task-new");
+            // The draft lives on the Tasks tab; composition fences leaving it.
+            reveal(cx, h, "mission-tab-tasks");
+            cx.update_window(h, |_, w, cx| w.click("mission-tab-tasks", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("mission-task-new", cx))
                 .unwrap();
             settle(cx, h);
@@ -404,17 +408,23 @@ pub fn run_mission_comments_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            reveal(cx, h, "mission-comments-open");
             let before = cx.update(|cx| form.read(cx).title.read(cx).value().to_string());
             cx.update_window(h, |_, w, cx| {
-                w.click("mission-comments-open", cx);
+                w.click("mission-tab-overview", cx);
                 assert!(
-                    !view.read(cx).comments.open,
+                    view.read(cx).tab == crate::mission_browser_view::Tab::Tasks,
                     "marked text is never interrupted"
                 );
                 let title = form.read(cx).title.clone();
                 assert!(title.update(cx, |i, cx| i.marked_text_range(w, cx).is_some()));
                 title.update(cx, |i, cx| i.unmark_text(w, cx));
+                w.click("mission-tab-overview", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            reveal(cx, h, "mission-comments-open");
+            cx.update_window(h, |_, w, cx| {
+                let title = form.read(cx).title.clone();
                 w.click("mission-comments-open", cx);
                 assert!(view.read(cx).comments.open);
                 assert_eq!(title.read(cx).value().as_ref(), before);

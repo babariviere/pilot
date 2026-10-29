@@ -59,8 +59,7 @@ impl Browser {
                                 .any(|r| r.key == *key && r.local_definition(&key.home))
                         })
                     });
-                    v.tasks_browser
-                        .update(cx, |p, cx| p.sync(key, v.options.clone(), w, cx));
+                    v.sync_tasks(key, w, cx);
                     if owned {
                         v.focus(w, cx);
                     }
@@ -77,8 +76,7 @@ impl Browser {
         if let Some(brief) = &self.brief {
             brief.update(cx, |v, cx| v.hide(cx));
         }
-        self.tasks_browser
-            .update(cx, |v, cx| v.sync(None, self.options.clone(), w, cx));
+        self.sync_tasks(None, w, cx);
         form.update(cx, |v, cx| {
             v.visible = true;
             v.load(w, cx);

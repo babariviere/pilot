@@ -67,7 +67,7 @@ impl Pane {
                 let owned = f.read(cx).owns_focus(w, cx);
                 v.hide_model(w, cx);
                 if owned {
-                    v.detail_focus.focus(w, cx);
+                    v.focus_list(w, cx);
                 }
                 cx.notify();
             });

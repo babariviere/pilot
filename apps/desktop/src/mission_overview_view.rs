@@ -1,9 +1,10 @@
-//! Overview at a glance: progress, what needs the user and what is working.
-//! Rows open an exact member chat or reveal an exact task in the Tasks pane.
+//! Overview at a glance: progress by phase, what needs the user and what is
+//! working. Rows open an exact member chat or reveal an exact task in Tasks.
 use super::*;
 use crate::{
     app_icon::AppIcon,
     mission_browser::{Attention, Detail, Proposal, Summary, Task as Row},
+    mission_phases::Group,
 };
 use gpui_kit::AnyElement;
 
@@ -136,6 +137,7 @@ impl Browser {
     fn can_reveal(&self, generation: u64, cx: &App) -> bool {
         self.current(generation) && self.tasks_browser.read(cx).state.key.is_some()
     }
+    /// Show the Tasks tab and, given an exact task ID, select it there.
     pub(super) fn reveal_task(
         &mut self,
         id: Option<String>,
@@ -146,28 +148,59 @@ impl Browser {
         if !self.can_reveal(generation, cx) || self.brief_marked(w, cx) {
             return;
         }
-        self.tasks_browser.update(cx, |p, cx| p.reveal(id, w, cx));
+        self.tab = Tab::Tasks;
+        self.tasks_browser.update(cx, |p, cx| match id {
+            Some(id) => p.reveal(Some(id), w, cx),
+            None => p.show(true, w, cx),
+        });
         cx.notify();
     }
-    pub(super) fn summary_view(&self, s: &Summary, cx: &Context<Self>) -> Option<AnyElement> {
+    /// A task bar over work-status counts: to do and delegated leave the track
+    /// showing, as in the Tasks list.
+    fn status_bar(counts: &[(&'static str, usize)], cx: &App) -> gpui_kit::Div {
+        let mut track = cx.theme().muted_foreground;
+        track.a *= 0.25;
+        let bar: Vec<_> = counts
+            .iter()
+            .filter_map(|(status, n)| {
+                let (_, fill, color) = ui::task_status(status, cx);
+                ((fill > 0. && *status != "delegated") || *status == "blocked")
+                    .then_some((*n, color))
+            })
+            .collect();
+        ui::progress_bar(&bar, counts.iter().map(|c| c.1).sum(), track)
+    }
+    /// Progress by phase when the mission has phases, as in Swift's Overview;
+    /// otherwise one bar with its legend.
+    pub(super) fn progress_view(&self, d: &Detail, cx: &Context<Self>) -> Option<AnyElement> {
+        if !d.phases.is_empty() {
+            return Some(
+                div()
+                    .id("mission-phases")
+                    .test_support()
+                    .v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .children(
+                        d.phases
+                            .iter()
+                            .enumerate()
+                            .map(|(ix, g)| self.phase_row(ix, g, cx)),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let s = &d.summary;
         if s.total() == 0 {
             return None;
         }
-        let mut track = cx.theme().muted_foreground;
-        track.a *= 0.25;
         let entries: Vec<_> = s
             .counts
             .iter()
             .map(|(status, n)| {
-                let (label, fill, color) = ui::task_status(status, cx);
-                (label, fill, color, *n, *status)
+                let (label, _, color) = ui::task_status(status, cx);
+                (label, color, *n)
             })
-            .collect();
-        // To do and delegated leave the track showing, as in the Tasks list.
-        let bar: Vec<_> = entries
-            .iter()
-            .filter(|e| (e.1 > 0. && e.4 != "delegated") || e.4 == "blocked")
-            .map(|e| (e.3, e.2))
             .collect();
         Some(
             div()
@@ -177,7 +210,7 @@ impl Browser {
                 .gap_2()
                 .w_full()
                 .max_w(px(360.))
-                .child(ui::progress_bar(&bar, s.total(), track))
+                .child(Self::status_bar(&s.counts, cx))
                 .child(
                     div()
                         .h_flex()
@@ -185,7 +218,7 @@ impl Browser {
                         .gap_3()
                         .text_size(px(crate::appearance::TextRole::CAPTION))
                         .text_color(cx.theme().muted_foreground)
-                        .children(entries.iter().map(|(label, _, color, n, _)| {
+                        .children(entries.iter().map(|(label, color, n)| {
                             div()
                                 .h_flex()
                                 .items_center()
@@ -196,6 +229,69 @@ impl Browser {
                 )
                 .into_any_element(),
         )
+    }
+    /// "Build ▬▬▬ 12/18": the current phase in the text colour, the rest
+    /// muted. Rows open Tasks; the counts exclude dropped tasks.
+    fn phase_row(&self, ix: usize, g: &Group, cx: &Context<Self>) -> AnyElement {
+        let generation = self.generation;
+        let color = if g.current {
+            cx.theme().foreground
+        } else {
+            cx.theme().muted_foreground
+        };
+        ui::action(
+            SharedString::from(format!("mission-phase-{ix}")),
+            "",
+            Action::Quiet,
+        )
+        .w_full()
+        .justify_start()
+        .disabled(!self.can_reveal(generation, cx))
+        .accessibility_label(SharedString::from(format!(
+            "{}{}: {} of {} done. Open Tasks",
+            g.name,
+            if g.current { ", current phase" } else { "" },
+            g.done,
+            g.total
+        )))
+        .child(
+            div()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_3()
+                .child(
+                    ui::text(Text::Body, SharedString::from(g.name.clone()))
+                        .w(px(150.))
+                        .flex_shrink_1()
+                        .min_w_0()
+                        .text_left()
+                        .truncate()
+                        .text_color(color)
+                        .when(g.current, |t| t.font_semibold()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(48.))
+                        .max_w(px(240.))
+                        .child(Self::status_bar(&g.counts, cx)),
+                )
+                .child(
+                    ui::text(
+                        Text::Caption,
+                        SharedString::from(format!("{}/{}", g.done, g.total)),
+                    )
+                    .flex_none()
+                    .min_w(px(36.))
+                    .text_right()
+                    .text_color(color),
+                )
+                .child(div().flex_1()),
+        )
+        .on_click(cx.listener(move |v, _, w, cx| v.reveal_task(None, generation, w, cx)))
+        .into_any_element()
     }
     fn section_header(
         &self,

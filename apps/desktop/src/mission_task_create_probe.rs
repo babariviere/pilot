@@ -64,6 +64,13 @@ fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     settle(cx, h);
 }
 fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
+    if id == "mission-task-new" {
+        // New task lives on the mission's Tasks tab; a different mission opens on Overview.
+        reveal(cx, h, "mission-tab-tasks");
+        cx.update_window(h, |_, w, cx| w.click("mission-tab-tasks", cx))
+            .unwrap();
+        settle(cx, h);
+    }
     reveal(cx, h, id);
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
     settle(cx, h);

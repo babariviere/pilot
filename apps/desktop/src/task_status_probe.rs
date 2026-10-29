@@ -67,7 +67,7 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     settle(cx, h);
 }
 fn open_task(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
-    click(cx, h, "mission-tasks-toggle");
+    click(cx, h, "mission-tab-tasks");
 }
 pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
     let mut cases = 0;
@@ -131,7 +131,7 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            click(cx, h, "mission-task-status");
+            crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
             cx.update_window(h, |_, w, cx| {
                 assert!(pane.read(cx).status_form.is_none());
                 let field = creation.read(cx).title.clone();
@@ -144,7 +144,7 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
         }
-        click(cx, h, "mission-task-status");
+        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
         let form = cx.update(|cx| pane.read(cx).status_form.clone().unwrap());
         assert_eq!(server.writes(), 0);
         click(cx, h, "task-status-todo");
@@ -165,7 +165,7 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             )
         })
         .unwrap();
-        click(cx, h, "mission-task-status");
+        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
         cx.update(|cx| {
             assert_eq!(pane.read(cx).status_form.as_ref(), Some(&form));
             assert_eq!(form.read(cx).chosen, "todo");
@@ -177,7 +177,7 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             !pane.read(cx).state.busy && pane.read(cx).state.snapshot.is_some()
         });
         click(cx, h, "mission-tasks-row-task-A");
-        click(cx, h, "mission-task-status");
+        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
         cx.update(|cx| assert_eq!(pane.read(cx).status_form.as_ref(), Some(&form)));
         reveal(cx, h, "task-status-form");
         cx.update_window(h, |_, w, _| {
@@ -240,7 +240,7 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             !pane.read(cx).state.busy && pane.read(cx).state.snapshot.is_some()
         });
         click(cx, h, "mission-tasks-row-task-A");
-        click(cx, h, "mission-task-status");
+        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
         click(cx, h, "task-status-submit");
         assert_eq!(
             server.writes(),

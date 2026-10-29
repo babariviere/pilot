@@ -105,6 +105,72 @@ fn progress_matches_overview_bar_order_without_dropped_and_with_work_status() {
     assert!(parse(&key, &v).unwrap().progress.is_empty());
 }
 #[test]
+fn sections_group_every_task_by_phase_order_and_find_exact_positions() {
+    let key = f::key("mission-A");
+    let mut v = f::detail("mission-A");
+    let task = |n: usize, status: &str, phase: Option<&str>| {
+        let mut t =
+            json!({"id":format!("t-{n}"),"number":n+1,"title":"Same","status":status,"order":n});
+        if let Some(p) = phase {
+            t["phaseId"] = json!(p);
+        }
+        t
+    };
+    v["tasks"] = json!([
+        task(0, "todo", None),
+        task(1, "done", Some("p-b")),
+        task(2, "dropped", Some("p-a")),
+        task(3, "in_progress", Some("p-a")),
+        task(4, "done", Some("p-a")),
+        task(5, "todo", Some("p-gone")),
+    ]);
+    v["phases"] = json!([
+        {"id":"p-b","missionId":"mission-A","name":"Second","order":2},
+        {"id":"p-a","missionId":"mission-A","name":"First 日本語","order":1},
+        {"id":"p-empty","missionId":"mission-A","name":"Empty","order":3}
+    ]);
+    let s = parse(&key, &v).unwrap();
+    let titles: Vec<_> = s.sections.iter().map(|s| s.title.as_deref()).collect();
+    // Empty phases have no rows; dropped tasks stay listed; No phase is last.
+    assert_eq!(
+        titles,
+        [Some("First 日本語"), Some("Second"), Some("No phase")]
+    );
+    let progress: Vec<_> = s.sections.iter().map(|s| s.progress.as_str()).collect();
+    assert_eq!(progress, ["1/2 done", "1/1 done", "0/2 done"]);
+    let ids = |section: usize| -> Vec<&str> {
+        (0..s.sections[section].tasks.len())
+            .map(|row| s.at(section, row).unwrap().id.as_str())
+            .collect()
+    };
+    assert_eq!(ids(0), ["t-2", "t-3", "t-4"]);
+    assert_eq!(ids(2), ["t-0", "t-5"]);
+    assert_eq!(s.position("t-4"), Some((0, 2)));
+    assert_eq!(s.position("t-5"), Some((2, 1)));
+    assert_eq!(s.position("missing"), None);
+    assert!(s.at(3, 0).is_none() && s.at(0, 3).is_none());
+    assert!(
+        s.task("t-3")
+            .unwrap()
+            .context
+            .contains("Phase: First 日本語")
+    );
+    assert!(!s.task("t-5").unwrap().context.contains("Phase:"));
+    assert_eq!(
+        s.sections.iter().map(|s| s.tasks.len()).sum::<usize>(),
+        s.tasks.len()
+    );
+    // Without phases the list is one untitled section in task order.
+    v["phases"] = json!([]);
+    let s = parse(&key, &v).unwrap();
+    assert_eq!(s.sections.len(), 1);
+    assert!(s.sections[0].title.is_none());
+    assert_eq!(s.position("t-5"), Some((0, 5)));
+    v["tasks"] = json!([]);
+    let s = parse(&key, &v).unwrap();
+    assert!(s.at(0, 0).is_none());
+}
+#[test]
 fn stale_generation_mission_switch_errors_and_removed_selection_are_fenced() {
     let a = f::key("mission-A");
     let b = f::key("mission-B");

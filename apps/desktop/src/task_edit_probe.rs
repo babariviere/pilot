@@ -116,15 +116,13 @@ fn open_editor(cx: &mut HeadlessAppContext, h: AnyWindowHandle, b: &Entity<Brows
     until(cx, h, |cx| !b.read(cx).busy);
     let pane = cx.update(|cx| b.read(cx).tasks_browser.clone());
     if !cx.update(|cx| pane.read(cx).opened) {
-        click(cx, h, "mission-tasks-toggle");
+        click(cx, h, "mission-tab-tasks");
     }
     until(cx, h, |cx| {
         !pane.read(cx).state.busy && pane.read(cx).state.snapshot.is_some()
     });
     click(cx, h, "mission-tasks-row-task-A");
-    click(cx, h, "mission-task-edit");
-    cx.advance_clock(Duration::from_millis(300));
-    settle(cx, h);
+    crate::mission_tasks_probe::task_action(cx, h, "task-A", "Edit title and description…");
 }
 
 pub fn run_task_edit_probe(cx: &mut HeadlessAppContext) {
@@ -223,7 +221,7 @@ pub fn run_task_edit_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             capture(cx, h, &dir, format!("task-edit-{name}.png"));
             // Backdrop clicks neither discard text nor dispatch a write.
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-back", cx))
+            cx.update_window(h, |_, w, cx| w.click("missions-title", cx))
                 .unwrap();
             settle(cx, h);
             assert!(cx.update(|cx| form.read(cx).visible));

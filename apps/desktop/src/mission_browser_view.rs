@@ -28,7 +28,8 @@ use gpui_kit::{
     TestSupportExt, Window,
     base::SelectableText,
     component::{
-        ActiveTheme, Disableable, StyledExt,
+        ActiveTheme, Disableable, Selectable, Sizable, StyledExt,
+        button::{ButtonGroup, ButtonVariants},
         menu::{DropdownMenu, PopupMenuItem},
     },
     div,
@@ -36,6 +37,15 @@ use gpui_kit::{
     px,
 };
 use std::sync::Arc;
+
+/// The mission page's sections, as in Swift's mission tab picker. Brief,
+/// Activity and Comments open as their own pages.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Tab {
+    #[default]
+    Overview,
+    Tasks,
+}
 
 #[derive(Clone)]
 pub(crate) enum Event {
@@ -100,9 +110,9 @@ pub(crate) struct Browser {
     focus: FocusHandle,
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
-    /// Unscrolled top of the Tasks section in detail_scroll, from the last paint.
-    tasks_top: std::rc::Rc<std::cell::Cell<gpui_kit::Pixels>>,
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
+    /// Overview or Tasks; a different mission opens on Overview.
+    pub(crate) tab: Tab,
     pub(crate) activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
     activity_open: bool,
     pub(crate) brief: Option<gpui_kit::Entity<crate::mission_brief_view::Workspace>>,
@@ -179,24 +189,12 @@ impl Browser {
             .or_else(|| self.tasks_browser.read(cx).update_blocker(cx))
     }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        let detail_scroll = gpui_kit::ScrollHandle::default();
         let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
-        // Bring Tasks to the top once the reveal settles; the next layout
-        // clamps the offset against the newly loaded list.
-        cx.subscribe(
-            &tasks_browser,
-            |v, _, _: &crate::mission_tasks_view::Revealed, cx| {
-                let handle = &v.detail_scroll;
-                let y = (handle.bounds().top() - v.tasks_top.get()).min(px(0.));
-                handle.set_offset(gpui_kit::point(handle.offset().x, y));
-                cx.notify();
-            },
-        )
-        .detach();
         Self {
             decisions: Default::default(),
             comments: Default::default(),
             tasks_browser,
+            tab: Tab::Overview,
             generation: 0,
             route: None,
             options: None,
@@ -219,8 +217,7 @@ impl Browser {
             filter: None,
             focus: cx.focus_handle(),
             catalog_scroll: gpui_kit::ScrollHandle::default(),
-            tasks_top: Default::default(),
-            detail_scroll,
+            detail_scroll: gpui_kit::ScrollHandle::default(),
             activity_browser: None,
             activity_open: false,
             brief: None,
@@ -232,6 +229,39 @@ impl Browser {
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
         self.options = Some(options);
+    }
+    /// Point the task pane at a mission (or none), reopening its list when the
+    /// Tasks tab is showing.
+    pub(crate) fn sync_tasks(&mut self, key: Option<Key>, w: &mut Window, cx: &mut Context<Self>) {
+        let options = self.options.clone();
+        let show = self.tab == Tab::Tasks;
+        self.tasks_browser.update(cx, |p, cx| {
+            p.sync(key, options, w, cx);
+            if show {
+                p.show(false, w, cx);
+            }
+        });
+    }
+    /// Switch tabs. Showing Tasks reads it once; leaving keeps its snapshot,
+    /// selection and drafts. `focus` moves focus into the task list.
+    pub(crate) fn choose_tab(
+        &mut self,
+        tab: Tab,
+        focus: bool,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.route, Some(Route::Detail(_))) || self.brief_marked(w, cx) {
+            return;
+        }
+        if tab == Tab::Overview && self.tasks_browser.read(cx).owns_focus(w, cx) {
+            self.focus.focus(w, cx);
+        }
+        self.tab = tab;
+        if tab == Tab::Tasks {
+            self.tasks_browser.update(cx, |p, cx| p.show(focus, w, cx));
+        }
+        cx.notify();
     }
     fn open_creation(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.route != Some(Route::Catalog) || self.brief_marked(w, cx) {
@@ -496,6 +526,7 @@ impl Browser {
                 self.focus.focus(w, cx);
             }
             self.route = route;
+            self.tab = Tab::Overview;
             self.jump = None;
             self.read(w, cx);
         } else if changed {
@@ -572,8 +603,7 @@ impl Browser {
                                     .any(|r| r.key == *key && r.local_definition(&key.home))
                             })
                         });
-                        v.tasks_browser
-                            .update(cx, |p, cx| p.sync(key, v.options.clone(), w, cx));
+                        v.sync_tasks(key, w, cx);
                         if owned {
                             v.focus(w, cx);
                         }
@@ -595,8 +625,7 @@ impl Browser {
         if let Some(brief) = &self.brief
             && brief.update(cx, |v, cx| v.show(source, title, self.online, w, cx))
         {
-            self.tasks_browser
-                .update(cx, |p, cx| p.sync(None, self.options.clone(), w, cx));
+            self.sync_tasks(None, w, cx);
         }
         cx.notify();
     }
@@ -680,9 +709,7 @@ impl Browser {
         {
             self.focus.focus(w, cx);
         }
-        self.tasks_browser.update(cx, |tasks, cx| {
-            tasks.sync(tasks_key, self.options.clone(), w, cx)
-        });
+        self.sync_tasks(tasks_key, w, cx);
         self.generation = self.generation.saturating_add(1);
         self.error = None;
         self.jump_note = None;
@@ -809,8 +836,7 @@ impl Browser {
                     && self.local_home().as_ref() == Some(&d.key.home)
             })
             .map(|d| d.key.clone());
-        self.tasks_browser
-            .update(cx, |tasks, cx| tasks.sync(key, self.options.clone(), w, cx));
+        self.sync_tasks(key, w, cx);
     }
     /// Secondary overview commands live in one … menu beside Refresh.
     fn overview_menu(&self, generation: u64, cx: &Context<Self>) -> Option<gpui_kit::AnyElement> {
@@ -950,9 +976,7 @@ impl Browser {
             .as_ref()
             .unwrap()
             .update(cx, |v, _| v.chats = chats);
-        self.tasks_browser.update(cx, |tasks, cx| {
-            tasks.sync(None, self.options.clone(), w, cx)
-        });
+        self.sync_tasks(None, w, cx);
         let title = self.detail.as_ref().unwrap().title.clone();
         self.activity_browser
             .as_ref()
@@ -1063,20 +1087,34 @@ impl Render for Browser {
                 })
                 .unwrap_or_else(|| "Mission overview".into())
         };
+        // A mission's back action and centred tabs share one full-width row,
+        // so neither moves when the Tasks tab widens the page below it.
+        let top = (!is_list).then(|| {
+            div()
+                .h_flex()
+                .items_center()
+                .w_full()
+                .min_w_0()
+                .flex_none()
+                .px(px(Space::HOME))
+                .pt(px(Space::HOME))
+                .child(
+                    div().flex_1().min_w_0().h_flex().child(
+                        ui::action("missions-list", "Missions", Action::Quiet)
+                            .icon(crate::app_icon::AppIcon::Back.asset())
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if v.generation == generation {
+                                    cx.emit(Event::List { generation });
+                                }
+                            })),
+                    ),
+                )
+                .child(self.tab_bar(cx))
+                .child(div().flex_1())
+        });
         let mut content = ui::page()
             .gap(px(Space::CONTROL))
-            .when(!is_list, |v| {
-                v.child(
-                    ui::action("missions-list", "Missions", Action::Quiet)
-                        .icon(crate::app_icon::AppIcon::Back.asset())
-                        .self_start()
-                        .on_click(cx.listener(move |v, _, _, cx| {
-                            if v.generation == generation {
-                                cx.emit(Event::List { generation });
-                            }
-                        })),
-                )
-            })
+            .when(!is_list, |v| v.pt(px(Space::CONTROL)))
             .child(
                 div()
                     .h_flex()
@@ -1143,6 +1181,34 @@ impl Render for Browser {
                     .test_support()
                     .child(Notice::new(error).tone(Tone::Error)),
             );
+        }
+        if !is_list && self.tab == Tab::Tasks {
+            // The header keeps its reading column so the tabs stay put; the
+            // task list and details below take the page's full width and height.
+            return div()
+                .id("missions-page")
+                .test_support()
+                .track_focus(&self.focus)
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .v_flex()
+                .on_action(cx.listener(Self::copy_selection))
+                .children(top)
+                .child(content.flex_none().max_w_full().pb(px(Space::CONTROL)))
+                .child(
+                    div()
+                        .id("mission-tasks-tab")
+                        .test_support()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .min_w_0()
+                        .px(px(Space::HOME))
+                        .pb(px(Space::HOME))
+                        .child(self.tasks_browser.clone()),
+                )
+                .into_any_element();
         }
         if is_list {
             let scope = self
@@ -1256,7 +1322,7 @@ impl Render for Browser {
                             .test_support()
                             .text_color(cx.theme().muted_foreground),
                     )
-                    .children(self.summary_view(&d.summary, cx)),
+                    .children(self.progress_view(d, cx)),
             );
             content = content
                 .child(self.decisions_view(cx))
@@ -1343,23 +1409,6 @@ impl Render for Browser {
                     }
                 }
             }
-            let (top, handle) = (self.tasks_top.clone(), self.detail_scroll.clone());
-            content = content.child(
-                div()
-                    .id("mission-tasks-anchor")
-                    .relative()
-                    .w_full()
-                    .min_w_0()
-                    .child(
-                        gpui_kit::canvas(
-                            move |b, _, _| top.set(b.top() - handle.offset().y),
-                            |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_0(),
-                    )
-                    .child(self.tasks_browser.clone()),
-            );
             // The brief stays collapsed: its workspace renders and edits it in full.
             content = content.child(
                 div()
@@ -1410,16 +1459,59 @@ impl Render for Browser {
             } else {
                 &self.detail_scroll
             })
-            .on_action(cx.listener(|_, _: &gpui_kit::base::input::Copy, w, cx| {
-                let text = gpui_kit::base::TextSelection::selected_text(w, cx);
-                if text.is_empty() {
-                    cx.propagate();
-                } else {
-                    cx.write_to_clipboard(ClipboardItem::new_string(text));
-                }
-            }))
+            .on_action(cx.listener(Self::copy_selection))
+            .children(top)
             .child(content)
             .into_any_element()
+    }
+}
+impl Browser {
+    fn copy_selection(
+        &mut self,
+        _: &gpui_kit::base::input::Copy,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = gpui_kit::base::TextSelection::selected_text(w, cx);
+        if text.is_empty() {
+            cx.propagate();
+        } else {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+    /// Overview and Tasks, as Swift's segmented mission picker. Tasks counts
+    /// what is still open (not done, not dropped) in the received detail.
+    fn tab_bar(&self, cx: &Context<Self>) -> impl IntoElement {
+        let open = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())))
+            .map(|d| d.summary.total() - d.summary.done())
+            .filter(|n| *n > 0);
+        let tasks = match open {
+            Some(n) => format!("Tasks {n}"),
+            None => "Tasks".to_owned(),
+        };
+        let available = self.tasks_browser.read(cx).state.key.is_some();
+        ButtonGroup::new("mission-tabs")
+            .small()
+            .ghost()
+            .flex_none()
+            .child(
+                ui::action("mission-tab-overview", "Overview", Action::Quiet)
+                    .selected(self.tab == Tab::Overview)
+                    .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Overview, false, w, cx))),
+            )
+            .child(
+                ui::action(
+                    "mission-tab-tasks",
+                    SharedString::from(tasks),
+                    Action::Quiet,
+                )
+                .selected(self.tab == Tab::Tasks)
+                .disabled(!available && self.tab != Tab::Tasks)
+                .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Tasks, false, w, cx))),
+            )
     }
 }
 /// Wire statuses read as sentence case ("active" → "Active").

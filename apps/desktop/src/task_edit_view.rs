@@ -11,7 +11,7 @@ use gpui_kit::{
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, TestSupportExt, Window,
     component::{
-        Disableable, StyledExt, WindowExt,
+        ActiveTheme, Disableable, StyledExt, WindowExt,
         input::{InputEvent, Textarea, TextareaState},
     },
     div,
@@ -76,7 +76,7 @@ impl Form {
         });
         let body = cx.new(|cx| {
             let mut t = TextareaState::new(w, cx)
-                .placeholder("Task body (optional)")
+                .placeholder("Description (optional)")
                 .auto_grow(3, 6);
             t.set_submit_on_enter(false, cx);
             t
@@ -169,11 +169,12 @@ impl Form {
         self.title.read(cx).focus_handle(cx).focus(w, cx);
     }
     pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
+        let title = SharedString::from(format!("Edit task #{}", form.read(cx).source.number));
         w.open_dialog(cx, {
             let form = form.clone();
             move |dialog, _, cx| {
                 crate::ui::dialog(dialog, cx)
-                    .title("Edit task")
+                    .title(title.clone())
                     .w(gpui_kit::px(520.))
                     .overlay_closable(false)
                     .close_button(false)
@@ -289,52 +290,47 @@ impl Render for Form {
                 v.close(w, cx);
             }))
             .on_action(cx.listener(|v, _: &SaveTaskEdit, w, cx| v.submit(w, cx)))
-            .on_action(cx.listener(|v, _: &CloseTaskEdit, w, cx| v.close(w, cx)))
-            .child(ui::text(
-                Text::Caption,
-                SharedString::from(format!(
-                    "Local mission {} · task #{}",
-                    self.source.key.id, self.source.number
-                )),
-            ))
-            .child(ui::text(
-                Text::Caption,
-                "Only title and body change. Draft retained through navigation, not app restart.",
-            ));
+            .on_action(cx.listener(|v, _: &CloseTaskEdit, w, cx| v.close(w, cx)));
         for (ix, (label, input, id)) in [
             ("Title", self.title.clone(), "task-edit-title"),
-            ("Body", self.body.clone(), "task-edit-body"),
+            ("Description", self.body.clone(), "task-edit-body"),
         ]
         .into_iter()
         .enumerate()
         {
             self.bounds[ix].set(None);
             let bounds = self.bounds[ix].clone();
-            form = form.child(ui::text(Text::Label, label)).child(
-                div()
-                    .id(id)
-                    .test_support()
-                    .relative()
-                    .w_full()
-                    .min_w_0()
-                    .child(Textarea::new(&input).aria_label(label).disabled(blocked))
-                    .child(
-                        gpui_kit::canvas(|_, _, _| (), move |b, (), _, _| bounds.set(Some(b)))
-                            .absolute()
-                            .inset_0()
-                            .size_full(),
-                    ),
-            );
+            form = form
+                .child(
+                    ui::text(Text::Caption, label)
+                        .text_color(cx.theme().muted_foreground)
+                        .when(ix > 0, |t| t.pt_1()),
+                )
+                .child(
+                    div()
+                        .id(id)
+                        .test_support()
+                        .relative()
+                        .w_full()
+                        .min_w_0()
+                        .child(Textarea::new(&input).aria_label(label).disabled(blocked))
+                        .child(
+                            gpui_kit::canvas(|_, _, _| (), move |b, (), _, _| bounds.set(Some(b)))
+                                .absolute()
+                                .inset_0()
+                                .size_full(),
+                        ),
+                );
         }
         if let Some((_, outcome)) = &self.state.attempt {
             let (text, tone) = match outcome {
-                Outcome::Pending => (
-                    "Saving… Closing or navigating away does not cancel this captured save.".to_string(),
-                    Tone::Normal,
-                ),
+                Outcome::Pending => ("Saving… Closing won't cancel it.".to_string(), Tone::Normal),
                 Outcome::NotSent(e) => (e.to_string(), Tone::Error),
                 Outcome::Unknown(e) => (format!("Save unconfirmed. {e}"), Tone::Error),
-                Outcome::Saved(_) => ("Saved. Local acknowledged this exact task title and body. Refresh tasks for current state.".to_string(),Tone::Normal),
+                Outcome::Saved(_) => (
+                    "Saved. Refresh tasks to see it in the list.".to_string(),
+                    Tone::Normal,
+                ),
             };
             form = form.child(
                 div()
@@ -353,35 +349,24 @@ impl Render for Form {
                 "Task text unavailable. Close and reopen to read again."
             }));
         }
-        form=form.child(Notice::new("No version check: concurrent edits may be overwritten. Only title and body are sent. Local records rename activity and reconciles phase/linked-ticket progress; existing coordinator notices may follow. No chat-start request is sent."));
         form.child(
             div()
                 .h_flex()
-                .flex_wrap()
+                .items_center()
                 .gap_2()
+                .pt_2()
                 .child(
-                    ui::action("task-edit-submit", "Save", Action::Primary)
-                        .disabled(blocked || unchanged || value.is_err())
-                        .tooltip("Save title and body in this exact Local mission (⌘Enter).")
-                        .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
+                    ui::action("task-edit-copy", "Copy text", Action::Quiet).on_click(cx.listener(
+                        |v, _, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(format!(
+                                "{}\n\n{}",
+                                v.title.read(cx).value(),
+                                v.body.read(cx).value()
+                            )));
+                        },
+                    )),
                 )
-                .child(
-                    ui::action("task-edit-close", "Close", Action::Quiet)
-                        .on_click(cx.listener(|v, _, w, cx| v.close(w, cx))),
-                )
-                .when(true, |d| {
-                    d.child(
-                        ui::action("task-edit-copy", "Copy text", Action::Quiet).on_click(
-                            cx.listener(|v, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(format!(
-                                    "{}\n\n{}",
-                                    v.title.read(cx).value(),
-                                    v.body.read(cx).value()
-                                )));
-                            }),
-                        ),
-                    )
-                })
+                .child(div().flex_1())
                 .when(
                     matches!(self.state.attempt.as_ref(), Some((_, Outcome::Saved(_)))),
                     |d| {
@@ -403,6 +388,17 @@ impl Render for Form {
                                 })),
                         )
                     },
+                )
+                .child(
+                    ui::action("task-edit-close", "Close", Action::Quiet)
+                        .tooltip("Close (Esc). Your edits stay until you save.")
+                        .on_click(cx.listener(|v, _, w, cx| v.close(w, cx))),
+                )
+                .child(
+                    ui::action("task-edit-submit", "Save", Action::Primary)
+                        .disabled(blocked || unchanged || value.is_err())
+                        .tooltip("Save title and description (⌘↩). Replaces any newer edits.")
+                        .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
                 ),
         )
         .child(fence)

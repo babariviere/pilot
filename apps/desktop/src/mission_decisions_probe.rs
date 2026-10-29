@@ -191,7 +191,9 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("proposal-text-p2").is_none());
             })
             .unwrap();
-            // Real mounted sibling task draft/preedit. Reading must neither submit nor blur it.
+            // Real mounted task draft/preedit on the Tasks tab. Leaving the tab
+            // must neither submit nor blur it.
+            click(cx, h, "mission-tab-tasks");
             click(cx, h, "mission-task-new");
             let form = cx.update(|cx| {
                 view.read(cx)
@@ -213,11 +215,12 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             let before = cx.update(|cx| form.read(cx).title.read(cx).value().to_string());
-            click(cx, h, "mission-decisions-open");
+            click(cx, h, "mission-tab-overview");
             cx.update_window(h, |_, w, cx| {
-                assert!(
-                    view.read(cx).decisions.opened,
-                    "pre-blur capture refuses disclosure close"
+                assert_eq!(
+                    view.read(cx).tab,
+                    crate::mission_browser_view::Tab::Tasks,
+                    "pre-blur capture refuses leaving Tasks"
                 );
                 let input = form.read(cx).title.clone();
                 assert!(input.update(cx, |i, cx| i.marked_text_range(w, cx).is_some()));
@@ -230,6 +233,11 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(
                 cx.update(|cx| form.read(cx).title.read(cx).value().to_string()),
                 before
+            );
+            click(cx, h, "mission-tab-overview");
+            assert!(
+                cx.update(|cx| view.read(cx).decisions.opened),
+                "the disclosure survives a trip to Tasks"
             );
             // Source disclosure is keyboard reachable; Return changes only its disclosure.
             reveal(cx, h, "decisions-source");

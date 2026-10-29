@@ -66,8 +66,7 @@ impl Browser {
         if let Some(b) = &self.brief {
             b.update(cx, |v, cx| v.hide(cx));
         }
-        self.tasks_browser
-            .update(cx, |v, cx| v.sync(None, self.options.clone(), w, cx));
+        self.sync_tasks(None, w, cx);
         form.update(cx, |v, cx| {
             v.visible = true;
             v.prepare(action);

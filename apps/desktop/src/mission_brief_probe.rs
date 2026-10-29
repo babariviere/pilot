@@ -307,7 +307,7 @@ fn component(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Opt
     click(cx, h, "brief-overview");
     cx.update_window(h, |_, w, _| {
         assert_ne!(
-            w.find("mission-tasks-toggle").disabled(),
+            w.find("mission-tab-tasks").disabled(),
             Some(true),
             "task browser is rearmed after brief closes"
         )

@@ -1,12 +1,36 @@
-# Read-only mission tasks
+# Mission phases and the Tasks tab
 
-Open a canonical Local mission from Missions, then **Browse tasks**. The task
-list is a retained virtual Kit List, not the old 24-row overview preview. Up/Down
-and Return open a task's description; a pointer activates the exact rendered ID.
-Close details (or Escape within details) returns to the list. Close tasks returns
-focus to Browse tasks. Copy task includes its number, full admitted title, status,
-exact ID, available context and literal Unicode description. Descriptions are
-selectable plain text; Markdown images, links and scripts are not executed.
+A mission page has two tabs, **Overview** and **Tasks N** (N counts open work:
+not done, not dropped), in one full-width row with the Missions back action, so
+neither moves when Tasks widens the page. A different mission opens on Overview.
+
+Overview shows progress by phase, as Swift's `MissionPhaseProgressList`: one row
+per phase with counted tasks, in phase order, then "No phase", each with its bar
+and done/total. The first phase with unfinished work is current (semibold). A
+mission without phases, or with only unphased work, keeps the single bar and
+legend. Rows, Working now, Needs you tasks and All tasks open the Tasks tab;
+task rows select their exact ID there.
+
+The Tasks tab fills the page: progress, Refresh and New task, then a retained
+virtual Kit List grouped into phase sections ("Build 3/4 done") with every task,
+dropped included; empty phases have no section. Each row shows its status and
+the first line of its description. Up/Down cross sections, Return or a pointer
+selects the exact ID, and Escape clears it; nothing opens below the list. The
+highlighted or hovered row shows a "…" button (a Tab stop on the highlighted
+row), and right-clicking any row opens the same menu: Change status, Edit title
+and description, Preferred model and Copy task, each for that exact row. Status,
+edit and model open as dialogs; only the New task form shows below the list.
+Leaving the tab keeps the snapshot, selection and drafts; IME composition fences
+leaving it.
+
+Phases come from the same detail GET (`phases`, task `phaseId`), ordered by
+order then ID; an older daemon without `phases` uses task milestones in first
+appearance order (`src/mission_phases.rs`). Counts use work status and exclude
+dropped tasks. Nothing here moves tasks between phases or changes gating.
+
+Copy task includes its number, full admitted title, status, exact ID, phase and
+other context and literal Unicode description. Descriptions are selectable plain
+text; Markdown images, links and scripts are not executed.
 
 ## Contract and limits
 
@@ -44,8 +68,8 @@ endpoint/backend changes, automatic agent starts or live automated actions.
 
 ## Design and ownership
 
-The mission title/status remain in the parent reading column. A single Browse
-tasks disclosure replaces the truncated preview; task identity and context are
+The mission title/status stay in the parent header. The Tasks tab replaces the
+old disclosure inside Overview; task identity and context are
 revealed in exact details rather than a wall of permanent metadata. Existing
 `ui::heading`, `action`, `ResourceLabel`, `Notice` and theme tokens supply chrome.
 The task pane owns its reader, selected ID and focus; Kit owns list navigation

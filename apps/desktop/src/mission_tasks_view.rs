@@ -1,4 +1,6 @@
-//! Retained readonly task disclosure. The parent owns mission navigation and its scroll.
+//! The mission's Tasks tab: every received task, grouped by phase, with the
+//! row actions in a "…" menu and the right-click menu. Status, edit and model
+//! forms open as dialogs. The parent owns mission navigation and tabs.
 use crate::{
     LocalOptions,
     mission_browser::Key,
@@ -8,12 +10,12 @@ use crate::{
 };
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Styled, Subscription, Task,
-    TestSupportExt, WeakEntity, Window,
-    base::SelectableText,
+    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, StatefulInteractiveElement,
+    Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     component::{
-        ActiveTheme, Disableable, IndexPath, StyledExt,
+        ActiveTheme, Disableable, IndexPath, StyledExt, WindowExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
+        menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     },
     div,
     prelude::FluentBuilder,
@@ -29,22 +31,66 @@ pub(crate) struct Rows {
     owner: WeakEntity<Pane>,
     snapshot: Arc<Snapshot>,
     generation: u64,
+    /// The list's highlighted row, which shows its "…" button.
+    current: Option<IndexPath>,
 }
-/// A reveal settled: the list (and any exact task) is now shown.
-pub(crate) struct Revealed;
-impl gpui_kit::EventEmitter<Revealed> for Pane {}
+fn index_path((section, row): (usize, usize)) -> IndexPath {
+    IndexPath::new(row).section(section)
+}
 impl ListDelegate for Rows {
     type Item = ListItem;
-    // Kit ListState owns the keyboard index; description selection is separate.
     fn set_selected_index(
         &mut self,
-        _: Option<IndexPath>,
+        ix: Option<IndexPath>,
         _: &mut Window,
-        _: &mut Context<ListState<Self>>,
+        cx: &mut Context<ListState<Self>>,
     ) {
+        self.current = ix;
+        cx.notify();
     }
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        self.snapshot.tasks.len()
+    fn sections_count(&self, _: &App) -> usize {
+        self.snapshot.sections.len().max(1)
+    }
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        self.snapshot
+            .sections
+            .get(section)
+            .map_or(0, |s| s.tasks.len())
+    }
+    /// "Build  3/8 done", as in Swift's Tasks tab. Every header has one line,
+    /// so Kit's single measured header height holds for all of them.
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let s = self.snapshot.sections.get(section)?;
+        let title = s.title.clone()?;
+        Some(
+            div()
+                .id(SharedString::from(format!("mission-tasks-phase-{section}")))
+                .test_support()
+                .h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .pt_3()
+                .pb_1()
+                .child(
+                    ui::text(Text::Body, SharedString::from(title))
+                        .min_w_0()
+                        .truncate()
+                        .font_semibold(),
+                )
+                .child(
+                    ui::text(Text::Caption, SharedString::from(s.progress.clone()))
+                        .flex_none()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+        )
     }
     fn render_item(
         &mut self,
@@ -52,11 +98,19 @@ impl ListDelegate for Rows {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
-        let t = self.snapshot.tasks.get(ix.row)?;
+        let t = self.snapshot.at(ix.section, ix.row)?;
         let id = t.id.clone();
         let owner = self.owner.clone();
         let generation = self.generation;
         let (label, fill, color) = ui::task_status(&t.status, cx);
+        let current = self.current == Some(ix);
+        let (menu_owner, menu_id) = (self.owner.clone(), t.id.clone());
+        let (button_owner, button_id) = (self.owner.clone(), t.id.clone());
+        // Status, then the description's first line, as Swift's collapsed row.
+        let detail = match t.body.lines().map(str::trim).find(|l| !l.is_empty()) {
+            Some(line) => format!("{label} · {line}"),
+            None => label.to_string(),
+        };
         Some(
             ListItem::new(SharedString::from(format!("mission-tasks-row-{}", t.id)))
                 .accessibility_label(SharedString::from(format!(
@@ -69,25 +123,91 @@ impl ListDelegate for Rows {
                 })
                 .child(
                     div()
-                        .id(SharedString::from(format!("mission-tasks-item-{}", t.id)))
-                        .test_support()
+                        .id(SharedString::from(format!("mission-tasks-menu-{}", t.id)))
+                        .group("mission-task-row")
                         .w_full()
                         .min_w_0()
-                        .py_1()
                         .h_flex()
                         .items_center()
-                        .gap(px(Space::CONTROL))
-                        .child(ui::status_pie(fill, color))
+                        .gap_2()
                         .child(
-                            ResourceLabel::new(SharedString::from(format!(
-                                "#{} {}",
-                                t.number, t.title
-                            )))
-                            .detail(label),
-                        ),
+                            div()
+                                .id(SharedString::from(format!("mission-tasks-item-{}", t.id)))
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .py_1()
+                                .h_flex()
+                                .items_center()
+                                .gap(px(Space::CONTROL))
+                                .child(ui::status_pie(fill, color))
+                                .child(
+                                    ResourceLabel::new(SharedString::from(format!(
+                                        "#{} {}",
+                                        t.number, t.title
+                                    )))
+                                    .detail(detail),
+                                ),
+                        )
+                        // Shown on hover and on the highlighted row, which keeps
+                        // it as a Tab stop; the right-click menu is the same.
+                        .child(
+                            div()
+                                .flex_none()
+                                .opacity(if current { 1. } else { 0. })
+                                .group_hover("mission-task-row", |s| s.opacity(1.))
+                                .child(
+                                    ui::icon_action(
+                                        SharedString::from(format!("mission-task-menu-{}", t.id)),
+                                        SharedString::from(format!(
+                                            "Actions for task #{}",
+                                            t.number
+                                        )),
+                                        crate::app_icon::AppIcon::More,
+                                        Action::Quiet,
+                                    )
+                                    .tab_stop(current)
+                                    .dropdown_menu(
+                                        move |menu, _, _| {
+                                            row_menu(menu, &button_owner, &button_id, generation)
+                                        },
+                                    ),
+                                ),
+                        )
+                        .context_menu(move |menu, _, _| {
+                            row_menu(menu, &menu_owner, &menu_id, generation)
+                        }),
                 ),
         )
     }
+}
+/// A row's commands, each run on that exact task.
+fn row_menu(mut menu: PopupMenu, owner: &WeakEntity<Pane>, id: &str, generation: u64) -> PopupMenu {
+    for (label, action) in [
+        ("Change status…", RowAction::Status),
+        ("Edit title and description…", RowAction::Edit),
+        ("Preferred model…", RowAction::Model),
+        ("Copy task", RowAction::Copy),
+    ] {
+        let (owner, id) = (owner.clone(), id.to_string());
+        menu = menu.item(PopupMenuItem::new(label).on_click(move |_, w, cx| {
+            let _ = owner.update(cx, |v, cx| v.row_action(&id, generation, action, w, cx));
+        }));
+    }
+    menu
+}
+#[derive(Clone, Copy)]
+enum RowAction {
+    Status,
+    Edit,
+    Model,
+    Copy,
+}
+fn copy_text(t: &crate::mission_tasks::Task) -> String {
+    format!(
+        "#{} {}\n{}\n{}\n\n{}",
+        t.number, t.title, t.status, t.context, t.body
+    )
 }
 pub(crate) struct Pane {
     pub(crate) state: State,
@@ -99,7 +219,6 @@ pub(crate) struct Pane {
     list: Option<Entity<ListState<Rows>>>,
     subscription: Option<Subscription>,
     trigger: FocusHandle,
-    detail_focus: FocusHandle,
     /// A reveal awaiting its snapshot; the exact task to select, if any.
     reveal: Option<Option<String>>,
     pub(crate) creation: Option<Entity<crate::mission_task_create_view::Form>>,
@@ -156,7 +275,6 @@ impl Pane {
             list: None,
             subscription: None,
             trigger: cx.focus_handle(),
-            detail_focus: cx.focus_handle(),
             reveal: None,
             creation: None,
             creations: Vec::new(),
@@ -186,7 +304,6 @@ impl Pane {
                 .as_ref()
                 .is_some_and(|f| f.read(cx).owns_focus(w, cx))
             || self.trigger.contains_focused(w, cx)
-            || self.detail_focus.contains_focused(w, cx)
             || self
                 .list
                 .as_ref()
@@ -281,7 +398,23 @@ impl Pane {
             }
             _ => self.back(w, cx),
         }
-        cx.emit(Revealed);
+    }
+    /// Open the list when its tab shows, reading once; later shows keep the
+    /// snapshot, selection and forms. `focus` moves focus into the list.
+    pub(crate) fn show(&mut self, focus: bool, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.key.is_none() || self.marked(w, cx) {
+            return;
+        }
+        if !self.opened {
+            self.opened = true;
+            self.read(w, cx);
+        }
+        if focus {
+            match &self.list {
+                Some(l) => l.update(cx, |l, cx| l.focus(w, cx)),
+                None => self.trigger.focus(w, cx),
+            }
+        }
     }
     fn new_task(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.marked(w, cx) {
@@ -336,13 +469,25 @@ impl Pane {
         self.hide_model(w, cx);
         self.hide_edit(w, cx);
         if let Some(f) = self.status_form.take() {
-            if f.read(cx).owns_focus(w, cx) {
-                self.trigger.focus(w, cx);
+            let owned = f.read(cx).owns_focus(w, cx);
+            let moved = w.focused(cx);
+            w.close_dialog(cx);
+            if owned {
+                self.focus_list(w, cx);
+            } else if let Some(focus) = moved {
+                focus.focus(w, cx);
             }
             f.update(cx, |f, cx| {
                 f.visible = false;
                 cx.notify();
             });
+        }
+    }
+    /// Focus the list, or the tab before it has one.
+    pub(super) fn focus_list(&self, w: &mut Window, cx: &mut Context<Self>) {
+        match &self.list {
+            Some(l) => l.update(cx, |l, cx| l.focus(w, cx)),
+            None => self.trigger.focus(w, cx),
         }
     }
     fn change_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -386,14 +531,6 @@ impl Pane {
                         match event {
                             crate::task_status_view::Event::Close => {
                                 v.hide_status(w, cx);
-                                if v.state.selected.as_ref().is_some_and(|id| {
-                                    v.state
-                                        .snapshot
-                                        .as_ref()
-                                        .is_some_and(|s| s.task(id).is_some())
-                                }) {
-                                    v.detail_focus.focus(w, cx);
-                                }
                             }
                             crate::task_status_view::Event::NewIntent => {
                                 if !v.state.busy
@@ -423,13 +560,10 @@ impl Pane {
         self.hide_status(w, cx);
         form.update(cx, |f, cx| {
             f.visible = true;
-            f.focus(w, cx);
             cx.notify();
         });
-        if let Some(f) = self.creation.take() {
-            f.update(cx, |f, _| f.visible = false);
-        }
-        self.status_form = Some(form);
+        self.status_form = Some(form.clone());
+        crate::task_status_view::Form::open(form, w, cx);
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -485,8 +619,8 @@ impl Pane {
                     .state
                     .selected
                     .as_ref()
-                    .and_then(|id| snapshot.tasks.iter().position(|t| &t.id == id))
-                    .map(IndexPath::new);
+                    .and_then(|id| snapshot.position(id))
+                    .map(index_path);
                 l.set_selected_index(ix, w, cx);
                 cx.notify();
             });
@@ -498,6 +632,7 @@ impl Pane {
                         owner,
                         snapshot,
                         generation,
+                        current: None,
                     },
                     w,
                     cx,
@@ -510,14 +645,13 @@ impl Pane {
                         .read(cx)
                         .delegate()
                         .snapshot
-                        .tasks
-                        .get(ix.row)
+                        .at(ix.section, ix.row)
                         .map(|t| t.id.clone());
                     if let Some(id) = choice {
                         v.select(&id, v.state.generation, w, cx);
                     }
                 }
-                ListEvent::Cancel => v.close(w, cx),
+                ListEvent::Cancel => v.back(w, cx),
                 _ => {}
             }));
             self.list = Some(list);
@@ -545,35 +679,37 @@ impl Pane {
         self.state.selected = Some(id.into());
         if let Some(list) = &self.list {
             list.update(cx, |l, cx| {
-                let ix = l
-                    .delegate()
-                    .snapshot
-                    .tasks
-                    .iter()
-                    .position(|t| t.id == id)
-                    .map(IndexPath::new);
+                let ix = l.delegate().snapshot.position(id).map(index_path);
                 l.set_selected_index(ix, w, cx);
             });
         }
-        self.detail_focus.focus(w, cx);
+        self.focus_list(w, cx);
         cx.notify();
     }
-    fn close(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        if self.marked(w, cx) {
+    /// A row's context menu: select that exact task, then run the same
+    /// command as its details button.
+    fn row_action(
+        &mut self,
+        id: &str,
+        generation: u64,
+        action: RowAction,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select(id, generation, w, cx);
+        if self.state.selected.as_deref() != Some(id) {
             return;
         }
-        self.hide_status(w, cx);
-        if let Some(form) = self.creation.take() {
-            form.update(cx, |f, _| f.visible = false);
+        match action {
+            RowAction::Status => self.change_status(w, cx),
+            RowAction::Edit => self.edit_task(w, cx),
+            RowAction::Model => self.task_model(w, cx),
+            RowAction::Copy => {
+                if let Some(t) = self.state.snapshot.as_ref().and_then(|s| s.task(id)) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(copy_text(t)));
+                }
+            }
         }
-        self.trigger.focus(w, cx);
-        self.opened = false;
-        self.reveal = None;
-        self.state.generation = self.state.generation.saturating_add(1);
-        self.state.busy = false;
-        self.reader = None;
-        self.updates = None;
-        cx.notify();
     }
     fn back(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.marked(w, cx) {
@@ -581,84 +717,104 @@ impl Pane {
         }
         self.hide_status(w, cx);
         self.state.selected = None;
-        if let Some(l) = &self.list {
-            l.update(cx, |l, cx| l.focus(w, cx));
-        } else {
-            self.trigger.focus(w, cx);
-        }
+        self.focus_list(w, cx);
         cx.notify();
     }
 }
-impl Render for Pane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut root = div()
-            .id("mission-tasks-browser")
-            .test_support()
+impl Pane {
+    /// Progress bar and legend as in the overview: bar order, work status, no dropped.
+    fn coverage(s: &Snapshot, cx: &App) -> gpui_kit::Div {
+        let counts: Vec<_> = s
+            .progress
+            .iter()
+            .map(|(status, n)| {
+                let (label, fill, color) = ui::task_status(status, cx);
+                (label, fill, color, *n, *status)
+            })
+            .collect();
+        let mut track = cx.theme().muted_foreground;
+        track.a *= 0.25;
+        // To do and delegated leave the track showing.
+        let bar: Vec<_> = counts
+            .iter()
+            .filter(|c| (c.1 > 0. && c.4 != "delegated") || c.4 == "blocked")
+            .map(|c| (c.3, c.2))
+            .collect();
+        let total = counts.iter().map(|c| c.3).sum();
+        div()
             .v_flex()
+            .gap_2()
             .w_full()
-            .min_w_0()
-            .gap(px(Space::CONTROL))
+            .max_w(px(360.))
+            .child(ui::progress_bar(&bar, total, track))
             .child(
                 div()
                     .h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().child(ui::heading(
-                        "mission-tasks-heading",
-                        "Tasks",
-                        Text::Headline,
-                    )))
-                    .when(self.opened, |d| {
-                        d.child(
-                            ui::icon_action(
-                                "mission-tasks-refresh",
-                                "Refresh tasks",
-                                crate::app_icon::AppIcon::Retry,
-                                Action::Quiet,
-                            )
-                            .disabled(self.state.busy)
-                            .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
-                        )
-                    })
-                    .child(
-                        ui::action(
-                            "mission-tasks-toggle",
-                            if self.opened {
-                                "Hide tasks"
-                            } else {
-                                "Show tasks"
-                            },
-                            Action::Quiet,
-                        )
-                        .track_focus(&self.trigger)
-                        .disabled(self.state.key.is_none())
-                        .on_click(cx.listener(|v, _, w, cx| {
-                            if v.opened {
-                                v.close(w, cx);
-                            } else {
-                                v.opened = true;
-                                v.read(w, cx);
-                            }
-                        })),
-                    )
-                    .when(self.state.key.is_some(), |d| {
-                        d.child(
-                            ui::action("mission-task-new", "New task…", Action::Secondary)
-                                .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
-                        )
-                    }),
+                    .flex_wrap()
+                    .gap_3()
+                    .text_size(px(crate::appearance::TextRole::CAPTION))
+                    .text_color(cx.theme().muted_foreground)
+                    .children(counts.iter().map(|(label, _, color, n, status)| {
+                        div()
+                            .id(SharedString::from(format!("mission-tasks-legend-{status}")))
+                            .test_support()
+                            .h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(div().size(px(6.)).rounded_full().bg(*color))
+                            .child(SharedString::from(format!("{n} {}", label.to_lowercase())))
+                    })),
+            )
+    }
+}
+impl Render for Pane {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let snapshot = self.state.snapshot.clone();
+        // Progress, then Refresh and New task: the tab's one toolbar.
+        let toolbar = div()
+            .h_flex()
+            .items_start()
+            .gap_2()
+            .w_full()
+            .min_w_0()
+            .child(
+                div()
+                    .id("mission-tasks-coverage")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .children(snapshot.as_ref().map(|s| Self::coverage(s, cx))),
+            )
+            .child(
+                ui::icon_action(
+                    "mission-tasks-refresh",
+                    "Refresh tasks",
+                    crate::app_icon::AppIcon::Retry,
+                    Action::Quiet,
+                )
+                .disabled(self.state.busy || !self.opened)
+                .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
+            )
+            .child(
+                ui::action("mission-task-new", "New task…", Action::Secondary)
+                    .disabled(self.state.key.is_none())
+                    .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
             );
+        let mut root = div()
+            .id("mission-tasks-browser")
+            .test_support()
+            .track_focus(&self.trigger)
+            .v_flex()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .gap(px(Space::CONTROL))
+            .child(toolbar);
         if let Some(e) = self.create_error {
             root = root.child(Notice::new(e).tone(Tone::Error));
         }
-        if let Some(form) = &self.creation {
-            root = root.child(form.clone());
-        }
-        if !self.opened {
-            return root;
-        }
         // Only states that change what the list means are narrated.
-        if self.state.busy || self.state.error.is_some() {
+        if self.opened && (self.state.busy || self.state.error.is_some()) {
             root = root.child(ui::text(
                 Text::Caption,
                 if self.state.busy {
@@ -676,176 +832,40 @@ impl Render for Pane {
                     .child(Notice::new(e).tone(Tone::Error)),
             );
         }
-        if let Some(s) = &self.state.snapshot {
-            // Progress bar and legend as in the overview: bar order, work status, no dropped.
-            let counts: Vec<_> = s
-                .progress
-                .iter()
-                .map(|(status, n)| {
-                    let (label, fill, color) = ui::task_status(status, cx);
-                    (label, fill, color, *n, *status)
-                })
-                .collect();
-            let mut track = cx.theme().muted_foreground;
-            track.a *= 0.25;
-            // To do and delegated leave the track showing.
-            let bar: Vec<_> = counts
-                .iter()
-                .filter(|c| (c.1 > 0. && c.4 != "delegated") || c.4 == "blocked")
-                .map(|c| (c.3, c.2))
-                .collect();
-            let total = counts.iter().map(|c| c.3).sum();
+        let empty = snapshot.as_ref().is_some_and(|s| s.tasks.is_empty());
+        if empty {
+            root = root.child(Notice::new("No tasks yet."));
+        }
+        let list = self.list.clone().filter(|_| !empty);
+        if let Some(l) = &list {
             root = root.child(
                 div()
-                    .id("mission-tasks-coverage")
+                    .id("mission-tasks-list")
                     .test_support()
-                    .v_flex()
-                    .gap_2()
-                    .child(ui::progress_bar(&bar, total, track))
-                    .child(
-                        div()
-                            .h_flex()
-                            .flex_wrap()
-                            .gap_3()
-                            .text_size(px(crate::appearance::TextRole::CAPTION))
-                            .text_color(cx.theme().muted_foreground)
-                            .children(counts.iter().map(|(label, _, color, n, status)| {
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "mission-tasks-legend-{status}"
-                                    )))
-                                    .test_support()
-                                    .h_flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .child(div().size(px(6.)).rounded_full().bg(*color))
-                                    .child(SharedString::from(format!(
-                                        "{n} {}",
-                                        label.to_lowercase()
-                                    )))
-                            })),
-                    ),
+                    .w_full()
+                    .flex_1()
+                    .min_h(px(120.))
+                    .child(List::new(l)),
             );
-            if s.tasks.is_empty() {
-                root = root.child(Notice::new("No tasks yet."));
-            }
-            if let Some(l) = &self.list {
-                root = root.child(
-                    div()
-                        .id("mission-tasks-list")
-                        .test_support()
-                        .w_full()
-                        .h(px(220.))
-                        .child(List::new(l)),
-                );
-            }
-            if let Some(t) = self.state.selected.as_ref().and_then(|id| s.task(id)) {
-                let copy = Arc::new(format!(
-                    "#{} {}\n{}\n{}\n\n{}",
-                    t.number, t.title, t.status, t.context, t.body
-                ));
-                let generation = self.state.generation;
-                let id = t.id.clone();
-                let focus = self.detail_focus.clone();
-                root = root.child(
-                    div()
-                        .id("mission-tasks-detail")
-                        .test_support()
-                        .track_focus(&self.detail_focus)
-                        .v_flex()
-                        .gap(px(Space::CONTROL))
-                        .w_full()
-                        .min_w_0()
-                        .on_key_down(cx.listener(|v, event: &gpui_kit::KeyDownEvent, w, cx| {
-                            if event.keystroke.key == "escape" {
-                                v.back(w, cx);
-                                cx.stop_propagation();
-                            }
-                        }))
-                        .child(
-                            div()
-                                .h_flex()
-                                .flex_wrap()
-                                .gap_2()
-                                .child(
-                                    ui::icon_action(
-                                        "mission-tasks-back",
-                                        "Close details",
-                                        crate::app_icon::AppIcon::Close,
-                                        Action::Quiet,
-                                    )
-                                    .on_click(cx.listener(|v, _, w, cx| v.back(w, cx))),
-                                )
-                                .child(
-                                    ui::action(
-                                        "mission-task-status",
-                                        "Change status…",
-                                        Action::Quiet,
-                                    )
-                                    .on_click(cx.listener(|v, _, w, cx| v.change_status(w, cx))),
-                                )
-                                .child(
-                                    ui::action(
-                                        "mission-task-edit",
-                                        "Edit title and body…",
-                                        Action::Quiet,
-                                    )
-                                    .on_click(cx.listener(|v, _, w, cx| v.edit_task(w, cx))),
-                                )
-                                .child(
-                                    ui::action(
-                                        "mission-task-model",
-                                        "Preferred model…",
-                                        Action::Quiet,
-                                    )
-                                    .on_click(cx.listener(|v, _, w, cx| v.task_model(w, cx))),
-                                )
-                                .child(
-                                    ui::action("mission-tasks-copy", "Copy task", Action::Quiet)
-                                        .on_click(cx.listener(move |v, _, _, cx| {
-                                            if v.opened
-                                                && v.state.generation == generation
-                                                && v.state.selected.as_ref() == Some(&id)
-                                            {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    (*copy).clone(),
-                                                ));
-                                            }
-                                        })),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id("mission-tasks-description")
-                                .test_support()
-                                .w_full()
-                                .min_w_0()
-                                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, w, cx| {
-                                    focus.focus(w, cx)
-                                })
-                                .child(SelectableText::new(
-                                    SharedString::from(format!(
-                                        "mission-task-detail-{}-{}",
-                                        t.id, generation
-                                    )),
-                                    SharedString::from(format!(
-                                        "#{} {}\n{}\n\n{}",
-                                        t.number,
-                                        t.title,
-                                        ui::task_status(&t.status, cx).0,
-                                        if t.body.is_empty() {
-                                            "No description saved."
-                                        } else {
-                                            &t.body
-                                        }
-                                    )),
-                                )),
-                        ),
-                );
-            }
         }
-        if let Some(form) = &self.status_form {
-            root = root.child(form.clone());
+        // New task opens below the list, scrolling on its own so the list
+        // keeps its place.
+        if self.creation.is_some() {
+            root = root.child(
+                div()
+                    .id("mission-tasks-details")
+                    .test_support()
+                    .overflow_y_scroll()
+                    .v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .flex_shrink_1()
+                    .when(list.is_some(), |d| d.max_h(gpui_kit::relative(0.55)))
+                    .gap(px(Space::CONTROL))
+                    .child(ui::rule(w, cx))
+                    .children(self.creation.clone()),
+            );
         }
         root
     }

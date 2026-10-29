@@ -2,7 +2,7 @@
 use crate::{
     LocalOptions,
     mission_browser_fixture::{self as f, Reply, Server},
-    mission_browser_view::{Browser, Event, Input},
+    mission_browser_view::{Browser, Event, Input, Tab},
     mission_reader::Route,
 };
 use gpui_kit::{
@@ -98,20 +98,6 @@ fn until(
     }
     settle(cx, h);
 }
-fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
-    cx.update_window(h, |_, w, cx| {
-        let viewport = w.find("missions-page").bounds();
-        let target = w.find(gpui_kit::SharedString::from(id.to_owned())).bounds();
-        let delta = viewport.top() + px(24.) - target.top();
-        w.scroll(
-            "missions-page",
-            ScrollDelta::Pixels(point(px(0.), delta)),
-            cx,
-        );
-    })
-    .unwrap();
-    settle(cx, h);
-}
 pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
     crate::mission_tasks_view::capacity_probe::run(cx);
     let dir = std::env::var_os("PILOT_NEXT_TASKS_DIR").map(std::path::PathBuf::from);
@@ -177,15 +163,23 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(
                 before,
                 server.state.lock().unwrap().seen.len(),
-                "collapsed pane never fetches"
+                "Overview never fetches the task list"
             );
-            reveal(cx, h, "mission-tasks-toggle");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-toggle", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, _| {
+                assert!(
+                    w.try_find("mission-tasks-browser").is_none(),
+                    "no list on Overview"
+                );
+                // Open work only: 300 received, 38 dropped, 38 done.
+                assert_eq!(w.find("mission-tab-tasks").label(), Some("Tasks 224"));
+            })
+            .unwrap();
+            click(cx, h, "mission-tab-tasks");
             until(cx, h, &host, |_, cx| {
                 pane.read(cx).state.snapshot.is_some() && !pane.read(cx).state.busy
             });
             cx.update(|cx| {
+                assert_eq!(host.read(cx).browser.read(cx).tab, Tab::Tasks);
                 assert_eq!(
                     pane.read(cx).state.snapshot.as_ref().unwrap().tasks.len(),
                     TASKS
@@ -210,7 +204,6 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 ]
             );
             assert_eq!(progress[4].1, 75, "phase-gated tasks count as stored To do");
-            reveal(cx, h, "mission-tasks-coverage");
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("mission-tasks-legend-dropped").is_none());
                 let mut last = None;
@@ -225,6 +218,8 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     }
                     last = Some((b.top(), b.left()));
                 }
+                // A mission without phases is one flat list without headers.
+                assert!(w.try_find("mission-tasks-phase-0").is_none());
             })
             .unwrap();
             if let Some(d) = &dir {
@@ -233,47 +228,61 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     .save(d.join(format!("{name}-legend.png")))
                     .unwrap();
             }
-            reveal(cx, h, "mission-tasks-list");
-            // A page-centred wheel can land on the inner list: bring it back to its first row.
+            // The tab spans the page, not the Overview's reading column.
             cx.update_window(h, |_, w, cx| {
+                let b = w.find("mission-tasks-list").bounds();
+                let inset = px(crate::ui::Space::HOME);
+                assert!(
+                    b.left() <= inset + px(1.) && b.right() >= px(width) - inset - px(1.),
+                    "full-width list {b:?}"
+                );
+                assert!(b.size.height > px(500.), "list fills the tab {b:?}");
+                assert!(b.bottom() <= px(1000.));
                 w.scroll(
                     "mission-tasks-list",
                     ScrollDelta::Pixels(point(px(0.), px(100_000.))),
                     cx,
-                )
+                );
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                let b = w.find("mission-tasks-list").bounds();
-                assert!(b.left() >= px(0.) && b.right() <= px(width) && b.size.height > px(200.));
-                w.click("mission-tasks-item-exact-0", cx);
-            })
-            .unwrap();
-            settle(cx, h);
+            click(cx, h, "mission-tasks-item-exact-0");
             cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-0")));
-            reveal(cx, h, "mission-tasks-copy");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-copy", cx))
-                .unwrap();
+            // Selecting a task opens nothing below the list; its "…" menu acts on it.
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("mission-tasks-details").is_none());
+                assert!(w.find("mission-tasks-list").bounds().size.height > px(500.));
+                assert!(pane.read(cx).owns_focus(w, cx));
+            })
+            .unwrap();
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!("{name}-selected.png")))
+                    .unwrap();
+            }
+            task_action(cx, h, "exact-0", "Copy task");
             cx.update(|cx| {
                 let s = cx.read_from_clipboard().unwrap().text().unwrap();
                 assert!(
                     s.contains("Exact description 0")
-                        && s.contains("👩‍💻 é")
+                        && s.contains("👩‍💻 e\u{301}")
                         && s.contains("Task ID: exact-0")
                 );
             });
-            if let Some(d) = &dir {
-                cx.capture_screenshot(h)
-                    .unwrap()
-                    .save(d.join(format!("{name}-details.png")))
-                    .unwrap();
-            }
-            // Escape from actual detail returns to mounted list; arrows/Enter select the other same-title ID.
+            // Escape clears the selection and highlight; arrows/Enter then start
+            // from the top and select the other same-title ID.
             cx.update_window(h, |_, w, cx| w.press("escape", cx))
                 .unwrap();
             settle(cx, h);
-            reveal(cx, h, "mission-tasks-list");
+            cx.update(|cx| assert!(pane.read(cx).state.selected.is_none()));
+            cx.update_window(h, |_, w, cx| {
+                w.press("down", cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-0")));
             cx.update_window(h, |_, w, cx| {
                 w.press("down", cx);
                 w.press("enter", cx);
@@ -281,9 +290,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-1")));
-            reveal(cx, h, "mission-tasks-copy");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-copy", cx))
-                .unwrap();
+            task_action(cx, h, "exact-1", "Copy task");
             cx.update(|cx| {
                 assert!(
                     cx.read_from_clipboard()
@@ -293,11 +300,18 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                         .contains("Exact description 1")
                 )
             });
+            // Overview and back keeps the list and its selection; no read.
+            let before = server.state.lock().unwrap().seen.len();
+            click(cx, h, "mission-tab-overview");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("mission-tasks-browser").is_none());
+                assert!(w.find("mission-goal").visible());
+            })
+            .unwrap();
+            click(cx, h, "mission-tab-tasks");
+            assert_eq!(before, server.state.lock().unwrap().seen.len());
+            cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-1")));
             // The received list is not the old 24-row preview: actual wheel reaches the last task.
-            cx.update_window(h, |_, w, cx| w.press("escape", cx))
-                .unwrap();
-            settle(cx, h);
-            reveal(cx, h, "mission-tasks-list");
             cx.update_window(h, |_, w, cx| {
                 w.scroll(
                     "mission-tasks-list",
@@ -307,13 +321,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-item-exact-299", cx))
-                .unwrap();
-            settle(cx, h);
+            click(cx, h, "mission-tasks-item-exact-299");
             cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-299")));
-            reveal(cx, h, "mission-tasks-copy");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-copy", cx))
-                .unwrap();
+            task_action(cx, h, "exact-299", "Copy task");
             cx.update(|cx| {
                 assert!(
                     cx.read_from_clipboard()
@@ -328,7 +338,6 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.press("escape", cx))
                 .unwrap();
             settle(cx, h);
-            reveal(cx, h, "mission-tasks-list");
             cx.update_window(h, |_, w, cx| {
                 w.scroll(
                     "mission-tasks-list",
@@ -359,8 +368,7 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-256")));
             row_in_list(cx, "exact-256");
             cx.update_window(h, |_, w, cx| {
-                assert_eq!(w.find("mission-tasks-detail").focused(), Some(true));
-                w.press("escape", cx);
+                assert!(pane.read(cx).owns_focus(w, cx));
                 w.press("up", cx);
                 w.press("enter", cx);
             })
@@ -369,7 +377,6 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("exact-255")));
             row_in_list(cx, "exact-255");
             cx.update_window(h, |_, w, cx| {
-                w.press("escape", cx);
                 w.press("down", cx);
                 w.press("down", cx);
                 w.press("enter", cx);
@@ -384,11 +391,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     .save(d.join(format!("{name}-reveal-257.png")))
                     .unwrap();
             }
-            // Refresh errors retain exact selected description, with explicit stale/error presentation.
+            // Refresh errors retain the exact selected row, with explicit stale/error presentation.
             server.reply("/api/missions/mission-A", Reply::json(503, json!({})));
-            reveal(cx, h, "mission-tasks-refresh");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-refresh", cx))
-                .unwrap();
+            click(cx, h, "mission-tasks-refresh");
             until(cx, h, &host, |_, cx| {
                 pane.read(cx).state.error.is_some() && !pane.read(cx).state.busy
             });
@@ -397,6 +402,11 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(p.state.selected.as_deref(), Some("exact-257"));
                 assert_eq!(p.state.snapshot.as_ref().unwrap().tasks.len(), TASKS);
             });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("mission-tasks-error").visible());
+                assert!(w.find("mission-tasks-item-exact-257").visible());
+            })
+            .unwrap();
             if let Some(d) = &dir {
                 cx.capture_screenshot(h)
                     .unwrap()
@@ -404,25 +414,18 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             server.reply("/api/missions/mission-A", Reply::json(200, detail.clone()));
-            reveal(cx, h, "mission-tasks-refresh");
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-refresh", cx))
-                .unwrap();
+            click(cx, h, "mission-tasks-refresh");
             until(cx, h, &host, |_, cx| {
                 pane.read(cx).state.error.is_none() && !pane.read(cx).state.busy
             });
-            // No automatic refresh or mutation on dismissal. Reopen and switch mission during a slow read.
-            reveal(cx, h, "mission-tasks-toggle");
-            let before = server.state.lock().unwrap().seen.len();
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-toggle", cx))
-                .unwrap();
-            settle(cx, h);
-            assert_eq!(before, server.state.lock().unwrap().seen.len());
+            // Switch mission during a slow read: the late result is fenced and the
+            // other mission opens on its Overview.
             let mut slow = Reply::json(200, detail);
             slow.delay_ms = 400;
             server.reply("/api/missions/mission-A", slow);
-            cx.update_window(h, |_, w, cx| w.click("mission-tasks-toggle", cx))
-                .unwrap();
-            settle(cx, h);
+            click(cx, h, "mission-tasks-refresh");
+            cx.update(|cx| assert!(pane.read(cx).state.busy));
+            server.reply("/api/missions/mission-B", Reply::json(200, phased()));
             cx.update_window(h, |_, w, cx| {
                 host.read(cx).browser.clone().update(cx, |b, cx| {
                     b.sync(input(Some(Route::Detail(f::key("mission-B")))), w, cx)
@@ -441,7 +444,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                         && p.state.selected.is_none()
                 );
                 assert_eq!(p.state.key.as_ref().unwrap().id, "mission-B");
+                assert_eq!(host.read(cx).browser.read(cx).tab, Tab::Overview);
             });
+            phases_journey(cx, h, &host, &pane, &dir, &name);
             assert!(server.all_gets());
             assert!(
                 server
@@ -463,4 +468,283 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
         }
     }
     assert!(cases > 0, "nonzero selected task journeys");
+}
+
+fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
+    cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
+    settle(cx, h);
+}
+/// Choose a command from a task row's "…" menu, waiting out any dialog
+/// entrance. False when the menu did not open.
+pub(crate) fn task_action(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    task: &str,
+    label: &str,
+) -> bool {
+    let button = gpui_kit::SharedString::from(format!("mission-task-menu-{task}"));
+    cx.update_window(h, |_, w, cx| w.click(button, cx)).unwrap();
+    settle(cx, h);
+    let chosen = cx
+        .update_window(h, |_, w, cx| {
+            if w.try_find("popup-menu").is_none() {
+                return false;
+            }
+            let item = (0..8usize)
+                .find(|i| {
+                    w.within("popup-menu")
+                        .try_find(*i)
+                        .is_some_and(|e| e.label() == Some(label))
+                })
+                .unwrap_or_else(|| panic!("task menu has no {label:?}"));
+            w.within("popup-menu").click(item, cx);
+            true
+        })
+        .unwrap();
+    settle(cx, h);
+    cx.advance_clock(Duration::from_millis(300));
+    settle(cx, h);
+    chosen
+}
+/// Mission B: Build (current), Ship and an empty Later phase, plus unphased work.
+fn phased() -> serde_json::Value {
+    let mut v = f::detail("mission-B");
+    v["phases"] = json!([
+        {"id":"p-ship","missionId":"mission-B","name":"Ship it 日本語 👩‍💻","order":2},
+        {"id":"p-build","missionId":"mission-B","name":"Build","order":1},
+        {"id":"p-later","missionId":"mission-B","name":"Later","order":3}
+    ]);
+    let rows = [
+        ("p-build", "done"),
+        ("p-build", "done"),
+        ("p-build", "done"),
+        ("p-build", "in_review"),
+        ("p-ship", "todo"),
+        ("p-ship", "in_progress"),
+        ("p-ship", "dropped"),
+        ("", "todo"),
+    ];
+    v["tasks"] = json!(rows.iter().enumerate().map(|(n, (phase, status))| {
+        let mut t = json!({"id":format!("b-{n}"),"number":n+1,"title":format!("Phase task {n}"),"status":status,"order":n,"body":format!("Body {n}")});
+        if !phase.is_empty() { t["phaseId"] = json!(phase); }
+        t
+    }).collect::<Vec<_>>());
+    v
+}
+/// Overview phases in order with exact counts, keyboard into Tasks, phase
+/// sections, Up/Down across a section boundary, and drafts kept across tabs.
+fn phases_journey(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    host: &Entity<Host>,
+    pane: &Entity<crate::mission_tasks_view::Pane>,
+    dir: &Option<std::path::PathBuf>,
+    name: &str,
+) {
+    cx.update(|cx| {
+        let b = host.read(cx).browser.read(cx);
+        let rows: Vec<_> = b
+            .detail
+            .as_ref()
+            .unwrap()
+            .phases
+            .iter()
+            .map(|g| (g.name.clone(), g.done, g.total, g.current))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("Build".to_owned(), 3, 4, true),
+                ("Ship it 日本語 👩‍💻".to_owned(), 0, 2, false),
+                ("No phase".to_owned(), 0, 1, false),
+            ]
+        );
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.try_find("mission-progress").is_none(),
+            "phases replace the overall bar"
+        );
+        assert!(
+            w.try_find("mission-phase-3").is_none(),
+            "an empty phase has no row"
+        );
+        let page = w.find("missions-page").bounds();
+        let mut top = None;
+        for id in ["mission-phase-0", "mission-phase-1", "mission-phase-2"] {
+            let b = w.find(id).bounds();
+            assert!(
+                b.left() >= page.left() && b.right() <= page.right(),
+                "{id} {b:?}"
+            );
+            assert!(top.is_none_or(|t| b.top() > t), "{id} follows phase order");
+            top = Some(b.top());
+        }
+        assert_eq!(
+            w.find("mission-phase-0").label(),
+            Some("Build, current phase: 3 of 4 done. Open Tasks")
+        );
+        assert_eq!(w.find("mission-tab-tasks").label(), Some("Tasks 4"));
+    })
+    .unwrap();
+    if let Some(d) = dir {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(d.join(format!("{name}-phases-overview.png")))
+            .unwrap();
+    }
+    // Keyboard: Tab to the Ship row and open Tasks with Return.
+    cx.update_window(h, |_, w, cx| {
+        let row = "mission-phase-1";
+        for _ in 0..60 {
+            w.press("tab", cx);
+            if w.find(row).focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(w.find(row).focused(), Some(true));
+        w.press("enter", cx);
+    })
+    .unwrap();
+    until(cx, h, host, |b, cx| {
+        b.tab == Tab::Tasks && pane.read(cx).state.snapshot.is_some() && !pane.read(cx).state.busy
+    });
+    cx.update(|cx| {
+        let s = pane.read(cx).state.snapshot.clone().unwrap();
+        assert_eq!(s.key.id, "mission-B");
+        let titles: Vec<_> = s
+            .sections
+            .iter()
+            .map(|s| s.title.clone().unwrap())
+            .collect();
+        assert_eq!(titles, ["Build", "Ship it 日本語 👩‍💻", "No phase"]);
+    });
+    cx.update_window(h, |_, w, _| {
+        let mut top = None;
+        for (header, first) in [
+            ("mission-tasks-phase-0", "mission-tasks-item-b-0"),
+            ("mission-tasks-phase-1", "mission-tasks-item-b-4"),
+            ("mission-tasks-phase-2", "mission-tasks-item-b-7"),
+        ] {
+            let hb = w.find(header).bounds();
+            let rb = w.find(first).bounds();
+            assert!(rb.top() >= hb.bottom() - px(1.), "{header} heads its rows");
+            assert!(top.is_none_or(|t| hb.top() > t), "{header} in phase order");
+            top = Some(hb.top());
+        }
+        // Dropped tasks stay listed in their phase.
+        assert!(w.find("mission-tasks-item-b-6").visible());
+    })
+    .unwrap();
+    // Up/Down cross the Build/Ship boundary by exact ID.
+    click(cx, h, "mission-tasks-item-b-3");
+    cx.update_window(h, |_, w, cx| {
+        w.press("down", cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("b-4")));
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx)
+                .state
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .task("b-4")
+                .unwrap()
+                .context
+                .contains("Phase: Ship it")
+        )
+    });
+    // An open New task form and the selection survive Overview and back.
+    click(cx, h, "mission-task-new");
+    let form = cx.update(|cx| pane.read(cx).creation.clone().unwrap());
+    if let Some(d) = dir {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(d.join(format!("{name}-phases-tasks.png")))
+            .unwrap();
+    }
+    click(cx, h, "mission-tab-overview");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("mission-tasks-browser").is_none())
+    })
+    .unwrap();
+    click(cx, h, "mission-tab-tasks");
+    cx.update(|cx| {
+        let p = pane.read(cx);
+        assert_eq!(p.creation.as_ref(), Some(&form));
+        assert!(form.read(cx).visible);
+        assert_eq!(p.state.selected.as_deref(), Some("b-4"));
+    });
+    // Right-click runs a row's commands on that exact task, not the selection.
+    let menu = |cx: &mut HeadlessAppContext, row: &'static str, label: &str| {
+        cx.update_window(h, |_, w, cx| w.right_click(row, cx))
+            .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            let item = (0..8usize)
+                .find(|i| {
+                    w.within("popup-menu")
+                        .try_find(*i)
+                        .is_some_and(|e| e.label() == Some(label))
+                })
+                .unwrap_or_else(|| panic!("task menu has no {label:?}"));
+            w.within("popup-menu").click(item, cx);
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    menu(cx, "mission-tasks-item-b-1", "Copy task");
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).state.selected.as_deref(), Some("b-1"));
+        let s = cx.read_from_clipboard().unwrap().text().unwrap();
+        assert!(
+            s.starts_with("#2 Phase task 1") && s.contains("Body 1"),
+            "{s}"
+        );
+    });
+    menu(cx, "mission-tasks-item-b-5", "Change status…");
+    cx.update(|cx| {
+        let p = pane.read(cx);
+        assert_eq!(p.state.selected.as_deref(), Some("b-5"));
+        let form = p.status_form.as_ref().expect("status form opens");
+        assert_eq!(form.read(cx).target.task, "b-5");
+    });
+    // Status opens as a dialog over the list, not below it.
+    cx.advance_clock(Duration::from_millis(300));
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        let form = w.find("task-status-form").bounds();
+        assert!(form.size.width <= px(520.) && form.left() > px(0.));
+    })
+    .unwrap();
+    if let Some(d) = dir {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(d.join(format!("{name}-status-dialog.png")))
+            .unwrap();
+    }
+    click(cx, h, "task-status-close");
+    cx.update(|cx| assert!(pane.read(cx).status_form.is_none()));
+    // The highlighted row's "…" button offers the same commands.
+    task_action(cx, h, "b-5", "Copy task");
+    cx.update(|cx| {
+        let s = cx.read_from_clipboard().unwrap().text().unwrap();
+        assert!(s.starts_with("#6 Phase task 5"), "{s}");
+    });
+    if let Some(d) = dir {
+        cx.update_window(h, |_, w, cx| w.right_click("mission-tasks-item-b-2", cx))
+            .unwrap();
+        settle(cx, h);
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(d.join(format!("{name}-row-menu.png")))
+            .unwrap();
+        cx.update_window(h, |_, w, cx| w.press("escape", cx))
+            .unwrap();
+        settle(cx, h);
+    }
 }

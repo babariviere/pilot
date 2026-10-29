@@ -1357,31 +1357,49 @@ fn overview_at_a_glance(
         let p = v.missions.read(cx).tasks_browser.read(cx);
         p.state.selected.as_deref() == Some("task-C") && !p.state.busy
     });
-    cx.update_window(h, |_, w, _| {
+    cx.update_window(h, |_, w, cx| {
         let page = w.find("missions-page").bounds();
-        // Tasks scroll toward the top, as far as the page allows, so the
-        // heading and the revealed details are both in view.
-        let heading = w.find("mission-tasks-heading").bounds();
-        let detail = w.find("mission-tasks-detail").bounds();
+        // The row opens the Tasks tab with its exact task selected in view.
+        let list = w.find("mission-tasks-list").bounds();
+        let row = w.find("mission-tasks-item-task-C").bounds();
         assert!(
-            heading.top() >= page.top() - px(1.) && detail.bottom() <= page.bottom() + px(1.),
-            "Tasks scrolled into view: {heading:?} {detail:?} in {page:?}"
+            list.top() >= page.top() && row.top() >= list.top() && row.bottom() <= list.bottom(),
+            "Tasks in view: {list:?} {row:?} in {page:?}"
         );
         assert!(
-            heading.top() < page.top() + px(80.)
-                || w.find("mission-brief-heading").bounds().bottom() <= page.bottom(),
-            "scrolled to Tasks or to the end of the page"
+            w.try_find("mission-working-now").is_none(),
+            "Overview is hidden"
         );
-        assert_eq!(w.find("mission-tasks-detail").focused(), Some(true));
+        assert!(
+            w.try_find("mission-tasks-details").is_none(),
+            "no details panel"
+        );
+        assert!(
+            view.read(cx)
+                .missions
+                .read(cx)
+                .tasks_browser
+                .read(cx)
+                .owns_focus(w, cx)
+        );
     })
     .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            view.read(cx).missions.read(cx).tab,
+            crate::mission_browser_view::Tab::Tasks
+        )
+    });
     capture(
         cx,
         h,
         dir,
         format!("{}-{}-overview-reveal.png", width as u32, mode.name()),
     );
-    // A blocked task in Needs you reveals its own exact ID in the open list.
+    // Back on Overview, a blocked task in Needs you reveals its own exact ID.
+    cx.update_window(h, |_, w, cx| w.click("mission-tab-overview", cx))
+        .unwrap();
+    settle(cx, h);
     // Wheel over page content outside the inner task list.
     let to_top = |cx: &mut HeadlessAppContext| {
         cx.update_window(h, |_, w, cx| {
@@ -1404,5 +1422,8 @@ fn overview_at_a_glance(
         let p = v.missions.read(cx).tasks_browser.read(cx);
         p.state.selected.as_deref() == Some("task-E") && !p.state.busy
     });
+    cx.update_window(h, |_, w, cx| w.click("mission-tab-overview", cx))
+        .unwrap();
+    settle(cx, h);
     to_top(cx);
 }

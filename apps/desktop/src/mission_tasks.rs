@@ -18,16 +18,43 @@ pub(crate) struct Task {
     pub(crate) context: String,
     order: f64,
 }
+/// One run of the list: a phase's tasks under its header, or the whole flat
+/// list (no title) when the mission has no phases.
+#[derive(Clone, Debug)]
+pub(crate) struct Section {
+    pub(crate) title: Option<String>,
+    /// "3/8 done", as in Swift's phase header.
+    pub(crate) progress: String,
+    /// Indices into `Snapshot::tasks`, in task order.
+    pub(crate) tasks: Vec<usize>,
+}
 #[derive(Clone, Debug)]
 pub(crate) struct Snapshot {
     pub(crate) key: Key,
     pub(crate) tasks: Vec<Task>,
     /// Work-status counts in the overview's bar order, zeros omitted, dropped excluded.
     pub(crate) progress: Vec<(&'static str, usize)>,
+    /// Every task exactly once: phases in order, then No phase; one untitled
+    /// section without phases. Empty phases have no section.
+    pub(crate) sections: Vec<Section>,
 }
 impl Snapshot {
     pub(crate) fn task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|t| t.id == id)
+    }
+    /// The task at a list position.
+    pub(crate) fn at(&self, section: usize, row: usize) -> Option<&Task> {
+        self.tasks.get(*self.sections.get(section)?.tasks.get(row)?)
+    }
+    /// The list position of an exact task ID.
+    pub(crate) fn position(&self, id: &str) -> Option<(usize, usize)> {
+        self.sections.iter().enumerate().find_map(|(s, section)| {
+            section
+                .tasks
+                .iter()
+                .position(|ix| self.tasks[*ix].id == id)
+                .map(|row| (s, row))
+        })
     }
 }
 fn text(v: &Value, cap: usize) -> Result<String, &'static str> {
@@ -42,6 +69,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
     let mut ids = HashSet::new();
     let mut numbers = HashSet::new();
     let mut tasks = Vec::with_capacity(raw.len());
+    let mut membership = Vec::with_capacity(raw.len());
     for t in raw {
         let id = t["id"]
             .as_str()
@@ -59,9 +87,12 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             .filter(|v| v.is_finite())
             .ok_or("Invalid task order.")?;
         let mut context = vec![format!("Task ID: {id}")];
+        if !t["sessionId"].is_null() {
+            context.push(format!("Assigned chat: {}", text(&t["sessionId"], 1024)?));
+        }
+        // The phase line follows once the phase index is known.
+        let lines = context.len();
         for (field, label) in [
-            ("sessionId", "Assigned chat"),
-            ("milestone", "Phase"),
             ("preferredModel", "Model"),
             ("preferredThinking", "Thinking"),
             ("delegatedTo", "Delegated to"),
@@ -104,16 +135,60 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
             } else {
                 text(&t["body"], BODY_BYTES)?
             },
-            context: context.join("\n"),
+            context: String::new(),
             order,
         });
+        membership.push((
+            t["phaseId"].as_str(),
+            t["milestone"].as_str(),
+            context,
+            lines,
+        ));
     }
-    tasks.sort_by(|a, b| {
+    let mut tasks: Vec<_> = tasks.into_iter().zip(membership).collect();
+    tasks.sort_by(|(a, _), (b, _)| {
         a.order
             .total_cmp(&b.order)
             .then(a.number.cmp(&b.number))
             .then(a.id.cmp(&b.id))
     });
+    let index = crate::mission_phases::Index::new(&v["phases"], tasks.iter().map(|(_, m)| m.1))?;
+    let phases: Vec<_> = tasks.iter().map(|(_, m)| index.of(m.0, m.1)).collect();
+    let tasks: Vec<Task> = tasks
+        .into_iter()
+        .zip(&phases)
+        .map(|((mut t, (_, _, mut context, at)), phase)| {
+            if let Some(name) = phase.and_then(|p| index.name(p)) {
+                context.insert(at, format!("Phase: {name}"));
+            }
+            t.context = context.join("\n");
+            t
+        })
+        .collect();
+    let groups = index.groups(
+        &phases
+            .iter()
+            .zip(&tasks)
+            .map(|(p, t)| (*p, t.work_status.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    let sections = if groups.is_empty() {
+        vec![Section {
+            title: None,
+            progress: String::new(),
+            tasks: (0..tasks.len()).collect(),
+        }]
+    } else {
+        groups
+            .into_iter()
+            .filter(|g| !g.tasks.is_empty())
+            .map(|g| Section {
+                progress: g.progress(),
+                title: Some(g.name),
+                tasks: g.tasks,
+            })
+            .collect()
+    };
     // The mission header still validates; the overview already shows it.
     text(&v["mission"]["title"], 800)?;
     text(&v["mission"]["status"], 40)?;
@@ -126,6 +201,7 @@ pub(crate) fn parse(key: &Key, v: &Value) -> Result<Snapshot, &'static str> {
         key: key.clone(),
         tasks,
         progress,
+        sections,
     })
 }
 

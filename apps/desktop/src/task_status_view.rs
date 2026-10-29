@@ -6,10 +6,10 @@ use crate::{
     ui::{self, Action, Notice, Text, Tone},
 };
 use gpui_kit::{
-    App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Task, TestSupportExt, Window,
-    component::{Disableable, Selectable, StyledExt},
-    div,
+    App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Task, TestSupportExt, Window,
+    component::{Disableable, Selectable, StyledExt, WindowExt},
+    div, px,
 };
 pub(crate) enum Event {
     Close,
@@ -58,6 +58,25 @@ impl Form {
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         self.focus.focus(w, cx);
+    }
+    /// Show the form as a dialog; Close and Escape go through the form.
+    pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
+        let title =
+            SharedString::from(format!("Change status of #{}", form.read(cx).target.number));
+        w.open_dialog(cx, {
+            let form = form.clone();
+            move |d, _, cx| {
+                crate::ui::dialog(d, cx)
+                    .title(title.clone())
+                    .w(px(520.))
+                    .overlay_closable(false)
+                    .close_button(false)
+                    .keyboard(false)
+                    .on_cancel(|_, _, _| false)
+                    .child(form.clone())
+            }
+        });
+        form.update(cx, |f, cx| f.focus(w, cx));
     }
     pub(crate) fn new_intent(&mut self, target: Target, cx: &mut Context<Self>) {
         if !self.visible
@@ -133,21 +152,9 @@ impl Render for Form {
                     cx.emit(Event::Close);
                 }
             }))
-            .child(ui::heading(
-                "task-status-heading",
-                "Change task status",
-                Text::Headline,
-            ))
             .child(ui::text(
                 Text::Body,
-                SharedString::from(format!("#{} {}", self.target.number, self.target.title)),
-            ))
-            .child(ui::text(
-                Text::Caption,
-                SharedString::from(format!(
-                    "Local mission {} · task {}",
-                    self.target.key.id, self.target.task
-                )),
+                SharedString::from(self.target.title.clone()),
             ))
             .child(ui::text(
                 Text::Label,
@@ -175,9 +182,7 @@ impl Render for Form {
                 })),
             );
         }
-        root=root.child(choices)
-            .child(ui::text(Text::Caption,"Changes status only, retaining the assigned chat. Explicit status clears delegation. Existing phase completion and managed-ticket progress may change; coordinator notices can resume its agent. No new chat is created."))
-            .child(ui::text(Text::Caption,"Someone else may change the status at the same time; this is the status when you opened it."));
+        root = root.child(choices);
         if model::backward(&self.target.current, &self.chosen) {
             root=root.child(Notice::new("Moving work backward permanently disables automatic linked-PR status sync, even for future links.").tone(Tone::Warning));
         }
@@ -226,6 +231,7 @@ impl Render for Form {
         root.child(
             div()
                 .h_flex()
+                .justify_end()
                 .gap_2()
                 .child(
                     ui::action("task-status-close", "Close", Action::Quiet).on_click(cx.listener(

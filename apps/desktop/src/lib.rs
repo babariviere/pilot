@@ -158,6 +158,7 @@ pub use mission_create_probe::run_mission_create_probe;
 mod mission_fixture;
 mod mission_inspector;
 mod mission_inspector_view;
+mod mission_phases;
 mod mission_reader;
 mod mission_task_create;
 #[cfg(any(test, feature = "native-probes"))]
