@@ -631,6 +631,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
+            run_waiting_question(cx, width);
         }
     }
     run_many(cx, captures.as_deref());
@@ -868,4 +869,128 @@ fn run_many(cx: &mut HeadlessAppContext, captures: Option<&std::path::Path>) {
         cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         cx.run_until_parked();
     }
+}
+
+/// The shared resolver, not the sidebar, decides a waiting question: summaries
+/// straight from `local_model::chat` (no signal overrides) for member and
+/// standalone rows, the thread roll-up and a collapsed section mark, then an
+/// answer returns the member to Working.
+fn run_waiting_question(cx: &mut HeadlessAppContext, width: f32) {
+    use crate::{sidebar_tree::Rollup, state_mark::Mark};
+    use gpui_kit::test::TestQueryExt as _;
+    let jobs = json!([{"name":"synthetic"}]);
+    let raw = |v: Value| crate::local_model::chat(&v).unwrap();
+    let asked = |id: &str, title: &str, project: &str, sent: f64, mission: Value| {
+        raw(
+            json!({"id":id,"title":title,"projectId":project,"missionId":mission,
+            "state":"idle","working":true,"runningJobs":jobs,"outcome":"question","outcomeAt":sent,
+            "outcomeReason":"Which layout 日本語 👩‍💻?","createdAt":sent,"lastUserMessageAt":sent}),
+        )
+    };
+    let chats = |answered: bool| {
+        let member = if answered {
+            raw(
+                json!({"id":"q-member","title":"Asking member","projectId":"pilot","missionId":"gpui",
+                "state":"working","working":true,"runningJobs":jobs,"createdAt":951.,"lastUserMessageAt":951.}),
+            )
+        } else {
+            asked("q-member", "Asking member", "pilot", 951., json!("gpui"))
+        };
+        vec![
+            raw(
+                json!({"id":"q-coord","title":"Coordinator","projectId":"pilot","missionId":"gpui",
+                "missionCoordinator":true,"state":"working","working":true,"createdAt":950.,"lastUserMessageAt":950.}),
+            ),
+            member,
+            raw(
+                json!({"id":"q-live","title":"Live run","projectId":"pilot","state":"working",
+                "working":true,"createdAt":940.,"lastUserMessageAt":940.}),
+            ),
+            asked("q-bg", "Background asks", "pilot", 930., Value::Null),
+            asked("q-hidden", "Hidden asks", "dotfiles", 800., Value::Null),
+        ]
+    };
+    let (h, view) = open(cx, width, chats(false), &["project:dotfiles"]);
+    let spoken = |cx: &mut HeadlessAppContext, title: &str| {
+        cx.update_window(h, |_, w, cx| {
+            w.render_frame(cx);
+            w.elements()
+                .into_iter()
+                .filter_map(|e| e.label().map(str::to_owned))
+                .find(|l| l.starts_with(title))
+                .unwrap_or_else(|| panic!("{title} row"))
+        })
+        .unwrap()
+    };
+    let thread = |cx: &mut HeadlessAppContext| {
+        cx.update(|cx| {
+            let list = view.read(cx).chats.read(cx).delegate();
+            (
+                list.tree
+                    .threads
+                    .iter()
+                    .find(|t| t.mission == "gpui")
+                    .unwrap()
+                    .rollup,
+                list.tree
+                    .groups
+                    .iter()
+                    .find(|g| g.key == "project:dotfiles")
+                    .unwrap()
+                    .mark(),
+            )
+        })
+    };
+    for title in ["Asking member", "Background asks"] {
+        let label = spoken(cx, title);
+        assert!(label.contains("Asks: Which layout 日本語 👩‍💻?"), "{label}");
+        assert!(!label.contains("Working"), "{label}");
+    }
+    assert!(
+        spoken(cx, "Live run").contains("Working"),
+        "no summary evidence"
+    );
+    // The roll-up counts members; the coordinator keeps its own mark.
+    let expected = Rollup {
+        needs: 1,
+        ..Default::default()
+    };
+    assert_eq!(thread(cx), (expected, Some(Mark::NeedsYou)));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("chat-mark-group:project:dotfiles").is_some());
+        assert!(w.try_find("chat-row-q-hidden").is_none());
+    })
+    .unwrap();
+    let rebuild = |cx: &mut HeadlessAppContext, chats: Vec<Chat>, collapse: bool| {
+        cx.update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.state.chats = Arc::new(chats);
+                v.chats
+                    .update(cx, |l, _| l.delegate_mut().set_collapsed("gpui", collapse));
+                v.rebuild_nav(w, cx);
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    // Collapsed thread: the member's question rolls up as Needs you.
+    rebuild(cx, chats(false), true);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("mission-rollup-NeedsYou").is_some());
+    })
+    .unwrap();
+    // Answered: the run starts and the member is Working again.
+    rebuild(cx, chats(true), false);
+    let label = spoken(cx, "Asking member");
+    assert!(
+        !label.contains("Asks:") && label.contains("Working"),
+        "{label}"
+    );
+    let expected = Rollup {
+        working: 1,
+        ..Default::default()
+    };
+    assert_eq!(thread(cx).0, expected);
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
 }

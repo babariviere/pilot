@@ -112,7 +112,8 @@ pub(crate) fn read(value: &Value, working: bool) -> Order {
             && value["unpublishedWork"] != true
             && terminal(&value["pullRequest"])
             && linked.into_iter().all(terminal),
-        question: settled_view && outcome == Some("question"),
+        question: outcome == Some("question")
+            && (settled_view || crate::local_model::question_outranks_work(value)),
         activity: Stamp(activity),
         created: Stamp(created),
         archived: Stamp(stamp(&value["archivedAt"]).unwrap_or(0.)),

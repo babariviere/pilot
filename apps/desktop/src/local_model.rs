@@ -321,6 +321,19 @@ fn working(value: &Value) -> bool {
             .unwrap_or(matches!(state, "working" | "starting") || jobs)
 }
 
+/// An unanswered turn-ending question while only background jobs or subagents
+/// run. pilotd keeps that outcome (`session-outcomes.ts` applyActivity) and
+/// clears it as soon as a run starts, so it outranks background Working. A
+/// live run's own blocking ask has no summary evidence; only the open chat's
+/// transcript can show it (`Presentation::for_display`).
+pub(crate) fn question_outranks_work(value: &Value) -> bool {
+    value["outcome"] == "question"
+        && value["sleepPaused"] != true
+        && value["offlinePaused"] != true
+        && value["scheduledMessage"] != true
+        && !matches!(value["state"].as_str(), Some("working" | "starting"))
+}
+
 // Read-only summary projection, mirroring SessionSignal/WorkingLine. It does not
 // import Swift's private review marks or alter action eligibility/working state.
 fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
@@ -363,7 +376,9 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
         && ["pullRequests", "boundPullRequests"]
             .iter()
             .all(|field| value[*field].as_array().is_none_or(Vec::is_empty));
-    let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall") {
+    let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall")
+        || (working && question_outranks_work(value))
+    {
         Some(Signal::NeedsYou)
     } else if working {
         Some(Signal::Working)
@@ -1899,6 +1914,90 @@ mod tests {
                     || matches!(value["state"].as_str(), Some("working" | "starting"))
             );
         }
+    }
+
+    #[test]
+    fn unanswered_question_outranks_background_work_through_its_lifecycle() {
+        use crate::{
+            attention::Kind,
+            state_mark::{Mark, Signal},
+        };
+        let jobs = json!([{"id":"j","name":"synthetic","startedAt":1}]);
+        let view = |value: Value| {
+            let c = chat(&value).unwrap();
+            (
+                c.signal,
+                Mark::of(&c),
+                c.attention.as_ref().map(|a| a.kind),
+                c.busy,
+                c.background_work,
+            )
+        };
+        // 1. Run active: no summary evidence of a blocking ask, so Working.
+        assert_eq!(
+            view(json!({"id":"a","state":"working","working":true,"runningJobs":jobs})),
+            (
+                Some(Signal::Working),
+                Some(Mark::Working),
+                None,
+                true,
+                false
+            )
+        );
+        // 2. Turn ended on a question while jobs keep running: Needs you,
+        // with background work and jobs preserved for the composer strip.
+        let asked = json!({"id":"a","state":"idle","working":true,"runningJobs":jobs,"outcome":"question","outcomeAt":9,"outcomeReason":"Pick a layout 日本語 👩‍💻"});
+        assert_eq!(
+            view(asked.clone()),
+            (
+                Some(Signal::NeedsYou),
+                Some(Mark::Question),
+                Some(Kind::Question),
+                true,
+                true
+            )
+        );
+        let c = chat(&asked).unwrap();
+        assert!(c.order.question);
+        assert!(
+            c.attention
+                .unwrap()
+                .label
+                .contains("Pick a layout 日本語 👩‍💻")
+        );
+        assert_eq!(c.running_jobs.len(), 1);
+        // Parked worker, same question: still Needs you.
+        assert_eq!(
+            view(json!({"id":"a","state":"parked","outcome":"question","outcomeAt":9})).0,
+            Some(Signal::NeedsYou)
+        );
+        // 3. Answered: the reply starts a run and pilotd clears the outcome.
+        // Even a lagging outcome never outranks a starting or live run.
+        for state in ["starting", "working"] {
+            let v = view(
+                json!({"id":"a","state":state,"working":true,"runningJobs":jobs,"outcome":"question","outcomeAt":9}),
+            );
+            assert_eq!((v.0, v.2), (Some(Signal::Working), None), "{state}");
+        }
+        // Paused, or answered by a scheduled message: no question attention.
+        for extra in ["sleepPaused", "offlinePaused", "scheduledMessage"] {
+            let mut v = asked.clone();
+            v[extra] = json!(true);
+            let c = chat(&v).unwrap();
+            assert_ne!(c.signal, Some(Signal::NeedsYou), "{extra}");
+            assert!(!c.order.question, "{extra}");
+        }
+        // 4. Cancelled (stopped) or done while jobs run: back to background work.
+        for outcome in ["stopped", "done"] {
+            let mut v = asked.clone();
+            v["outcome"] = json!(outcome);
+            assert_eq!(view(v).1, Some(Mark::Background), "{outcome}");
+        }
+        // Unknown state words never manufacture attention.
+        assert_eq!(
+            view(json!({"id":"a","state":"mystery","runningJobs":jobs})).1,
+            Some(Mark::Background)
+        );
     }
 
     #[test]

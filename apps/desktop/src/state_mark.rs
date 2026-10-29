@@ -212,6 +212,13 @@ mod tests {
             mark(json!({"id":"a","state":"idle","outcome":"question","outcomeAt":1})),
             Some(Mark::Question)
         );
+        // An unanswered question outranks background-only work.
+        assert_eq!(
+            mark(
+                json!({"id":"a","state":"idle","working":true,"runningJobs":[{"name":"j"}],"outcome":"question","outcomeAt":1})
+            ),
+            Some(Mark::Question)
+        );
         assert_eq!(
             mark(json!({"id":"a","state":"working","attentionReason":{"kind":"tool_stall"}})),
             Some(Mark::NeedsYou)
