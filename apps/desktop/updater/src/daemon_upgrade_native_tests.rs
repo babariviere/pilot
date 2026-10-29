@@ -118,6 +118,185 @@ impl Drop for Service {
 }
 
 #[test]
+#[ignore = "explicit private synthetic stopped migration; random service and temporary profile only"]
+fn native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_once() {
+    let node = PathBuf::from(
+        std::env::var_os("PILOT_DAEMON_UPGRADE_FIXTURE_NODE").expect("explicit fixture Node"),
+    );
+    let temp = crate::owned_tests::Temp::new();
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
+    fs::create_dir_all(home.join("Library/Logs/Pilot")).unwrap();
+    let home = home.canonicalize().unwrap();
+    let profile = home.join("profile");
+    fs::create_dir(&profile).unwrap();
+    fs::set_permissions(&profile, fs::Permissions::from_mode(0o700)).unwrap();
+    let daemon = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let lineage = "bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb";
+    let daemon_bytes = format!("{daemon}\n");
+    let lineage_bytes = format!("{lineage}\n");
+    installer::write_new(&profile.join("daemon-id"), daemon_bytes.as_bytes()).unwrap();
+    installer::write_new(&profile.join("storage-lineage"), lineage_bytes.as_bytes()).unwrap();
+    installer::write_new(
+        &profile.join("preserved-draft"),
+        b"preserved offline draft\n",
+    )
+    .unwrap();
+    let db = profile.join(".daemon-owner.sqlite");
+    command("/usr/bin/sqlite3",&[db.as_os_str(),"CREATE TABLE runtime_owner(singleton INTEGER PRIMARY KEY CHECK(singleton=1),managed INTEGER NOT NULL); INSERT INTO runtime_owner VALUES(1,0); PRAGMA user_version=1;".as_ref()]).unwrap();
+    fs::set_permissions(&db, fs::Permissions::from_mode(0o600)).unwrap();
+    let db_inode = fs::metadata(&db).unwrap().ino();
+    let profile_inode = fs::metadata(&profile).unwrap().ino();
+    let seed = bundle(
+        temp.path(),
+        "Pilot Next.app",
+        "com.example.synthetic.offline",
+        "101.1",
+        &node,
+        true,
+    );
+    // Unlike older fixtures, existing UUID identities must not be rewritten at all.
+    // Count process entries before admission, so a duplicate bootstrap cannot hide
+    // behind a singleton failure or the same accepted owner boot.
+    let main = MAIN
+        .replace("writeFileSync(process.env.PILOT_HOME+'/daemon-id','fixture-daemon',{mode:0o600});", "")
+        .replace("writeFileSync(process.env.PILOT_HOME+'/storage-lineage','fixture-lineage',{mode:0o600});", "")
+        .replace("readFileSync, existsSync, writeFileSync", "readFileSync, existsSync, writeFileSync, appendFileSync")
+        .replace("const root=", "appendFileSync(process.env.PILOT_HOME+'/fixture-starts','start\\n',{mode:0o600});\nconst root=")
+        .replace("fixture-daemon",daemon).replace("fixture-lineage",lineage);
+    fs::write(
+        seed.join(crate::layout::RUNTIME)
+            .join("packages/daemon/src/main.ts"),
+        main,
+    )
+    .unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            "--identifier".as_ref(),
+            "com.example.synthetic.offline".as_ref(),
+            seed.as_os_str(),
+        ],
+    )
+    .unwrap();
+    let trust = Trust {
+        application_id: "com.example.synthetic.offline".into(),
+        channel: "desktop-stable".into(),
+        repository: "synthetic/fixture-only".into(),
+        public_key: [42; 32],
+        code_requirement: "identifier \"com.example.synthetic.offline\"".into(),
+        current_build: "101.1".into(),
+        bundle_name: "Pilot Next.app".into(),
+    };
+    let current = runtime::publish(
+        &seed,
+        &temp.path().join(runtime::STORE_NAME),
+        &trust,
+        &installer::MacPlatform,
+    )
+    .unwrap();
+    fs::remove_dir_all(seed).unwrap();
+    let label = format!(
+        "com.example.pilot-offline-{}",
+        coordination::random_hex().unwrap()
+    );
+    assert_ne!(label, LABEL);
+    let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
+    let cleanup = Service(service.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let file = home
+        .join("Library/LaunchAgents")
+        .join(format!("{label}.plist"));
+    let missing = temp.path().join("Pilot.app");
+    assert!(!missing.exists());
+    let old_runtime = missing.join(crate::layout::RUNTIME);
+    let log = home.join("Library/Logs/Pilot/pilotd.log");
+    let definition = json!({"Label":label,"ProgramArguments":[old_runtime.join("node/bin/node"),old_runtime.join("packages/daemon/src/main.ts")],"WorkingDirectory":home,"EnvironmentVariables":{"PATH":"/usr/bin:/bin","PILOT_PORT":port.to_string(),"PILOT_HOME":profile},"RunAtLoad":true,"KeepAlive":true,"ThrottleInterval":10,"ProcessType":"Interactive","StandardOutPath":log,"StandardErrorPath":log});
+    installer::write_new(&file, &serde_json::to_vec(&definition).unwrap()).unwrap();
+    command(
+        "/usr/bin/plutil",
+        &["-convert".as_ref(), "xml1".as_ref(), file.as_os_str()],
+    )
+    .unwrap();
+    let original_bytes = fs::read(&file).unwrap();
+    let location = Location {
+        home: profile.clone(),
+        port,
+        policy: Default::default(),
+    };
+    let cancel = AtomicBool::new(false);
+    let result = super::stopped::migrate_at(&home, &label, &current, &trust, &cancel);
+    assert_eq!(
+        result,
+        Ok(()),
+        "isolated offline migration: {}; journal={}",
+        fs::read_to_string(&log).unwrap_or_default(),
+        fs::read_to_string(profile.join(JOURNAL)).unwrap_or_default()
+    );
+    let owner = super::super::native::running(&location, &current).unwrap();
+    assert_eq!(
+        fs::read_to_string(profile.join("fixture-starts")).unwrap(),
+        "start\n"
+    );
+    assert_eq!(
+        super::stopped::migrate_at(&home, &label, &current, &trust, &cancel),
+        Err(Failure::Unsupported)
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"]
+    );
+    assert_eq!(
+        fs::read_to_string(profile.join("fixture-starts")).unwrap(),
+        "start\n"
+    );
+    assert_eq!(
+        fs::read(profile.join("daemon-id")).unwrap(),
+        daemon_bytes.as_bytes()
+    );
+    assert_eq!(
+        fs::read(profile.join("storage-lineage")).unwrap(),
+        lineage_bytes.as_bytes()
+    );
+    assert_eq!(
+        fs::read(profile.join("preserved-draft")).unwrap(),
+        b"preserved offline draft\n"
+    );
+    assert_eq!(fs::metadata(&db).unwrap().ino(), db_inode);
+    assert_eq!(fs::metadata(&profile).unwrap().ino(), profile_inode);
+    let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
+    assert_eq!(journal["phase"], "complete");
+    let backup = Path::new(journal["originalPlistBackup"].as_str().unwrap());
+    assert_eq!(fs::read(backup).unwrap(), original_bytes);
+    assert_eq!(fs::metadata(backup).unwrap().mode() & 0o777, 0o600);
+    assert_eq!(journal["previousDefinition"], definition);
+    assert!(file.with_extension("plist.next-owner").exists());
+    assert!(!missing.exists());
+    drop(cleanup);
+    let end = Instant::now() + Duration::from_secs(10);
+    while coordination::owner_live(&profile) {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let managed = command(
+        "/usr/bin/sqlite3",
+        &[
+            db.as_os_str(),
+            "SELECT managed FROM runtime_owner WHERE singleton=1".as_ref(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(managed, b"0\n");
+    assert_eq!(fs::metadata(&db).unwrap().ino(), db_inode);
+}
+
+#[test]
 #[ignore = "explicit private synthetic launchd registration; no login/global service"]
 fn native_launchd_registration_offline_seed_and_singleton() {
     let node = PathBuf::from(
@@ -314,6 +493,7 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
     fs::write(profile.join("preserved-draft"), "still here 🐦").unwrap();
     let cancel = AtomicBool::new(false);
     let mut host = LaunchAgent {
+        original_backup: None,
         location: location.clone(),
         current: current.clone(),
         trust: &trust,

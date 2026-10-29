@@ -143,6 +143,24 @@ pub(super) fn wait_registered(location: &Location, root: &Path) -> Result<Value,
     }
 }
 pub(super) fn command(program: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>, Failure> {
+    let (status, bytes) = command_status(program, args)?;
+    if !status.success() {
+        return Err(Failure::Unverified);
+    }
+    Ok(bytes)
+}
+pub(super) fn command_status(
+    program: &str,
+    args: &[&std::ffi::OsStr],
+) -> Result<(std::process::ExitStatus, Vec<u8>), Failure> {
+    let (status, out, _) = command_capture(program, args, false)?;
+    Ok((status, out))
+}
+pub(super) fn command_capture(
+    program: &str,
+    args: &[&std::ffi::OsStr],
+    stderr: bool,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>), Failure> {
     let mut child = io(Command::new(program)
         .args(args)
         .env_clear()
@@ -150,7 +168,11 @@ pub(super) fn command(program: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8
         .env("HOME", std::env::var_os("HOME").unwrap_or_default())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if stderr {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .envs(if program == "/usr/bin/systemctl" {
             ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]
                 .into_iter()
@@ -171,7 +193,7 @@ pub(super) fn command(program: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8
     let end = Instant::now() + Duration::from_secs(timeout);
     loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => {
+            Ok(Some(status)) => {
                 let mut bytes = Vec::new();
                 io(child
                     .stdout
@@ -179,8 +201,12 @@ pub(super) fn command(program: &str, args: &[&std::ffi::OsStr]) -> Result<Vec<u8
                     .ok_or(Failure::Unverified)?
                     .take(65537)
                     .read_to_end(&mut bytes))?;
-                return if bytes.len() <= 65536 {
-                    Ok(bytes)
+                let mut error = Vec::new();
+                if let Some(stderr) = child.stderr.take() {
+                    io(stderr.take(4097).read_to_end(&mut error))?;
+                }
+                return if bytes.len() <= 65536 && error.len() <= 4096 {
+                    Ok((status, bytes, error))
                 } else {
                     Err(Failure::Unverified)
                 };

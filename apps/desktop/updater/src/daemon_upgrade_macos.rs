@@ -21,6 +21,9 @@ use std::{
 
 const LABEL: &str = "com.babariviere.pilot.daemon";
 const JOURNAL: &str = ".daemon-upgrade.json";
+#[path = "daemon_migrate_stopped.rs"]
+mod stopped;
+pub use stopped::migrate_stopped;
 fn verified<T>(result: Result<T, crate::Error>) -> Result<T, Failure> {
     result.map_err(|_| Failure::Unverified)
 }
@@ -60,6 +63,7 @@ pub fn upgrade(
         lock: None,
         plist_stamp: None,
         reservation: None,
+        original_backup: None,
     };
     execute(&mut host, cancel)
 }
@@ -81,6 +85,7 @@ struct LaunchAgent<'a> {
     lock: Option<File>,
     plist_stamp: Option<(u64, u64)>,
     reservation: Option<super::reservation::Reservation>,
+    original_backup: Option<PathBuf>,
 }
 
 fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Failure> {
@@ -120,6 +125,18 @@ fn service_pid(text: &str, path: &Path, arguments: &[Value]) -> Result<i32, Fail
     pid.filter(|pid| *pid > 1).ok_or(Failure::Unverified)
 }
 impl LaunchAgent<'_> {
+    fn bootstrap(&self) -> Result<(), Failure> {
+        let domain = format!("gui/{}", unsafe { libc::geteuid() });
+        command(
+            "/bin/launchctl",
+            &[
+                "bootstrap".as_ref(),
+                domain.as_ref(),
+                self.plist.as_os_str(),
+            ],
+        )?;
+        Ok(())
+    }
     fn verify_target(&self) -> Result<(), Failure> {
         let id = verified(runtime::identity(&self.current))?;
         let (_, build) = verified(coordination::validate_capsule(
@@ -336,7 +353,7 @@ impl Handoff for LaunchAgent<'_> {
         if phase == "stopping" {
             claim(&self.plist, &self.location)?;
         }
-        let value = json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"capsule":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement,"receipt":self.reservation.as_ref().map(|r|&r.receipt)});
+        let value = json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"capsule":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement,"originalPlistBackup":self.original_backup,"receipt":self.reservation.as_ref().map(|r|&r.receipt)});
         let temp = self.location.home.join(format!(
             ".daemon-upgrade-{}.pending",
             verified(coordination::random_hex())?
@@ -379,7 +396,7 @@ impl Handoff for LaunchAgent<'_> {
         let meta = private_regular(&self.plist)?;
         if Some((meta.dev(), meta.ino())) != self.plist_stamp
             || plist(&self.plist)? != self.original
-            || coordination::owner_live(&self.location.home)
+            || (self.original_backup.is_none() && coordination::owner_live(&self.location.home))
         {
             return Err(Failure::Unverified);
         }
@@ -400,6 +417,14 @@ impl Handoff for LaunchAgent<'_> {
             &["-convert".as_ref(), "xml1".as_ref(), temp.as_os_str()],
         )?;
         io(io(File::open(&temp))?.sync_all())?;
+        if let Some(backup) = &self.original_backup {
+            let meta = private_regular(&self.plist)?;
+            if Some((meta.dev(), meta.ino())) != self.plist_stamp
+                || io(fs::read(&self.plist))? != io(fs::read(backup))?
+            {
+                return Err(Failure::Unverified);
+            }
+        }
         io(fs::rename(&temp, &self.plist))?;
         io(io(File::open(self.plist.parent().ok_or(Failure::Unverified)?))?.sync_all())
     }
@@ -408,16 +433,7 @@ impl Handoff for LaunchAgent<'_> {
         if coordination::owner_live(&self.location.home) {
             return Err(Failure::Unverified);
         }
-        let domain = format!("gui/{}", unsafe { libc::geteuid() });
-        command(
-            "/bin/launchctl",
-            &[
-                "bootstrap".as_ref(),
-                domain.as_ref(),
-                self.plist.as_os_str(),
-            ],
-        )?;
-        Ok(())
+        self.bootstrap()
     }
     fn verify_started(&mut self) -> Result<(), Failure> {
         let until = Instant::now() + Duration::from_secs(30);

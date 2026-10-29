@@ -101,6 +101,9 @@ a daemon automatically. Other external owners remain externally managed.
 Bundled launch uses the existing configured Local home/port. It does not silently
 select a new profile, import Swift state or retarget retained drafts/operations.
 An existing legacy/unproven profile is refused **without enrollment or migration**.
+The separate, explicit [stopped legacy service migration](daemon-upgrades.md#stopped-legacy-service-migration)
+can replace a stopped Swift launch agent's runtime while preserving that profile;
+it is never invoked automatically at startup.
 The user must explicitly arrange a compatible guarded runtime, choose a genuinely
 fresh configured profile, or use existing-daemon mode. No automatic recovery
 deletes owner files, guesses a PID, starts on another port or replaces a daemon.

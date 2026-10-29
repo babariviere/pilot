@@ -66,6 +66,37 @@ to the GUI login session. Linux logout/reboot survival depends on existing host
 policy, not a new linger or power-setting grant. Bundling remains the offline
 seed; no daemon feed, signing or self-update activation is introduced.
 
+## Stopped legacy service migration
+
+The macOS update helper supports an explicit operator migration for the known
+Swift launch agent after it has been unloaded. This also covers a missing
+`/Applications/Pilot.app`: the old executable is not needed to migrate a stopped
+service. A running daemon still requires the safe live upgrade above.
+
+```sh
+# Unload the old definition first. This interrupts agents and terminals.
+launchctl bootout "gui/$(id -u)/com.babariviere.pilot.daemon"
+# Requires a helper release containing stopped-service migration:
+"/Applications/Pilot Next.app/Contents/Helpers/pilot-desktop-update-helper" \
+  --migrate-stopped --app "/Applications/Pilot Next.app" --confirm
+```
+
+This changes service ownership and executable paths, not the chat data format.
+The existing profile, daemon/storage identities, chats and drafts stay in place;
+the profile's `managed` flag is not changed. No ownership database or lock is
+deleted, and no `--bundled-runtime` enrollment is performed. Normal packaged
+startup can connect to the verified daemon afterward.
+
+Migration requires the exact supported service definition, an unloaded service,
+an unused listener, a released profile lease and no incomplete handoff. It
+verifies and retains the selected app's runtime using the helper's compiled
+trust, preserves the original definition in a backup, and journals intent
+before changing the service. It starts once, then verifies the new runtime and
+unchanged profile identity. A failed acknowledgement after intent is **Unknown**:
+inspect the backup, journal and actual service state instead of retrying or
+automatically rolling back. Custom launch agents and Linux services are outside
+this migration's scope. Older helpers do not implement this command.
+
 ## Verified handoff
 
 1. Obtain exact durable editor/outbox/question and Settings checkpoints. Preedit,
@@ -193,6 +224,11 @@ explicit restart of the selected retained version. Both use private definitions
 and random labels. The registration fixture deliberately skips `launchctl enable`
 so it never changes the user's login-domain override database; production's
 separately confirmed registration enables the established label.
+`native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_once`
+uses a separate random label and temporary profile with a missing old app. It
+checks the exact private plist backup, unchanged identities, profile/lease
+inodes and `managed=0`, one bootstrap and repeat-migration refusal. This is
+isolated native evidence, not a blanket live-user migration qualification.
 Run these fixtures with an explicit Node executable:
 
 ```sh
