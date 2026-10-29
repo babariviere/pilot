@@ -1,0 +1,19 @@
+{
+  "crate": "gpui-pre",
+  "version": "0.3.9",
+  "archiveSha256": "34f61c1cfd36fc9c436af09308c963822ae27a45a84feb21a77ba5c9e051f1c0",
+  "upstream": "https://crates.io/crates/gpui-pre/0.3.9",
+  "purpose": "Expose native background blur capability. Unsupported and headless platforms default to opaque.",
+  "edits": [
+    {
+      "path": "src/platform.rs",
+      "old": "    fn background_appearance(&self) -> WindowBackgroundAppearance;",
+      "new": "    /// Whether this window can request native behind-window blur right now.\n    /// Unsupported/headless backends must not substitute plain transparency.\n    fn supports_background_blur(&self) -> bool { false }\n\n    fn background_appearance(&self) -> WindowBackgroundAppearance;"
+    },
+    {
+      "path": "src/window.rs",
+      "old": "    pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {",
+      "new": "    /// Whether the native backend currently supports behind-window blur.\n    pub fn supports_background_blur(&self) -> bool {\n        self.platform_window.supports_background_blur()\n    }\n\n    /// Sets the window background appearance.\n    pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {"
+    }
+  ]
+}

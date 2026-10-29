@@ -48,6 +48,8 @@ env -u PILOT_NEXT_WORKBENCH_BASELINE bash scripts/cargo.sh test --locked --featu
 # Glass tints over a synthetic backdrop, opaque reading surfaces and page entrance.
 bash scripts/cargo.sh clippy --locked --features native-probes --test glass -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test glass
+# Hidden real AppKit material/request lifecycle, not visible backdrop qualification.
+bash scripts/cargo.sh test --locked --features native-probes --test native_glass
 # Reusable presentation contracts with actual Kit controls, synthetic state only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test catalog -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test catalog

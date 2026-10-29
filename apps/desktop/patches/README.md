@@ -12,6 +12,13 @@ These are isolated desktop-prototype edits to published, pinned sources, not reg
 edits, an upstream fork or a framework upgrade. The application still imports
 GPUI exclusively through Kit 0.8.0 re-exports, with baseline GPUI 0.3.9.
 
+Native glass uses three narrow `gpui-pre{,-macos,-linux}-0.3.9.json` patches:
+a default-false window capability, public macOS Reduce Transparency observation,
+and explicit KDE/ext Wayland blur regions with live capability/lifetime handling.
+No dependency version or X11 path changes. See
+[`native-glass.md`](../docs/native-glass.md) for isolated request tests and the
+separate visible-compositor qualification boundary.
+
 `gpui-base-0.8.0.json` records exact preimages/replacements and the original
 crates.io archive SHA-256. `scripts/prepare-patches.py` verifies that archive,
 extracts it into ignored `.patched/gpui-base-0.8.0`, checks every edit count,

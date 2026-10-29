@@ -160,6 +160,12 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(calls[2][-2:], ["-D", "warnings"])
         self.assertEqual(len(calls), 3)
 
+    def test_linux_glass_wire_fixture_is_registered_and_failure_propagates(self):
+        self.run_ci("check", expected=42, FAKE_OS="Linux", FAKE_ARCH="x86_64",
+                    FAIL_MATCH="background_blur_tests")
+        self.assertEqual(self.calls()[-1], ["test", "--locked", "-p", "gpui-pre-linux",
+                                           "--lib", "background_blur_tests"])
+
     def test_library_helper_and_runner_checks_are_executed(self):
         # Do not recursively execute this suite in the temporary script fixture.
         self.write("bin/python3", '#!/bin/sh\necho "$*" >> "$CALLS"\n')
@@ -339,7 +345,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(len(calls), 1 + len(compiled) // 2)
         for target in ["session_todos", "context_usage", "task_model", "task_edit", "conversation_links", "mission_lifecycle",
                        "usage_overview", "provider_usage", "workspace_changes", "conversation_images", "queued_message", "chat_links",
-                       "question_entry", "github_events"]:
+                       "question_entry", "github_events", "native_glass"]:
             with self.subTest(target=target):
                 self.assertIn(["test", "--locked", "--features", "native-probes", "--test", target], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "project_creation"], calls)

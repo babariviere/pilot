@@ -1,0 +1,104 @@
+{
+  "crate": "gpui-pre-linux",
+  "version": "0.3.9",
+  "archiveSha256": "e28213c3fde6f13e91ba0b74b90cbaadec9373e36a031eda98561d31059870f3",
+  "upstream": "https://crates.io/crates/gpui-pre-linux/0.3.9",
+  "purpose": "Request explicit resized KDE/ext background blur regions and expose live compositor capability, including global removal/rebind. Reuse existing Wayland protocol dependencies; no X11 changes or desktop-name inference.",
+  "edits": [
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};",
+      "new": "use wayland_protocols::ext::background_effect::v1::client::{\n    ext_background_effect_manager_v1, ext_background_effect_surface_v1,\n};\nuse wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "#[derive(Clone)]\npub struct Globals {",
+      "new": "#[derive(Default)]\npub struct BackgroundEffects {\n    pub(crate) kde: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,\n    pub(crate) ext: Option<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1>,\n    kde_name: Option<u32>,\n    ext_name: Option<u32>,\n    pub(crate) blur: bool,\n}\n\nimpl BackgroundEffects {\n    pub fn supports_blur(&self) -> bool {\n        // Prefer the explicit live capability over the legacy KDE protocol.\n        if self.ext.is_some() { self.blur } else { self.kde.is_some() }\n    }\n}\n\n#[derive(Clone)]\npub struct Globals {"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "    pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,",
+      "new": "    pub background_effects: Rc<RefCell<BackgroundEffects>>,"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "        let dialog_v = XdgWmDialogV1::interface().version;",
+      "new": "        let mut effects = BackgroundEffects {\n            kde: globals.bind(&qh, 1..=1, ()).ok(),\n            ext: globals.bind(&qh, 1..=1, ()).ok(),\n            ..Default::default()\n        };\n        for global in globals.contents().clone_list() {\n            match global.interface.as_str() {\n                \"org_kde_kwin_blur_manager\" => effects.kde_name = Some(global.name),\n                \"ext_background_effect_manager_v1\" => effects.ext_name = Some(global.name),\n                _ => {}\n            }\n        }\n        let dialog_v = XdgWmDialogV1::interface().version;"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "            blur_manager: globals.bind(&qh, 1..=1, ()).ok(),",
+      "new": "            background_effects: Rc::new(RefCell::new(effects)),"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStatePtr {",
+      "new": "impl WaylandClientStatePtr {\n    fn report_background_effects(&self) {\n        // GPUI callbacks may borrow the client again. Never hold it here.\n        let windows = self.get_client().borrow().windows.values().cloned().collect::<Vec<_>>();\n        for window in windows {\n            window.background_blur_changed();\n        }\n    }\n}\n\nimpl Dispatch<ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1, ()>\n    for WaylandClientStatePtr\n{\n    fn event(\n        this: &mut Self,\n        manager: &ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,\n        event: ext_background_effect_manager_v1::Event,\n        _: &(), _: &Connection, _: &QueueHandle<Self>,\n    ) {\n        if let ext_background_effect_manager_v1::Event::Capabilities { flags } = event {\n            let blur = matches!(flags, WEnum::Value(flags) if flags.contains(\n                ext_background_effect_manager_v1::Capability::Blur\n            ));\n            let client = this.get_client();\n            let state = client.borrow();\n            let mut effects = state.globals.background_effects.borrow_mut();\n            if effects.ext.as_ref() != Some(manager) { return; }\n            effects.blur = blur;\n            drop(effects);\n            drop(state);\n            this.report_background_effects();\n        }\n    }\n}\n\ndelegate_noop!(WaylandClientStatePtr: ignore ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1);\n\nimpl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStatePtr {"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "            } => match &interface[..] {",
+      "new": "            } => match &interface[..] {\n                \"org_kde_kwin_blur_manager\" | \"ext_background_effect_manager_v1\" => {\n                    let mut effects = state.globals.background_effects.borrow_mut();\n                    if interface == \"org_kde_kwin_blur_manager\" && effects.kde_name != Some(name) {\n                        effects.kde = Some(registry.bind(name, 1, qh, ()));\n                        effects.kde_name = Some(name);\n                    } else if interface == \"ext_background_effect_manager_v1\" && effects.ext_name != Some(name) {\n                        effects.ext = Some(registry.bind(name, 1, qh, ()));\n                        effects.ext_name = Some(name);\n                        effects.blur = false; // wait for the manager's capability event\n                    }\n                    drop(effects);\n                    drop(state);\n                    this.report_background_effects();\n                }"
+    },
+    {
+      "path": "src/linux/wayland/client.rs",
+      "old": "            wl_registry::Event::GlobalRemove { name } => {",
+      "new": "            wl_registry::Event::GlobalRemove { name } => {\n                let mut effects = state.globals.background_effects.borrow_mut();\n                if effects.kde_name == Some(name) || effects.ext_name == Some(name) {\n                    if effects.kde_name == Some(name) {\n                        effects.kde.take();\n                        effects.kde_name = None;\n                    }\n                    if effects.ext_name == Some(name) {\n                        if let Some(manager) = effects.ext.take() { manager.destroy(); }\n                        effects.ext_name = None;\n                        effects.blur = false;\n                    }\n                    drop(effects);\n                    drop(state);\n                    this.report_background_effects();\n                    return;\n                }\n                drop(effects);"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;",
+      "new": "use wayland_protocols::ext::background_effect::v1::client::{\n    ext_background_effect_surface_v1,\n};\nuse wayland_protocols_plasma::blur::client::org_kde_kwin_blur;"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "    blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,",
+      "new": "    background_blur: BackgroundBlur,"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "            blur: None,",
+      "new": "            background_blur: BackgroundBlur::default(),"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "        // Destroy blur first, this has no dependencies.\n        if let Some(blur) = &state.blur {\n            blur.release();\n        }",
+      "new": "        state.background_blur.clear();"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "    pub fn set_button_layout(&self) {",
+      "new": "    pub fn background_blur_changed(&self) {\n        update_window(self.state.borrow_mut());\n        let callback = self.callbacks.borrow_mut().appearance_changed.take();\n        if let Some(mut callback) = callback {\n            callback();\n            self.callbacks.borrow_mut().appearance_changed = Some(callback);\n        }\n        self.request_redraw();\n    }\n\n    pub fn set_button_layout(&self) {"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "    fn background_appearance(&self) -> WindowBackgroundAppearance {",
+      "new": "    fn supports_background_blur(&self) -> bool {\n        self.borrow().globals.background_effects.borrow().supports_blur()\n    }\n\n    fn background_appearance(&self) -> WindowBackgroundAppearance {"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "    if let Some(ref blur_manager) = state.globals.blur_manager {\n        if state.background_appearance == WindowBackgroundAppearance::Blurred {\n            if state.blur.is_none() {\n                let blur = blur_manager.create(&state.surface, &state.globals.qh, ());\n                state.blur = Some(blur);\n            }\n            state.blur.as_ref().unwrap().commit();\n        } else {\n            // It probably doesn't hurt to clear the blur for opaque windows\n            blur_manager.unset(&state.surface);\n            if let Some(b) = state.blur.take() {\n                b.release()\n            }\n        }\n    }",
+      "new": "    let effects = state.globals.background_effects.clone();\n    let surface = state.surface.clone();\n    let qh = state.globals.qh.clone();\n    let requested = state.background_appearance == WindowBackgroundAppearance::Blurred;\n    state.background_blur.update(&effects.borrow(), &surface, &qh, &region, requested);"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "#[derive(Default)]\npub(crate) struct Callbacks {",
+      "new": "/// Native request objects belong to one wl_surface, never to a desktop name.\n#[derive(Default)]\nstruct BackgroundBlur {\n    kde: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,\n    ext: Option<ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1>,\n}\n\nimpl BackgroundBlur {\n    fn clear(&mut self) {\n        if let Some(effect) = self.ext.take() { effect.destroy(); }\n        if let Some(blur) = self.kde.take() { blur.release(); }\n    }\n\n    fn update(\n        &mut self,\n        effects: &crate::linux::BackgroundEffects,\n        surface: &wl_surface::WlSurface,\n        qh: &wayland_client::QueueHandle<WaylandClientStatePtr>,\n        region: &wayland_client::protocol::wl_region::WlRegion,\n        requested: bool,\n    ) {\n        let blurred = requested && effects.supports_blur();\n        if let Some(manager) = &effects.ext {\n            if blurred {\n                let effect = self.ext.get_or_insert_with(|| {\n                    manager.get_background_effect(surface, qh, ())\n                });\n                // ext starts empty; null REMOVES blur. Copy a surface-local\n                // region on creation/resize before the next wl_surface.commit.\n                effect.set_blur_region(Some(region));\n            } else if let Some(effect) = self.ext.take() {\n                effect.destroy();\n            }\n        } else if let Some(effect) = self.ext.take() {\n            effect.destroy();\n        }\n        if let Some(manager) = &effects.kde {\n            if blurred && effects.ext.is_none() {\n                let blur = self.kde.get_or_insert_with(|| manager.create(surface, qh, ()));\n                blur.set_region(Some(region));\n                blur.commit();\n            } else {\n                manager.unset(surface);\n                if let Some(blur) = self.kde.take() { blur.release(); }\n            }\n        } else if let Some(blur) = self.kde.take() {\n            blur.release();\n        }\n    }\n}\n\n#[derive(Default)]\npub(crate) struct Callbacks {"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "pub(crate) trait WindowDecorationsExt {",
+      "new": "#[cfg(test)]\nmod background_blur_tests {\n    use super::*;\n    use crate::linux::BackgroundEffects;\n    use std::{io::Read, os::unix::net::UnixStream};\n    use wayland_client::{Connection, delegate_noop, protocol::{wl_compositor, wl_registry}};\n    use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1;\n    use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager;\n\n    // No display/GPU/compositor. Capture the actual generated Wayland requests\n    // made by the production region/lifetime implementation over a socket pair.\n    delegate_noop!(WaylandClientStatePtr: ignore wl_registry::WlRegistry);\n\n    fn requests(connection: &Connection, server: &mut UnixStream) -> Vec<(u32, u16, Vec<u32>)> {\n        connection.flush().unwrap();\n        let mut bytes = Vec::new();\n        loop {\n            let mut chunk = [0; 4096];\n            match server.read(&mut chunk) {\n                Ok(0) => break,\n                Ok(n) => bytes.extend_from_slice(&chunk[..n]),\n                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,\n                Err(e) => panic!(\"wire read: {e}\"),\n            }\n        }\n        let mut result = Vec::new();\n        let word = |bytes: &[u8]| u32::from_ne_bytes(bytes.try_into().unwrap());\n        let mut offset = 0;\n        while offset < bytes.len() {\n            let header = word(&bytes[offset + 4..offset + 8]);\n            let size = (header >> 16) as usize;\n            result.push((word(&bytes[offset..offset + 4]), header as u16,\n                bytes[offset + 8..offset + size].chunks_exact(4).map(word).collect()));\n            offset += size;\n        }\n        result\n    }\n\n    #[test]\n    fn native_blur_regions_resize_capability_and_lifetime() {\n        let (client, mut server) = UnixStream::pair().unwrap();\n        server.set_nonblocking(true).unwrap();\n        let connection = Connection::from_socket(client).unwrap();\n        let queue = connection.new_event_queue::<WaylandClientStatePtr>();\n        let qh = queue.handle();\n        let registry = connection.display().get_registry(&qh, ());\n        let compositor: wl_compositor::WlCompositor = registry.bind(1, 6, &qh, ());\n        let ext: ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1 = registry.bind(2, 1, &qh, ());\n        let kde: org_kde_kwin_blur_manager::OrgKdeKwinBlurManager = registry.bind(3, 1, &qh, ());\n        let surface = compositor.create_surface(&qh, ());\n        let region = compositor.create_region(&qh, ());\n        region.add(0, 0, 640, 480);\n        let mut effects = BackgroundEffects::default();\n        let mut blur = BackgroundBlur::default();\n        requests(&connection, &mut server);\n\n        assert!(!effects.supports_blur());\n        blur.update(&effects, &surface, &qh, &region, true);\n        assert!(requests(&connection, &mut server).is_empty(), \"unsupported means no blur request\");\n        effects.ext = Some(ext.clone());\n        effects.kde = Some(kde.clone());\n        assert!(!effects.supports_blur(), \"binding is not the ext blur capability\");\n        effects.blur = true;\n        assert!(effects.supports_blur());\n        blur.update(&effects, &surface, &qh, &region, true);\n        let id = blur.ext.as_ref().unwrap().id().protocol_id();\n        let wire = requests(&connection, &mut server);\n        assert!(wire.contains(&(ext.id().protocol_id(), 1, vec![id, surface.id().protocol_id()])));\n        assert!(wire.contains(&(id, 1, vec![region.id().protocol_id()])), \"non-null ext blur region\");\n        assert!(blur.kde.is_none(), \"prefer explicit ext capability\");\n\n        let resized = compositor.create_region(&qh, ());\n        resized.add(0, 0, 960, 720);\n        blur.update(&effects, &surface, &qh, &resized, true);\n        let wire = requests(&connection, &mut server);\n        assert!(wire.contains(&(resized.id().protocol_id(), 1, vec![0, 0, 960, 720])));\n        assert!(wire.contains(&(id, 1, vec![resized.id().protocol_id()])));\n        assert!(!wire.iter().any(|(sender, opcode, _)| *sender == ext.id().protocol_id() && *opcode == 1), \"resize reuses effect\");\n\n        effects.blur = false;\n        assert!(!effects.supports_blur(), \"lost capability must not fall through to KDE\");\n        blur.update(&effects, &surface, &qh, &resized, true);\n        assert!(requests(&connection, &mut server).contains(&(id, 0, vec![])), \"remove effect on capability loss\");\n        assert!(blur.ext.is_none() && blur.kde.is_none());\n\n        effects.ext = None; // older KWin's advertised legacy protocol\n        assert!(effects.supports_blur());\n        blur.update(&effects, &surface, &qh, &resized, true);\n        let id = blur.kde.as_ref().unwrap().id().protocol_id();\n        let wire = requests(&connection, &mut server);\n        assert!(wire.contains(&(kde.id().protocol_id(), 0, vec![id, surface.id().protocol_id()])));\n        assert!(wire.contains(&(id, 1, vec![resized.id().protocol_id()])));\n        assert!(wire.contains(&(id, 0, vec![])), \"KDE blur commit\");\n        blur.update(&effects, &surface, &qh, &resized, false);\n        let wire = requests(&connection, &mut server);\n        assert!(wire.contains(&(kde.id().protocol_id(), 1, vec![surface.id().protocol_id()])));\n        assert!(wire.contains(&(id, 2, vec![])), \"release after opaque fallback\");\n        assert!(blur.kde.is_none());\n\n        // A recreated window gets new request objects; opaque first paint does not.\n        let recreated = compositor.create_surface(&qh, ());\n        effects.ext = Some(ext);\n        effects.blur = true;\n        blur.update(&effects, &recreated, &qh, &region, true);\n        assert!(blur.ext.is_some());\n        let id = blur.ext.as_ref().unwrap().id().protocol_id();\n        blur.clear();\n        assert!(requests(&connection, &mut server).contains(&(id, 0, vec![])));\n        assert!(blur.ext.is_none());\n    }\n}\n\n\npub(crate) trait WindowDecorationsExt {"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "    let opaque_area = state.window_bounds.map(|v| f32::from(v) as i32);\n    opaque_area.inset(f32::from(state.inset()) as i32);",
+      "new": "    // Regions are surface-local, including during the initial centered open.\n    // Use current surface size (also while maximized), not saved windowed bounds.\n    let opaque_area = inset_by_tiling(\n        state.bounds.map_origin(|_| px(0.0)), state.inset(), state.tiling,\n    ).map(|v| f32::from(v) as i32);"
+    },
+    {
+      "path": "src/linux/wayland/window.rs",
+      "old": "            let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;\n            drop(state);",
+      "new": "            let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;\n            update_window(state); // copy the resized blur region before committing a frame"
+    }
+  ]
+}

@@ -13,6 +13,12 @@ required-features = ["native-probes"]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[test]]
+name = "native_glass"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "native_menus"
 harness = false
 required-features = ["native-probes"]
@@ -98,6 +104,9 @@ required-features = ["native-probes"]
 [patch.crates-io]
 gpui-base = { path = ".patched/gpui-base-0.8.0" }
 gpui-component = { path = ".patched/gpui-component-0.8.0" }
+gpui-pre = { path = ".patched/gpui-pre-0.3.9" }
+gpui-pre-macos = { path = ".patched/gpui-pre-macos-0.3.9" }
+gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.9" }
 
 [dependencies]
 tracing = "=0.1.44"

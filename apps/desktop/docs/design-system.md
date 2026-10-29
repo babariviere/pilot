@@ -237,12 +237,15 @@ never loop. `state_mark::Fade` cross-fades a changed mark once (180 ms) on the
 sight never fades and reduced motion swaps at once. The `style` native target
 checks still marks, the settled fade and reduced motion.
 
-Glass: `appearance::enable_glass` (called by the app before its windows open) makes
-the window background blur what is behind it on macOS, KWin and Hyprland, and turns
-the page, sidebar and list into a frosted, milky wash (macOS uses the heavier
-window-server blur, falling back to GPUI's material). Cards, the composer tray/editor,
+Glass: `appearance::enable_glass` requests glass before windows open;
+`follow_appearance` admits it from the actual native capability, not desktop names.
+macOS keeps its native behind-window material (unless Reduce Transparency is on).
+Protocol-capable KWin/Hyprland receive explicit blur regions. The page, sidebar
+and list retain their frosted, milky wash. Cards, the composer tray/editor,
 popovers, buttons and code stay opaque. Never stack the page tint under the sidebar.
 Elsewhere, and in offscreen probes, every surface stays solid.
+See [native glass](native-glass.md) for request lifecycle, fallback and the separate
+visible compositor qualification boundary.
 
 `transition::Transition` is the one-shot entrance helper: it runs on the executor
 clock (settled by probe clock advances), requests frames only while running and is

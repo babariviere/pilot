@@ -3,7 +3,7 @@
 //! and the embedded Inter / JetBrains Mono faces carry interface and code text.
 use crate::settings_state::AppearancePreference;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_kit::{App, AssetSource, SharedString, Window};
+use gpui_kit::{App, AssetSource, SharedString, Styled, Window};
 use std::{borrow::Cow, rc::Rc};
 
 /// Interface, page-title and code families. The files are embedded (licenses/INTER.txt,
@@ -73,31 +73,38 @@ impl gpui_kit::Global for CommittedAppearance {}
 #[derive(Clone, Copy, Default)]
 struct Surfaces {
     fonts: bool,
+    glass_requested: bool,
     glass: bool,
 }
 impl gpui_kit::Global for Surfaces {}
 
-/// Glass needs a compositor that blurs what is behind a translucent window:
-/// macOS always, KWin through its blur protocol, Hyprland by default. Elsewhere
-/// a translucent window would show the raw desktop, so it stays opaque.
-fn glass_supported() -> bool {
-    if cfg!(target_os = "macos") {
-        return true;
+// Kit's root normally paints the page color. Our pages and sidebar already own
+// their tints, so painting it there too almost completely hides the native blur.
+// Keep Root and all its input/overlay behavior, changing only that default fill.
+struct GlassRoot;
+impl gpui_kit::Render for GlassRoot {
+    fn render(
+        &mut self,
+        _: &mut Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        gpui_kit::div()
     }
-    cfg!(target_os = "linux")
-        && (std::env::var("XDG_CURRENT_DESKTOP")
-            .is_ok_and(|desktop| desktop.split(':').any(|d| d.eq_ignore_ascii_case("KDE")))
-            || std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some())
 }
+impl gpui_kit::base::RootPlugin for GlassRoot {
+    fn style(&self, surface: &mut gpui_kit::Stateful<gpui_kit::Div>, _: &mut Window, cx: &mut App) {
+        if glass(cx) {
+            surface.style().background = Some(cx.theme().transparent.into());
+        }
+    }
+}
+
 /// Opt the app's windows into the frosted background where the platform supports it.
 /// The page and sidebar become translucent tints over the blur; cards, the composer,
-/// popovers and code stay opaque. Call before opening windows.
+/// popovers and code stay opaque. Call before opening windows, then `follow_appearance`
+/// for each window. Desktop names are not evidence of native blur support.
 pub fn enable_glass(cx: &mut App) {
-    if glass_supported() && !glass(cx) {
-        let fonts = cx.try_global::<Surfaces>().is_some_and(|s| s.fonts);
-        cx.set_global(Surfaces { fonts, glass: true });
-        install_configs(cx);
-    }
+    cx.global_mut::<Surfaces>().glass_requested = true;
 }
 pub(crate) fn glass(cx: &App) -> bool {
     cx.try_global::<Surfaces>().is_some_and(|s| s.glass)
@@ -111,70 +118,25 @@ pub fn window_background(cx: &App) -> gpui_kit::WindowBackgroundAppearance {
     }
 }
 
-/// Window-server blur radius behind macOS glass windows. GPUI's material blur is fixed and
-/// light; this heavier window-server blur diffuses the desktop into frost.
-#[cfg(target_os = "macos")]
-const MAC_BLUR_RADIUS: i64 = 100;
-
-/// Swaps a glass window's material blur for the stronger window-server blur, keeping the
-/// material when the window server refuses.
-fn blur_window(window: &mut Window, cx: &App) {
-    #[cfg(target_os = "macos")]
-    if glass(cx) && mac_blur::set(window, MAC_BLUR_RADIUS) {
-        window.set_background_appearance(gpui_kit::WindowBackgroundAppearance::Transparent);
+fn set_glass(supported: bool, cx: &mut App) -> gpui_kit::WindowBackgroundAppearance {
+    let surfaces = cx.global_mut::<Surfaces>();
+    let enabled = surfaces.glass_requested && supported;
+    if surfaces.glass != enabled {
+        surfaces.glass = enabled;
+        install_configs(cx);
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (window, cx);
+    if enabled {
+        gpui_kit::WindowBackgroundAppearance::Blurred
+    } else {
+        gpui_kit::WindowBackgroundAppearance::Opaque
+    }
 }
 
-#[cfg(target_os = "macos")]
-mod mac_blur {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use std::ffi::{c_char, c_void};
-
-    #[link(name = "objc")]
-    unsafe extern "C" {
-        fn sel_registerName(name: *const c_char) -> *const c_void;
-        fn objc_msgSend();
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        // Private but long-standing; Terminal.app uses it.
-        fn CGSMainConnectionID() -> *mut c_void;
-        fn CGSSetWindowBackgroundBlurRadius(
-            connection: *mut c_void,
-            window: isize,
-            radius: i64,
-        ) -> i32;
-    }
-
-    pub(super) fn set(window: &gpui_kit::Window, radius: i64) -> bool {
-        let Ok(handle) = HasWindowHandle::window_handle(window) else {
-            return false;
-        };
-        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
-            return false;
-        };
-        // SAFETY: objc_msgSend is called through the exact signatures of -[NSView window]
-        // and -[NSWindow windowNumber] on a live view owned by this window.
-        unsafe {
-            let send = objc_msgSend as unsafe extern "C" fn();
-            let object: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
-                std::mem::transmute(send);
-            let integer: unsafe extern "C" fn(*mut c_void, *const c_void) -> isize =
-                std::mem::transmute(send);
-            let ns_window = object(
-                handle.ns_view.as_ptr(),
-                sel_registerName(c"window".as_ptr()),
-            );
-            if ns_window.is_null() {
-                return false;
-            }
-            let number = integer(ns_window, sel_registerName(c"windowNumber".as_ptr()));
-            number > 0
-                && CGSSetWindowBackgroundBlurRadius(CGSMainConnectionID(), number, radius) == 0
-        }
-    }
+fn blur_window(window: &mut Window, cx: &mut App) {
+    let background = set_glass(window.supports_background_blur(), cx);
+    // Never replace a live native material with plain transparency on a private
+    // window-server API's success code. It does not prove a visible blur.
+    window.set_background_appearance(background);
 }
 
 fn follows_system(cx: &App) -> bool {
@@ -385,6 +347,7 @@ fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
     })
 }
 pub fn init_appearance(cx: &mut App) {
+    gpui_kit::base::Root::register_plugin(cx, |_, _| GlassRoot);
     cx.set_global(CommittedAppearance::default());
     // Before any layout: an unregistered family would fall back to another face.
     let fonts = cx
@@ -393,12 +356,13 @@ pub fn init_appearance(cx: &mut App) {
         .is_ok();
     cx.set_global(Surfaces {
         fonts,
+        glass_requested: false,
         glass: false,
     });
     install_configs(cx);
 }
 fn install_configs(cx: &mut App) {
-    let Surfaces { fonts, glass } = *cx.global::<Surfaces>();
+    let Surfaces { fonts, glass, .. } = *cx.global::<Surfaces>();
     Theme::update(cx, |theme| {
         let mut light = (*config(false, fonts, glass)).clone();
         light.highlight = theme.light_theme.highlight.clone();
@@ -423,6 +387,7 @@ pub fn follow_appearance(window: &mut Window, cx: &mut App) {
     }
     window
         .observe_window_appearance(|window, cx| {
+            blur_window(window, cx);
             if follows_system(cx) {
                 Theme::sync_system_appearance(Some(window), cx);
             }
@@ -458,6 +423,39 @@ impl AssetSource for ChromeAssets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[gpui_kit::test]
+    fn glass_root_leaves_the_page_tint_to_its_content(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::InteractiveElement as _;
+        use gpui_kit::base::RootPlugin as _;
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            init_appearance(cx);
+            enable_glass(cx);
+        });
+        let (_, cx) = cx.add_window_view(|_, _| GlassRoot);
+        cx.update(|window, cx| {
+            for supported in [false, true, false, true] {
+                set_glass(supported, cx);
+                let page = cx.theme().background;
+                let mut surface = gpui_kit::div().id("root").bg(page);
+                GlassRoot.style(&mut surface, window, cx);
+                assert_eq!(
+                    surface.style().background,
+                    Some(
+                        if supported {
+                            cx.theme().transparent
+                        } else {
+                            page
+                        }
+                        .into()
+                    ),
+                    "the shared root must not add a second translucent page tint"
+                );
+                assert_eq!(cx.theme().tokens.background.color, page);
+                assert_eq!(page.a < 1., supported);
+            }
+        });
+    }
     #[gpui_kit::test]
     fn committed_manual_policy_persists_until_system_is_explicit(
         cx: &mut gpui_kit::TestAppContext,
@@ -608,12 +606,27 @@ mod tests {
             commit_appearance(AppearancePreference::Dark, cx);
             enable_glass(cx);
             assert!(cx.theme().is_dark(), "glass reinstall keeps a manual mode");
-            if cfg!(target_os = "macos") {
-                assert!(glass(cx));
+            assert!(!glass(cx), "request alone is not native capability");
+            assert_eq!(
+                set_glass(true, cx),
+                gpui_kit::WindowBackgroundAppearance::Blurred
+            );
+            assert!(cx.theme().background.a < 1.);
+            assert_eq!(card(cx).a, 1.);
+            for _ in 0..2 {
                 assert_eq!(
-                    window_background(cx),
+                    set_glass(false, cx),
+                    gpui_kit::WindowBackgroundAppearance::Opaque
+                );
+                assert!(!glass(cx));
+                assert_eq!(cx.theme().background.a, 1.);
+                assert_eq!(cx.theme().sidebar.a, 1.);
+                assert!(cx.theme().is_dark(), "fallback preserves manual appearance");
+                assert_eq!(
+                    set_glass(true, cx),
                     gpui_kit::WindowBackgroundAppearance::Blurred
                 );
+                assert!(glass(cx));
                 assert!(cx.theme().background.a < 1.);
                 assert_eq!(card(cx).a, 1.);
             }
