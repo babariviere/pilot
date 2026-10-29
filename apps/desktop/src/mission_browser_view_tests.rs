@@ -251,3 +251,146 @@ fn chat_mission_jump_opens_only_a_listed_exact_key_or_says_it_is_missing(cx: &mu
     cx.run_until_parked();
     assert_eq!(opened.borrow().len(), 1);
 }
+/// The displayed mission's coordinatorSessionId, exactly: a distinct member, a
+/// role-like decoy title or a retained mission never stands in for it.
+#[gpui_kit::test]
+fn coordinator_jump_opens_only_the_displayed_missions_exact_coordinator(cx: &mut TestAppContext) {
+    use serde_json::json;
+    cx.update(gpui_kit::init);
+    let pane = cx.new(Browser::new);
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        let opened = opened.clone();
+        cx.subscribe(&pane, move |_, e: &Event, _| {
+            if let Event::Chat {
+                key,
+                id,
+                generation,
+            } = e
+            {
+                opened
+                    .borrow_mut()
+                    .push((key.clone(), id.clone(), *generation));
+            }
+        })
+        .detach();
+    });
+    let chat = |id: &str, title: &str, extra: serde_json::Value| {
+        let mut v =
+            json!({"id":id,"title":title,"projectId":"project-A","state":"idle","mode":"ask"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        crate::local_model::chat(&v).unwrap()
+    };
+    let local = Arc::new(vec![
+        chat("chat-M", "Member work", json!({"missionId":"mission-A"})),
+        chat(
+            "chat-C",
+            "Plan the mission",
+            json!({"missionId":"mission-A","missionCoordinator":true}),
+        ),
+        // A role-like title and a stale role flag are never the coordinator.
+        chat(
+            "chat-X",
+            "Mission coordinator",
+            json!({"missionCoordinator":true}),
+        ),
+    ]);
+    let detail = |coordinator: serde_json::Value| {
+        let mut v = f::detail("mission-A");
+        v["mission"]["coordinatorSessionId"] = coordinator;
+        let d = Arc::new(model::detail(&f::key("mission-A"), &v).unwrap());
+        let m = model::members(
+            &d,
+            &json!([
+                {"id":"chat-M","title":"Member work","missionId":"mission-A","projectId":"project-A"},
+                {"id":"chat-C","title":"Plan the mission","missionId":"mission-A","projectId":"project-A"},
+            ]),
+        )
+        .map(Arc::new);
+        Data::Detail(d, m)
+    };
+    pane.update(cx, |v, cx| {
+        v.options(LocalOptions::synthetic(1));
+        v.online = true;
+        v.loaded = true;
+        v.chats = local.clone();
+        accept_latest(
+            v,
+            Route::Detail(f::key("mission-A")),
+            detail(json!("chat-C")),
+            cx,
+        );
+        let g = v.generation;
+        let c = v.coordinator().expect("assigned coordinator");
+        assert_eq!(
+            (c.key.clone(), c.id.as_str()),
+            (f::key("mission-A"), "chat-C")
+        );
+        assert_eq!(c.title.as_deref(), Some("Plan the mission"));
+        assert!(c.available);
+        // A member, a decoy or an old generation never opens as the coordinator.
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-M", g, cx));
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-X", g, cx));
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-C", g - 1, cx));
+        assert!(!v.open_coordinator(&f::key("mission-B"), "chat-C", g, cx));
+        assert!(v.open_coordinator(&f::key("mission-A"), "chat-C", g, cx));
+        // Offline or outside the Local chat list: known but unavailable.
+        v.online = false;
+        assert!(!v.coordinator().unwrap().available);
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-C", g, cx));
+        v.online = true;
+        v.chats = Arc::new(local.iter().filter(|c| c.id != "chat-C").cloned().collect());
+        let c = v.coordinator().unwrap();
+        assert!(!c.available && c.id == "chat-C");
+        assert_eq!(
+            c.title.as_deref(),
+            Some("Plan the mission"),
+            "member title remains"
+        );
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-C", g, cx));
+        v.chats = local.clone();
+        // A coordinator the member list doesn't confirm stays unavailable.
+        accept_latest(
+            v,
+            Route::Detail(f::key("mission-A")),
+            detail(json!("chat-Z")),
+            cx,
+        );
+        let c = v.coordinator().unwrap();
+        assert!(!c.available && c.id == "chat-Z" && c.title.is_none());
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-Z", v.generation, cx));
+        // None assigned: no target, and the role-flagged decoy is not one.
+        accept_latest(
+            v,
+            Route::Detail(f::key("mission-A")),
+            detail(json!(null)),
+            cx,
+        );
+        assert!(v.coordinator().is_none());
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-X", v.generation, cx));
+        // Switching missions retires the previous mission's coordinator at once.
+        accept_latest(
+            v,
+            Route::Detail(f::key("mission-A")),
+            detail(json!("chat-C")),
+            cx,
+        );
+        let old = v.generation;
+        v.generation += 1;
+        v.route = Some(Route::Detail(f::key("mission-B")));
+        assert!(
+            v.detail.is_some(),
+            "retained detail of the previous mission"
+        );
+        assert!(v.coordinator().is_none());
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-C", old, cx));
+        assert!(!v.open_coordinator(&f::key("mission-A"), "chat-C", v.generation, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        *opened.borrow(),
+        vec![(f::key("mission-A"), "chat-C".to_owned(), 1)]
+    );
+}

@@ -270,7 +270,9 @@ Up next leads with the project's top Inbox rows (Needs you, then Ready to merge)
 the project; Pull requests then lists only those still waiting on checks, review or a fix, so each chat appears once.
 A mission's Overview has the same shape: its goal, one meta line, the task progress bar with its
 legend, then Needs you (hidden when empty), Working now, Linear tickets (hidden when the mission manages none) and
-Links. Both share the Inbox's rows and words (Needs you rows, Ready to merge). Sections added later follow the same
+Links. Its title row carries a Compass icon action that opens the mission's own coordinator chat, the chat people
+open most from a mission; it is disabled when that chat can't be opened here and absent when no coordinator is
+assigned. Both share the Inbox's rows and words (Needs you rows, Ready to merge). Sections added later follow the same
 rules. A managed ticket nests its contributing tasks one level deep, like sub-issues, and says only in words which
 links count toward it ("Counts toward ENG-123") and which are references ("Referenced by #7 · not counted"); Links
 holds every other link, so a ticket appears once. Its Linear update line is muted while up to date, amber with

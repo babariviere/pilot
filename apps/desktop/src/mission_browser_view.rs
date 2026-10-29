@@ -52,6 +52,17 @@ pub(crate) enum Event {
         generation: u64,
     },
 }
+/// The displayed mission's own coordinator chat, by its detail's exact
+/// coordinatorSessionId; never a title or a chat's role flag.
+#[derive(Clone, Debug)]
+pub(crate) struct Coordinator {
+    pub(crate) key: Key,
+    pub(crate) id: String,
+    /// The cached Local name, else the member list's.
+    pub(crate) title: Option<String>,
+    /// Opens through the same guarded member-chat link as the Chats rows.
+    pub(crate) available: bool,
+}
 pub(crate) struct Input {
     pub(crate) route: Option<Route>,
     pub(crate) filter: Option<String>,
@@ -288,6 +299,84 @@ impl Browser {
                         c.id == id && !c.local_draft && c.project_id.as_deref() == Some(&d.project)
                     })
             })
+    }
+    /// The coordinator of the mission on screen, while its detail is the route's.
+    pub(crate) fn coordinator(&self) -> Option<Coordinator> {
+        let d = self
+            .detail
+            .as_ref()
+            .filter(|d| self.route == Some(Route::Detail(d.key.clone())))?;
+        let id = d.coordinator.clone()?;
+        let title = self
+            .chats
+            .iter()
+            .find(|c| c.id == id && !c.local_draft)
+            .map(|c| c.title.clone())
+            .or_else(|| {
+                let m = self.members.as_ref().ok()?;
+                m.rows.iter().find(|r| r.id == id).map(|r| r.title.clone())
+            });
+        Some(Coordinator {
+            available: self.can_link(&d.key, &id, self.generation),
+            key: d.key.clone(),
+            id,
+            title,
+        })
+    }
+    /// Asks LocalViewer to open the coordinator, only if it is still exactly
+    /// the displayed mission's available coordinator for this generation.
+    pub(crate) fn open_coordinator(
+        &mut self,
+        key: &Key,
+        id: &str,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let exact = self.coordinator().is_some_and(|c| {
+            c.available && &c.key == key && c.id == id && self.generation == generation
+        });
+        if exact {
+            cx.emit(Event::Chat {
+                key: key.clone(),
+                id: id.to_owned(),
+                generation,
+            });
+        }
+        exact
+    }
+    /// Beside the title, as in Swift: the coordinator is the chat people open
+    /// most from a mission. Hidden when none is assigned (Chats says so);
+    /// disabled, with the reason in its name, when it can't be opened here.
+    fn coordinator_action(&self, cx: &Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let c = self.coordinator()?;
+        let generation = self.generation;
+        let (label, tooltip) = match (&c.title, c.available) {
+            (Some(t), true) => ("Open coordinator", format!("Open coordinator · {t}")),
+            (None, true) => ("Open coordinator", "Open coordinator".to_owned()),
+            (Some(t), false) => (
+                "Coordinator unavailable",
+                format!("Coordinator unavailable · {t}"),
+            ),
+            (None, false) => (
+                "Coordinator unavailable",
+                "Coordinator unavailable".to_owned(),
+            ),
+        };
+        let Coordinator { key, id, .. } = c;
+        Some(
+            ui::icon_action(
+                "mission-open-coordinator",
+                label,
+                crate::app_icon::AppIcon::Coordinator,
+                Action::Quiet,
+            )
+            .tooltip(SharedString::from(tooltip))
+            .disabled(!c.available)
+            .on_click(cx.listener(move |v, _, _, cx| {
+                v.open_coordinator(&key, &id, generation, cx);
+            }))
+            .into_any_element(),
+        )
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         if let Some(f) = self.lifecycle.iter().find(|f| f.read(cx).visible) {
@@ -937,6 +1026,7 @@ impl Render for Browser {
                                 .test_support(),
                         ),
                     )
+                    .when(!is_list, |d| d.children(self.coordinator_action(cx)))
                     .child(
                         ui::icon_action(
                             "missions-refresh",
@@ -1114,8 +1204,11 @@ impl Render for Browser {
                 Text::Headline,
             ));
             if d.coordinator.is_none() {
-                content =
-                    content.child(ui::text(Text::Caption, "No coordinator chat is assigned."));
+                content = content.child(
+                    ui::text(Text::Caption, "No coordinator chat is assigned.")
+                        .id("mission-no-coordinator")
+                        .test_support(),
+                );
             }
             match &self.members {
                 Err(e) => content = content.child(Notice::new(*e).tone(Tone::Warning)),

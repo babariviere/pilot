@@ -517,6 +517,345 @@ pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
         }
     }
     run_chat_mission_jump(cx);
+    run_coordinator_jump(cx);
+}
+/// The overview's title row opens the displayed mission's exact coordinator:
+/// pointer and keyboard, Back returns through the overview to the open chat
+/// with its draft, an unavailable coordinator is disabled, none assigned shows
+/// no header action, and a mission switch never reuses the old coordinator.
+fn run_coordinator_jump(cx: &mut HeadlessAppContext) {
+    let dir = std::env::var_os("PILOT_NEXT_MISSIONS_DIR").map(PathBuf::from);
+    let member = |id: &str, title: &str, mission: &str, project: &str| json!({"id":id,"title":title,"missionId":mission,"projectId":project,"state":"idle"});
+    let coordinator_title = "Plan and coordinate the mission 日本語 👩‍💻 with a long name";
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let server = Server::start();
+            let mut a = f::detail("mission-A");
+            a["mission"]["coordinatorSessionId"] = json!("chat-C");
+            server.reply("/api/missions/mission-A", Reply::json(200, a.clone()));
+            server.reply(
+                "/api/sessions?archived=all&missionId=mission-A",
+                Reply::json(
+                    200,
+                    json!([
+                        member("chat-M", "Member work", "mission-A", "project-A"),
+                        member("chat-C", coordinator_title, "mission-A", "project-A"),
+                    ]),
+                ),
+            );
+            let mut b = f::detail("mission-B");
+            b["mission"]["coordinatorSessionId"] = json!("chat-D");
+            let mut slow = Reply::json(200, b);
+            slow.delay_ms = 200;
+            server.reply("/api/missions/mission-B", slow);
+            server.reply(
+                "/api/sessions?archived=all&missionId=mission-B",
+                Reply::json(
+                    200,
+                    json!([member(
+                        "chat-D",
+                        "Other coordinator",
+                        "mission-B",
+                        "project-B"
+                    )]),
+                ),
+            );
+            let private = Private(
+                std::env::temp_dir()
+                    .canonicalize()
+                    .unwrap()
+                    .join(format!("native-coordinator-jump-{}", uuid::Uuid::new_v4())),
+            );
+            let (writer, updates) =
+                Interaction::start(server.options.clone(), Ok(private.0.clone()));
+            let (client, commands) = LocalClient::synthetic_commands();
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (h, view) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                Default::default(),
+                                size(px(width), px(840.)),
+                            ))),
+                            show: false,
+                            focus: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |w, cx| {
+                            cx.new(|cx| {
+                                let mut v =
+                                    LocalViewer::build(Some(client), Some(writer.clone()), w, cx);
+                                v.missions
+                                    .update(cx, |b, _| b.options(server.options.clone()));
+                                v.state.projects = Arc::new(
+                                    crate::local_model::projects(&json!([
+                                        {"id":"project-A","name":"Same project","path":"/synthetic/A"},
+                                        {"id":"project-B","name":"Other project","path":"/synthetic/B"}
+                                    ]))
+                                    .unwrap(),
+                                );
+                                v.state.projects_loaded = true;
+                                v.state.list_loaded = true;
+                                v.state.loaded = true;
+                                v.state.status = "Synthetic Local fixture".into();
+                                let chat = |extra: serde_json::Value| {
+                                    let mut base = json!({"title":"Chat","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"});
+                                    base.as_object_mut()
+                                        .unwrap()
+                                        .extend(extra.as_object().unwrap().clone());
+                                    crate::local_model::chat(&base).unwrap()
+                                };
+                                v.state.chats = Arc::new(vec![
+                                    chat(json!({"id":"chat-A","title":"Open chat"})),
+                                    chat(json!({"id":"chat-M","title":"Member work","missionId":"mission-A"})),
+                                    chat(json!({"id":"chat-C","title":coordinator_title,"missionId":"mission-A","missionCoordinator":true})),
+                                    // A role-like decoy outside the mission.
+                                    chat(json!({"id":"chat-X","title":"Mission coordinator","missionCoordinator":true})),
+                                    chat(json!({"id":"chat-D","title":"Other coordinator","projectId":"project-B","cwd":"/synthetic/B","missionId":"mission-B","missionCoordinator":true})),
+                                ]);
+                                v.selected = Some("chat-A".into());
+                                v.title = "Open chat".into();
+                                v.generation = 1;
+                                v.state.generation = 1;
+                                v.editor.update(cx, |e, cx| {
+                                    e.select("chat:chat-A".into(), true, false, w, cx)
+                                });
+                                v.rebuild_nav(w, cx);
+                                v.listen_writes(updates, w, cx);
+                                v
+                            })
+                        },
+                    )
+                })
+                .unwrap();
+            until(cx, h, &view, |v, cx| v.editor.read(cx).ready());
+            let draft = "Keep this draft 私 👩‍💻";
+            cx.update_window(h, |_, w, cx| {
+                let input = view.read(cx).editor.read(cx).shell_probe().0;
+                input.update(cx, |i, cx| i.focus(w, cx));
+                w.input(draft, cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            let opened = |cx: &mut HeadlessAppContext, id: &str| {
+                let mut seen = Vec::new();
+                while let Ok(c) = commands.try_recv() {
+                    if let Command::Open { id, .. } = c {
+                        seen.push(id);
+                    }
+                }
+                cx.update(|cx| {
+                    assert_eq!(view.read(cx).page, Page::Chat);
+                    assert_eq!(view.read(cx).selected.as_deref(), Some(id));
+                });
+                assert_eq!(seen, vec![id.to_owned()], "exactly one Open of {id}");
+            };
+            let open_mission = |cx: &mut HeadlessAppContext, key: crate::mission_browser::Key| {
+                cx.update_window(h, |_, w, cx| w.press("secondary-3", cx))
+                    .unwrap();
+                until(cx, h, &view, |v, cx| {
+                    v.page == Page::Missions
+                        && v.missions.read(cx).catalog.is_some()
+                        && !v.missions.read(cx).busy
+                });
+                cx.update_window(h, |_, w, cx| {
+                    w.click(format!("mission-row-{}", key.tag()), cx)
+                })
+                .unwrap();
+            };
+            let shown = |v: &LocalViewer, cx: &App, id: &str| {
+                let b = v.missions.read(cx);
+                v.page == Page::Mission(f::key(id))
+                    && b.detail.as_ref().is_some_and(|d| d.key == f::key(id))
+                    && !b.busy
+            };
+            open_mission(cx, f::key("mission-A"));
+            until(cx, h, &view, |v, cx| shown(v, cx, "mission-A"));
+            cx.update_window(h, |_, w, _| {
+                let page = w.find("missions-page").bounds();
+                let title = w.find("missions-title").bounds();
+                let refresh = w.find("missions-refresh").bounds();
+                let jump = w.find("mission-open-coordinator");
+                assert_ne!(jump.disabled(), Some(true));
+                assert_eq!(jump.label(), Some("Open coordinator"));
+                let jump = jump.bounds();
+                // One title row: title, coordinator, Refresh, … inside the page.
+                assert!(jump.left() >= title.right() - px(1.), "{title:?} {jump:?}");
+                assert!(
+                    jump.right() <= refresh.left() + px(1.),
+                    "{jump:?} {refresh:?}"
+                );
+                assert!((jump.center().y - refresh.center().y).abs() < px(1.));
+                assert!(jump.left() >= page.left() && jump.right() <= page.right());
+                assert!(jump.size.width >= px(20.) && jump.size.height >= px(20.));
+                assert!(w.try_find("mission-no-coordinator").is_none());
+            })
+            .unwrap();
+            capture(
+                cx,
+                h,
+                &dir,
+                format!("{}-{}-coordinator.png", width as u32, mode.name()),
+            );
+            // Pointer: the exact coordinator, not the member or the decoy.
+            cx.update_window(h, |_, w, cx| w.click("mission-open-coordinator", cx))
+                .unwrap();
+            settle(cx, h);
+            opened(cx, "chat-C");
+            // Back returns to the overview, then through the list to the open
+            // chat with its draft.
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| shown(v, cx, "mission-A"));
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("mission-open-coordinator").visible())
+            })
+            .unwrap();
+            for _ in 0..2 {
+                cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                    .unwrap();
+                settle(cx, h);
+            }
+            until(cx, h, &view, |v, cx| {
+                v.page == Page::Chat
+                    && v.selected.as_deref() == Some("chat-A")
+                    && v.editor.read(cx).shell_probe().0.read(cx).value().as_ref() == draft
+            });
+            while commands.try_recv().is_ok() {}
+            // Keyboard: Tab reaches the title-row action; Enter opens it.
+            open_mission(cx, f::key("mission-A"));
+            until(cx, h, &view, |v, cx| shown(v, cx, "mission-A"));
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| v.missions.update(cx, |b, cx| b.focus(w, cx)));
+                for _ in 0..80 {
+                    w.press("tab", cx);
+                    if w.find("mission-open-coordinator").focused() == Some(true) {
+                        break;
+                    }
+                }
+                assert_eq!(w.find("mission-open-coordinator").focused(), Some(true));
+                w.press("enter", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            opened(cx, "chat-C");
+            cx.update_window(h, |_, w, cx| w.press("secondary-[", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| shown(v, cx, "mission-A"));
+            // Outside the Local chat list: disabled with its reason, no Open.
+            let all = cx.update(|cx| view.read(cx).state.chats.clone());
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.chats =
+                        Arc::new(all.iter().filter(|c| c.id != "chat-C").cloned().collect());
+                    v.rebuild_nav(w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let jump = w.find("mission-open-coordinator");
+                assert_eq!(jump.disabled(), Some(true));
+                assert_eq!(jump.label(), Some("Coordinator unavailable"));
+                w.click("mission-open-coordinator", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert!(shown(view.read(cx), cx, "mission-A")));
+            assert!(commands.try_recv().is_err());
+            capture(
+                cx,
+                h,
+                &dir,
+                format!(
+                    "{}-{}-coordinator-unavailable.png",
+                    width as u32,
+                    mode.name()
+                ),
+            );
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    v.state.chats = all.clone();
+                    v.rebuild_nav(w, cx);
+                })
+            })
+            .unwrap();
+            settle(cx, h);
+            // None assigned: no header action; Chats says so.
+            let mut none = a.clone();
+            none["mission"]["coordinatorSessionId"] = json!(null);
+            server.reply("/api/missions/mission-A", Reply::json(200, none));
+            cx.update_window(h, |_, w, cx| w.click("missions-refresh", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| {
+                shown(v, cx, "mission-A")
+                    && v.missions
+                        .read(cx)
+                        .detail
+                        .as_ref()
+                        .unwrap()
+                        .coordinator
+                        .is_none()
+            });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("mission-open-coordinator").is_none());
+                assert!(w.try_find("mission-no-coordinator").is_some());
+            })
+            .unwrap();
+            // Switching missions: the old coordinator never shows for the next
+            // mission while it loads; then that mission's own coordinator opens.
+            server.reply("/api/missions/mission-A", Reply::json(200, a.clone()));
+            cx.update_window(h, |_, w, cx| w.click("missions-refresh", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| {
+                shown(v, cx, "mission-A") && v.missions.read(cx).coordinator().is_some()
+            });
+            cx.update_window(h, |_, w, cx| w.click("missions-list", cx))
+                .unwrap();
+            until(cx, h, &view, |v, cx| {
+                v.page == Page::Missions && !v.missions.read(cx).busy
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.click(format!("mission-row-{}", f::key("mission-B").tag()), cx)
+            })
+            .unwrap();
+            cx.run_until_parked();
+            cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+            cx.update(|cx| {
+                let v = view.read(cx);
+                assert_eq!(v.page, Page::Mission(f::key("mission-B")));
+                assert!(
+                    v.missions.read(cx).busy,
+                    "mission-B detail is still loading"
+                );
+                assert!(v.missions.read(cx).coordinator().is_none());
+            });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("mission-open-coordinator").is_none())
+            })
+            .unwrap();
+            until(cx, h, &view, |v, cx| shown(v, cx, "mission-B"));
+            cx.update_window(h, |_, w, cx| w.click("mission-open-coordinator", cx))
+                .unwrap();
+            settle(cx, h);
+            opened(cx, "chat-D");
+            assert!(server.all_gets());
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, _| v.writes = None);
+                w.remove_window();
+            })
+            .unwrap();
+            drop(view);
+            cx.run_until_parked();
+            assert!(writer.command(WriteCommand::Close));
+            println!(
+                "{}",
+                json!({"coordinator_jump":true,"width":width,"mode":mode.name(),"pointer":"chat-C","keyboard_enter":"chat-C","back_draft_kept":true,"unavailable_disabled":true,"none_hidden":true,"switch_no_stale":"chat-D","mutation_http":0})
+            );
+        }
+    }
 }
 
 /// Tab from the sidebar list until `target` has focus, never passing `other`.
@@ -526,23 +865,14 @@ fn tab_to(
     target: &'static str,
     other: &'static str,
 ) {
-    use gpui_kit::test::TestQueryExt as _;
-    let mut seen = Vec::new();
     for _ in 0..12 {
         cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
         settle(cx, h);
-        let (hit, passed, focused) = cx
+        let (hit, passed) = cx
             .update_window(h, |_, w, _| {
-                let focused = w
-                    .elements()
-                    .iter()
-                    .filter(|e| e.focused() == Some(true))
-                    .map(|e| format!("{:?}", e.path().last()))
-                    .collect::<Vec<_>>();
                 (
                     w.find(target).focused() == Some(true),
                     w.find(other).focused() == Some(true),
-                    focused,
                 )
             })
             .unwrap();
@@ -550,9 +880,8 @@ fn tab_to(
         if hit {
             return;
         }
-        seen.push(focused);
     }
-    panic!("Tab never reached {target}: {seen:?}");
+    panic!("Tab never reached {target}");
 }
 /// Sidebar mission names open their exact linked mission: pointer before the
 /// list is loaded, Enter on the selected row's link once it is, and a truthful
