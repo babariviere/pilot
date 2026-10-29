@@ -667,19 +667,14 @@ fn run_reply_memory(cx: &mut HeadlessAppContext) {
             })
             .collect::<Vec<_>>()
     };
-    let wait_for_file =
-        |cx: &mut HeadlessAppContext, want: &dyn Fn(&crate::sidebar_memory::Saved) -> bool| {
-            for _ in 0..200 {
-                cx.run_until_parked();
-                if crate::sidebar_memory::read(&path).is_some_and(|s| want(&s)) {
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            panic!("the sidebar memory was not written");
-        };
     let (handle, view) = open_rows(cx, 1100., chats(), Some(path.clone()));
-    wait_for_file(cx, &|_| true);
+    // The headless dispatcher owns the background read/write tasks too.
+    // Drain them and inspect their result, rather than sleeping for real I/O.
+    cx.run_until_parked();
+    assert!(
+        crate::sidebar_memory::read(&path).is_some(),
+        "initial memory was written"
+    );
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(
@@ -726,28 +721,19 @@ fn run_reply_memory(cx: &mut HeadlessAppContext) {
         );
     })
     .unwrap();
-    wait_for_file(cx, &|s| s.seen.contains_key("seen"));
+    cx.run_until_parked();
+    let saved = crate::sidebar_memory::read(&path).expect("sidebar memory was written");
+    assert_eq!(
+        saved.seen.get("seen"),
+        Some(&later),
+        "the exact reply was saved"
+    );
     cx.update_window(handle, |_, window, _| window.remove_window())
         .unwrap();
     cx.run_until_parked();
     // A restart reads the same private file.
     let (handle, _) = open_rows(cx, 1100., chats(), Some(path.clone()));
-    for _ in 0..200 {
-        cx.run_until_parked();
-        let loaded = cx
-            .update_window(handle, |_, window, cx| {
-                window.render_frame(cx);
-                window
-                    .within("chat-mark-unseen")
-                    .try_find("state-circle-filled")
-                    .is_some()
-            })
-            .unwrap();
-        if loaded {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    cx.run_until_parked();
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(

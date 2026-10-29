@@ -134,6 +134,39 @@ fn memory_round_trips_privately_and_a_bad_file_starts_fresh() {
 }
 
 #[test]
+fn fractional_stamps_survive_restart_without_reopening_a_seen_reply() {
+    let dir = std::env::temp_dir().join(format!("pilot-sidebar-memory-{}", uuid::Uuid::new_v4()));
+    let path = dir.join(FILE);
+    // Without exact JSON float parsing this reloads as 1793305600000.007,
+    // one representable value below the reply we already saw.
+    let stamp = 1_793_305_600_000.007_3_f64;
+    let fresh =
+        c(json!({"id":"fresh","outcome":"done","outcomeAt":stamp,"lastUserMessageAt":stamp}));
+    let mut memory = Memory::at(path.clone());
+    memory.restore(None, stamp.next_down());
+    memory.observe(std::slice::from_ref(&fresh));
+    memory.note_seen(&fresh);
+    memory.note_sent("fresh", stamp);
+    let (target, bytes) = memory.take_save().unwrap();
+    write(&target, &bytes).unwrap();
+
+    let mut reopened = Memory::at(path.clone());
+    reopened.restore(read(&path), stamp + 1000.);
+    assert!(!reopened.unread(&fresh), "seen survives a restart");
+    assert_eq!(
+        reopened.saved(),
+        memory.saved(),
+        "all stamps round-trip exactly"
+    );
+    let next = c(json!({"id":"fresh","outcome":"done","outcomeAt":stamp.next_up()}));
+    assert!(
+        reopened.unread(&next),
+        "even the next representable reply is new"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn maps_stay_bounded_and_keep_the_newest() {
     let mut memory = Memory::ephemeral(0.);
     for i in 0..(CAP + 10) {

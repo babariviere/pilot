@@ -8,9 +8,9 @@ use crate::{
     state_mark::Signal,
 };
 use gpui_kit::{
-    AnyWindowHandle, AppContext, Bounds, Entity, HeadlessAppContext, Pixels, WindowBounds,
-    WindowOptions,
-    component::{Theme, ThemeMode},
+    AnyWindowHandle, AppContext, Bounds, Entity, FocusHandle, HeadlessAppContext, Pixels,
+    WindowBounds, WindowOptions,
+    component::{Theme, ThemeMode, WindowExt, dialog::ANIMATION_DURATION},
     px, size,
     test::TestWindowExt,
 };
@@ -25,6 +25,37 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
         cx.run_until_parked();
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
+}
+/// Kit closes logically and restores focus immediately, then retains the
+/// surface for its SlideDown exit. Advance that contract, not a wall-clock sleep
+/// or the shorter generic row-state settle (192ms).
+fn finish_folder_exit(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    previous_focus: &Option<FocusHandle>,
+) {
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(!w.has_active_dialog(cx), "the folder dialog is closed");
+        assert_eq!(
+            &w.focused(cx),
+            previous_focus,
+            "dialog restores caller focus"
+        );
+        assert!(
+            w.try_find("folder-editor").is_some(),
+            "the exit still paints"
+        );
+    })
+    .unwrap();
+    cx.advance_clock(*ANIMATION_DURATION);
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.try_find("folder-editor").is_none(), "the exit unmounts");
+    })
+    .unwrap();
+    cx.run_until_parked();
 }
 fn projects() -> Vec<Project> {
     [
@@ -459,6 +490,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
 
             // Edit folders: add two, file projects, save. Cancel keeps nothing.
+            let previous_focus = cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap();
             let form = cx
                 .update_window(h, |_, w, cx| {
                     view.update(cx, |v, cx| v.open_folder_editor(w, cx))
@@ -503,7 +535,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
                 w.click("folder-save", cx);
             })
             .unwrap();
-            settle(cx, h);
+            finish_folder_exit(cx, h, &previous_focus);
             let folders = cx.update(|cx| {
                 view.read(cx)
                     .chats
@@ -537,7 +569,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
                 w.click("folder-cancel", cx);
             })
             .unwrap();
-            settle(cx, h);
+            finish_folder_exit(cx, h, &previous_focus);
             assert_eq!(
                 cx.update(|cx| view
                     .read(cx)
@@ -549,6 +581,46 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
                     .clone()),
                 folders
             );
+
+            // Enter in a folder name saves; Escape discards a valid edit.
+            // Both return focus before the retained exit surface unmounts.
+            for key in ["enter", "escape"] {
+                let form = cx
+                    .update_window(h, |_, w, cx| {
+                        view.update(cx, |v, cx| v.open_folder_editor(w, cx))
+                    })
+                    .unwrap()
+                    .unwrap();
+                cx.advance_clock(*ANIMATION_DURATION);
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    let input = form.read(cx).names[1].clone();
+                    input.update(cx, |i, cx| i.set_value("Private", w, cx));
+                    w.render_frame(cx);
+                    w.click("folder-name-1", cx);
+                    w.press(key, cx);
+                })
+                .unwrap();
+                finish_folder_exit(cx, h, &previous_focus);
+                let saved = cx.update(|cx| {
+                    view.read(cx)
+                        .chats
+                        .read(cx)
+                        .delegate()
+                        .memory
+                        .folders()
+                        .clone()
+                });
+                if key == "enter" {
+                    assert_eq!(saved.folder_of("pilot"), Some("Private"));
+                    cx.update_window(h, |_, w, cx| {
+                        view.update(cx, |v, cx| v.set_folders(folders.clone(), w, cx));
+                    })
+                    .unwrap();
+                } else {
+                    assert_eq!(saved, folders, "Escape discards the edited name");
+                }
+            }
 
             // The picker: All projects, folders with counts, projects; Edit folders….
             cx.update_window(h, |_, w, cx| w.click("project-scope", cx))
