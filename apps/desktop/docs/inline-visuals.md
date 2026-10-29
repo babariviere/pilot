@@ -94,6 +94,16 @@ advances at most 0.1 s. Under Reduce Motion it draws once at `t = 0`. Each frame
 re-renders the reader. A draw over the helper's 8 ms limit is retried
 once on a fresh helper; two in a row for the same canvas stop the reader with
 the error until Retry.
+Canvas frames are planned on the worker, not the UI thread: shapes become
+triangles, and consecutive shapes of one color share a batch, so painting only
+places vertices. Everything the published draw contract admits (20,000
+commands, 100,000 path points, 64 Ki characters) is planned, with no command or
+text cap, and shapes past the canvas edge are clipped. Two native guards remain,
+each shown as the canvas error rather than a partial frame: a frame holds at
+most 1,048,576 triangle vertices (about 110 MB of GPU vertex data per frame;
+GPUI drops frames over 256 MiB), and a filled free-form path has at most 4,096
+points and a bounded number of self-crossings, because sweep tessellation is
+quadratic in the worst case. Strokes and built-in shapes are linear.
 Decoded raster artifacts instead hug their aspect-fitted natural size, constrained
 by the conversation width and Swift's 720pt image ceiling (48pt minimum target).
 Small images no longer sit inside a 440pt blank box. Raster completion remeasures

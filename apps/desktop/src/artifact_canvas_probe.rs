@@ -338,8 +338,303 @@ fn animated(cx: &mut HeadlessAppContext) {
         per_frame.as_secs_f64() * 1000.,
     );
 }
+/// Replies to a Draw with `drawing(width, height)` at the Draw's own identity.
+fn reply(
+    p: &mut ArtifactPane,
+    command: Command,
+    drawing: fn(f64, f64) -> crate::visual_drawing::Drawing,
+    cx: &mut Context<ArtifactPane>,
+) {
+    let Command::Draw {
+        version,
+        id,
+        width,
+        height,
+        t,
+        pointer,
+    } = command
+    else {
+        panic!("expected Draw")
+    };
+    install(
+        p,
+        id,
+        version,
+        width,
+        height,
+        t,
+        pointer,
+        drawing(width, height),
+        cx,
+    );
+}
+#[allow(clippy::too_many_arguments)]
+fn install(
+    p: &mut ArtifactPane,
+    id: String,
+    version: u64,
+    width: f64,
+    height: f64,
+    t: f64,
+    pointer: Option<[f64; 2]>,
+    drawing: crate::visual_drawing::Drawing,
+    cx: &mut Context<ArtifactPane>,
+) {
+    let mut next = p.snapshot.clone();
+    Arc::make_mut(&mut next.drawings).insert(
+        id,
+        crate::artifact_worker::DrawingFrame {
+            version,
+            width,
+            height,
+            t,
+            pointer,
+            plan: crate::visual_canvas_plan::Plan::compile(&drawing, width, height).map(Arc::new),
+        },
+    );
+    let reference = p.reference.clone().unwrap();
+    p.accept(p.generation, &reference, next, cx);
+}
+const COLS: usize = 40;
+const ROWS: usize = 20;
+/// One filled cell per command, cycling the six chart colors: 800 commands.
+fn grid(width: f64, height: f64) -> crate::visual_drawing::Drawing {
+    let (cw, ch) = (width / COLS as f64, height / ROWS as f64);
+    let mut ops = Vec::new();
+    for i in 0..COLS * ROWS {
+        let (c, r) = ((i % COLS) as f64, (i / COLS) as f64);
+        let color = 7. + (i % 6) as f64;
+        ops.extend([
+            10.,
+            1.,
+            color,
+            1.,
+            0.,
+            c * cw + 1.,
+            r * ch + 1.,
+            cw - 2.,
+            ch - 2.,
+            0.,
+        ]);
+    }
+    crate::visual_drawing::Drawing::checked(COLS * ROWS, ops, vec![]).unwrap()
+}
+/// 20,000 large rounded cards: valid commands whose triangles pass the native
+/// vertex limit together.
+fn cards(width: f64, _: f64) -> crate::visual_drawing::Drawing {
+    let mut ops = Vec::new();
+    for k in 0..20_000 {
+        ops.extend([
+            10.,
+            1.,
+            7.,
+            1.,
+            0.,
+            (k as f64 * 7.) % (width - 80.),
+            10.,
+            80.,
+            80.,
+            40.,
+        ]);
+    }
+    crate::visual_drawing::Drawing::checked(20_000, ops, vec![]).unwrap()
+}
+/// 20,000 small dots, the published per-draw command maximum.
+fn dots(width: f64, height: f64) -> crate::visual_drawing::Drawing {
+    let mut ops = Vec::new();
+    for k in 0..20_000 {
+        let (x, y) = (
+            (k * 37) as f64 % (width - 8.) + 4.,
+            (k * 53) as f64 % (height - 8.) + 4.,
+        );
+        ops.extend([11., 1., 7. + (k % 6) as f64, 0.9, 0., x, y, 2.]);
+    }
+    crate::visual_drawing::Drawing::checked(20_000, ops, vec![]).unwrap()
+}
+/// Canvases past 512 commands paint completely: every cell of an 800-command
+/// grid is visible at both widths in both themes. A drawing past the native
+/// vertex limit shows its error rather than a partial frame, and the next valid
+/// frame paints in full again.
+fn large(cx: &mut HeadlessAppContext) {
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (worker, commands) = Worker::synthetic();
+            let (handle, view) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Geometry::new(
+                            Default::default(),
+                            size(px(width), px(760.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |window, cx| {
+                        cx.new(|cx| {
+                            let view = crate::LocalViewer::visual_preview(9, window, cx);
+                            view.probe_artifact_pane().update(cx, |p, cx| {
+                                let reference = p.reference.clone().unwrap();
+                                p.preview_canvas(reference, 320., cx);
+                                p.snapshot.drawings = Default::default();
+                                p.snapshot.live = true;
+                                p.worker = Some(worker);
+                                p.zoom.scale = Some(1.);
+                            });
+                            view
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            let pane = cx.update(|cx| view.read(cx).probe_artifact_pane());
+            let settle = |cx: &mut HeadlessAppContext| {
+                for _ in 0..6 {
+                    cx.run_until_parked();
+                    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                        .unwrap();
+                    cx.run_until_parked();
+                    let Ok(command) = commands.try_recv() else {
+                        return;
+                    };
+                    pane.update(cx, |p, cx| reply(p, command, grid, cx));
+                }
+                panic!("canvas never settled");
+            };
+            settle(cx);
+            let frame = pane.read_with(cx, |p, _| p.snapshot.drawings["0.1"].clone());
+            let plan = frame.plan.clone().expect("800-command grid plans");
+            assert_eq!(plan.vertices(), COLS * ROWS * 6, "every cell is planned");
+            let bounds = cx
+                .update_window(handle, |_, window, cx| {
+                    window.render_frame(cx);
+                    window.find("0.1").bounds()
+                })
+                .unwrap();
+            let scale = f64::from(f32::from(bounds.size.width)) / frame.width;
+            assert!((scale - 1.).abs() < 0.01, "unzoomed reader {scale}");
+            assert!(
+                f32::from(bounds.right()) <= width && f32::from(bounds.bottom()) <= 760.,
+                "whole canvas visible: {bounds:?}"
+            );
+            let missing = |cx: &mut HeadlessAppContext| {
+                let image = cx.capture_screenshot(handle).unwrap();
+                let k = f64::from(image.width()) / f64::from(width);
+                let pixel = |x: f64, y: f64| {
+                    let px = (f64::from(f32::from(bounds.left())) + x * scale) * k;
+                    let py = (f64::from(f32::from(bounds.top())) + y * scale) * k;
+                    *image.get_pixel(px as u32, py as u32)
+                };
+                let gap = pixel(0.3, 0.3);
+                let (cw, ch) = (frame.width / COLS as f64, frame.height / ROWS as f64);
+                (0..COLS * ROWS)
+                    .filter(|i| {
+                        let (c, r) = ((i % COLS) as f64, (i / COLS) as f64);
+                        pixel(c * cw + cw / 2., r * ch + ch / 2.) == gap
+                    })
+                    .count()
+            };
+            assert_eq!(
+                missing(cx),
+                0,
+                "every one of 800 cells paints ({width} {mode:?})"
+            );
+            let paint_cpu = |cx: &mut HeadlessAppContext| {
+                let cpu = thread_cpu();
+                for _ in 0..10 {
+                    cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                        .unwrap();
+                }
+                (thread_cpu() - cpu) / 10
+            };
+            let grid_cpu = paint_cpu(cx);
+            // Past the vertex limit: explicit error, no partial frame.
+            let identity = (frame.version, frame.width, frame.height);
+            pane.update(cx, |p, cx| {
+                install(
+                    p,
+                    "0.1".into(),
+                    identity.0,
+                    identity.1,
+                    identity.2,
+                    0.,
+                    None,
+                    cards(identity.1, identity.2),
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+            let error = pane.read_with(cx, |p, _| p.snapshot.drawings["0.1"].plan.clone().err());
+            assert_eq!(
+                error,
+                Some("Canvas exceeds the native limit of 1,048,576 triangle vertices")
+            );
+            // The refused frame has no plan to paint, only its error.
+            let empty_cpu = paint_cpu(cx);
+            // Contract-scale dots: plan off the UI thread, then measure paint only.
+            let started = std::time::Instant::now();
+            let heavy = dots(identity.1, identity.2);
+            pane.update(cx, |p, cx| {
+                install(
+                    p,
+                    "0.1".into(),
+                    identity.0,
+                    identity.1,
+                    identity.2,
+                    0.,
+                    None,
+                    heavy,
+                    cx,
+                )
+            });
+            let planned = started.elapsed();
+            let vertices = pane.read_with(cx, |p, _| {
+                p.snapshot.drawings["0.1"]
+                    .plan
+                    .as_ref()
+                    .map(|p| p.vertices())
+                    .ok()
+            });
+            println!(
+                "Native canvas {width} {mode:?} UI CPU per frame: no geometry {empty_cpu:?}, 800-cell grid {grid_cpu:?}, 20000 dots ({vertices:?} vertices; plan+accept {planned:?}) {:?}",
+                paint_cpu(cx)
+            );
+            // A valid frame after the refusal paints in full again.
+            pane.update(cx, |p, cx| {
+                install(
+                    p,
+                    "0.1".into(),
+                    identity.0,
+                    identity.1,
+                    identity.2,
+                    0.,
+                    None,
+                    grid(identity.1, identity.2),
+                    cx,
+                )
+            });
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, cx| window.render_frame(cx))
+                .unwrap();
+            assert_eq!(missing(cx), 0, "valid frame after refusal paints fully");
+            assert!(
+                commands.try_recv().is_err(),
+                "installed frames request no Draw"
+            );
+            cx.update_window(handle, |_, window, _| window.remove_window())
+                .unwrap();
+            cx.run_until_parked();
+        }
+    }
+    println!(
+        "Native canvas large: 800-command grid fully painted at 680/1100, light/dark; vertex-limit refusal paints nothing, then recovers. Synthetic, offscreen only."
+    );
+}
 pub(in crate::artifact_view) fn run(cx: &mut HeadlessAppContext) {
     animated(cx);
+    large(cx);
     let reduce_motion = cx.update(|cx| {
         let previous = cx.reduce_motion();
         cx.set_reduce_motion(true);

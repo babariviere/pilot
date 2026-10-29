@@ -5076,6 +5076,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "libc",
+ "lyon_tessellation",
  "pilot-desktop-updater",
  "raw-window-handle",
  "reqwest",

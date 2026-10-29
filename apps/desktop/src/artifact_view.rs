@@ -1479,14 +1479,6 @@ impl ArtifactPane {
                     .cloned();
                 let plan = frame.as_ref().and_then(|f| f.plan.as_ref().ok()).cloned();
                 let error = frame.as_ref().and_then(|f| f.plan.as_ref().err()).copied();
-                if let Some(plan) = &plan {
-                    if plan.cost > *budget {
-                        return Self::note(
-                            "Canvas exceeds aggregate native display budget. Source retained.",
-                        );
-                    }
-                    *budget -= plan.cost;
-                }
                 let height = value["height"].as_f64().unwrap_or(160.);
                 let live = self.snapshot.live;
                 let animated = value["animated"] == true;

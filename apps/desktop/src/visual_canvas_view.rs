@@ -1,8 +1,8 @@
 //! Trusted bounded path/text painting, never source interpretation or dynamic SVG.
 use crate::visual_canvas_plan::{Plan, Primitive};
 use gpui_kit::{
-    App, Bounds, FontWeight, Hsla, PathBuilder, Pixels, SharedString, TextAlign, TextRun, Window,
-    point, px,
+    App, Bounds, ContentMask, FontWeight, Hsla, Path, PathVertex, Pixels, SharedString, TextAlign,
+    TextRun, Window, point, px,
 };
 pub(crate) fn palette(cx: &App) -> [Hsla; 13] {
     [
@@ -25,35 +25,46 @@ pub(crate) fn paint_scaled(
     {
         return;
     }
+    // Shapes may extend past the canvas; clip them to it like any 2D canvas.
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        paint_primitives(plan, bounds, colors, mono, scale, window, cx)
+    });
+}
+fn paint_primitives(
+    plan: &Plan,
+    bounds: Bounds<Pixels>,
+    colors: &[Hsla; 13],
+    mono: &SharedString,
+    scale: f32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let at = |p: [f32; 2]| bounds.origin + point(px(p[0] * scale), px(p[1] * scale));
     for primitive in &plan.primitives {
         match primitive {
-            Primitive::Path {
-                points,
-                closed,
-                paint,
+            // Tessellated off the UI thread; painting only places the vertices.
+            Primitive::Triangles {
+                vertices,
+                bounds: [lo, hi],
+                color,
+                opacity,
             } => {
-                if points.is_empty() || paint.opacity == 0. || (paint.stroke && paint.width == 0.) {
+                if vertices.is_empty() {
                     continue;
                 }
-                let mut builder = if paint.stroke {
-                    PathBuilder::stroke(px(paint.width * scale))
-                } else {
-                    PathBuilder::fill()
-                };
-                builder.move_to(
-                    bounds.origin + point(px(points[0][0] * scale), px(points[0][1] * scale)),
-                );
-                for p in &points[1..] {
-                    builder.line_to(bounds.origin + point(px(p[0] * scale), px(p[1] * scale)));
-                }
-                if *closed || !paint.stroke {
-                    builder.close();
-                }
-                if let Ok(path) = builder.build() {
-                    let mut color = colors[paint.color];
-                    color.a *= paint.opacity;
-                    window.paint_path(path, color);
-                }
+                let mut path = Path::new(at(*lo));
+                path.bounds = Bounds::from_corners(at(*lo), at(*hi));
+                path.vertices = vertices
+                    .iter()
+                    .map(|&p| PathVertex {
+                        xy_position: at(p),
+                        st_position: point(0., 1.),
+                        content_mask: Default::default(),
+                    })
+                    .collect();
+                let mut color = colors[*color];
+                color.a *= *opacity;
+                window.paint_path(path, color);
             }
             Primitive::Text {
                 text,
