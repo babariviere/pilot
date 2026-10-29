@@ -373,9 +373,9 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                     if phase=="call" {
                         assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("probe",cx).0,"the row opens its call");
                         assert!(window.find("step-toggle-call:probe").label().unwrap().starts_with("Run the disclosure probe and show the failure"));
-                        // The script waits behind its own toggle, with exact copy.
-                        assert!(window.find("show-call:probe-Code").bounds().right()<=viewport.right());
-                        assert!(window.find_all("body-call:probe-Code").is_empty());
+                        // Opening the call shows its code at once, with exact copy.
+                        assert!(window.find("body-call:probe-Code").bounds().right()<=viewport.right());
+                        assert!(window.find_all("show-call:probe-Code").is_empty());
                         assert!(view.read(cx).transcript.read(cx).disclosure_probe_step("failed-early",cx).0,"a failed call opens with its output");
                         window.click("copy-call:probe-Code",cx);
                         assert!(cx.read_from_clipboard().unwrap().text().unwrap().starts_with("// @options"));

@@ -363,7 +363,6 @@ impl WorkUi {
                         step: step.clone(),
                         active: work.active,
                         open: false,
-                        expanded: BTreeSet::new(),
                         bodies: BTreeMap::new(),
                         subscriptions: Vec::new(),
                         pulse: crate::transition::Pulse::default(),
@@ -798,7 +797,6 @@ struct Block<'a> {
     detail: Option<String>,
     /// Outcome beside the label, and whether it is a failure.
     status: Option<(&'static str, bool)>,
-    collapsible: bool,
     /// Wash the lines that read as failures.
     errors: bool,
 }
@@ -811,7 +809,6 @@ impl Block<'_> {
             plain: true,
             detail: None,
             status: None,
-            collapsible: false,
             errors: false,
         }
     }
@@ -870,8 +867,6 @@ pub(crate) struct StepView {
     /// The group follows a live run, so live calls read as running.
     active: bool,
     open: bool,
-    /// Collapsible blocks (code, command, arguments) the user opened.
-    expanded: BTreeSet<&'static str>,
     bodies: BTreeMap<&'static str, Body>,
     subscriptions: Vec<Subscription>,
     /// Clock of the running dots, while this call runs.
@@ -928,8 +923,8 @@ impl StepView {
     }
     /// One section of a call's panel: a caption (label, detail, status) with
     /// exact copy, then the text. Copy is always the exact source; the shown
-    /// text can drop a matched header. A collapsible section starts closed and
-    /// builds no parser until the user opens it.
+    /// text can drop a matched header. Its parser exists only while the call
+    /// is open; long text scrolls inside the section.
     fn body(&mut self, block: Block<'_>, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let Block {
             label,
@@ -938,12 +933,10 @@ impl StepView {
             plain,
             detail,
             status,
-            collapsible,
             errors,
         } = block;
         let id = step_id(&self.step);
-        let open = !collapsible || self.expanded.contains(label);
-        let state = if open {
+        let state = {
             let shown = shown.unwrap_or(source.as_str()).to_owned();
             let parsed = if plain {
                 // Failing lines get a quiet danger wash; the text is unchanged.
@@ -982,9 +975,7 @@ impl StepView {
                     },
                 );
             }
-            Some(self.bodies[label].state.clone())
-        } else {
-            None
+            self.bodies[label].state.clone()
         };
         let muted = cx.theme().muted_foreground;
         let danger = cx.theme().danger;
@@ -1015,40 +1006,7 @@ impl StepView {
             .gap_2()
             .items_center()
             .min_w_0()
-            .map(|this| {
-                if collapsible {
-                    this.child(
-                        Button::new(SharedString::from(format!("show-{id}-{label}")))
-                            .ghost()
-                            .xsmall()
-                            // Cancel the button's inset so the chevron sits
-                            // in the panel's label column.
-                            .ml(px(-8.))
-                            .accessibility_label(SharedString::from(format!(
-                                "{} {name}",
-                                if open { "Hide" } else { "Show" }
-                            )))
-                            .child(
-                                div()
-                                    .h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .text_color(muted)
-                                    .child(chevron(open))
-                                    .child(caption),
-                            )
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if !view.expanded.remove(label) {
-                                    view.expanded.insert(label);
-                                }
-                                cx.emit(Change::Disclosure(step_id(&view.step)));
-                                cx.notify();
-                            })),
-                    )
-                } else {
-                    this.child(caption)
-                }
-            })
+            .child(caption)
             .child(div().flex_1())
             .child(
                 Button::new(SharedString::from(format!("copy-{id}-{label}")))
@@ -1068,7 +1026,7 @@ impl StepView {
             // Panel sections carry their own inset; a note reads as prose.
             .when(plain, |this| this.px(px(12.)).py(px(6.)))
             .child(header)
-            .when_some(state, |this, state| {
+            .map(|this| {
                 this.child(
                     div()
                         .id(SharedString::from(format!("body-{id}-{label}")))
@@ -1206,8 +1164,7 @@ impl Render for StepView {
                         .flatten();
                     let failed = tool.status == Status::Error;
                     let mut sections: Vec<gpui_kit::AnyElement> = Vec::new();
-                    // The command reads first; a script's code waits behind
-                    // its own toggle so its output leads.
+                    // The command or code, then what it printed.
                     if let Some((label, source)) = &tool.input {
                         let lines = source.lines().count();
                         let script = *label == "Code";
@@ -1227,7 +1184,6 @@ impl Render for StepView {
                                             if lines == 1 { "" } else { "s" }
                                         )
                                     }),
-                                    collapsible: script,
                                     ..Block::code(label, source.clone())
                                 },
                                 cx,
@@ -1272,16 +1228,12 @@ impl Render for StepView {
                             .into_any_element(),
                         );
                     }
-                    if !tool.arguments.is_empty() {
+                    // A script's or command's arguments only repeat its source,
+                    // and an edit's its preview: show them for other tools.
+                    if tool.input.is_none() && tool.diff.is_empty() && !tool.arguments.is_empty() {
                         sections.push(
-                            self.body(
-                                Block {
-                                    collapsible: true,
-                                    ..Block::code("Arguments", tool.arguments.clone())
-                                },
-                                cx,
-                            )
-                            .into_any_element(),
+                            self.body(Block::code("Arguments", tool.arguments.clone()), cx)
+                                .into_any_element(),
                         );
                     }
                     // One quiet panel; hairlines separate its sections.

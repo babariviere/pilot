@@ -376,39 +376,27 @@ fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mu
         window.render_frame(cx);
         let step = window.find("step-toggle-call:s");
         assert!(step.label().unwrap().starts_with("Count rows"));
-        // Output shows without the wrapper; code waits behind its own toggle.
-        assert_eq!(view.read(cx).work_ui.step_info("s", cx), (true, 1));
+        // Code and output both show at once; output drops only the wrapper.
+        assert_eq!(view.read(cx).work_ui.step_info("s", cx), (true, 2));
         let shown = view.read(cx).work_ui.body_state("s", "Output", cx);
         let shown = shown.read(cx).rendered_text().source().to_string();
         assert!(!shown.contains("Wall time") && !shown.contains("Script failed"));
         assert!(shown.contains("os error 2") && shown.contains("日本語"));
-        assert!(window.find_all("body-call:s-Code").is_empty());
         let block = window.find("body-call:s-Output").bounds();
         let viewport = window.find("viewport").bounds();
         assert!(block.right() <= viewport.right(), "long lines stay inside");
-        assert!(window.find("show-call:s-Code").bounds().bottom() <= block.top());
+        assert!(window.find("body-call:s-Code").bounds().bottom() <= block.top());
+        // Nothing to fold: no section toggles, and no arguments that only
+        // repeat the script.
+        assert!(window.find_all("show-call:s-Code").is_empty());
+        assert!(window.find_all("copy-call:s-Arguments").is_empty());
         window.click("copy-call:s-Output", cx);
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), output);
         window.click("copy-call:s-Code", cx);
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), code);
-        window.click("show-call:s-Code", cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle, |_, window, cx| {
-        window.render_frame(cx);
-        assert_eq!(view.read(cx).work_ui.step_info("s", cx), (true, 2));
         let code_state = view.read(cx).work_ui.body_state("s", "Code", cx);
         let source = code_state.read(cx).rendered_text().source().to_string();
         assert!(source.contains("const e = 5;") && source.contains("return a + b;"));
-        window.click("copy-call:s-Arguments", cx);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                &cx.read_from_clipboard().unwrap().text().unwrap()
-            )
-            .unwrap(),
-            json!({"code":code})
-        );
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();
@@ -418,6 +406,26 @@ fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mu
         shape(cx, handle, &view, id).1,
         vec![vec![0], vec![1], vec![2]]
     );
+    // A tool without code shows its arguments, open, with exact copy.
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("step-toggle-call:r1", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("body-call:r1-Arguments").bounds().size.height > px(0.));
+        window.click("copy-call:r1-Arguments", cx);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &cx.read_from_clipboard().unwrap().text().unwrap()
+            )
+            .unwrap(),
+            json!({"path":"src/a.rs"})
+        );
+    })
+    .unwrap();
 }
 
 #[gpui_kit::test]
@@ -663,17 +671,10 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
                 cx.read_from_clipboard().unwrap().text().unwrap(),
                 "printf synthetic"
             );
-            // Executable source leads; its JSON envelope is a secondary copy, never parsed.
-            window.click("copy-call:a-Arguments", cx);
+            // The command is the input; its JSON envelope only repeats it.
+            assert!(window.find_all("copy-call:a-Arguments").is_empty());
             window.draw(cx).clear(cx);
             assert_eq!(view.read(cx).work_ui.step_info("a", cx), (true, 2));
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(
-                    &cx.read_from_clipboard().unwrap().text().unwrap()
-                )
-                .unwrap(),
-                json!({"command":"printf synthetic","timeout":30})
-            );
             assert_eq!(
                 view.read(cx).scroller.read(cx).logical_scroll_top().item_ix,
                 0,

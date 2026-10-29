@@ -200,13 +200,14 @@ not gaps between tool events; a committed reply or a new user turn ends it.
 Codemode names (`tool_script.rs`) come only from literal nested `tools.*` calls
 or a leading `//` comment, never from execution, and the status is always the
 outer script's. An opened call is one quiet panel on the code tint, its
-sections split by hairlines: the command (a script's code collapsed, so its
-output leads), the output with its outcome (Failed, Running, Status unknown)
-and failing lines on a faint danger wash, any patch preview, then collapsed
-arguments. Text is monospace. A script's codemode header (status, wall time,
-`Output:`) is dropped from the shown text only when it matches exactly; the
-wall time moves to the caption. Every section copies its exact source, header
-included. A call that is running now shows three bouncing dots in its glyph
+sections split by hairlines and never folded: the command or script code, the
+output with its outcome (Failed, Running, Status unknown) and failing lines on a
+faint danger wash, then any patch preview. Arguments show only for tools with
+neither source nor preview, since a script's or command's only repeat it. Long
+sections scroll inside. Text is monospace. A script's codemode header (status,
+wall time, `Output:`) is dropped from the shown text only when it matches
+exactly; the wall time moves to the caption. Every section copies its exact
+source, header included. A call that is running now shows three bouncing dots in its glyph
 slot (`transition::Pulse`, frame-driven only while painted); they hold still
 under reduced motion and give way to the kind or error glyph when the call ends,
 fails or its run goes stale.
