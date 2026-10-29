@@ -10,12 +10,12 @@ use gpui_kit::{
     AppContext, Context, Entity, EntityInputHandler, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
-        Disableable, Icon, IconName, Sizable, StyledExt,
+        ActiveTheme, Disableable, Icon, IconName, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         checkbox::Checkbox,
         input::{Input, InputEvent, InputState, Textarea, TextareaState},
     },
-    div,
+    div, relative, rems,
 };
 pub(crate) struct ScopedModels {
     source: Option<LocalOptions>,
@@ -475,23 +475,31 @@ impl Render for ScopedModels {
                     let label = if provider.is_empty() { "Unspecified provider" } else { provider };
                     let provider_key = provider.to_owned();
                     let selected = selected_by_provider.get(provider).copied().unwrap_or(0);
-                    div().id(SharedString::from(format!("scope-provider-{provider}"))).test_support().v_flex().gap_3().min_w_0()
-                        .child(Button::new(SharedString::from(format!("scope-provider-toggle-{provider}"))).ghost().small().w_full().justify_start()
+                    // Flat list: the toggle is outdented by its own px_2 on both sides so the chevron,
+                    // every model checkbox and All share the page edge; names line up with the label.
+                    div().id(SharedString::from(format!("scope-provider-{provider}"))).test_support().v_flex().min_w_0()
+                        .child(Button::new(SharedString::from(format!("scope-provider-toggle-{provider}"))).ghost().small().justify_start().mx(rems(-0.5))
                             .accessibility_label(SharedString::from(format!("{} {label}, {selected} selected", if open { "Collapse" } else { "Expand" })))
                             .disabled(!query.is_empty())
                             .tooltip(if query.is_empty() { "Expand or collapse provider" } else { "Search keeps matching providers expanded. Clear search to fold them." })
                             .child(div().h_flex().items_center().gap_2().w_full().min_w_0()
                                 .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).small())
-                                .child(ui::heading(SharedString::from(format!("scope-provider-title-{provider}")), SharedString::from(label), Text::Headline))
-                                .when(selected > 0, |this| this.child(ui::text(Text::Caption, SharedString::from(format!("{selected} selected"))))))
+                                .child(ui::text(Text::Label, SharedString::from(label)).id(SharedString::from(format!("scope-provider-title-{provider}"))).test_support().truncate().font_semibold().text_color(cx.theme().muted_foreground))
+                                .when(selected > 0, |this| this.child(ui::text(Text::Caption, SharedString::from(format!("{selected} selected"))).text_color(cx.theme().muted_foreground))))
                             .on_click(cx.listener(move |v,_,w,cx| v.toggle_provider(&provider_key,w,cx))))
-                        .when(open, |this| this.children(candidates.into_iter().map(|c|{
+                        .when(open, |this| this.child(div().v_flex().min_w_0()
+                            .children(candidates.into_iter().map(|c|{
                     let id=c.id.clone();let checked=selection.as_ref().is_some_and(|p|p.iter().any(|s|s==&id));
-                    FieldRow::new(SharedString::from(format!("scope-row-{id}")),SharedString::from(c.name.clone()),
-                        Checkbox::new(SharedString::from(format!("scope-model-{id}"))).label("Include model").accessibility_label(SharedString::from(format!("Include {}",id))).checked(checked).disabled(!editable)
-                            .on_change(cx.listener(move|v,checked,w,cx|v.choose(&id,*checked,w,cx))))
-                        .description(SharedString::from(c.id.clone()))
-                })))
+                    // One line per model: checkbox, name, then the muted ID trailing. The ID truncates
+                    // first; the full ID stays in the accessible name. The whole row is one hit target.
+                    Checkbox::new(SharedString::from(format!("scope-model-{id}"))).small().w_full().min_w_0().py_1()
+                        .accessibility_label(SharedString::from(format!("{}, {id}", c.name)))
+                        .checked(checked).disabled(!editable)
+                        .child(div().h_flex().items_center().w_full().min_w_0()
+                            .child(ui::text(Text::Body, SharedString::from(c.name.clone())).id(SharedString::from(format!("scope-model-name-{id}"))).test_support().flex_shrink_0().max_w(relative(0.65)).truncate())
+                            .child(ui::text(Text::Caption, SharedString::from(id.clone())).id(SharedString::from(format!("scope-model-id-{id}"))).test_support().ml_auto().pl_3().min_w_0().truncate().text_color(cx.theme().muted_foreground)))
+                        .on_change(cx.listener(move|v,checked,w,cx|v.choose(&id,*checked,w,cx)))
+                }))))
                 }))
                 .child(ui::text(Text::Caption,SharedString::from(format!("{} of {matched} authenticated models loaded. Unavailable patterns are preserved.",matched.min(self.shown)))))
                 .when(matched>self.shown,|this|this.child(ui::action("scope-show-more","Show more models",Action::Quiet).on_click(cx.listener(|v,_,_,cx|{v.shown=(v.shown+30).min(2048);cx.notify();}))))

@@ -109,6 +109,11 @@ synthetic multi-provider catalog into the real Settings section. It exercises se
 order, shared-name and provider search, empty results, pointer selection, native
 Tab/Space checked state, literal ordering and search preedit guards without Save or
 Check. The surrounding faux daemon asserts zero PUT during this grouping-only flow.
+Each model is one single-line small Checkbox in a flat list: the box on the page edge
+(shared with All and the provider chevron), the name lined up with the quiet provider
+label, and the muted ID trailing, truncating first. The whole row is one hit target and
+its accessible name is `name, id`. The probe measures that alignment, long Unicode
+name/ID truncation and name/ID clicks at 680/1100pt.
 Pure grouping and retained-view tests live in `scoped_models_view_tests.rs`.
 Focused verification: `python3 scripts/check-scoped.py --unit scoped_models_view
 --test scoped_models --lint` (shared native slot and CPU2/4GiB wrapper).
