@@ -33,8 +33,9 @@ unchanged; outstanding accounting memory and release verification is documented 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Finish a mission explicitly in Pilot Next.** Mission detail offers **Mark done** when all remaining
-  tasks are done (dropped tasks excluded, at least one done task required). Working chats and history stay
-  intact. See [status-only mission lifecycle](apps/desktop/docs/mission-lifecycle.md).
+  tasks are done (dropped tasks excluded, at least one done task required). Done or archived missions archive
+  their coordinator after current work finishes. Archiving a coordinator archives its mission. Member chats
+  and history stay intact. See [mission lifecycle](apps/desktop/docs/mission-lifecycle.md).
 - **Choose pi’s scoped models.** Settings → Scoped models has a searchable multi-select and an All option.
   Save changes pi’s global model list on this Mac, with conflict detection and exact readback.
   Project overrides, sign-ins, default models and running chats are unchanged. Advanced literal patterns

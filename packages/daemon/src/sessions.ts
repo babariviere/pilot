@@ -210,6 +210,8 @@ export interface SessionMissionBridge {
 	): NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
 	/** The archive generation lets a later explicit chat restore win, including across daemon restarts. */
 	missionArchivedAt?(missionId: string): number | undefined;
+	/** Explicit coordinator archival closes its mission without waking members. */
+	archiveCoordinator?(sessionId: string): boolean;
 	passiveMissionLifecycle?(missionId: string): boolean;
 	/** User title edits also rename the shared planning scope when this chat leads it. */
 	renameCoordinator?(sessionId: string, title: string): void;
@@ -2961,11 +2963,7 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id), passive = false): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
-		if (
-			context?.coordinator === "self" &&
-			context.status === "archived" &&
-			!this.missions?.passiveMissionLifecycle?.(context.id)
-		)
+		if (context?.coordinator === "self" && (context.status === "archived" || context.status === "done"))
 			this.coordinatorArchiveMissions.set(id, {
 				id: context.id,
 				archivedAt: this.missions?.missionArchivedAt?.(context.id) ?? 0,
@@ -3588,13 +3586,12 @@ export class SessionManager {
 		}
 	}
 
-	/** An archived mission waits for its coordinator's whole turn, including children and job follow-ups. */
+	/** A closed mission waits for its coordinator's whole turn, including children and job follow-ups. */
 	private coordinatorArchiveReady(meta: SessionMeta): boolean {
 		const worker = this.workers.get(meta.id);
 		const target = this.coordinatorArchiveMissions.get(meta.id);
 		return !!(
 			target &&
-			!this.missions?.passiveMissionLifecycle?.(target.id) &&
 			(meta.restoredAt === undefined || meta.restoredAt < target.archivedAt) &&
 			!this.closing &&
 			!this.sleepPause &&
@@ -3697,8 +3694,12 @@ export class SessionManager {
 						throw error;
 					}
 				}
-				// Finish interrupted cleanup even on an idempotent archive or an immediate restore.
-				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
+				// Retry the linked mission write even if the chat archive already committed.
+				if ((meta.archivedAt !== undefined) === archived) {
+					if (archived && coordinatorMissionId === undefined && this.missions?.archiveCoordinator?.(id))
+						await this.missions?.whenDurable?.();
+					return this.summary(meta);
+				}
 				const worker = this.workers.get(id);
 				if (
 					archived &&
@@ -3725,6 +3726,8 @@ export class SessionManager {
 					...(!archived ? { restoredAt: Date.now() } : {}),
 					autoArchivedPullRequest,
 				});
+				if (archived && coordinatorMissionId === undefined && this.missions?.archiveCoordinator?.(id))
+					await this.missions?.whenDurable?.();
 				this.workspaceCleanupBackoff.delete(id);
 				this.workspaceAudits.delete(id);
 				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });

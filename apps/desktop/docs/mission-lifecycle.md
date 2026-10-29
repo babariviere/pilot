@@ -1,4 +1,4 @@
-# Status-only mission completion, Archive/Reopen
+# Mission completion, Archive/Reopen
 
 Mission Overview has a named **Mark done** action beside **Read decisions**, available only for an active
 canonical Local mission whose current, complete task detail proves all remaining
@@ -21,9 +21,12 @@ The body contains only operationId, home (daemonId/lineageId), projectId,
 expectedStatus and action (`complete`, `archive` or `reopen`). The server pins home, checks
 project/status synchronously and commits only mission status/timestamps, a status
 event and the durable passive-lifecycle marker. It does not reconcile tasks,
-change membership/role/autopilot, archive/restore chats, remove scratch, send input
-or stop work. An already-running turn is not interrupted. Legacy calls on missions
-that never opted in retain their existing behavior.
+change membership/role/autopilot, restore chats, send input or stop work.
+Done and archived missions archive their coordinator once its whole turn, children,
+tools and job follow-ups finish. Coordinator scratch is removed by normal chat archival;
+member chats and history are retained. Explicitly archiving a coordinator also archives
+its mission, without tracker completion or member lifecycle effects. An already-running
+turn is not interrupted. Legacy calls retain their other existing behavior.
 
 Completion re-reads canonical identity and task eligibility before its single POST.
 The server checks the active mission and current stored task statuses inside the
@@ -31,8 +34,7 @@ same immediate transaction as the status write, so a task reopened after preflig
 blocks completion. Passive completion neither invokes tracker completion listeners
 nor replays them on daemon startup. It does not complete tasks or release claims.
 
-Passive lifecycle is durable: coordinator auto-archival and automatic coordinator
-notices remain suppressed, including already-frozen/queued notices and restart.
+Passive lifecycle is durable: automatic coordinator notices remain suppressed, including already-frozen/queued notices and restart.
 Notice records are retained, not acknowledged or discarded. Mission-triggered
 role callbacks cannot start pending work. Explicit chat sends/Stop still use the
 normal admission path; unrelated previously running work can recover normally.
@@ -69,5 +71,5 @@ an owned faux daemon: light/dark,680/1100 widths, cancel/keyboard, late hidden A
 retained Unknown, root marked-editor navigation and mounted focus. Backend
 `mission-lifecycle.test.ts` and the passive-lifecycle cases in
 `session-archives.test.ts` cover strict admission, retained notices, restart,
-scratch/chat preservation, response durability and post-COMMIT errors. No real
-mission/chat mutations, installation, service action or release is tested.
+coordinator archival and member/history preservation, response durability and post-COMMIT
+errors. No real mission/chat mutations, installation, service action or release is tested.

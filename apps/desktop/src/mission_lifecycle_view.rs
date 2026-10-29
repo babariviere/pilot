@@ -181,7 +181,7 @@ impl Render for Form {
             .child(ui::heading("lifecycle-heading",self.action.label(),Text::Headline))
             .child(ui::text(Text::Body,SharedString::from(self.snapshot.as_ref().map_or("Reading mission…".into(),|s|s.title.clone()))))
             .child(ui::text(Text::Caption,SharedString::from(format!("Local mission {} · Home {} / {}",self.source.key.id,self.source.key.home.daemon,self.source.key.home.lineage))))
-            .child(Notice::new("Only the mission status changes. Chats, coordinator, tasks, brief, history and drafts are kept. No chat is archived, restored, started or stopped. Existing work continues."))
+            .child(Notice::new("Marking done or archiving also archives the coordinator after its current work finishes. Member chats, tasks, brief and history are kept. No work is started or stopped."))
             .child(Notice::new("Automatic coordinator notices stay paused for this mission, including after restart. Use its chats explicitly. Reopening does not restore an already archived chat."));
         if let Some(s) = &self.snapshot {
             if self.action == Lifecycle::Complete

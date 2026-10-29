@@ -2253,7 +2253,7 @@ export class MissionStore {
 		return this.require(id);
 	}
 
-	/** Explicit status-only lifecycle. No task reconciliation, role transitions, chat archival or wake. */
+	/** Explicit lifecycle. No task reconciliation, role transitions or wake; closed coordinators archive when idle. */
 	lifecycle(
 		id: string,
 		projectId: string,
@@ -2295,13 +2295,13 @@ export class MissionStore {
 				status === "archived" ? now : null,
 				id,
 			);
-			this.event(id, "status", `Mission marked ${status} without chat lifecycle actions`, USER, { at: now });
+			this.event(id, "status", `Mission marked ${status}`, USER, { at: now });
 		}, true);
 		this.changed(id, [], true);
 		return this.require(id);
 	}
 
-	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices or archival. */
+	/** Durable guard: passive lifecycle never re-enables automatic coordinator notices. */
 	passiveLifecycle(id: string): boolean {
 		return this.one("SELECT passive_lifecycle FROM missions WHERE id=?", id)?.passive_lifecycle === 1;
 	}

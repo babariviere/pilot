@@ -212,7 +212,18 @@ export class MissionService {
 				const home = shared?.home ?? this.sharing?.host;
 				return missionId && home ? { homeId: home.daemonId, lineageId: home.lineageId, missionId } : undefined;
 			},
-			missionArchivedAt: (missionId) => store.get(missionId)?.archivedAt,
+			missionArchivedAt: (missionId) => {
+				const mission = store.get(missionId);
+				return mission?.archivedAt ?? mission?.completedAt;
+			},
+			archiveCoordinator: (sessionId) => {
+				const membership = store.membership(sessionId);
+				if (!membership?.coordinator) return false;
+				const mission = store.require(membership.missionId);
+				if (mission.status !== "archived")
+					store.lifecycle(mission.id, mission.projectId, mission.status, "archive");
+				return true;
+			},
 			passiveMissionLifecycle: (missionId) => store.passiveLifecycle(missionId),
 			renameCoordinator: (sessionId, title) => {
 				const membership = store.membership(sessionId);

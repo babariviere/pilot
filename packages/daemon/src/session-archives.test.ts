@@ -173,7 +173,9 @@ test("archiving a mission immediately archives its idle coordinator, even pinned
 	f.store.join(member, f.mission.id);
 	await f.sessions.setPinned(f.id, true);
 	f.store.update(f.mission.id, { status: "done" });
-	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined, "done is not archived");
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.ok(f.sessions.get(f.id)?.archivedAt, "done archives the coordinator");
+	assert.equal(f.store.require(f.mission.id).status, "done", "automatic archive preserves done");
 	f.store.update(f.mission.id, { status: "archived" });
 	await f.sessions["archiveTransitions"].get(f.id)?.promise;
 	assert.ok(f.sessions.get(f.id)?.archivedAt);
@@ -459,8 +461,8 @@ for (const release of ["done", "archived", "role", "leave"] as const) {
 			await sessions["roleTransitions"].get(id)?.catch(() => undefined);
 			await sessions["archiveTransitions"].get(id)?.promise;
 			assert.equal(sessions.get(id)?.activeMissionCoordinator, undefined);
-			if (release === "archived")
-				assert.ok(sessions.get(id)?.archivedAt, "mission archival archives its coordinator");
+			if (release === "archived" || release === "done")
+				assert.ok(sessions.get(id)?.archivedAt, "closing a mission archives its coordinator");
 			else assert.equal(sessions.get(id)?.archivedAt, undefined, "the unbound PR cannot archive its former owner");
 			assert.equal(meta.autoArchivedPullRequest, undefined);
 		} finally {
@@ -1471,42 +1473,120 @@ test("renames persist, broadcast, keep activity and win over a pending generated
 	}
 });
 
-test("passive lifecycle preserves coordinator, members, scratch and mounted work through restart", async (t) => {
+for (const action of ["archive", "complete"] as const) {
+	test(`passive ${action} archives coordinator after work, preserving members and history`, async (t) => {
+		const f = await coordinatorFixture(t);
+		const member = f.ids[1]!;
+		f.store.join(member, f.mission.id);
+		f.store.addTask(f.mission.id, { title: "Done" });
+		f.store.updateTask(f.mission.id, "1", { status: "done" });
+		const worker = new FakeWorker();
+		f.sessions["workers"].set(f.id, worker);
+		f.meta.working = true;
+		worker.state = "working";
+		f.store.lifecycle(f.mission.id, f.first.id, "active", action);
+		assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+		assert.deepEqual(worker.commands, []);
+		f.meta.working = false;
+		worker.state = "idle";
+		f.sessions["emit"](f.meta);
+		await f.sessions["archiveTransitions"].get(f.id)?.promise;
+		assert.ok(f.sessions.get(f.id)?.archivedAt);
+		assert.equal(f.store.require(f.mission.id).status, action === "complete" ? "done" : "archived");
+		assert.equal(f.sessions.get(member)?.archivedAt, undefined);
+		assert.deepEqual(worker.commands, []);
+		assert.equal(await readFile(join(f.home, "sessions", f.id, "durable", "history"), "utf8"), "retained transcript");
+	});
+}
+
+for (const status of ["active", "done"] as const) {
+	test(`archiving a coordinator archives its ${status} mission, not members`, async (t) => {
+		const f = await coordinatorFixture(t);
+		const member = f.ids[1]!;
+		f.store.join(member, f.mission.id);
+		if (status === "done") {
+			f.meta.working = true;
+			f.store.update(f.mission.id, { status });
+			f.meta.working = false;
+		}
+		await f.sessions.archive(f.id);
+		assert.equal(f.store.require(f.mission.id).status, "archived");
+		assert.ok(f.sessions.get(f.id)?.archivedAt);
+		assert.equal(f.sessions.get(member)?.archivedAt, undefined);
+		await f.sessions.archive(f.id);
+		await f.sessions.restore(f.id);
+		assert.equal(f.store.require(f.mission.id).status, "archived", "restore does not implicitly reopen");
+	});
+}
+
+for (const action of ["archive", "complete"] as const) {
+	test(`pending passive ${action} coordinator archival recovers on restart`, async (t) => {
+		const f = await coordinatorFixture(t);
+		f.store.addTask(f.mission.id, { title: "Done" });
+		f.store.updateTask(f.mission.id, "1", { status: "done" });
+		f.meta.working = true;
+		f.store.lifecycle(f.mission.id, f.first.id, "active", action);
+		assert.equal(f.meta.archivedAt, undefined);
+		f.meta.working = false;
+		await f.sessions["save"](f.meta);
+		await f.sessions.shutdown();
+		const reopened = await f.manager(f.sessions["missions"]!);
+		await reopened["archiveTransitions"].get(f.id)?.promise;
+		assert.ok(reopened.get(f.id)?.archivedAt);
+		assert.equal(reopened["workers"].size, 0);
+	});
+}
+
+test("coordinator archive does not close its mission when chat persistence fails", async (t) => {
+	const f = await coordinatorFixture(t);
+	const save = f.sessions["save"].bind(f.sessions);
+	const failure = t.mock.method(
+		f.sessions as unknown as { save: typeof save },
+		"save",
+		async (...args: Parameters<typeof save>) => {
+			if (args[1]) throw new Error("archive persistence failed");
+			return save(...args);
+		},
+	);
+	await assert.rejects(f.sessions.archive(f.id), /archive persistence failed/);
+	assert.equal(f.store.require(f.mission.id).status, "active");
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+	failure.mock.restore();
+	await f.sessions.archive(f.id);
+	assert.equal(f.store.require(f.mission.id).status, "archived");
+});
+
+test("coordinator archive waits for its mission write to become durable", async (t) => {
+	const f = await coordinatorFixture(t);
+	const gate = deferred();
+	const entered = deferred();
+	const durable = f.store.whenDurable.bind(f.store);
+	t.mock.method(f.store, "whenDurable", async () => {
+		entered.resolve();
+		await gate.promise;
+		await durable();
+	});
+	let acknowledged = false;
+	const pending = f.sessions.archive(f.id).then(() => {
+		acknowledged = true;
+	});
+	try {
+		await entered.promise;
+		assert.equal(f.store.require(f.mission.id).status, "archived");
+		assert.equal(acknowledged, false);
+	} finally {
+		gate.resolve();
+		await pending;
+	}
+});
+
+test("archiving a member does not archive its mission or coordinator", async (t) => {
 	const f = await coordinatorFixture(t);
 	const member = f.ids[1]!;
 	f.store.join(member, f.mission.id);
-	const scratch = join(f.home, "sessions", f.id, "scratch", "keep.txt");
-	await mkdir(join(scratch, ".."), { recursive: true });
-	await writeFile(scratch, "retained");
-	const worker = new FakeWorker();
-	f.sessions["workers"].set(f.id, worker);
-	f.meta.working = true;
-	worker.state = "working";
-	f.store.lifecycle(f.mission.id, f.first.id, "active", "archive");
-	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
-	assert.deepEqual(worker.commands, []);
-	f.meta.working = false;
-	worker.state = "idle";
-	f.sessions["emit"](f.meta);
-	await f.sessions["archiveInactiveSessions"]();
-	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
-	assert.equal(f.sessions.get(member)?.archivedAt, undefined);
-	assert.equal(await readFile(scratch, "utf8"), "retained");
-	f.store.lifecycle(f.mission.id, f.first.id, "archived", "reopen");
+	await f.sessions.archive(member);
 	assert.equal(f.store.require(f.mission.id).status, "active");
-	assert.equal(f.sessions["starting"].size, 0);
-	assert.deepEqual(worker.commands, []);
-	f.meta.pending = [
-		{ type: "input", requestId: "mission-notice:held", content: "held", mode: "followUp", onlyIfIdle: true },
-	];
-	await f.sessions["save"](f.meta);
-	await f.sessions.shutdown();
-	const reopened = await f.manager(f.sessions["missions"]!);
-	await reopened["archiveInactiveSessions"]();
-	assert.equal(reopened["metas"].get(f.id)?.pending?.[0]?.requestId, "mission-notice:held");
-	assert.equal(reopened.get(f.id)?.archivedAt, undefined);
-	assert.equal(reopened["workers"].size, 0);
-	assert.equal(await readFile(scratch, "utf8"), "retained");
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
 });
 
 test("passive lifecycle rejects an already-admitted archive before changing the mission", async (t) => {
@@ -1622,6 +1702,8 @@ test("passive lifecycle HTTP pins home, holds ACK for durability and exposes pos
 		assert.equal(ack.operationId, value.operationId);
 		assert.equal(ack.mission.passiveLifecycle, true);
 		original.mock.restore();
+		await f.sessions["archiveTransitions"].get(f.id)?.promise;
+		assert.ok(f.sessions.get(f.id)?.archivedAt);
 		const unsubscribe = f.store.onChange(() => {
 			throw new Error("after commit");
 		});
@@ -1630,7 +1712,7 @@ test("passive lifecycle HTTP pins home, holds ACK for durability and exposes pos
 		await failed.arrayBuffer();
 		unsubscribe();
 		assert.equal(f.store.require(f.mission.id).status, "active");
-		assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+		assert.ok(f.sessions.get(f.id)?.archivedAt, "reopening does not restore the coordinator");
 		assert.equal(f.sessions["workers"].size, 0);
 	} finally {
 		gate.resolve();
