@@ -425,6 +425,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "session_jobs"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "tool_diff_preview"
 harness = false
 required-features = ["native-probes"]

@@ -127,6 +127,10 @@ owner at680/1100 in both themes. See [session todos](session-todos.md) for sourc
 contracts and precise MonoCode attribution. Do not reuse it for mission tasks,
 infer statuses from tools, add mutation callbacks or auto-fold on stream updates.
 
+`session_jobs_tray` uses the same tray-strip shape for running background jobs,
+directly above the task strip: a quiet disclosure summary and per-job rows with
+Copy log path and Stop. See [running jobs](running-jobs.md).
+
 `ResourceLabel` is passive, full-width/left-aligned, with a fixed rem glyph slot,
 truncated title/detail and physical Control gap. Give the real owner its full
 accessible name. Its native test parts are resource-icon/title/detail, scoped

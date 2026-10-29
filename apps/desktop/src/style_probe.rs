@@ -83,6 +83,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                                     signal,
                                     background_work,
                                     order: Default::default(),
+                                    running_jobs: Default::default(),
                                     cwd: String::new(),
                                     project_id: None,
                                     model_configuration: None,

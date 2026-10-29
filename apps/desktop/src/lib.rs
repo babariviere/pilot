@@ -35,11 +35,17 @@ mod provider_usage;
 #[cfg(feature = "native-probes")]
 mod provider_usage_probe;
 mod provider_usage_view;
+mod session_jobs;
+mod session_jobs_log;
+#[cfg(any(test, feature = "native-probes"))]
+mod session_jobs_fixture;
 mod session_todos;
 mod session_todos_view;
 mod subscription_pause;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_todos_probe::run_session_todos_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::session_jobs_probe::run_session_jobs_probe;
 #[cfg(feature = "native-probes")]
 pub use provider_usage_probe::run_provider_usage_probe;
 mod chat_links;

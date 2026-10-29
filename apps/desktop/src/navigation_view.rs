@@ -274,6 +274,7 @@ impl LocalViewer {
                     signal: None,
                     background_work: false,
                     order: Default::default(),
+                    running_jobs: Default::default(),
                     cwd: String::new(),
                     project_id: None,
                     model_configuration: None,

@@ -78,6 +78,7 @@ pub(crate) struct ChatEditor {
     paths: paths::Paths,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
+    jobs_entry: Option<gpui_kit::AnyView>,
     queue_entry: Option<gpui_kit::AnyView>,
     questions: questions::Questions,
     models: Option<model_picker::Models>,
@@ -93,6 +94,7 @@ pub(crate) struct ChatEditor {
     thinking: bool,
     thinking_held: bool,
     background_work: bool,
+    jobs_only: bool,
     pending: BTreeMap<String, u64>,
     /// Ordinary chat sends in flight, by captured draft revision.
     sending: BTreeMap<String, u64>,
@@ -169,6 +171,7 @@ impl ChatEditor {
             paths: Default::default(),
             context_entry: None,
             todos_entry: None,
+            jobs_entry: None,
             queue_entry: None,
             questions,
             models: None,
@@ -184,6 +187,7 @@ impl ChatEditor {
             thinking: false,
             thinking_held: false,
             background_work: false,
+            jobs_only: false,
             pending: BTreeMap::new(),
             sending: BTreeMap::new(),
             delivered: BTreeMap::new(),
@@ -211,6 +215,9 @@ impl ChatEditor {
     }
     pub(crate) fn set_todos_entry(&mut self, entry: gpui_kit::AnyView) {
         self.todos_entry = Some(entry);
+    }
+    pub(crate) fn set_jobs_entry(&mut self, entry: gpui_kit::AnyView) {
+        self.jobs_entry = Some(entry);
     }
     fn prune_cache(&mut self) {
         self.cache.retain(|key, draft| {
@@ -274,6 +281,7 @@ impl ChatEditor {
         self.writable = false;
         self.busy = false;
         self.background_work = false;
+        self.jobs_only = false;
         self.thinking = false;
         self.text.update(cx, |v, cx| v.set_value("", window, cx));
         self.cwd.update(cx, |v, cx| v.set_value("", window, cx));
@@ -382,6 +390,7 @@ impl ChatEditor {
         self.thinking = false;
         self.thinking_held = false;
         self.background_work = false;
+        self.jobs_only = false;
         self.error = None;
         self.load_input(window, cx);
         self.open_completed(cx);
@@ -410,6 +419,8 @@ impl ChatEditor {
     pub(crate) fn activity_label(&self) -> Option<&'static str> {
         if self.thinking {
             Some("Thinking...")
+        } else if self.jobs_only {
+            None
         } else if self.busy || self.background_work {
             Some("Working...")
         } else {
@@ -464,6 +475,12 @@ impl ChatEditor {
     pub(crate) fn background(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.background_work != active {
             self.background_work = active;
+            cx.notify();
+        }
+    }
+    pub(crate) fn jobs_only(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.jobs_only != active {
+            self.jobs_only = active;
             cx.notify();
         }
     }
@@ -1480,6 +1497,7 @@ impl Render for ChatEditor {
                 let region = region.test_support();
                 shell.child(region)
             })
+            .children((!is_new).then(|| self.jobs_entry.clone()).flatten())
             .children((!is_new).then(|| self.todos_entry.clone()).flatten())
             .relative()
             .children(self.path_suggestions(cx))

@@ -198,6 +198,8 @@ pub(crate) struct Chat {
     pub(crate) project_id: Option<String>,
     /// List order and grouping inputs (`chat_order`).
     pub(crate) order: crate::chat_order::Order,
+    /// Live worker-owned jobs from the summary, in server order (session_jobs).
+    pub(crate) running_jobs: std::sync::Arc<[crate::session_jobs::Job]>,
 }
 impl Chat {
     /// Row reason: attention, else live signal, else a non-routine raw state.
@@ -267,6 +269,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
             .filter(|id| valid_id(id))
             .map(str::to_owned),
         order: crate::chat_order::read(value, working(value)),
+        running_jobs: crate::session_jobs::read(value),
     })
 }
 

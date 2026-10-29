@@ -100,6 +100,13 @@ pub(crate) mod session_todos_probe;
 #[path = "session_todos_tray.rs"]
 mod session_todos_tray;
 #[cfg(feature = "native-probes")]
+#[path = "session_jobs_probe.rs"]
+pub(crate) mod session_jobs_probe;
+#[path = "session_jobs_tray.rs"]
+mod session_jobs_tray;
+#[path = "session_jobs_log_view.rs"]
+mod session_jobs_log_view;
+#[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
@@ -999,6 +1006,7 @@ impl LocalViewer {
                 signal: Some(Signal::Working),
                 background_work: false,
                 order: Default::default(),
+                running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1022,6 +1030,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 order: Default::default(),
+                running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1045,6 +1054,7 @@ impl LocalViewer {
                 signal: None,
                 background_work: false,
                 order: Default::default(),
+                running_jobs: Default::default(),
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1245,6 +1255,7 @@ impl LocalViewer {
             signal: Some(Signal::Failed),
             background_work: false,
             order: Default::default(),
+            running_jobs: Default::default(),
             cwd: String::new(),
             project_id: None,
             model_configuration: None,
@@ -1439,10 +1450,12 @@ impl LocalViewer {
         editor.update(cx, |editor, cx| editor.enable_paths(path_owner, window, cx));
         let context_entry = context_usage_view::entry(cx);
         let todos_entry = session_todos_tray::entry(window, cx);
+        let jobs_entry = session_jobs_tray::entry(window, cx);
         let queue_entry = queued_message_view::entry(window, cx);
         editor.update(cx, |editor, _| {
             editor.set_context_entry(context_entry.into());
             editor.set_todos_entry(todos_entry.into());
+            editor.set_jobs_entry(jobs_entry.into());
             editor.set_queue_entry(queue_entry.into());
         });
         let mission =
@@ -1601,6 +1614,7 @@ impl LocalViewer {
                             signal: Some(Signal::Working),
                             background_work: false,
                             order: Default::default(),
+                            running_jobs: Default::default(),
                             cwd: String::new(),
                             project_id: None,
                             model_configuration: None,
@@ -2033,6 +2047,8 @@ impl LocalViewer {
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
                 editor.background(chat.background_work, cx);
+                // Only jobs run: their strip above the composer says so instead.
+                editor.jobs_only(chat.background_work && !chat.running_jobs.is_empty(), cx);
                 if let Some(configuration) = &chat.model_configuration {
                     editor.model_context(&chat.id, &chat.cwd, configuration.clone(), window, cx);
                 }
@@ -2402,6 +2418,7 @@ impl LocalViewer {
                     signal: None,
                     background_work: false,
                     order: Default::default(),
+                    running_jobs: Default::default(),
                     cwd: String::new(),
                     project_id: None,
                     attention: None,
@@ -3148,6 +3165,7 @@ mod refresh_tests {
                         signal: None,
                         background_work: false,
                         order: Default::default(),
+                        running_jobs: Default::default(),
                         cwd: String::new(),
                         project_id: None,
                         attention: None,
