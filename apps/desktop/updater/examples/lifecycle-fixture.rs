@@ -157,7 +157,10 @@ fn run(args: Vec<String>) -> Result<()> {
                 .map_err(err)?;
         event(&root, "preparation_started")?;
         let (stage, lock) = installer::new_stage(&target, &trust, &NativePlatform).map_err(err)?;
-        fs::copy(root.join("archive.zip"), stage.join("archive.zip"))?;
+        fs::copy(
+            root.join("archive.zip"),
+            installer::download_path(&stage).map_err(err)?,
+        )?;
         let staged = installer::finish_stage(
             stage.clone(),
             target.clone(),
@@ -184,7 +187,7 @@ fn run(args: Vec<String>) -> Result<()> {
             )
             .map_err(err)?
         } else {
-            let candidate = stage.join(format!("payload/{}", trust.bundle_name));
+            let candidate = installer::preview_bundle(&stage, &trust).map_err(err)?;
             let guard = if args[2] == "ui-only" {
                 Guard::prepare_ui(location, &candidate, &stage, staged.build(), &trust)
             } else {
@@ -211,7 +214,12 @@ fn run(args: Vec<String>) -> Result<()> {
         }
         if args[2] == "tamper" {
             fs::write(
-                stage
+                installer::preview_bundle(&stage, &trust)
+                    .map_err(err)?
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
                     .join("install-payload")
                     .join(&trust.bundle_name)
                     .join("Contents/Resources/unsealed-extra"),
@@ -472,10 +480,7 @@ fn run(args: Vec<String>) -> Result<()> {
     if capsule_id(&capsule)? != id {
         return Err("active capsule changed".into());
     }
-    if !transaction
-        .join(format!("install-payload/{}", trust.bundle_name))
-        .is_dir()
-    {
+    if !installer::rollback_bundle(&transaction, &trust).is_dir() {
         return Err("old app not retained".into());
     }
     let read_event = |name: &str| -> Result<f64> {

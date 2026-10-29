@@ -153,7 +153,7 @@ impl Worker {
                                     release,
                                     &trust,
                                     access.as_ref(),
-                                    &root.join("archive.zip"),
+                                    &installer::download_path(&root)?,
                                     &cancel,
                                     &mut |received| {
                                         report(
@@ -227,7 +227,7 @@ impl Worker {
                                 )?
                             } else {
                                 let location = runtime.ok_or(Error::RuntimeUnverified)?;
-                                let candidate = stage.root.join("payload").join(&trust.bundle_name);
+                                let candidate = installer::preview_bundle(&stage.root, &trust)?;
                                 let guard = if ui_only {
                                     crate::coordination::Guard::prepare_ui(
                                         location,

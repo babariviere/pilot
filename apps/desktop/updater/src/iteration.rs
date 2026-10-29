@@ -91,7 +91,7 @@ pub(crate) fn stage(
             .write(true)
             .create_new(true)
             .mode(0o600)
-            .open(root.join("archive.zip"))
+            .open(installer::download_path(&root)?)
             .map_err(|_| Error::Filesystem)?;
         let mut buffer = [0; 64 * 1024];
         let mut remaining = verified.manifest().archive_size;

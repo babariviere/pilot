@@ -112,7 +112,7 @@ authentication for the ordinary loopback API.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
    same-volume transaction and start the matching helper. On macOS the helper
-   re-authenticates/extracts/syncs its own private installation payload before
+   re-authenticates/extracts/syncs its own private OS-temporary installation payload before
    readiness, then waits for COMMIT. The GUI is still open during this work;
    restart admission/editing fences remain held.
    Bundled UI-only reloads inspect the retained proof without reserving the daemon.
@@ -124,7 +124,10 @@ authentication for the ordinary loopback API.
 5. The helper observes actual OS parent exit and re-authenticates the archive.
    On macOS it rehashes the exact helper-prepared closed payload; Linux retains
    post-exit extraction. It rechecks native signature, source closure and the same
-   guard, then swaps the complete GUI bundle.
+   guard. macOS copies the candidate into a hidden private same-volume transaction
+   entry without an `.app` suffix, verifies its exact closure and native signature,
+   then atomically swaps the complete GUI bundle. A cross-volume temporary directory
+   never participates in the final rename.
    Expiry/revocation before exit refuses the
    swap even after COMMIT. The existing daemon and its capsule remain untouched.
 6. Relaunch carries a durable receipt. The new GUI restores the receipt-bound
@@ -171,6 +174,24 @@ stay in place. Original receipt paths resolve into acknowledged history for
 inspection. History is never purged. Capacity and archive refusals report that
 nothing was installed, rather than claiming an uncertain install result.
 Automatic rollback and privilege elevation are not implemented.
+
+### Temporary payloads, durable recovery
+
+On macOS, downloads, extracted preview apps and helper-prepared apps use an exclusive
+mode0700 OS temporary directory, not `/Applications`. The helper inherits the target
+lock and reopens the exact private path/device/inode recorded in the durable
+transaction; GUI lifetime or differing helper environment cannot delete or redirect
+it. Purged/replaced temporary data refuses installation while durable recovery
+evidence remains. Successful swap cleans only that workspace. Unknown/committed
+failures are retained, not automatically retried or cleaned.
+
+The installed target remains `/Applications/Pilot Next.app` (or the original supported
+relocated target). Journals, signed metadata, an authenticated archive copy, receipts
+and the exchanged rollback inode remain durable beside it and in acknowledged history.
+New rollback/commit entries are private `install-payload/bundle` directories without
+`.app` suffixes. Existing `.app` backups remain unchanged and could still be indexed;
+no live cleanup or indexer manipulation is performed. See the
+[updater storage contract](../updater/README.md#recovery-and-explicit-limits).
 
 `scripts/verify_update_lifecycle.py` runs only native arm64 macOS synthetic
 fixtures: signed temporary minimal test apps, the actual helper, owned Node

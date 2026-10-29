@@ -101,6 +101,12 @@ still cost time. Variable host load/cache state and dev SHA256 speed affect thes
 observations. No one-minute cause, production speedup or full-GUI startup acceptance
 is established.
 
+These historical measurements predate OS-temporary macOS payload staging. That
+layout now adds a post-exit copy into a suffixless private same-volume commit entry,
+exact closure verification and syncing before atomic exchange. Do not apply the
+numbers above to the current layout or claim unchanged restart latency without a
+new measurement. Temporary purges never affect the durable rollback/journal.
+
 ## Remaining evidence for the reported minute
 
 If the minute persists, obtain the exact installed/target versions, whether the

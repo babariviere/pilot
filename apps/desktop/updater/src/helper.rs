@@ -517,7 +517,7 @@ pub fn run_native(
     }
     let _guard = crate::app_update::ExitGuard::load(
         &root,
-        &root.join("payload").join(&trust.bundle_name),
+        &crate::installer::preview_bundle(&root, &trust)?,
         staged.build(),
         &trust,
     )?;

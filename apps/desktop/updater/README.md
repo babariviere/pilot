@@ -157,7 +157,7 @@ trust/feed/signing configuration is deliberately absent from development assembl
    clean quit. Keep all fences held; do not resume editing/admissions after COMMIT.
    A `CommitUncertain` error is recovery-required, never permission to continue normally.
 7. Helper installs only after OS-observed parent exit, retains the old bundle in the
-   transaction's `install-payload/Pilot Next.app`, and launches via `open -n` with a
+   transaction's durable rollback entry, and launches via `open -n` with a
    receipt argument. New app must durably load its state and explicitly call
    `acknowledge_startup`. `open` success alone is not startup success or update acceptance.
 
@@ -171,7 +171,43 @@ already acknowledged/fenced install intent; safety must be established before se
 
 ## Recovery and explicit limits
 
-Stages are private same-volume directories, permanent target lock files are never unlinked.
+macOS downloads and extracted preview/helper-prepared `.app` payloads live in an
+exclusive mode0700 `mkdtemp` directory in the OS temporary directory (normally
+`/private/var/folders/…/T`, or canonical `/tmp`). They are **not** staged under
+`/Applications`. An unsafe temporary root or one inside the installation parent
+is refused. The durable transaction records the exact temporary path/device/inode;
+the helper uses that record, not its environment or a GUI-owned auto-deleting guard.
+Every use checks canonical path, private ownership/mode/ACLs and inode identity.
+Dropping the GUI worker cannot delete a helper's payload. Temporary storage may be
+purged: a missing/changed payload refuses installation, never authorizes a retry.
+
+After COMMIT and OS-observed parent exit, the helper copies the prepared tree with
+`ditto` into the private same-volume transaction's `install-payload/bundle`, **without
+an `.app` suffix**. It never renames from temporary storage, so a different volume
+is supported. The copier inherits the permanent target lock. The complete copied
+closure must match the helper's in-memory digest; native signature, signed source
+and guard checks still precede the existing inode-checked atomic exchange. Files
+and both rename parents are synced before the durable journal advances. This
+adds a post-exit copy/verification cost; earlier restart timing measurements do not
+measure this layout. No shorter blackout is claimed here.
+
+The final app stays `/Applications/Pilot Next.app` for that installation; relocated
+supported targets stay where they were. Journals, verified manifest, authenticated
+archive copy, UI/runtime receipts and the exact exchanged old inode stay in the
+durable private transaction beside the target. Rollback must survive temporary
+purges and reboot. New rollback entries use `install-payload/bundle` too, not an
+indexable `.app` sibling. Legacy transactions/history retain their original
+`install-payload/Pilot Next.app` layout and may still appear in third-party indexes;
+this change neither moves nor deletes existing backups. No guarantee is made about
+third-party scanners that ignore private/hidden paths or index bundle contents.
+
+Successful exchange removes only the exact temporary workspace; pre-COMMIT helper
+cancel removes only its prepared extraction so the verified preview can be retried.
+Failed/incomplete downloads and proven inactive Ready cleanup also remove their
+exact workspace. Committed/Unknown transactions are not cleaned or replayed.
+Unreferenced temporary directories after an interrupted initial creation are left
+to OS temporary-storage cleanup, never discovered by a broad deletion scan.
+Linux keeps its previous staging layout. Permanent target lock files are never unlinked.
 Writable installation parents/unsafe ancestors are rejected, with one macOS exception:
 the exact `/Applications` directory may be root:admin (UID 0/GID 80), mode 0775.
 Administrators are trusted to replace apps in that system directory. This does not
@@ -186,7 +222,7 @@ and contents, so permissive nested ACLs cannot race verified executable launch.
 only newly created private staging has inherited ACLs stripped. Existing user paths
 are never chmod/ACL-repaired by the installer. Reopened private stages refuse allow ACLs.
 The parent directory is
-held open through extraction and the target inode rechecked immediately before the
+held open through final preparation and the target inode rechecked immediately before the
 swap; the retained/installed inode identities are checked afterwards too. Journal
 transitions use a separate private nonblocking lock. Relaunch intent is durable before
 launch, so fast startup acknowledgement cannot be overwritten by a later helper write.

@@ -62,7 +62,7 @@ fn repeated_acknowledged_history_does_not_exhaust_staging() {
     for id in 1..=8 {
         let (root, lock) = new_stage(&target, &trust(), &FixturePlatform)
             .expect("acknowledged history must leave room beyond two upgrades");
-        fs::remove_dir(root).unwrap(); // fixture only, substitute an acknowledged install
+        discard_incomplete(&root, &target).unwrap(); // fixture only, substitute acknowledged install
         let root = transaction(&target, id, Phase::StartupAcknowledged);
         let old = fs::metadata(root.join("install-payload/Pilot Next.app")).unwrap();
         receipts.push((root, old.dev(), old.ino()));

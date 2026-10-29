@@ -1,7 +1,10 @@
-//! Durable, same-volume staging. Ordinary quit never arms installation.
+//! Durable installation evidence and atomic replacement. Ordinary quit never installs.
 #[cfg(test)]
 #[path = "installer_retention_tests.rs"]
 mod retention_tests;
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[path = "installer_temporary.rs"]
+mod temporary;
 use crate::{
     Error, archive,
     manifest::{Trust, VerifiedManifest},
@@ -9,12 +12,14 @@ use crate::{
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     os::{
         fd::AsRawFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
+        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     },
     path::{Path, PathBuf},
 };
@@ -60,9 +65,22 @@ impl PreparedPayload<'_> {
         if read_journal(&self.staged.root)?.phase != Phase::Ready {
             return Err(Error::RecoveryRequired);
         }
+        let workspace = payload_root(&self.staged.root)?;
+        if self.bundle
+            != workspace
+                .join("install-payload")
+                .join(&self.staged.verified.manifest().bundle_name)
+        {
+            return Err(Error::Filesystem);
+        }
         fs::remove_dir_all(self.bundle.parent().ok_or(Error::Filesystem)?)
             .map_err(|_| Error::Filesystem)?;
-        sync_directory(&self.staged.root)
+        sync_directory(
+            self.bundle
+                .parent()
+                .and_then(Path::parent)
+                .ok_or(Error::Filesystem)?,
+        )
     }
 
     pub(crate) fn apply_after_exit(
@@ -85,7 +103,23 @@ impl PreparedPayload<'_> {
                     return Err(Error::Identity);
                 }
                 phase.finish("exited_closure_hash");
-                Ok(self.bundle)
+                if self
+                    .staged
+                    .root
+                    .join("temporary.json")
+                    .try_exists()
+                    .map_err(|_| Error::Filesystem)?
+                {
+                    temporary::commit_copy(
+                        self.staged,
+                        &self.bundle,
+                        &self.identity,
+                        trust,
+                        platform,
+                    )
+                } else {
+                    Ok(self.bundle)
+                }
             },
             check,
         )
@@ -236,10 +270,56 @@ fn new_stage_locked(target: &Path, lock: File) -> Result<(PathBuf, File), Error>
         ".pilot-next-update-{}",
         crate::transport::hex(&random)
     ));
-    fs::create_dir(&root).map_err(|_| Error::Filesystem)?;
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).map_err(|_| Error::Filesystem)?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&root)
+        .map_err(|_| Error::Filesystem)?;
     acl_policy(&root, 1)?; // owned newly-created stage only; never repair existing ACLs
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    if let Err(error) = temporary::create(&root) {
+        let _ = fs::remove_dir_all(&root); // exclusively created here, never published
+        return Err(error);
+    }
     Ok((root, lock))
+}
+
+/// Writable archive destination for this fresh transaction, never the installed app.
+pub fn download_path(root: &Path) -> Result<PathBuf, Error> {
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    {
+        temporary::archive(root)
+    }
+    #[cfg(not(all(target_os = "macos", feature = "native-macos")))]
+    {
+        Ok(root.join("archive.zip"))
+    }
+}
+
+/// Read-only preview location, including compatibility with retained legacy stages.
+pub fn preview_bundle(root: &Path, trust: &Trust) -> Result<PathBuf, Error> {
+    Ok(payload_root(root)?.join("payload").join(&trust.bundle_name))
+}
+
+fn payload_root(root: &Path) -> Result<PathBuf, Error> {
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    if root
+        .join("temporary.json")
+        .try_exists()
+        .map_err(|_| Error::Filesystem)?
+    {
+        return temporary::workspace(root);
+    }
+    Ok(root.to_owned())
+}
+
+/// Durable rollback entry. Legacy transactions keep their original .app layout.
+pub fn rollback_bundle(root: &Path, trust: &Trust) -> PathBuf {
+    let new = root.join("install-payload/bundle");
+    if root.join("temporary.json").exists() {
+        new
+    } else {
+        root.join("install-payload").join(&trust.bundle_name)
+    }
 }
 
 const HISTORY: &str = ".pilot-next-updater-history";
@@ -306,7 +386,7 @@ fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<boo
     {
         return Ok(false);
     }
-    let rollback = root.join("install-payload").join(&trust.bundle_name);
+    let rollback = rollback_bundle(root, trust);
     let Ok(old) = fs::symlink_metadata(&rollback) else {
         return Ok(false);
     };
@@ -408,12 +488,19 @@ pub fn finish_stage(
     platform: &impl Platform,
     cancel: &Cancellation,
 ) -> Result<Staged, Error> {
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    temporary::retain_archive(&root, &verified, cancel)?;
     let archive = root.join("archive.zip");
     verify_archive(&archive, &verified, cancel)?;
     if !verified.is_newer(trust)? {
         return Err(Error::Version);
     }
-    let bundle = archive::extract(&archive, &root.join("payload"), &trust.bundle_name, cancel)?;
+    let bundle = archive::extract(
+        &archive,
+        &payload_root(&root)?.join("payload"),
+        &trust.bundle_name,
+        cancel,
+    )?;
     platform.verify_candidate(&bundle, trust, verified.manifest())?;
     cancel.check()?;
     write_new(&root.join("manifest.json"), verified.envelope())?;
@@ -635,7 +722,7 @@ impl Staged {
     fn extract_install_payload(&self, trust: &Trust) -> Result<PathBuf, Error> {
         archive::extract(
             &self.root.join("archive.zip"),
-            &self.root.join("install-payload"),
+            &payload_root(&self.root)?.join("install-payload"),
             &trust.bundle_name,
             &Cancellation::default(),
         )
@@ -675,7 +762,7 @@ impl Staged {
     }
 
     /// Invoked ONLY after COMMIT and OS-observed parent exit. No on-quit observer.
-    /// The old bundle is retained, not deleted, at payload/<bundle_name> after swap.
+    /// The old bundle remains in the durable rollback entry after swap.
     pub fn apply_after_exit(
         &self,
         trust: &Trust,
@@ -700,6 +787,17 @@ impl Staged {
                 let phase = crate::timing::Phase::start();
                 let candidate = self.extract_install_payload(trust)?;
                 phase.finish("exited_extract_sync");
+                #[cfg(all(target_os = "macos", feature = "native-macos"))]
+                if self
+                    .root
+                    .join("temporary.json")
+                    .try_exists()
+                    .map_err(|_| Error::Filesystem)?
+                {
+                    validate_target(&candidate, trust)?;
+                    let identity = crate::runtime::identity(&candidate)?;
+                    return temporary::commit_copy(self, &candidate, &identity, trust, platform);
+                }
                 Ok(candidate)
             },
             check,
@@ -782,6 +880,8 @@ impl Staged {
         journal.phase = Phase::RelaunchRequested;
         write_journal(&self.root, &journal)?;
         drop(journal_guard);
+        #[cfg(all(target_os = "macos", feature = "native-macos"))]
+        let _ = temporary::discard(&self.root); // installed + rollback are already durable
         phase.finish("swap_journal_sync");
         let phase = crate::timing::Phase::start();
         // open success is NOT startup acknowledgement or a promise of rollback.
@@ -844,6 +944,8 @@ pub fn discard_uncommitted(target: &Path, trust: &Trust) -> Result<usize, Error>
         }
     }
     for root in &stale {
+        #[cfg(all(target_os = "macos", feature = "native-macos"))]
+        temporary::discard(root)?;
         fs::remove_dir_all(root).map_err(|_| Error::Filesystem)?;
     }
     if !stale.is_empty() {
@@ -1085,6 +1187,8 @@ pub(crate) fn discard_incomplete(root: &Path, target: &Path) -> Result<(), Error
     {
         return Err(Error::RecoveryRequired);
     }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    temporary::discard(root)?;
     fs::remove_dir_all(root).map_err(|_| Error::Filesystem)?;
     sync_directory(root.parent().ok_or(Error::Filesystem)?)
 }

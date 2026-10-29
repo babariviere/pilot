@@ -646,7 +646,7 @@ fn ring_random() -> Result<[u8; 16], Error> {
         .map_err(|_| Error::Native)?;
     Ok(bytes)
 }
-fn sync_tree(
+pub(crate) fn sync_tree(
     root: &Path,
     deadline: Instant,
     cancel: &impl Fn() -> Result<(), Error>,

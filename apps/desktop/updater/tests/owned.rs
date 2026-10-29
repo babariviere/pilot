@@ -167,7 +167,7 @@ fn fixture_stage(temp: &Temp) -> installer::Staged {
     let bytes = archive();
     let manifest = verified(&bytes);
     let (root, lock) = installer::new_stage(&target, &trust(), &FakePlatform::default()).unwrap();
-    fs::write(root.join("archive.zip"), &bytes).unwrap();
+    fs::write(installer::download_path(&root).unwrap(), &bytes).unwrap();
     installer::finish_stage(
         root,
         target,
@@ -886,6 +886,198 @@ fn explicit_commit_is_durable_but_does_not_replace_a_living_parent() {
 }
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 #[test]
+fn macos_staging_never_exposes_intermediate_apps_beside_installation() {
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    assert!(
+        !staged.root.join("payload").exists(),
+        "preview must be temporary"
+    );
+    let platform = FakePlatform::default();
+    let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
+    assert!(
+        !staged.root.join("install-payload").exists(),
+        "preparation must be temporary"
+    );
+    assert!(
+        staged.root.join("journal.json").is_file(),
+        "receipt stays durable"
+    );
+    assert!(
+        staged.root.join("archive.zip").is_file(),
+        "authenticated recovery archive stays durable"
+    );
+    prepared.discard().unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn temporary_payload_handoff_survives_worker_drop_and_relocated_target() {
+    use std::os::unix::fs::MetadataExt;
+    let temp = Temp::new();
+    let directory = temp.path().join("Relocated Applications with spaces");
+    fs::create_dir(&directory).unwrap();
+    let original = fixture_target(&temp);
+    let target = directory.join("Pilot Next.app");
+    fs::rename(original, &target).unwrap();
+    let staged = fixture_stage_in_existing_target(&target);
+    let preview = installer::preview_bundle(staged.root(), &trust()).unwrap();
+    let workspace = preview.parent().unwrap().parent().unwrap().to_owned();
+    assert!(workspace.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    assert!(!workspace.starts_with(&directory));
+    assert_eq!(fs::metadata(&workspace).unwrap().mode() & 0o777, 0o700);
+    let root = staged.root.clone();
+    let lock = staged.lock.try_clone().unwrap();
+    drop(staged); // GUI's worker lifetime is not the temporary payload lifetime.
+    let staged = installer::Staged::reopen(&root, &target, &trust(), lock).unwrap();
+    let platform = FakePlatform::default();
+    let payload = staged.prepare_payload(&trust(), &platform).unwrap();
+    commit(&staged);
+    payload
+        .apply_after_exit(
+            &trust(),
+            &platform,
+            helper::ExitedParent::synthetic(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert!(
+        !workspace.exists(),
+        "successful exchange cleans ephemeral payloads only"
+    );
+    let rollback = installer::rollback_bundle(&root, &trust());
+    assert_eq!(rollback.file_name().unwrap(), "bundle");
+    assert_eq!(
+        fs::read_to_string(rollback.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    assert!(!root.join("payload").exists());
+    assert!(!root.join("install-payload/Pilot Next.app").exists());
+    installer::acknowledge_startup(&root, "101.1", &trust(), &platform, &target).unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn purged_temporary_payload_never_replays_committed_install_or_loses_recovery() {
+    for committed in [false, true] {
+        let temp = Temp::new();
+        let staged = fixture_stage(&temp);
+        let platform = FakePlatform::default();
+        let payload = staged.prepare_payload(&trust(), &platform).unwrap();
+        let preview = installer::preview_bundle(&staged.root, &trust()).unwrap();
+        let workspace = preview.parent().unwrap().parent().unwrap();
+        if committed {
+            commit(&staged);
+        }
+        fs::remove_dir_all(workspace).unwrap(); // isolated OS-purge fault injection
+        assert!(
+            payload
+                .apply_after_exit(
+                    &trust(),
+                    &platform,
+                    helper::ExitedParent::synthetic(),
+                    |_| Ok(())
+                )
+                .is_err()
+        );
+        assert_eq!(
+            fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+            "100.1"
+        );
+        let phase = if committed {
+            installer::Phase::Committed
+        } else {
+            installer::Phase::Ready
+        };
+        assert_eq!(installer::recovery_phase(&staged.root).unwrap(), phase);
+        let root = staged.root.clone();
+        let target = staged.target.clone();
+        drop(staged);
+        assert_eq!(
+            installer::discard_uncommitted(&target, &trust()).unwrap(),
+            usize::from(!committed)
+        );
+        if committed {
+            assert!(root.join("archive.zip").exists());
+            assert_eq!(
+                installer::recoveries(&target, &trust()).unwrap(),
+                vec![(root, phase)]
+            );
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn failed_download_cleans_only_its_exact_private_temporary_workspace() {
+    let temp = Temp::new();
+    let target = fixture_target(&temp);
+    let (root, _lock) = installer::new_stage(&target, &trust(), &FakePlatform::default()).unwrap();
+    let download = installer::download_path(&root).unwrap();
+    let workspace = download.parent().unwrap();
+    fs::write(&download, "partial unauthenticated download").unwrap();
+    let moved = workspace.with_extension("saved");
+    fs::rename(workspace, &moved).unwrap();
+    let unrelated = temp.path().join("unrelated");
+    fs::create_dir(&unrelated).unwrap();
+    fs::write(unrelated.join("keep"), "not an updater payload").unwrap();
+    std::os::unix::fs::symlink(&unrelated, workspace).unwrap();
+    assert!(installer::download_path(&root).is_err());
+    assert!(installer::discard_incomplete(&root, &target).is_err());
+    assert!(unrelated.join("keep").exists());
+    fs::remove_file(workspace).unwrap();
+    fs::rename(&moved, workspace).unwrap();
+    installer::discard_incomplete(&root, &target).unwrap();
+    assert!(!workspace.exists());
+    assert!(!root.exists());
+    assert!(unrelated.join("keep").exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+#[ignore = "explicit isolated mounted-volume fixture; no installed app"]
+fn temporary_cross_device_copy_commits_atomically_on_install_volume() {
+    use std::os::unix::fs::MetadataExt;
+    let parent = PathBuf::from(
+        std::env::var_os("PILOT_UPDATER_TEST_VOLUME").expect("owned isolated test mount required"),
+    )
+    .canonicalize()
+    .unwrap();
+    let directory = parent.join("Relocated Applications with spaces");
+    fs::create_dir(&directory).unwrap();
+    let target = directory.join("Pilot Next.app");
+    fs::create_dir_all(target.join("Contents")).unwrap();
+    fs::write(target.join("Contents/build"), "100.1").unwrap();
+    fs::write(target.join("Contents/id"), trust().application_id).unwrap();
+    let original = fs::metadata(&target).unwrap();
+    let staged = fixture_stage_in_existing_target(&target);
+    let preview = installer::preview_bundle(&staged.root, &trust()).unwrap();
+    assert_ne!(fs::metadata(&preview).unwrap().dev(), original.dev());
+    let platform = FakePlatform::default();
+    let payload = staged.prepare_payload(&trust(), &platform).unwrap();
+    commit(&staged);
+    payload
+        .apply_after_exit(
+            &trust(),
+            &platform,
+            helper::ExitedParent::synthetic(),
+            |_| Ok(()),
+        )
+        .unwrap();
+    let rollback = fs::metadata(installer::rollback_bundle(&staged.root, &trust())).unwrap();
+    assert_eq!(
+        (rollback.dev(), rollback.ino()),
+        (original.dev(), original.ino())
+    );
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "101.1"
+    );
+    installer::acknowledge_startup(&staged.root, "101.1", &trust(), &platform, &target).unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
 fn native_atomic_swap_retains_old_bundle_and_requires_startup_ack() {
     let temp = Temp::new();
     let staged = fixture_stage(&temp);
@@ -902,12 +1094,7 @@ fn native_atomic_swap_retains_old_bundle_and_requires_startup_ack() {
         "101.1"
     );
     assert_eq!(
-        fs::read_to_string(
-            staged
-                .root
-                .join("install-payload/Pilot Next.app/Contents/build")
-        )
-        .unwrap(),
+        fs::read_to_string(staged.root.join("install-payload/bundle/Contents/build")).unwrap(),
         "100.1"
     );
     assert_eq!(
@@ -959,7 +1146,7 @@ fn failed_launch_retains_both_bundles_and_refuses_blind_second_swap() {
     assert!(
         staged
             .root
-            .join("install-payload/Pilot Next.app/Contents/build")
+            .join("install-payload/bundle/Contents/build")
             .exists()
     );
 }
@@ -1004,7 +1191,13 @@ fn prepared_payload_moves_extraction_before_commit_but_never_trusts_mutable_stag
         let staged = fixture_stage(&temp);
         let platform = FakePlatform::default();
         let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
-        let bundle = staged.root.join("install-payload/Pilot Next.app");
+        let bundle = installer::preview_bundle(&staged.root, &trust())
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("install-payload/Pilot Next.app");
         assert!(
             bundle.is_dir(),
             "extraction finishes while parent is still alive"
@@ -1046,7 +1239,10 @@ fn prepared_payload_moves_extraction_before_commit_but_never_trusts_mutable_stag
                 "101.1"
             );
             assert_eq!(
-                fs::read_to_string(bundle.join("Contents/build")).unwrap(),
+                fs::read_to_string(
+                    installer::rollback_bundle(&staged.root, &trust()).join("Contents/build")
+                )
+                .unwrap(),
                 "100.1"
             );
             assert_eq!(
@@ -1078,11 +1274,29 @@ fn prepared_payload_cancellation_can_retry_but_commit_never_discards_evidence() 
         .unwrap()
         .discard()
         .unwrap();
-    assert!(!staged.root.join("install-payload").exists());
+    assert!(
+        !installer::preview_bundle(&staged.root, &trust())
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("install-payload")
+            .exists()
+    );
     let prepared = staged.prepare_payload(&trust(), &platform).unwrap();
     commit(&staged);
     assert_eq!(prepared.discard(), Err(Error::RecoveryRequired));
-    assert!(staged.root.join("install-payload").exists());
+    assert!(
+        installer::preview_bundle(&staged.root, &trust())
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("install-payload")
+            .exists()
+    );
     assert!(matches!(
         staged.prepare_payload(&trust(), &platform),
         Err(Error::RecoveryRequired)
@@ -1804,7 +2018,7 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
         let verified =
             manifest::VerifiedManifest::parse(&envelope(&manifest), &current, 12).unwrap();
         let (root, lock) = installer::new_stage(&target, &current, &platform).unwrap();
-        fs::write(root.join("archive.zip"), &bytes).unwrap();
+        fs::write(installer::download_path(&root).unwrap(), &bytes).unwrap();
         let stage = installer::finish_stage(
             root.clone(),
             target.clone(),
@@ -1840,7 +2054,7 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
     }
     for (root, old_build, dev, ino, bytes) in receipts {
         let located = installer::transaction_path(&root).unwrap();
-        let old = located.join("install-payload/Pilot Next.app");
+        let old = installer::rollback_bundle(&located, &current);
         let meta = fs::metadata(&old).unwrap();
         assert_eq!((meta.dev(), meta.ino()), (dev, ino));
         assert_eq!(
@@ -1860,7 +2074,7 @@ fn fixture_stage_in_existing_target(target: &Path) -> installer::Staged {
     let bytes = archive();
     let manifest = verified(&bytes);
     let (root, lock) = installer::new_stage(target, &trust(), &FakePlatform::default()).unwrap();
-    fs::write(root.join("archive.zip"), &bytes).unwrap();
+    fs::write(installer::download_path(&root).unwrap(), &bytes).unwrap();
     installer::finish_stage(
         root,
         target.to_owned(),
