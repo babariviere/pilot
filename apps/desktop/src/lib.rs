@@ -3,6 +3,8 @@
 pub mod app_menu;
 pub mod bundled_runtime;
 pub mod diagnostics;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod running_identity;
 mod diagnostics_view;
 #[cfg(feature = "native-probes")]
 pub use diagnostics_view::probe::run_diagnostics_probe;

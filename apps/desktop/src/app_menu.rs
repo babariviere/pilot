@@ -1,6 +1,7 @@
 //! Native macOS menus. Editing remains owned by the focused Kit control.
 use crate::local_client::ConnectedDaemon;
 use crate::local_view::menu_routing::{Minimize, Zoom, connected_daemon, main_window};
+use crate::running_identity::{RunningApp, daemon_display};
 use gpui_kit::base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::{App, Global, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType};
 
@@ -26,35 +27,10 @@ pub fn init(cx: &mut App) {
 struct AboutOpen;
 impl Global for AboutOpen {}
 
-/// The executing binary's build, fixed when it was compiled. Never read from the
-/// app bundle on disk, which an installed update may already have replaced.
-struct RunningApp {
-    version: String,
-    /// The signed release build; `None` for development builds without one.
-    build: Option<String>,
-}
-impl RunningApp {
-    fn current() -> Self {
-        Self {
-            version: crate::diagnostics::Build::current().version().into(),
-            build: pilot_desktop_updater::helper::compiled_trust()
-                .ok()
-                .map(|trust| trust.current_build),
-        }
-    }
-}
-
 /// One labeled row each for this app and the daemon it is connected to.
 fn about_detail(app: &RunningApp, daemon: &ConnectedDaemon) -> String {
-    let app = match &app.build {
-        Some(build) => format!("{} (Build {build})", app.version),
-        None => format!("{} (development build)", app.version),
-    };
-    let daemon = match daemon {
-        ConnectedDaemon::Connected(Some(version)) => version.to_string(),
-        ConnectedDaemon::Connected(None) => "Version unknown".into(),
-        ConnectedDaemon::NotConnected => "Not connected".into(),
-    };
+    let app = app.display();
+    let daemon = daemon_display(daemon);
     format!("Pilot Next: {app}\nDaemon: {daemon}")
 }
 

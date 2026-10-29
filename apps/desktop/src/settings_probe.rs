@@ -372,10 +372,54 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(handle, |_, window, cx| {
                 assert!(window.find("updates-automatic").visible());
                 assert!(window.find("updates-check").visible());
+                let app = format!(
+                    "Current app: {}",
+                    crate::running_identity::RunningApp::current().display()
+                );
+                assert_eq!(
+                    window.find("updates-current-app").label(),
+                    Some(app.as_str())
+                );
+                assert_eq!(
+                    window.find("updates-current-daemon").label(),
+                    Some("Current daemon: Not connected")
+                );
+                assert!(window.try_find("updates-target").is_none());
                 assert!(window.try_find("updates-install").is_none());
                 window.click("updates-automatic", cx);
             })
             .unwrap();
+            cx.update(|cx| {
+                owner
+                    .read(cx)
+                    .daemon_upgrade
+                    .clone()
+                    .unwrap()
+                    .update(cx, |daemon, cx| {
+                        daemon.connected(
+                            crate::local_client::ConnectedDaemon::Connected(Some("1.2.3".into())),
+                            cx,
+                        )
+                    })
+            });
+            settle(cx, handle);
+            cx.update_window(handle, |_, window, _| {
+                assert_eq!(
+                    window.find("updates-current-daemon").label(),
+                    Some("Current daemon: 1.2.3")
+                )
+            })
+            .unwrap();
+            cx.update(|cx| {
+                owner
+                    .read(cx)
+                    .daemon_upgrade
+                    .clone()
+                    .unwrap()
+                    .update(cx, |daemon, cx| {
+                        daemon.connected(crate::local_client::ConnectedDaemon::NotConnected, cx)
+                    })
+            });
             settle(cx, handle);
             cx.update(|cx| {
                 assert!(owner.read(cx).state.dirty());

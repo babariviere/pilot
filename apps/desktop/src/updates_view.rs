@@ -446,6 +446,13 @@ impl Updates {
                     let target = w.find("updates-target");
                     assert!(target.visible() && inside(target.bounds()));
                     assert_eq!(target.label(), Some("Pilot Next 1.85.0, Build 4210.1"));
+                    let app = format!(
+                        "Current app: {}",
+                        crate::running_identity::RunningApp::current().display()
+                    );
+                    let current = w.find("updates-current-app");
+                    assert_eq!(current.label(), Some(app.as_str()));
+                    assert!(current.bounds().bottom() <= target.bounds().top());
                     assert!(w.find("updates-download").visible());
                     // Actions hug their labels on one row instead of spanning the pane.
                     let download = w.find("updates-download").bounds();
@@ -1660,6 +1667,11 @@ impl Render for Updates {
             .id("updates-controller")
             .v_flex()
             .gap_3()
+            .child(crate::running_identity::identity_row(
+                "updates-current-app",
+                "Current app",
+                crate::running_identity::RunningApp::current().display(),
+            ))
             .child(status_line(message))
             .children(target)
             .children(transfer)

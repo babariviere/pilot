@@ -1571,6 +1571,15 @@ impl LocalViewer {
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(daemon) = self.settings.read(cx).daemon_upgrade.clone() {
+            let connected = self
+                .client
+                .as_ref()
+                .map(LocalClient::daemon)
+                .unwrap_or_default();
+            daemon.update(cx, |daemon, cx| daemon.connected(connected, cx));
+        }
         if self.refreshing && state.generation == self.generation && !state.loaded {
             self.state.projects = state.projects;
             self.state.projects_loaded = state.projects_loaded;

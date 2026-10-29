@@ -69,6 +69,7 @@ enum Phase {
 
 pub(crate) struct DaemonUpgrade {
     target: Option<Target>,
+    connected: crate::local_client::ConnectedDaemon,
     worker: Worker,
     phase: Phase,
     /// Last finished attempt. Errors stay until a newer attempt finishes.
@@ -102,6 +103,7 @@ impl DaemonUpgrade {
     ) -> Self {
         Self {
             target,
+            connected: Default::default(),
             worker,
             phase: Phase::Idle,
             outcome: None,
@@ -112,6 +114,17 @@ impl DaemonUpgrade {
             confirm_focus: cx.focus_handle(),
             #[cfg(any(test, feature = "native-probes"))]
             started: 0,
+        }
+    }
+
+    pub(crate) fn connected(
+        &mut self,
+        connected: crate::local_client::ConnectedDaemon,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connected != connected {
+            self.connected = connected;
+            cx.notify();
         }
     }
 
@@ -315,6 +328,11 @@ impl Render for DaemonUpgrade {
                 "daemon-upgrade-heading",
                 "Daemon",
                 Text::Headline,
+            ))
+            .child(crate::running_identity::identity_row(
+                "updates-current-daemon",
+                "Current daemon",
+                crate::running_identity::daemon_display(&self.connected),
             ));
         if self.target.is_none() {
             return view.child(
