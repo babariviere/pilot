@@ -1,9 +1,9 @@
 # Project-based Local chat creation
 
-Use New chat, choose a configured Local project, then type the message and create
-with Enter or the button. Search by name or canonical ID; duplicate names or
-folders remain separate choices. The selected ID and cached configured path are
-shown before creation. Ask remains the default; existing chat controls and
+Use New chat, click a configured Local project row, then type the message and create
+with Enter or the button. Search by name, folder or canonical ID; duplicate names or
+folders remain separate choices. The chosen row is checked before creation.
+Ask remains the default; existing chat controls and
 permissions are not inherited or promoted. Adding/importing projects is outside
 this feature. The sidebar’s browsing scope never silently assigns a destination.
 

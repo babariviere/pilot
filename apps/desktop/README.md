@@ -118,7 +118,7 @@ new credentials, remote fanout or changes to pause/force-work policy.
 ### Add a Local project
 
 Open the sidebar project selector for **Add project…** (Tab to the action, then
-Return), or use it in the new-chat project chooser.
+Return), or use it below the new-chat project list.
 Choose one existing folder in the native dialog, then confirm **Add project**.
 Cancellation sends nothing. Registration refreshes the canonical catalog but
 never selects a draft destination or creates/starts a chat. Select the project
@@ -346,13 +346,14 @@ uncertain work. This is not a mission dashboard or permission promotion. See
 
 ### Messages and private drafts
 
-New chat uses a centered native setup: project and Ask/Build above the compact
-composer, with model/thinking below the editor. Destination details live in the
-project chooser; exceptional delivery and recovery stay above the tray. Existing
+New chat uses a centered native setup: the project list above the compact
+composer, with model/thinking below the editor. Each project row shows its folder;
+exceptional delivery and recovery stay above the tray. Existing
 chats keep their bottom composer. See [new-chat layout](docs/new-chat-layout.md).
 
-New chat requires an explicit configured Local **project**, selected with the
-searchable project picker, and an Ask/Build choice (Ask by default). The canonical
+New chat requires an explicit configured Local **project**: one click on its row
+(or arrows and Return from the list's search field) chooses it, and the row is
+checked. Choosing never creates or sends anything. The canonical
 project ID, not a guessed folder match, determines the chat association and daemon-owned
 working directory/workspace defaults. No manual working-folder prompt or another
 agent's isolated working copy is inherited. Selection is retained per private draft;

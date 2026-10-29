@@ -805,8 +805,11 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("new-local-chat", cx))
                 .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("new-chat-project", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                let query = editor.read(cx).project_query(cx).unwrap();
+                query.update(cx, |q, cx| q.focus(w, cx));
+            })
+            .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| w.input("project-a", cx))
                 .unwrap();

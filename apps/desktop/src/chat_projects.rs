@@ -1,10 +1,15 @@
 //! Explicit per-draft Local project choice. No path-to-project inference.
+//! Projects are visible rows: one click (or arrows + Enter) chooses, nothing is sent.
 use super::*;
 use crate::{local_model::Project, ui};
-use gpui_kit::StatefulInteractiveElement;
-use gpui_kit::component::FocusableExt;
-use gpui_kit::component::select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState};
+use gpui_kit::Task;
+use gpui_kit::component::IndexPath;
+use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use std::sync::Arc;
+
+/// Two-line rows (name, folder). Five stay visible; the rest scroll or filter.
+const ROW: f32 = 44.;
+const VISIBLE_ROWS: f32 = 5.;
 
 #[derive(Default)]
 pub(super) struct Catalog {
@@ -19,45 +24,115 @@ struct Choice {
     detail: SharedString,
     unavailable: bool,
 }
-impl SelectItem for Choice {
-    type Value = String;
-    fn value(&self) -> &String {
-        &self.id
-    }
-    fn title(&self) -> SharedString {
-        self.title.clone()
-    }
-    fn disabled(&self) -> bool {
-        self.unavailable
-    }
+impl Choice {
     fn matches(&self, query: &str) -> bool {
         let query = query.to_lowercase();
-        self.title.to_lowercase().contains(&query) || self.detail.to_lowercase().contains(&query)
+        [&*self.title, &*self.detail, &self.id]
+            .iter()
+            .any(|text| text.to_lowercase().contains(&query))
     }
-    fn render(&self, _: &mut Window, _: &mut gpui_kit::App) -> impl IntoElement {
-        let row = div()
-            .id(SharedString::from(format!("new-project-{}", self.id)))
-            .w_full()
-            .min_w_0()
-            .v_flex()
-            .aria_label(SharedString::from(format!(
-                "{} · {}",
-                self.title, self.detail
-            )))
-            .child(div().min_w_0().truncate().child(self.title.clone()))
-            .child(
-                ui::text(ui::Text::Caption, self.detail.clone())
-                    .min_w_0()
-                    .truncate(),
-            );
-        #[cfg(any(test, feature = "native-probes"))]
-        let row = row.test_support();
-        row
+}
+#[derive(Default)]
+pub(super) struct Rows {
+    all: Vec<Choice>,
+    /// Indices into `all` matching the current query, in catalog order.
+    shown: Vec<usize>,
+    query: String,
+    chosen: Option<String>,
+    enabled: bool,
+}
+impl Rows {
+    fn set(&mut self, all: Vec<Choice>, chosen: Option<String>) {
+        self.all = all;
+        self.chosen = chosen;
+        self.filter();
+    }
+    fn filter(&mut self) {
+        self.shown = (0..self.all.len())
+            .filter(|&i| self.all[i].matches(&self.query))
+            .collect();
+    }
+    fn id_at(&self, ix: IndexPath) -> Option<&str> {
+        self.shown.get(ix.row).map(|&i| self.all[i].id.as_str())
+    }
+    fn chosen_index(&self) -> Option<IndexPath> {
+        let id = self.chosen.as_deref()?;
+        self.shown
+            .iter()
+            .position(|&i| self.all[i].id == id)
+            .map(IndexPath::new)
+    }
+}
+impl ListDelegate for Rows {
+    type Item = ListItem;
+    fn items_count(&self, _: usize, _: &gpui_kit::App) -> usize {
+        self.shown.len()
+    }
+    fn item_height(&self, _: IndexPath, _: &gpui_kit::App) -> Option<gpui_kit::Pixels> {
+        Some(px(ROW))
+    }
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        self.query = query.to_owned();
+        self.filter();
+        Task::ready(())
+    }
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _: &mut Window,
+        _: &mut Context<ListState<Self>>,
+    ) -> Option<ListItem> {
+        let choice = &self.all[*self.shown.get(ix.row)?];
+        Some(
+            ListItem::new(SharedString::from(format!("new-project-{}", choice.id)))
+                .h(px(ROW))
+                .px_2()
+                .py_0()
+                .rounded(px(ui::Radius::ROW))
+                .accessibility_label(SharedString::from(format!(
+                    "{} · {}",
+                    choice.title, choice.detail
+                )))
+                .disabled(!self.enabled || choice.unavailable)
+                .confirmed(self.chosen.as_deref() == Some(choice.id.as_str()))
+                .check_icon(ui::IconRole::Complete.icon())
+                .child(
+                    ui::ResourceLabel::new(choice.title.clone())
+                        .detail(choice.detail.clone())
+                        .icon(ui::IconRole::Project)
+                        .muted(!self.enabled || choice.unavailable),
+                ),
+        )
+    }
+    fn set_selected_index(
+        &mut self,
+        _: Option<IndexPath>,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        cx.notify();
+    }
+    fn render_empty(
+        &mut self,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_2()
+            .text_size(px(crate::appearance::TextRole::BODY))
+            .text_color(cx.theme().muted_foreground)
+            .child("No matching projects")
     }
 }
 pub(super) struct Picker {
     source: String,
-    state: Entity<SelectState<SearchableVec<Choice>>>,
+    state: Entity<ListState<Rows>>,
     catalog: Arc<Vec<Project>>,
     selected: Option<String>,
     _subscriptions: Vec<Subscription>,
@@ -67,7 +142,15 @@ impl ChatEditor {
     pub(crate) fn project_query(&self, cx: &gpui_kit::App) -> Option<Entity<InputState>> {
         self.project_picker
             .as_ref()
-            .map(|p| p.state.read(cx).query_input(cx))
+            .map(|p| p.state.read(cx).query_input())
+    }
+    /// The row list's checked project and whether rows accept a choice.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn project_rows_probe(&self, cx: &gpui_kit::App) -> (Option<String>, bool) {
+        self.project_picker.as_ref().map_or((None, false), |p| {
+            let rows = p.state.read(cx).delegate();
+            (rows.chosen.clone(), rows.enabled)
+        })
     }
     pub(crate) fn projects(
         &mut self,
@@ -96,20 +179,17 @@ impl ChatEditor {
             picker
                 .state
                 .read(cx)
-                .query_input(cx)
+                .query_input()
                 .update(cx, |q, cx| q.marked_text_range(window, cx).is_some())
         })
     }
+    /// Navigation waits for a project-search composition, like the composer's.
     pub(super) fn retire_project_picker(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.project_picker.as_ref().is_none_or(|picker| {
-            picker
-                .state
-                .update(cx, |p, cx| p.prepare_navigation(window, cx))
-        })
+        !self.project_query_marked(window, cx)
     }
     pub(super) fn project_problem(&self, draft: &Draft) -> Option<&'static str> {
         if !self.project_catalog.loaded {
@@ -132,6 +212,30 @@ impl ChatEditor {
             .any(|p| &p.id == id && p.path == draft.cwd))
         .then_some("The selected project or folder changed. Choose the project again.")
     }
+    /// Whether a click or Enter on a project row can change this draft now.
+    fn projects_choosable(&self, draft: &Draft) -> bool {
+        self.ready()
+            && self.writable
+            && !self.waiting()
+            && draft.editable()
+            && self.project_catalog.loaded
+            && !self.project_catalog.rows.is_empty()
+            && self.project_catalog.error.is_none()
+    }
+    /// Keeps row affordance in step with the existing choice guards. Render-time,
+    /// but it only notifies the list when the answer actually changes.
+    pub(super) fn sync_project_rows_enabled(&self, cx: &mut Context<Self>) {
+        let (Some(picker), Some(draft)) = (self.project_picker.as_ref(), self.draft()) else {
+            return;
+        };
+        let enabled = self.projects_choosable(draft);
+        if picker.state.read(cx).delegate().enabled != enabled {
+            picker.state.update(cx, |list, cx| {
+                list.delegate_mut().enabled = enabled;
+                list.set_selectable(enabled, cx);
+            });
+        }
+    }
     pub(super) fn sync_project_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(key) = self.selected.clone().filter(|key| key.starts_with("new:")) else {
             self.project_picker = None;
@@ -142,21 +246,33 @@ impl ChatEditor {
         };
         let selected = draft.project_id.clone();
         if self.project_picker.as_ref().is_none_or(|p| p.source != key) {
-            let state = cx.new(|cx| {
-                SelectState::new(SearchableVec::new(Vec::<Choice>::new()), None, window, cx)
-                    .searchable(true)
-            });
+            let state = cx.new(|cx| ListState::new(Rows::default(), window, cx).searchable(true));
             let source = key.clone();
-            let confirm = cx.subscribe_in(
+            let events = cx.subscribe_in(
                 &state,
                 window,
-                move |view, _, event: &SelectEvent<SearchableVec<Choice>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(id)) = event {
-                        view.choose_project(&source, id, window, cx);
+                move |view, list, event: &ListEvent, window, cx| match event {
+                    ListEvent::Confirm(ix) => {
+                        let id = list.read(cx).delegate().id_at(*ix).map(str::to_owned);
+                        if let Some(id) = id {
+                            // Show every project again, the chosen one checked.
+                            if !view.project_query_marked(window, cx)
+                                && !list.read(cx).query_input().read(cx).value().is_empty()
+                            {
+                                list.update(cx, |l, cx| l.set_query("", window, cx));
+                            }
+                            view.choose_project(&source, &id, window, cx);
+                        }
                     }
+                    // Escape leaves the search; the draft keeps its project.
+                    ListEvent::Cancel if !view.project_query_marked(window, cx) => {
+                        list.update(cx, |l, cx| l.set_query("", window, cx));
+                        view.focus(window, cx);
+                    }
+                    _ => {}
                 },
             );
-            let query = state.read(cx).query_input(cx);
+            let query = state.read(cx).query_input();
             let changed = cx.subscribe_in(&query, window, |view, _, event, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     view.sync_project_picker(window, cx);
@@ -167,7 +283,7 @@ impl ChatEditor {
                 state,
                 catalog: Arc::default(),
                 selected: None,
-                _subscriptions: vec![confirm, changed],
+                _subscriptions: vec![events, changed],
             });
         }
         if self.project_query_marked(window, cx) {
@@ -192,7 +308,7 @@ impl ChatEditor {
                 } else {
                     p.name.clone().into()
                 },
-                detail: format!("{} · {}", p.path, p.id).into(),
+                detail: p.path.clone().into(),
                 unavailable: false,
             })
             .collect();
@@ -206,14 +322,16 @@ impl ChatEditor {
                 unavailable: true,
             });
         }
-        picker.state.update(cx, |p, cx| {
-            p.prepare_navigation(window, cx);
-            p.set_items(SearchableVec::new(choices), window, cx);
-            if let Some(id) = &selected {
-                p.set_selected_value(id, window, cx);
-            } else {
-                p.set_selected_index(None, window, cx);
+        let first =
+            !Arc::ptr_eq(&picker.catalog, &self.project_catalog.rows) && picker.catalog.is_empty();
+        picker.state.update(cx, |list, cx| {
+            list.delegate_mut().set(choices, selected.clone());
+            let chosen = list.delegate().chosen_index();
+            list.set_selected_index(chosen, window, cx);
+            if first && chosen.is_some() {
+                list.scroll_to_selected_item(window, cx);
             }
+            cx.notify();
         });
         picker.catalog = self.project_catalog.rows.clone();
         picker.selected = selected;
@@ -274,47 +392,64 @@ impl ChatEditor {
     pub(super) fn project_field(
         &self,
         draft: &Draft,
-        _window: &mut Window,
-        _cx: &Context<Self>,
+        window: &mut Window,
+        cx: &Context<Self>,
     ) -> impl IntoElement {
-        let editable = self.ready()
-            && self.writable
-            && !self.waiting()
-            && draft.editable()
+        // Rows only while this draft's destination can still change. Loading,
+        // empty, failed and sent drafts keep their notice/caption instead.
+        let shown = draft.editable()
             && self.project_catalog.loaded
-            && !self.project_catalog.rows.is_empty()
-            && self.project_catalog.error.is_none();
-        div().v_flex().gap_1().min_w_0().child(
-            div()
-                .h_flex()
-                .gap_1()
-                .min_w_0()
-                .children(self.project_picker.as_ref().map(|picker| {
-                    div().flex_1().min_w_0().h(px(28.)).child(
-                        Select::new(&picker.state)
-                            .id("new-chat-project")
-                            .small()
-                            .w_full()
-                            .appearance(false)
-                            .focus_ring(false)
-                            .menu_width(px(320.))
-                            .menu_max_h(px(260.))
-                            .disabled(!editable)
-                            .placeholder("Choose project…")
-                            .accessibility_label("New chat project")
+            && self.project_catalog.error.is_none()
+            && !self.project_catalog.rows.is_empty();
+        let list = self
+            .project_picker
+            .as_ref()
+            .filter(|_| shown)
+            .map(|picker| {
+                let rows = picker.state.read(cx).delegate().all.len() as f32;
+                // Half a row past the fold says the list scrolls.
+                let visible = if rows > VISIBLE_ROWS {
+                    VISIBLE_ROWS + 0.5
+                } else {
+                    rows
+                };
+                let frame = div()
+                    .id("new-chat-project")
+                    .aria_label("New chat project")
+                    .w_full()
+                    .min_w_0()
+                    .border(crate::appearance::hairline(window))
+                    .border_color(cx.theme().border)
+                    .rounded(px(ui::Radius::CONTROL))
+                    .overflow_hidden()
+                    .child(
+                        List::new(&picker.state)
+                            .p_1()
+                            .max_h(px(ROW * visible + 8.))
                             .search_placeholder("Find a project…"),
-                    )
-                }))
-                .child(
-                    ui::action("new-chat-add-project", "Add project…", ui::Action::Quiet)
-                        .disabled(!self.ready() || self.waiting() || !draft.editable())
-                        .on_click(_cx.listener(|view, _, window, cx| {
-                            if !view.marked(window, cx) {
-                                cx.emit(EditorEvent::AddProject);
-                            }
-                        })),
-                ),
-        )
+                    );
+                #[cfg(any(test, feature = "native-probes"))]
+                let frame = frame.test_support();
+                frame
+            });
+        // A sent draft's destination is fixed, so Add project would be noise there.
+        let add = draft.editable().then(|| {
+            div().h_flex().child(
+                ui::action("new-chat-add-project", "Add project…", ui::Action::Quiet)
+                    .disabled(!self.ready() || self.waiting())
+                    .on_click(cx.listener(|view, _, window, cx| {
+                        if !view.marked(window, cx) {
+                            cx.emit(EditorEvent::AddProject);
+                        }
+                    })),
+            )
+        });
+        div()
+            .v_flex()
+            .gap(px(ui::Space::CONTROL))
+            .min_w_0()
+            .children(list)
+            .children(add)
     }
 }
 
@@ -360,16 +495,9 @@ mod tests {
                 assert_eq!(e.draft().unwrap().text, "Uncaptured 私 👩‍💻");
                 e.select("chat:a".into(), true, false, w, cx);
                 e.select(key.clone(), true, false, w, cx);
-                assert_eq!(
-                    e.project_picker
-                        .as_ref()
-                        .unwrap()
-                        .state
-                        .read(cx)
-                        .selected_value()
-                        .map(String::as_str),
-                    Some("ab")
-                );
+                let list = e.project_picker.as_ref().unwrap().state.read(cx);
+                assert_eq!(list.delegate().chosen.as_deref(), Some("ab"));
+                assert_eq!(list.selected_index(), Some(IndexPath::new(1)));
                 e.submit(false, w, cx);
             })
         })
@@ -436,7 +564,7 @@ mod tests {
             })
             .unwrap();
         cx.update_window(handle, |_, _, cx| {
-            old.update(cx, |_, cx| cx.emit(SelectEvent::Confirm(Some("ab".into()))))
+            old.update(cx, |_, cx| cx.emit(ListEvent::Confirm(IndexPath::new(1))))
         })
         .unwrap();
         cx.run_until_parked();
@@ -588,7 +716,7 @@ mod tests {
                     .unwrap()
                     .state
                     .read(cx)
-                    .query_input(cx);
+                    .query_input();
                 q.update(cx, |q, cx| {
                     q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
                 });

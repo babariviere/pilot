@@ -1199,6 +1199,9 @@ impl Render for ChatEditor {
             return empty.into_any_element();
         };
         let is_new = key.starts_with("new:");
+        if is_new {
+            self.sync_project_rows_enabled(cx);
+        }
         // The placeholder states what typing does here, including read-only.
         let placeholder = if !self.writable {
             "This chat is read-only."

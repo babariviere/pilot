@@ -13,6 +13,51 @@ fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
 }
+/// One real pointer click: move, press and release as separate events, with
+/// deferred work and frames settled between them like a live run loop.
+fn pointer_click(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, id: &str) {
+    use gpui_kit::{InputEvent as _, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
+    let id = gpui_kit::SharedString::from(id.to_owned());
+    let position = cx
+        .update_window(h, |_, w, cx| {
+            w.render_frame(cx);
+            w.find(id).bounds().center()
+        })
+        .unwrap();
+    let events = [
+        MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+        }
+        .to_platform_input(),
+    ];
+    for event in events {
+        cx.update_window(h, |_, w, cx| {
+            w.dispatch_event(event, cx);
+        })
+        .unwrap();
+        settle(cx, h);
+    }
+}
+fn chosen(cx: &mut HeadlessAppContext, editor: &Entity<ChatEditor>) -> Option<String> {
+    cx.update(|cx| editor.read(cx).shell_probe().2.unwrap().project_id.clone())
+}
 pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
     super::draft_discard_probe::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_NEW_CHAT_DIR").map(std::path::PathBuf::from);
@@ -183,7 +228,9 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
                 settle(cx, h);
                 cx.update_window(h, |_, w, cx| {
-                    assert_eq!(w.find("new-chat-project").disabled(), Some(true));
+                    // Loading, failed and empty catalogs show their notice, not rows.
+                    assert!(w.try_find("new-chat-project").is_none());
+                    assert!(w.try_find("new-project-atlas").is_none());
                     assert_eq!(w.find("local-send").disabled(), Some(true));
                     w.click("local-send", cx);
                 })
@@ -196,24 +243,117 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("new-chat-project", cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.input("atlas", cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                let choice = w.find("new-project-atlas").bounds();
-                assert!(choice.right() <= px(width) && choice.bottom() <= px(760.));
-                if dark {
-                    w.press("down", cx);
-                    w.press("enter", cx);
-                } else {
-                    w.click("new-project-atlas", cx);
+            // Every project is a visible row: no dropdown to open first.
+            cx.update_window(h, |_, w, _| {
+                let frame = w.find("new-chat-project").bounds();
+                let tray = w.find("composer-tray").bounds();
+                for id in ["new-project-atlas", "new-project-notes"] {
+                    let row = w.find(id).bounds();
+                    assert!(row.left() >= frame.left() && row.right() <= frame.right());
+                    assert!(row.bottom() <= frame.bottom() && frame.bottom() < tray.top());
                 }
+                assert!(frame.right() <= px(width) && frame.bottom() <= px(760.));
+                assert!(w.find("new-chat-add-project").bounds().top() >= frame.bottom());
             })
             .unwrap();
-            settle(cx, h);
+            assert_eq!(chosen(cx, &editor), None);
+            if dark {
+                // Keyboard: search field, Escape leaves it unchanged, arrows + Enter choose.
+                let query = cx.update(|cx| editor.read(cx).project_query(cx).unwrap());
+                cx.update_window(h, |_, w, cx| query.update(cx, |q, cx| q.focus(w, cx)))
+                    .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| w.input("zz", cx)).unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    assert!(w.try_find("new-project-atlas").is_none());
+                    w.press("escape", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| {
+                    assert!(query.read(cx).value().is_empty());
+                    assert!(w.try_find("new-project-notes").is_some());
+                    let text = editor.read(cx).shell_probe().0;
+                    assert!(gpui_kit::Focusable::focus_handle(text.read(cx), cx).is_focused(w));
+                })
+                .unwrap();
+                assert_eq!(chosen(cx, &editor), None);
+                // Shift-Tab from the composer reaches the project search.
+                let mut reached = false;
+                for _ in 0..4 {
+                    cx.update_window(h, |_, w, cx| w.press("shift-tab", cx))
+                        .unwrap();
+                    settle(cx, h);
+                    reached = cx
+                        .update_window(h, |_, w, cx| {
+                            gpui_kit::Focusable::focus_handle(query.read(cx), cx).is_focused(w)
+                        })
+                        .unwrap();
+                    if reached {
+                        break;
+                    }
+                }
+                assert!(reached, "keyboard reaches the project search");
+                settle(cx, h);
+                cx.update_window(h, |_, w, cx| w.input("日本語", cx))
+                    .unwrap();
+                settle(cx, h);
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.try_find("new-project-atlas").is_none());
+                    assert!(w.try_find("new-project-notes").is_some());
+                })
+                .unwrap();
+                // Enter on the filtered row chooses it and shows every project again.
+                cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                    .unwrap();
+                settle(cx, h);
+                assert_eq!(chosen(cx, &editor).as_deref(), Some("notes"));
+                cx.update_window(h, |_, w, cx| {
+                    assert!(query.read(cx).value().is_empty());
+                    assert!(w.try_find("new-project-atlas").is_some());
+                })
+                .unwrap();
+                cx.update_window(h, |_, w, cx| {
+                    w.press("up", cx);
+                    w.press("enter", cx);
+                })
+                .unwrap();
+                settle(cx, h);
+                assert_eq!(chosen(cx, &editor).as_deref(), Some("atlas"));
+                // Arrows alone only move the highlight; Enter changes the project.
+                cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
+                settle(cx, h);
+                assert_eq!(chosen(cx, &editor).as_deref(), Some("atlas"));
+                cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                    .unwrap();
+                settle(cx, h);
+                assert_eq!(chosen(cx, &editor).as_deref(), Some("notes"));
+            } else {
+                // One pointer click chooses; another click changes it.
+                pointer_click(cx, h, "new-project-notes");
+                assert_eq!(chosen(cx, &editor).as_deref(), Some("notes"));
+            }
+            assert!(writes.try_recv().is_err(), "choosing never sends");
+            assert_eq!(models.posts(), 0);
+            pointer_click(cx, h, "new-project-atlas");
+            assert_eq!(chosen(cx, &editor).as_deref(), Some("atlas"));
+            assert!(writes.try_recv().is_err(), "choosing never sends");
+            assert!(reads.try_recv().is_err(), "choosing never opens or creates");
+            cx.update(|cx| {
+                let list = editor.read(cx).project_rows_probe(cx);
+                assert_eq!(list, (Some("atlas".to_owned()), true));
+            });
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!(
+                        "{}-{}-chosen.png",
+                        width as u32,
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(
                     editor
@@ -275,10 +415,21 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             let focused = cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap();
+            pointer_click(cx, h, "new-project-notes");
             cx.update_window(h, |_, w, cx| {
-                w.click("new-chat-project", cx);
                 assert_eq!(w.focused(cx), focused);
                 assert!(editor.update(cx, |e, cx| e.marked(w, cx)));
+                assert_eq!(
+                    editor
+                        .read(cx)
+                        .shell_probe()
+                        .2
+                        .unwrap()
+                        .project_id
+                        .as_deref(),
+                    Some("atlas"),
+                    "a click during composition never changes the project"
+                );
                 assert_eq!(editor.read(cx).shell_probe().2.unwrap().mode, "build");
                 text.update(cx, |t, cx| t.unmark_text(w, cx));
             })
@@ -420,7 +571,9 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("chat-model-restriction").is_none());
                 let tray = w.find("composer-tray").bounds();
                 assert!(recovery.bottom() <= tray.top());
-                assert_eq!(w.find("new-chat-project").disabled(), Some(true));
+                // A sent/Unknown draft keeps its destination caption; rows are gone.
+                assert!(w.try_find("new-chat-project").is_none());
+                assert!(w.try_find("new-project-notes").is_none());
                 assert_eq!(w.find("local-send").disabled(), Some(true));
                 w.click("local-send", cx);
                 assert_eq!(

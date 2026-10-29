@@ -1,4 +1,4 @@
-//! Actual production composer/Select/courier over an owned faux daemon.
+//! Actual production composer/project rows/courier over an owned faux daemon.
 //! Offscreen component pixels are not full-app, OS IME or performance acceptance.
 use super::*;
 use crate::{
@@ -22,6 +22,14 @@ use tokio::{
     net::TcpListener,
 };
 
+fn focus_project_search(
+    editor: &Entity<ChatEditor>,
+    w: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) {
+    let query = editor.read(cx).project_query(cx).unwrap();
+    query.update(cx, |q, cx| q.focus(w, cx));
+}
 fn catalog() -> Value {
     json!([
         {"id":"project-a","name":"Same project title 日本語","path":"/synthetic/shared"},
@@ -312,7 +320,7 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                             .iter()
                             .all(|e| e.label() != Some("Local working folder"))
                     );
-                    w.click("new-chat-project", cx);
+                    focus_project_search(&editor, w, cx);
                 })
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
@@ -323,7 +331,7 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
                 cx.update(|cx| assert!(editor.read(cx).draft().unwrap().project_id.is_none()));
-                cx.update_window(handle, |_, w, cx| w.click("new-chat-project", cx))
+                cx.update_window(handle, |_, w, cx| focus_project_search(&editor, w, cx))
                     .unwrap();
                 pump(cx, handle, &editor, &updates);
                 cx.update_window(handle, |_, w, cx| w.input("project-ab", cx))
@@ -372,7 +380,7 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 pump(cx, handle, &editor, &updates);
                 assert!(server.seen.lock().unwrap().envelopes.is_empty());
                 cx.update_window(handle, |_, w, cx| {
-                    assert_eq!(w.find("new-chat-project").disabled(), Some(true));
+                    assert!(w.try_find("new-chat-project").is_none());
                     assert_eq!(w.find("local-send").disabled(), Some(true));
                     editor.update(cx, |e, cx| {
                         assert!(e.state.book.as_ref().unwrap().pending.is_empty());
@@ -389,7 +397,7 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
                 pump(cx, handle, &editor, &updates);
                 // Reselect the SAME ID/path using the actual native picker, with no edit.
-                cx.update_window(handle, |_, w, cx| w.click("new-chat-project", cx))
+                cx.update_window(handle, |_, w, cx| focus_project_search(&editor, w, cx))
                     .unwrap();
                 pump(cx, handle, &editor, &updates);
                 cx.update_window(handle, |_, w, cx| w.input("project-ab", cx))
@@ -439,9 +447,9 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                 });
                 let operation = server.seen.lock().unwrap().envelopes[0].clone();
                 if lost {
-                    cx.update_window(handle, |_, w, cx| {
-                        assert_eq!(w.find("new-chat-project").disabled(), Some(true));
-                        w.click("new-chat-project", cx);
+                    cx.update_window(handle, |_, w, _| {
+                        // A sent draft's destination is fixed: no project rows to click.
+                        assert!(w.try_find("new-chat-project").is_none());
                     })
                     .unwrap();
                     pump(cx, handle, &editor, &updates);
