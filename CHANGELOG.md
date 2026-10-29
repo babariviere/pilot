@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.89.0](https://github.com/babariviere/pilot/compare/v1.88.0...v1.89.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** go back/forward with Command-Left/Right outside text fields ([926630f](https://github.com/babariviere/pilot/commit/926630fd65f9619e1864e19e66246fa1f98a0f8f))
+* **desktop:** mission phases overview and dedicated Tasks tab ([5048fe6](https://github.com/babariviere/pilot/commit/5048fe6ba88a39392ed9467f26e017c2f8fe468e))
+* **desktop:** show a restore notice instead of the composer for archived chats ([15a6a7d](https://github.com/babariviere/pilot/commit/15a6a7d1c3fcc5fa4f72a5a2055eaef002889cc8))
+* **desktop:** show tool call sections unfolded ([64b4268](https://github.com/babariviere/pilot/commit/64b426852839caec47efaa77f5c627e1d3646c36))
+
+
+### Bug Fixes
+
+* **daemon:** reserve idle runtime for explicit upgrades ([54fe9e3](https://github.com/babariviere/pilot/commit/54fe9e3d63b83678146b15339331d15b13dade0d))
+* **desktop:** name the specific blocker when an update can't install ([1dc712f](https://github.com/babariviere/pilot/commit/1dc712f8937c6d0bfacb186af102c5f8e6ff4315))
+* **desktop:** retain durable unknown sends across GUI updates ([30c60da](https://github.com/babariviere/pilot/commit/30c60da39ff4bdd3f45271be426a856f5ca255e4))
+* **updater:** stage macOS payloads in private temporary storage ([5ea764c](https://github.com/babariviere/pilot/commit/5ea764c5ec9ef9d2b29a8350124bca6aaf1251a5))
+
 ## [1.88.0](https://github.com/babariviere/pilot/compare/v1.87.0...v1.88.0) (2026-10-29)
 
 
