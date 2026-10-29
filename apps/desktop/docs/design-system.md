@@ -370,6 +370,13 @@ chat's menu adds Open mission, the same navigation as its mission link. Only the
 hovered row, the selected row and the row whose menu opened last build the
 button (Tab reaches the selected row's); the rest keep an empty slot, because
 GPUI caches by absolute bounds and every row re-renders while the list scrolls.
+A coordinator's parent row (whose click opens the coordinator's chat) adds a
+quiet Open mission icon button (Map) just before its …, over the state word,
+built by the hovered or selected row and shown on hover, keyboard selection or
+its own Tab focus; the row makes room for it only while shown. It opens that
+mission's overview without selecting, opening or folding the row, and Enter on
+it opens the mission rather than the chat. Coordinator-less parent rows already
+open the mission and get none; so do chats whose mission is unknown.
 The open row keeps its faint neutral fill. Missions is the sidebar's only mission
 entry (Command-3 opens the same browser); missions are never sidebar rows, only
 their chats are. Flat rows (search, Pinned, Archived) keep the mission caption:

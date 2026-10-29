@@ -558,6 +558,37 @@ impl ChatList {
         })
         .into_any_element()
     }
+    /// A coordinator row's Open mission button: the row itself opens the
+    /// coordinator's chat. Built and shown like the … (hover or keyboard
+    /// selection), and while Tab has focused it.
+    fn open_mission(
+        &self,
+        ix: IndexPath,
+        key: &str,
+        mission: &str,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> OpenMission {
+        let focus = window
+            .use_keyed_state(
+                SharedString::from(format!("sidebar-open-mission-focus-{key}")),
+                cx,
+                |_, cx| cx.focus_handle(),
+            )
+            .read(cx)
+            .clone();
+        let hovered = self.hovered.as_deref() == Some(key);
+        let focused = focus.contains_focused(window, cx);
+        OpenMission {
+            mission: mission.to_owned(),
+            owner: self.action_owner.clone(),
+            built: hovered || self.selected == Some(ix),
+            shown: hovered || keyboard || focused,
+            focused,
+            focus,
+        }
+    }
     fn render_chat(
         &mut self,
         ix: IndexPath,
@@ -793,7 +824,6 @@ impl ChatList {
             window,
             cx,
         );
-        let menu = coordinator.is_some().then(|| self.menu_shown(ix, window));
         let keyboard = self.menu_shown(ix, window);
         // A collapsed thread's roll-up follows the title; only the project
         // takes a second line. The title truncates first, down to a few
@@ -835,6 +865,12 @@ impl ChatList {
                         .child(n.to_string())
                 }))
         });
+        let open_mission = coordinator
+            .is_some()
+            .then(|| self.open_mission(ix, &key, &t.mission, keyboard, window, cx));
+        let menu = coordinator
+            .is_some()
+            .then(|| keyboard || open_mission.as_ref().is_some_and(|o| o.focused));
         let height = if caption {
             TWO_LINE_HEIGHT
         } else {
@@ -901,7 +937,13 @@ impl ChatList {
                         )
                         .children(tally),
                     )
-                    .children(word.map(|(word, mark)| state_word(word, mark, menu, cx)))
+                    .map(|line| {
+                        let word = word.map(|(word, mark)| state_word(word, mark, menu, cx));
+                        match open_mission {
+                            Some(open) => line.child(open.place(word)),
+                            None => line.children(word),
+                        }
+                    })
                     .child(trailing)
                     // The chevron sits in the leading gutter before the
                     // Compass: always while collapsed, else on hover or
@@ -1144,6 +1186,86 @@ fn state_word(word: &'static str, mark: Mark, menu: Option<bool>, cx: &App) -> O
             mark.color(cx)
         })
         .child(word)
+}
+/// A coordinator row's Open mission button, from `ChatList::open_mission`.
+struct OpenMission {
+    mission: String,
+    owner: WeakEntity<LocalViewer>,
+    focus: FocusHandle,
+    /// The hovered or selected row builds it, so Tab can reach it.
+    built: bool,
+    /// Hover, keyboard selection or its own focus shows it.
+    shown: bool,
+    focused: bool,
+}
+impl OpenMission {
+    /// The button sits over the state word, right before the …, which
+    /// overhangs its narrow slot by 0.375rem. The row makes room for it only
+    /// while it shows, so titles keep their width at rest.
+    fn place(self, word: Option<Observed>) -> Observed {
+        let Self {
+            mission,
+            owner,
+            focus,
+            built,
+            shown,
+            ..
+        } = self;
+        div()
+            .id("sidebar-mission-actions")
+            .test_support()
+            .relative()
+            .flex_none()
+            .h_flex()
+            .items_center()
+            .justify_end()
+            .when(shown, |d| d.min_w(gpui_kit::rems(2.375)))
+            .children(word)
+            .when(built, |d| {
+                let id = SharedString::from(format!("sidebar-open-mission-{mission}"));
+                let open = std::rc::Rc::new(move |w: &mut Window, cx: &mut App| {
+                    let _ = owner.update(cx, |v, cx| v.show_chat_mission(&mission, w, cx));
+                });
+                let confirm = open.clone();
+                d.child(
+                    div()
+                        .id("sidebar-open-mission-slot")
+                        .track_focus(&focus)
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(gpui_kit::rems(0.375))
+                        .flex()
+                        .items_center()
+                        .opacity(if shown { 1. } else { 0. })
+                        .group_hover("chat-row", |s| s.opacity(1.))
+                        // Enter is the list's Confirm (open the row's chat);
+                        // on the focused button it opens the mission.
+                        .on_action(move |_: &gpui_kit::base::actions::Confirm, w, cx| {
+                            confirm(w, cx)
+                        })
+                        .child(
+                            crate::ui::icon_action(
+                                id,
+                                "Open mission",
+                                AppIcon::Mission,
+                                crate::ui::Action::Quiet,
+                            )
+                            .size_8()
+                            // Neither selects nor clicks the row, which opens
+                            // the coordinator's chat.
+                            .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
+                                w.prevent_default();
+                                cx.stop_propagation();
+                            })
+                            .on_click(move |_, w, cx| {
+                                cx.stop_propagation();
+                                open(w, cx);
+                            }),
+                        ),
+                )
+            })
+    }
 }
 /// The title lane: the title takes the row's free width.
 fn lane(title: impl IntoElement) -> Div {

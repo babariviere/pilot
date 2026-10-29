@@ -12,6 +12,8 @@ use serde_json::json;
 use std::{path::PathBuf, time::Instant};
 #[path = "chat_menu_mission_probe.rs"]
 mod chat_menu;
+#[path = "sidebar_open_mission_probe.rs"]
+mod sidebar_open_mission;
 struct Private(PathBuf);
 impl Drop for Private {
     fn drop(&mut self) {
@@ -90,10 +92,16 @@ fn into_view(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) 
 pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
     let case = std::env::var("PILOT_NEXT_MISSIONS_CASE").ok();
     assert!(
-        case.as_deref().is_none_or(|c| c == "chat-menu"),
+        case.as_deref()
+            .is_none_or(|c| c == "chat-menu" || c == "sidebar-open-mission"),
         "unknown missions native case"
     );
-    chat_menu::run(cx);
+    if case.as_deref() != Some("sidebar-open-mission") {
+        chat_menu::run(cx);
+    }
+    if case.as_deref() != Some("chat-menu") {
+        sidebar_open_mission::run(cx);
+    }
     if case.is_some() {
         return;
     }
