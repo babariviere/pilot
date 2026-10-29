@@ -97,6 +97,28 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("usage-details-body").is_some())
             })
             .unwrap();
+            // A known partial subtotal draws a bar (it used to vanish); missing days do not.
+            cx.update_window(h, |_, w, _| {
+                let bar = |i: u64| w.try_find(format!("usage-bar-{}", range.from + i * DAY));
+                let complete = bar(1).expect("complete day bar").bounds();
+                let partial = bar(2).expect("partial subtotal bar").bounds();
+                assert!(complete.size.height > px(0.));
+                assert!(partial.size.height > complete.size.height, "60K above 48K");
+                for i in [0, 3, 4, 5, 6] {
+                    assert!(
+                        bar(i).is_none(),
+                        "outside/empty/zero/unknown day {i} has no bar"
+                    );
+                }
+                let axis = w.find("usage-axis").bounds();
+                let top = w.find("usage-tick-3").bounds();
+                let zero = w.find("usage-tick-0").bounds();
+                assert!(top.bottom() < zero.top() && top.left() >= axis.left() - px(1.));
+                let off = f32::from(partial.top() - top.center().y).abs();
+                assert!(off <= 3., "partial reaches the 60K tick ({off})");
+                assert!(w.try_find("usage-legend").is_some());
+            })
+            .unwrap();
             // Capture the overview, not the expanded diagnostic detail.
             cx.update_window(h, |_, w, cx| w.click("usage-details", cx))
                 .unwrap();
@@ -108,6 +130,49 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                     .unwrap()
                     .save(dir.join(format!("usage-{width}-{mode:?}.png")))
                     .unwrap();
+            }
+            // Longer ranges, billions per day and a 30-day retention floor stay contained.
+            for days in [30u64, 90] {
+                let long = Range::preset(days, range.to - 1).unwrap();
+                for buckets in [false, true] {
+                    s.reply(
+                        &f::path(&s.options, long, buckets),
+                        f::Reply::json(200, f::long_report(long, buckets)),
+                    );
+                }
+                cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.request(long, w, cx)))
+                    .unwrap();
+                until(cx, h, &v);
+                assert!(cx.update(|cx| {
+                    v.read(cx)
+                        .state
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|s| s.trend.is_ok())
+                }));
+                cx.update_window(h, |_, w, _| {
+                    let bars = w.find("usage-bars").bounds();
+                    let labels = w.find("usage-days").bounds();
+                    assert!(bars.right() <= px(width) && labels.right() <= px(width));
+                    let last = w
+                        .find(format!("usage-day-{}", long.to / DAY * DAY))
+                        .bounds();
+                    assert!(
+                        last.right() <= bars.right() + px(1.),
+                        "{days} days contained"
+                    );
+                    assert!(w.try_find("usage-tick-1").is_some());
+                })
+                .unwrap();
+                if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(
+                            std::path::PathBuf::from(dir)
+                                .join(format!("usage-{days}d-{width}-{mode:?}.png")),
+                        )
+                        .unwrap();
+                }
             }
             // Real range control cancels/replaces reads and clears old-range values.
             cx.update_window(h, |_, w, cx| w.click("usage-range-30", cx))

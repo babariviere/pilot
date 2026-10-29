@@ -42,10 +42,16 @@ requests. Never sum page totals, checkpoints or historical context. Bucket reads
 are separate dated observations, not a transactional snapshot; a generation
 change prevents adopting the trend. A failed trend does not replace a valid dated
 summary. Missing days/metrics remain unknown or unobserved, never synthetic zero.
-Daily input+output bars require complete numeric evidence for both metrics and
-safe addition; cache read/write and reasoning are not added. Numeric summaries
-retain per-metric known/unknown/incomplete evidence. Catalog costs are estimates,
-not billed charges, including when subscription usage is present.
+Daily input+output bars draw the known subtotal of each UTC day on a round token
+axis (cache read/write and reasoning are not added). A day where some requests
+lack input or output counts keeps its known subtotal as a floor, drawn with a
+detached top edge; it no longer disappears. A counted zero shows `0`, a day whose
+records carry no counts shows `?`, a day without requests stays blank, and days
+before collection/capture/retention floors sit in one "outside retained history"
+band. The legend lists only the marks present; per-day exact values are in each
+bar's tooltip and in Coverage details. Numeric summaries use thousands separators
+and retain per-metric known/unknown/incomplete evidence. Catalog costs are
+estimates, not billed charges, including when subscription usage is present.
 
 All history remains explicitly partial, with collection start and observation
 time visible. Old data retained after a failed same-window refresh is clearly
@@ -60,8 +66,10 @@ maps only this model, transport/faux daemon and mounted production page, plus
 matching production lint/build. It uses the existing shared serial slot, pinned
 toolchain, mbx CPU2/4GiB bounds and private outputs. Full suites stay in CI.
 The native target covers680/1100 light/dark geometry, loading versus empty,
-coverage/summaries/trend, pointer range replacement, disclosure, explicit retry,
-failed-refresh retention and close. Captures are offscreen synthetic GPUI, not
+coverage/summaries/trend, the partial-subtotal bar and axis ticks, 30/90-day
+ranges with billion-token days and a retention floor, pointer range replacement,
+disclosure, explicit retry, failed-refresh retention and close. Set
+`PILOT_NEXT_USAGE_DIR` to save the captures. Captures are offscreen synthetic GPUI, not
 the user's app or real usage. No new animation/timer or scrolling hot path is
 introduced. No OS IME, live-daemon, Linux/Wayland, GPU performance or user acceptance
 claim follows from these checks.

@@ -38,7 +38,7 @@ pub(crate) fn now() -> u64 {
         .min(SAFE as u128) as u64
 }
 // Gregorian civil date from UTC epoch days, independent of local timezone/DST.
-pub(crate) fn date(ms: u64) -> String {
+fn civil(ms: u64) -> (i64, i64, i64) {
     let z = (ms / DAY) as i64 + 719468;
     let era = z / 146097;
     let doe = z - era * 146097;
@@ -49,7 +49,74 @@ pub(crate) fn date(ms: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = mp + if mp < 10 { 3 } else { -9 };
     y += i64::from(m <= 2);
+    (y, m, d)
+}
+pub(crate) fn date(ms: u64) -> String {
+    let (y, m, d) = civil(ms);
     format!("{y:04}-{m:02}-{d:02}")
+}
+const MONTHS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+/// Axis label for a UTC day, e.g. `Oct 29`.
+pub(crate) fn short_date(ms: u64) -> String {
+    let (_, m, d) = civil(ms);
+    format!("{} {d}", MONTHS[(m - 1) as usize])
+}
+/// Readable UTC day, e.g. `Thu, Oct 29`. 1970-01-01 was a Thursday.
+pub(crate) fn day_name(ms: u64) -> String {
+    const WEEK: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    format!("{}, {}", WEEK[(ms / DAY % 7) as usize], short_date(ms))
+}
+/// Exact count with thousands separators.
+pub(crate) fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+/// Axis tick label: 0, 950, 1.5K, 25M, 2B. Ticks are round, so one decimal suffices.
+pub(crate) fn compact(n: u64) -> String {
+    let Some((unit, suffix)) = [
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+        (1_000, "K"),
+    ]
+    .into_iter()
+    .find(|(unit, _)| n >= *unit) else {
+        return n.to_string();
+    };
+    let tenths = n * 10 / unit;
+    if tenths.is_multiple_of(10) {
+        format!("{}{suffix}", tenths / 10)
+    } else {
+        format!("{}.{}{suffix}", tenths / 10, tenths % 10)
+    }
+}
+/// Round axis: `steps` gridlines of `step` tokens cover `max`. Zero data has no gridlines.
+pub(crate) fn scale(max: u64) -> (u64, u64) {
+    if max == 0 {
+        return (1, 0);
+    }
+    let raw = max.div_ceil(4);
+    let mut magnitude = 1;
+    while magnitude <= raw / 10 {
+        magnitude *= 10;
+    }
+    let step = [1, 2, 5, 10]
+        .into_iter()
+        .map(|m| m * magnitude)
+        .chain((magnitude >= 10).then_some(magnitude * 5 / 2))
+        .filter(|s| *s >= raw)
+        .min()
+        .unwrap_or(raw);
+    (step, max.div_ceil(step))
 }
 pub(crate) fn stamp(ms: u64) -> String {
     format!(
@@ -91,19 +158,28 @@ impl Metric {
             ""
         };
         if cost {
-            if value > 0 && value < 100 {
-                format!("≈ ${:.6}{suffix}", value as f64 / 1_000_000.)
+            // Micro-dollars: show every digit below one cent, else round to 4 places.
+            let (digits, units) = if value > 0 && value < 100 {
+                (6, value)
             } else {
-                format!("≈ ${:.4}{suffix}", value as f64 / 1_000_000.)
-            }
+                (4, (value + 50) / 100)
+            };
+            let one = 10u64.pow(digits as u32);
+            format!(
+                "≈ ${}.{:0digits$}{suffix}",
+                grouped(units / one),
+                units % one
+            )
         } else {
-            format!("{value}{suffix}")
+            format!("{}{suffix}", grouped(value))
         }
     }
     pub(crate) fn coverage(&self) -> String {
         format!(
             "{} known, {} unknown, {} incomplete",
-            self.known, self.unknown, self.partial
+            grouped(self.known),
+            grouped(self.unknown),
+            grouped(self.partial)
         )
     }
 }
@@ -126,19 +202,110 @@ impl Aggregate {
             && self.metrics.len() <= 16
             && self.metrics.values().all(Metric::valid)
     }
-    pub(crate) fn tokens(&self) -> Option<u64> {
+    /// Known input + output subtotal (cache excluded) and the records lacking each count.
+    /// A subtotal is kept when only some records carry metrics; `None` means no count is known.
+    pub(crate) fn tokens(&self) -> Option<(u64, [u64; 2])> {
         let a = self.metric("input")?;
         let b = self.metric("output")?;
-        if a.overflow
-            || b.overflow
-            || a.unknown > 0
-            || b.unknown > 0
-            || a.partial > 0
-            || b.partial > 0
-        {
+        if a.overflow || b.overflow || a.known + b.known == 0 {
             return None;
         }
-        a.value?.checked_add(b.value?).filter(|v| *v <= SAFE)
+        let part = |m: &Metric| if m.known == 0 { Some(0) } else { m.value };
+        let value = part(a)?.checked_add(part(b)?).filter(|v| *v <= SAFE)?;
+        Some((value, [a.unknown + a.partial, b.unknown + b.partial]))
+    }
+}
+/// One UTC day of the trend. Absence of evidence is never drawn as zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Day {
+    /// Before collection, capture or retention began, and no records returned.
+    Outside,
+    /// Within retained history with no dated request records.
+    Empty,
+    /// Records exist, but none carries an input or output count.
+    Unknown { records: u64 },
+    /// Known subtotal. `uncounted` holds records lacking input/output counts; zero means complete.
+    Known {
+        tokens: u64,
+        records: u64,
+        uncounted: [u64; 2],
+    },
+}
+impl Day {
+    pub(crate) fn complete(self) -> bool {
+        matches!(
+            self,
+            Self::Known {
+                uncounted: [0, 0],
+                ..
+            }
+        )
+    }
+    pub(crate) fn tokens(self) -> Option<u64> {
+        match self {
+            Self::Known { tokens, .. } => Some(tokens),
+            _ => None,
+        }
+    }
+    pub(crate) fn describe(self) -> String {
+        match self {
+            Self::Outside => "Outside retained history".into(),
+            Self::Empty => "No requests observed".into(),
+            Self::Unknown { records } => {
+                format!("{} requests, token counts unavailable", grouped(records))
+            }
+            Self::Known {
+                tokens,
+                uncounted: [0, 0],
+                ..
+            } => {
+                format!("{} input + output tokens", grouped(tokens))
+            }
+            Self::Known {
+                tokens,
+                records,
+                uncounted: [i, o],
+            } => format!(
+                "At least {} input + output tokens. Of {} requests, {} lack input and {} lack output counts.",
+                grouped(tokens),
+                grouped(records),
+                grouped(i),
+                grouped(o)
+            ),
+        }
+    }
+}
+impl Report {
+    /// Every UTC day of `range`, in order. Missing buckets stay Empty or Outside, never zero.
+    pub(crate) fn days(&self, range: Range) -> Vec<(u64, Day)> {
+        let s = &self.status;
+        let floor = s
+            .coverage_started_at
+            .max(s.capture_floor)
+            .max(s.retention_floor);
+        let groups: BTreeMap<u64, &Aggregate> = self
+            .groups
+            .iter()
+            .filter_map(|g| Some((g.key.parse().ok()?, &g.aggregate)))
+            .collect();
+        (range.from..range.to)
+            .step_by(DAY as usize)
+            .map(|at| {
+                let day = match groups.get(&at).filter(|a| a.records > 0) {
+                    None if at + DAY <= floor => Day::Outside,
+                    None => Day::Empty,
+                    Some(a) => match a.tokens() {
+                        None => Day::Unknown { records: a.records },
+                        Some((tokens, uncounted)) => Day::Known {
+                            tokens,
+                            records: a.records,
+                            uncounted,
+                        },
+                    },
+                };
+                (at, day)
+            })
+            .collect()
     }
 }
 #[derive(Clone, Debug, Deserialize)]

@@ -2,12 +2,12 @@
 use crate::{
     LocalOptions,
     ui::{self, Action, Notice, Space, Text, Tone},
-    usage_overview::{self as model, Range, State},
+    usage_overview::{self as model, Day, Range, State},
     usage_overview_reader::{Reader, Request, Response},
 };
 use gpui_kit::{
     App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
+    SharedString, Styled, Task, TestSupportExt, Window,
     component::{ActiveTheme, Disableable, StyledExt, scroll::ScrollableElement},
     div, px,
 };
@@ -219,7 +219,12 @@ impl Render for Usage {
                 .test_support()
                 .v_flex()
                 .gap(px(Space::SIDEBAR))
-                .child(ui::text(Text::Headline, "Daily input + output"));
+                .child(
+                    ui::header("usage-trend-title", "Daily input + output", Text::Headline).child(
+                        ui::text(Text::Caption, "Tokens per UTC day, cache excluded")
+                            .text_color(cx.theme().muted_foreground),
+                    ),
+                );
             match &snapshot.trend {
                 Err(error) => {
                     trend = trend.child(
@@ -229,86 +234,12 @@ impl Render for Usage {
                     );
                 }
                 Ok(buckets) => {
-                    let range = snapshot.range;
-                    let groups: std::collections::BTreeMap<_, _> = buckets
-                        .groups
-                        .iter()
-                        .map(|g| {
-                            (
-                                g.key.parse::<u64>().expect("validated UTC bucket"),
-                                &g.aggregate,
-                            )
-                        })
-                        .collect();
-                    let max = groups
-                        .values()
-                        .filter_map(|g| g.tokens())
-                        .max()
-                        .unwrap_or(1)
-                        .max(1);
-                    let mut bars = div()
-                        .id("usage-bars")
-                        .test_support()
-                        .h_flex()
-                        .w_full()
-                        .h_24()
-                        .items_end()
-                        .gap_1();
-                    let mut day = range.from;
-                    while day < range.to {
-                        let value = groups.get(&day).and_then(|g| g.tokens());
-                        let label = format!(
-                            "{}: {}",
-                            model::date(day),
-                            value
-                                .map(|n| format!("{n} observed input + output tokens"))
-                                .unwrap_or_else(|| "Unknown or no observed requests".into())
-                        );
-                        // Data-driven height, not a new chrome metric. Unknown days
-                        // are empty slots, never fabricated zero observations.
-                        bars = bars.child(
-                            div()
-                                .id(SharedString::from(format!("usage-day-{day}")))
-                                .test_support()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .flex()
-                                .items_end()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .h(gpui_kit::relative(
-                                            value.map(|n| n as f32 / max as f32).unwrap_or(0.),
-                                        ))
-                                        .bg(cx.theme().muted_foreground),
-                                )
-                                .tooltip(move |w, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(label.clone())
-                                        .build(w, cx)
-                                }),
-                        );
-                        day += model::DAY;
-                    }
-                    trend = trend
-                        .child(bars)
-                        .child(
-                            div()
-                                .h_flex()
-                                .justify_between()
-                                .child(ui::text(Text::Caption, model::date(range.from)))
-                                .child(ui::text(Text::Caption, model::date(range.to - 1))),
-                        )
-                        .child(
-                            ui::text(
-                                Text::Caption,
-                                format!(
-                                    "UTC days. Missing evidence is not zero. Observed {}.",
-                                    model::stamp(buckets.queried_at)
-                                ),
-                            )
-                            .text_color(cx.theme().muted_foreground),
-                        );
+                    trend = trend.child(crate::usage_overview_chart::chart(
+                        snapshot.range,
+                        buckets,
+                        w,
+                        cx,
+                    ));
                 }
             }
             page = page.child(trend).child(
@@ -334,21 +265,24 @@ impl Render for Usage {
                     .child(ui::text(Text::Body,format!("Rejected: {}. Conflicts: {}. Expired: {}. Queue overflows: {}.",status.rejected,status.conflicts,status.expired,status.queue_overflows)))
                     .child(ui::text(Text::Body,"Local only. No remote hosts queried. Checkpoints and historical context are not added to totals. Loopback identity pinning is not authentication."));
                 if let Ok(buckets) = &snapshot.trend {
-                    let mut groups: Vec<_> = buckets.groups.iter().collect();
-                    groups.sort_by_key(|g| g.key.parse::<u64>().unwrap());
-                    for g in groups {
-                        details = details.child(ui::text(
-                            Text::Caption,
-                            format!(
-                                "{}: {} input + output tokens",
-                                model::date(g.key.parse().unwrap()),
-                                g.aggregate
-                                    .tokens()
-                                    .map(|n| n.to_string())
-                                    .unwrap_or_else(|| "Unknown".into())
-                            ),
-                        ));
+                    let days = buckets.days(snapshot.range);
+                    let quiet = |kind: Day| days.iter().filter(|&&(_, d)| d == kind).count();
+                    for &(at, day) in &days {
+                        if matches!(day, Day::Known { .. } | Day::Unknown { .. }) {
+                            details = details.child(ui::text(
+                                Text::Caption,
+                                format!("{} UTC: {}", model::day_name(at), day.describe()),
+                            ));
+                        }
                     }
+                    details = details.child(ui::text(
+                        Text::Caption,
+                        format!(
+                            "Days with no requests observed: {}. Days outside retained history: {}.",
+                            quiet(Day::Empty),
+                            quiet(Day::Outside)
+                        ),
+                    ));
                 }
                 page = page.child(details);
             }

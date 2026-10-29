@@ -254,6 +254,7 @@ mod typography;
 /// App-owned presentation contracts over Kit. See docs/design-system.md.
 pub mod ui;
 mod usage_overview;
+mod usage_overview_chart;
 #[cfg(any(test, feature = "native-probes"))]
 mod usage_overview_fixture;
 #[cfg(feature = "native-probes")]
