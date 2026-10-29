@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.96.0](https://github.com/babariviere/pilot/compare/v1.95.0...v1.96.0) (2026-10-29)
+
+
+### Features
+
+* **daemon:** add classification and advisory model routing ([5eefb0f](https://github.com/babariviere/pilot/commit/5eefb0fb5c2f19a81ae3076b04444032a4539b1c))
+* **daemon:** persist worker-owned jj change provenance ([7d247eb](https://github.com/babariviere/pilot/commit/7d247ebe50aee92a9785ced5c4ec00ae7a6b6483))
+* **daemon:** retain immutable change review snapshots ([83ba477](https://github.com/babariviere/pilot/commit/83ba477ff362b8cccfa55932f784345a8f3d00b4))
+* **daemon:** retain revision-bound delivery evidence ([81a64c2](https://github.com/babariviere/pilot/commit/81a64c291520c0b556067acfd0f27286bff36629))
+* **desktop:** coordinate daemon upgrades after GUI startup ([9affcbf](https://github.com/babariviere/pilot/commit/9affcbf3d043cd6eedf52e5a0520e524e2cd41fe))
+* **desktop:** open subagents in the shared chat composer ([4f1d8be](https://github.com/babariviere/pilot/commit/4f1d8becbbc224c45d49a2a8b1b8d32e7b4a1674))
+* **kernel:** add first-party code exploration tools ([196a47e](https://github.com/babariviere/pilot/commit/196a47efdfe07f1878d09215cc7a4dba2113adf6))
+* **kernel:** add source call-path exploration ([6ba3012](https://github.com/babariviere/pilot/commit/6ba30126ccd0d0e94b2df684a2e30b32b7462d66))
+
+
+### Bug Fixes
+
+* **desktop:** guard unsupported native scroll counters ([9ddd6e6](https://github.com/babariviere/pilot/commit/9ddd6e6a442cae4090dd3162849a6a6f7f5cea86))
+* **desktop:** keep revealed finished chats below active members ([c8bd547](https://github.com/babariviere/pilot/commit/c8bd54793ae2e5bea62619fe8dfd44368f1ecc77))
+* **desktop:** reconnect without staging another runtime ([dd78d79](https://github.com/babariviere/pilot/commit/dd78d79d017a1cc95d23f56a8d9f43ee07ce31e4))
+* **desktop:** retain selection as streamed Markdown grows ([e4b5295](https://github.com/babariviere/pilot/commit/e4b52954b3e43fb162f7c58731f6ceef703b169f))
+* **desktop:** stabilize sidebar dialog and restart checks ([f94131f](https://github.com/babariviere/pilot/commit/f94131fd7cbb07c0a718a7cc00c85c9389bd8149))
+
 ## [1.95.0](https://github.com/babariviere/pilot/compare/v1.94.0...v1.95.0) (2026-10-29)
 
 
