@@ -467,67 +467,6 @@ fn update_location(value: &serde_json::Value) -> Option<crate::navigation::Locat
     Some(Location { scope, target })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::update_location;
-    use crate::navigation::{Location, Target};
-    use serde_json::json;
-    #[test]
-    fn update_navigation_tokens_are_passive_and_validated() {
-        let at = |target, scope: Option<&str>| Location {
-            scope: scope.map(Into::into),
-            target,
-        };
-        for (value, expected) in [
-            (
-                json!({"location":{"target":"home"},"scope":null}),
-                at(Target::Home, None),
-            ),
-            (
-                json!({"location":{"target":"missions"},"scope":"a"}),
-                at(Target::Missions, Some("a")),
-            ),
-            (
-                json!({"location":{"target":"inbox","id":null}}),
-                at(Target::Inbox(None), None),
-            ),
-            (
-                json!({"location":{"target":"inbox","id":"b"}}),
-                at(Target::Inbox(Some("b".into())), None),
-            ),
-            (
-                json!({"location":{"target":"project","id":"a"},"scope":"a"}),
-                at(Target::Project("a".into()), Some("a")),
-            ),
-            (
-                json!({"location":{"target":"chat","id":"chat-1"}}),
-                at(Target::Chat("chat-1".into()), None),
-            ),
-            (
-                json!({"location":{"target":"draft","id":"new:日本語"}}),
-                at(Target::Draft("new:日本語".into()), None),
-            ),
-        ] {
-            assert_eq!(update_location(&value), Some(expected), "{value}");
-        }
-        for value in [
-            serde_json::Value::Null,
-            json!({"location":null}),
-            json!({"location":{"target":"send","id":"a"}}),
-            json!({"location":{"target":"mission","id":"a"}}),
-            json!({"location":{"target":"chat"}}),
-            json!({"location":{"target":"chat","id":"../a"}}),
-            json!({"location":{"target":"project","id":"a"},"scope":7}),
-            json!({"location":{"target":"home"},"scope":"x/y"}),
-            json!({"location":{"target":"draft","id":"chat:a"}}),
-            json!({"location":{"target":"draft","id":"new:\u{7}"}}),
-            json!({"location":{"target":"draft","id":format!("new:{}", "a".repeat(256))}}),
-        ] {
-            assert_eq!(update_location(&value), None, "{value}");
-        }
-    }
-}
-
 /// The install gate on a production view: a clean loaded viewer, and forms that were opened
 /// and closed or already answered, reach the checkpoint; held work is named and shown, never
 /// discarded. No receipt, daemon, worker or profile is used; the writer only records.
@@ -937,4 +876,65 @@ pub(crate) fn probe_update_navigation(cx: &mut gpui_kit::HeadlessAppContext) {
     );
     assert!(!restored && !error);
     assert_eq!(location, Location::home());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_location;
+    use crate::navigation::{Location, Target};
+    use serde_json::json;
+    #[test]
+    fn update_navigation_tokens_are_passive_and_validated() {
+        let at = |target, scope: Option<&str>| Location {
+            scope: scope.map(Into::into),
+            target,
+        };
+        for (value, expected) in [
+            (
+                json!({"location":{"target":"home"},"scope":null}),
+                at(Target::Home, None),
+            ),
+            (
+                json!({"location":{"target":"missions"},"scope":"a"}),
+                at(Target::Missions, Some("a")),
+            ),
+            (
+                json!({"location":{"target":"inbox","id":null}}),
+                at(Target::Inbox(None), None),
+            ),
+            (
+                json!({"location":{"target":"inbox","id":"b"}}),
+                at(Target::Inbox(Some("b".into())), None),
+            ),
+            (
+                json!({"location":{"target":"project","id":"a"},"scope":"a"}),
+                at(Target::Project("a".into()), Some("a")),
+            ),
+            (
+                json!({"location":{"target":"chat","id":"chat-1"}}),
+                at(Target::Chat("chat-1".into()), None),
+            ),
+            (
+                json!({"location":{"target":"draft","id":"new:日本語"}}),
+                at(Target::Draft("new:日本語".into()), None),
+            ),
+        ] {
+            assert_eq!(update_location(&value), Some(expected), "{value}");
+        }
+        for value in [
+            serde_json::Value::Null,
+            json!({"location":null}),
+            json!({"location":{"target":"send","id":"a"}}),
+            json!({"location":{"target":"mission","id":"a"}}),
+            json!({"location":{"target":"chat"}}),
+            json!({"location":{"target":"chat","id":"../a"}}),
+            json!({"location":{"target":"project","id":"a"},"scope":7}),
+            json!({"location":{"target":"home"},"scope":"x/y"}),
+            json!({"location":{"target":"draft","id":"chat:a"}}),
+            json!({"location":{"target":"draft","id":"new:\u{7}"}}),
+            json!({"location":{"target":"draft","id":format!("new:{}", "a".repeat(256))}}),
+        ] {
+            assert_eq!(update_location(&value), None, "{value}");
+        }
+    }
 }

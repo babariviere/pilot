@@ -307,6 +307,7 @@ impl Plan {
         Ok(plan)
     }
     /// Total triangle vertices across every batch.
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn vertices(&self) -> usize {
         self.primitives
             .iter()
@@ -528,7 +529,7 @@ mod tests {
                 Primitive::Triangles { vertices, .. } => Some(vertices),
                 Primitive::Text { .. } => None,
             })
-            .flat_map(|v| v.chunks_exact(3))
+            .flat_map(|v| v.as_chunks::<3>().0)
             .map(|t| {
                 ((t[1][0] - t[0][0]) * (t[2][1] - t[0][1])
                     - (t[2][0] - t[0][0]) * (t[1][1] - t[0][1]))
@@ -584,7 +585,7 @@ mod tests {
         );
         assert!((area(&p) - 768. * 64.).abs() < 0.5, "{}", area(&p));
         // The same grid in one color is one batch.
-        for chunk in ops.chunks_exact_mut(10) {
+        for chunk in ops.as_chunks_mut::<10>().0 {
             chunk[2] = 7.;
         }
         assert_eq!(batches(&plan(768, &ops, &[]).unwrap()), vec![(7, 768 * 6)]);

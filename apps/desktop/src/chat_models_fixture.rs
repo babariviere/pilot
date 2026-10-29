@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)] // Shared by tests and native probes; each uses a subset.
 pub(crate) enum Mode {
     Accept,
     Parked,

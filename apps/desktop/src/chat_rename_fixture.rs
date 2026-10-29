@@ -8,7 +8,7 @@ use tokio::{
 };
 
 #[derive(Clone, Copy)]
-#[cfg_attr(not(test), allow(dead_code))] // Shared fault corpus; native journey uses the accepted arm.
+#[allow(dead_code)] // Shared fault corpus; tests and native probes each use a subset.
 pub(crate) enum Behavior {
     Accept,
     Lost,

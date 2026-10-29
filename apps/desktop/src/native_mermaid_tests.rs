@@ -159,10 +159,7 @@ fn labels_wrap_at_spaces_and_break_only_overlong_words_between_graphemes() {
             out.lines().all(|l| l.graphemes(true).count() <= columns),
             "{out}"
         );
-        assert_eq!(
-            out.replace('\n', "").replace(' ', ""),
-            text.replace(' ', "")
-        );
+        assert_eq!(out.replace(['\n', ' '], ""), text.replace(' ', ""));
     }
     let plan =
         prepare("graph TD\nA[Receive 👩🏽‍💻 request] -->|yes, store it| B{Is it valid now?}").unwrap();

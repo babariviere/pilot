@@ -237,14 +237,15 @@ async fn blocking_question_unknown_retry_needs_its_exact_awaited_question() {
             .state,
         "accepted"
     );
-    let seen = daemon.seen.lock().unwrap();
-    assert_eq!(
-        seen.envelopes.as_slice(),
-        &[original.clone(), original],
-        "Exact envelope only"
-    );
-    assert_eq!(seen.executions, 1);
-    drop(seen);
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(
+            seen.envelopes.as_slice(),
+            &[original.clone(), original],
+            "Exact envelope only"
+        );
+        assert_eq!(seen.executions, 1);
+    }
     assert!(client.command(WriteCommand::Close));
     until(&updates, |s| s.flushed).await;
 }

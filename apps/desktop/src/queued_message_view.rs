@@ -729,6 +729,7 @@ impl LocalViewer {
     /// Whether no queue form holds user state, so update lifecycle work may
     /// proceed. An empty per-chat form is only an allocation. Pending and
     /// uncertain receipts are drafts, so they keep this false.
+    #[cfg(feature = "native-probes")]
     pub(super) fn queue_checkpoint_safe(&self, cx: &App) -> bool {
         self.queue_hold_chat(cx).is_none()
     }

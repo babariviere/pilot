@@ -48,9 +48,7 @@ async fn explicit_existing_connection_is_get_only_and_rejects_changed_or_vanishe
             .await
             .unwrap();
         if matches!(scenario, Scenario::Normal) {
-            let options = result
-                .ok()
-                .expect("matching hello permits explicit external connection");
+            let options = result.expect("matching hello permits explicit external connection");
             assert!(options.externally_managed);
             assert!(
                 options.update_location().is_none(),

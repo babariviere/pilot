@@ -72,6 +72,7 @@ impl Server {
             .replies
             .insert((method.into(), path.into()), reply);
     }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn posts(&self) -> usize {
         self.state
             .lock()

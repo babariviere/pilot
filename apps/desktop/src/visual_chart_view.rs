@@ -637,7 +637,7 @@ mod tests {
                         )
                         .unwrap()
                     });
-                    cx.update_window(h.into(), |_, w, cx| {
+                    cx.update_window(h, |_, w, cx| {
                         w.render_frame(cx);
                         let plot = w.find("chart-plot").bounds();
                         assert!(w.find("chart-y-label").bounds().bottom() <= plot.top());
@@ -675,8 +675,7 @@ mod tests {
                     })
                     .unwrap();
                     cx.update(|cx| assert_eq!(view.read(cx).hover, None));
-                    cx.update_window(h.into(), |_, w, _| w.remove_window())
-                        .unwrap();
+                    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
                 }
             }
         }

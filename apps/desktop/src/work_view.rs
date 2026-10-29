@@ -67,6 +67,7 @@ impl Choices {
             .max_by_key(|(seq, _)| *seq)
             .map(|(_, open)| *open)
     }
+    #[cfg(any(test, feature = "native-probes"))]
     fn open(&self, work: &Work) -> bool {
         // Activity/results update the line, never disclosure intent.
         self.choice(work).unwrap_or(false)
@@ -496,6 +497,7 @@ impl WorkView {
         self.choices.borrow_mut().choose(&self.data, open);
         cx.notify();
     }
+    #[cfg(any(test, feature = "native-probes"))]
     fn open(&self) -> bool {
         self.choices.borrow().open(&self.data)
     }

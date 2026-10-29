@@ -451,7 +451,7 @@ impl Workspace {
             .w_full()
             .child(SelectableText::new(id, text))
     }
-    #[cfg(any(test, feature = "native-probes"))]
+    #[cfg(feature = "native-probes")]
     pub(crate) fn disconnect_fixture(&self) {
         if let Some(r) = &self.reader {
             r.disconnect_fixture();
