@@ -20,6 +20,39 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
 
+test("coordinator planning schema exposes only strict versioned assignment writes", () => {
+	const tool = createMissionTool(async () => ({}), true);
+	const args = {
+		action: "task",
+		id: "1",
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Intent",
+			scope: "No UI",
+			criteria: ["Criterion"],
+		},
+	};
+	const validate = (value: unknown) =>
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "planning",
+			name: "mission",
+			arguments: value as typeof args,
+		});
+	validate(args);
+	for (const assignment of [
+		{ ...args.assignment, version: 2 },
+		{ ...args.assignment, expectedRevision: -1 },
+		{ ...args.assignment, criteria: [] },
+		{ ...args.assignment, revision: 1 },
+	])
+		assert.throws(() => validate({ ...args, assignment }));
+	const member = createMissionTool(async () => ({}));
+	assert.ok(!("assignment" in (member.parameters as { properties: object }).properties));
+	assert.match(tool.description, /in_review is for PR review, not generic submission/);
+});
+
 test("mission authoring boundaries match runtime schema and reject before IPC", async () => {
 	for (const coordinator of [false, true]) {
 		let calls = 0;

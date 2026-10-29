@@ -41,7 +41,7 @@ function remote(n = 1, state = "todo", teamId = "child") {
 	};
 }
 
-async function fixture(t: TestContext, disk = false) {
+async function fixture(t: TestContext, disk = false, planningVersion?: 1) {
 	const dir = await mkdtemp(join(tmpdir(), "linear-sync-"));
 	const projects = new ProjectStore(dir, async () => "");
 	await projects.load();
@@ -52,6 +52,7 @@ async function fixture(t: TestContext, disk = false) {
 	const file = disk ? join(dir, "missions.sqlite") : ":memory:";
 	let store = new MissionStore(file);
 	const mission = store.create({
+		planningVersion,
 		projectId: project.id,
 		title: "Delivery",
 		tasks: [{ title: "A" }, { title: "B" }, { title: "Reference" }],
@@ -195,6 +196,16 @@ test("aggregate actual task transitions through progress, review and Merged, nev
 	assert.equal(f.status().state, "synced");
 	assert.equal(f.status().teamId, "child", "root selection isn't the actual issue team");
 	assert.ok(f.reads.slice(1).every((r) => r.id === f.issues[0]!.id));
+});
+
+test("coordinator-owned planning retains canceled-ticket evidence without automatically dropping tasks", async (t) => {
+	const f = await fixture(t, false, 1);
+	f.state("canceled");
+	await f.poll();
+	assert.equal(f.status().state, "terminal");
+	assert.equal(f.store.resolveTask(f.mission.id, "1").status, "todo");
+	assert.equal(f.store.resolveTask(f.mission.id, "2").status, "todo");
+	assert.equal(f.writes.length, 0);
 });
 
 for (const state of ["deployed", "canceled", "duplicate"]) {

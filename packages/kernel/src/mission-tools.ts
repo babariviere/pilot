@@ -58,6 +58,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
 Authoring limits (Unicode code points, including whitespace): decision text 1000, task title 200/body 4000, brief 12000. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
+When get reports planningVersion 1, only the coordinator/user plans or assigns work. Workers report their own execution status and log evidence; in_review is for PR review, not generic submission. Propose planning changes with comment. Workers cannot complete, claim/release, edit task definitions/criteria, briefs or decisions. Coordinator/user marks done separately; this is not review or merge approval.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
@@ -166,6 +167,30 @@ Authoring limits (Unicode code points, including whitespace): decision text 1000
 			),
 			...(coordinator
 				? {
+						assignment: Type.Optional(
+							Type.Object(
+								{
+									version: Type.Literal(1),
+									expectedRevision: Type.Integer({ minimum: 0 }),
+									intent: Type.String({ minLength: 1, maxLength: 1000 }),
+									scope: Type.String({ minLength: 1, maxLength: 4000 }),
+									criteria: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), {
+										minItems: 1,
+										maxItems: 20,
+									}),
+								},
+								{
+									additionalProperties: false,
+									description:
+										"Planning v1 task assignment replacement; read current revision first (0 when absent). Does not grant execution authority.",
+								},
+							),
+						),
+						sessionId: Type.Optional(
+							Type.Union([Type.String({ minLength: 1, maxLength: 128 }), Type.Null()], {
+								description: "Planning v1 only: assign a member chat, or null to release.",
+							}),
+						),
 						tasks: Type.Optional(
 							Type.Array(
 								Type.Object({

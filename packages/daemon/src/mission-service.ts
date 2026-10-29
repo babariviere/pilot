@@ -384,6 +384,9 @@ export class MissionService {
 		const selectedIds = new Set(selected.map((decision) => decision.id));
 		return {
 			id: mission.id,
+			...(mission.planningVersion !== undefined
+				? { planningVersion: mission.planningVersion, briefRevision: mission.briefRevision }
+				: {}),
 			title: mission.title,
 			goal: mission.goal,
 			status: mission.status,
@@ -394,7 +397,12 @@ export class MissionService {
 					: "other",
 			tasks: detail.tasks
 				.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
-				.map((task) => ({ number: task.number, title: task.title, status: task.status })),
+				.map((task) => ({
+					number: task.number,
+					title: task.title,
+					status: task.status,
+					...(task.assignment ? { assignmentRevision: task.assignment.revision } : {}),
+				})),
 			decisions: selected.map((decision) => `D${decision.number}: ${decision.text}`),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
 			decisionState: detail.decisions.map(({ id, number, text, audience }) => ({
@@ -737,7 +745,12 @@ export class MissionService {
 		const holders = tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
 		if (holders.length === 1) {
 			const holder = holders[0]!;
-			this.store.claimTask(missionId, tasks[0]!.id, holder.id);
+			this.store.claimTask(
+				missionId,
+				tasks[0]!.id,
+				holder.id,
+				mission.planningVersion === undefined ? { sessionId: holder.id } : {},
+			);
 			this.store.recordTaskStart(
 				missionId,
 				tasks[0]!.id,
@@ -1032,6 +1045,7 @@ export class MissionService {
 				}
 				return {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
+					...(mission.planningVersion !== undefined ? { planningVersion: mission.planningVersion } : {}),
 					...(this.sharing ? { remoteAllocations: this.sharing.missionAllocations(missionId) } : {}),
 					phaseGating: mission.phaseGating ?? false,
 					phases: [
@@ -1233,6 +1247,8 @@ export class MissionService {
 				return this.store.completeTask(missionId, args.id, sessionId, args.completion);
 			case "task": {
 				const write = {
+					...(args.assignment !== undefined ? { assignment: args.assignment } : {}),
+					...(args.sessionId !== undefined ? { sessionId: args.sessionId } : {}),
 					...(args.title !== undefined ? { title: args.title } : {}),
 					...(args.body !== undefined ? { body: args.body } : {}),
 					...(args.status !== undefined ? { status: args.status } : {}),
@@ -1490,6 +1506,11 @@ class MissionAgentView {
 	task(task: MissionTask, full = false) {
 		return {
 			number: task.number,
+			...(task.assignment
+				? full
+					? { assignment: task.assignment }
+					: { assignmentRevision: task.assignment.revision }
+				: {}),
 			title: task.title,
 			status: task.status,
 			...(task.delegatedTo ? { delegatedTo: task.delegatedTo } : {}),

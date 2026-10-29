@@ -23,6 +23,18 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("coordinator-owned planning prompt separates truthful reports from planning and completion", () => {
+	const prompt = missionPrompt({ ...mission, planningVersion: 1, coordinator: "other" });
+	assert.match(prompt, /propose follow-up work with comment/);
+	assert.match(prompt, /Only the coordinator\/user edits/);
+	assert.match(prompt, /use in_review only for PR review, not no-PR submission/);
+	assert.match(prompt, /Coordinator\/user marks done separately/);
+	assert.doesNotMatch(prompt, /Claim tasks before|Save delivery once with mission complete/);
+	const legacy = missionPrompt(mission);
+	assert.match(legacy, /Claim tasks before/);
+	assert.match(legacy, /Save delivery once with mission complete/);
+});
+
 test("Build delivery is allowed through shell, jobs and nested tools while read-only and merge gates remain", async () => {
 	for (const level of ["investigate", "implement", "publish", "merge"] as const) {
 		const extension = withPilotPolicy({ name: "test" }, { executionPermission: { authorizationId: "grant", level } });

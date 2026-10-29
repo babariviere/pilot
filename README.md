@@ -615,6 +615,32 @@ The brief is the spec; tasks track progress and blockers; decisions record agree
 Comments hold actionable discussion. Agents check existing discussions before posting and resolve
 addressed comments after saving any lasting outcome. Unanswered questions stay open.
 
+The API can opt a **new** mission into coordinator-owned planning with `planningVersion: 1` on
+creation. Omission keeps legacy behavior; existing missions are never adopted automatically and
+cannot change this field. In opted-in missions, the coordinator/user owns briefs, new decisions,
+task definitions, dependencies, decision pins, assignments and completion. Existing recorded decisions
+remain user-edit-only. Workers can report their own execution status, log findings/evidence, and
+propose planning changes through comments. `in_review` still means PR review, not a generic submission
+status. For no-PR work, workers log a handoff without inventing review state; the coordinator's `task`
+action or the user's task PATCH can mark it done. This does not attest review, authorize a merge,
+retire a worker or delete its workspace. PR merge/canceled-ticket observations no longer automatically
+complete/drop these tasks.
+
+Opted-in tasks may carry a coordinator-owned `assignment` with `version: 1`, `intent`, `scope` and
+`criteria` (1–20 items). Writes replace the whole assignment with `expectedRevision` (0 when absent);
+reads return its `revision`. Stale revisions and unsupported write versions fail. The task's existing
+body remains planning text, while logs/comments retain execution reports. Agent task summaries carry
+the assignment revision; `get` with a task ID returns its full assignment. Decision context still uses
+existing audiences and explicit task pins. This foundation does not add brief/policy approval,
+build admission, immutable evidence acceptance or a general context-revision engine.
+
+Planning authorization uses the session identity bound by worker IPC, never an actor supplied in tool
+arguments. The loopback REST API remains the existing trusted user/daemon path, not an authenticated
+agent surface. This is not isolation against a full-access shell calling local REST or modifying local
+storage; app authentication/capabilities need a separate design before making that security claim.
+Read limits remain unchanged, including legacy content and unknown stored planning versions. Unknown
+versions are inspectable but cannot be mutated through supported planning writes.
+
 Task status icons fill clockwise from the top: empty for To do, one third for In progress and two thirds
 for In review. Task status menus list the statuses as plain text.
 

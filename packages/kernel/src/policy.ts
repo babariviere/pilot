@@ -65,6 +65,10 @@ export interface WorkspaceReset {
 
 /** What a mission chat needs in every prompt. Kept small and stable to preserve prompt caching. */
 export interface MissionContext {
+	/** Missing preserves legacy planning; unknown versions grant no planning writes. */
+	planningVersion?: number;
+	/** Opted-in planning context uses existing brief and assignment revisions, not a second plan store. */
+	briefRevision?: number;
 	/** This worker reads a local replica and cannot acquire canonical coordination authority. */
 	sharedContext?: boolean;
 	id: string;
@@ -74,7 +78,7 @@ export interface MissionContext {
 	/** "self": this chat coordinates; "user": nobody does; "other": another chat. */
 	coordinator: "self" | "user" | "other";
 	/** Tasks this chat owns. */
-	tasks: Array<{ number: number; title: string; status: string }>;
+	tasks: Array<{ number: number; title: string; status: string; assignmentRevision?: number }>;
 	decisions: string[];
 	/** Selected prompt content, used to avoid duplicate decision reads. */
 	decisionEntries?: Array<{ id: string; text: string }>;
@@ -129,14 +133,22 @@ export function missionPrompt(
 		`- This chat is part of the mission ${JSON.stringify(mission.title)}${mission.goal ? `, whose goal is: ${mission.goal}` : ""}. Its brief (the spec), tasks, decisions, comments, links, artifacts and activity are shared with the user and other chats through the \`mission\` tool. Read the current state with \`mission({action: "get"})\` when you start work, and the brief with \`mission({action: "brief"})\` when the task depends on it. Prefer \`get\` with \`id\` for one full task, filtered \`tasks\` lists, and \`activity\` with \`taskId\` or \`since\` instead of reading whole lists.`,
 		mission.coordinator === "self"
 			? "- You coordinate this mission: keep the brief and tasks accurate, split work into tasks other chats can pick up, and summarize progress for the user. The mission tool describes the coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr). Start chats only when the user asks; Autopilot is not enabled. Use start with ids for dependent tasks in one chat and a stack of PRs; use separate starts for parallel work. When you do, pick cheaper models for small tasks and the strongest allowed model for hard ones."
-			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and add tasks for follow-up work you find instead of widening your scope.`,
-		...(mission.sharedContext
-			? []
-			: [
-					'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with the reason in the task body, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
-				]),
+			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and ${mission.planningVersion === undefined ? "add tasks for follow-up work you find" : "propose follow-up work with comment"} instead of widening your scope.`,
+		...(mission.planningVersion !== undefined
+			? [
+					"- Coordinator-owned planning: read your task's assignment/version/revision before work. Only the coordinator/user edits definitions, brief, decisions, pins, dependencies and assignments. Report actual execution status and log evidence or blockers; use in_review only for PR review, not no-PR submission; propose planning changes with comment. Do not claim/release or use complete. Coordinator/user marks done separately, not as review/merge approval.",
+				]
+			: mission.sharedContext
+				? []
+				: [
+						'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with the reason in the task body, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
+					]),
 		"- The brief is the spec; tasks track progress and blockers; decisions record agreed choices; comments hold actionable discussion. Comment only when you need someone's answer or action; progress, evidence and results go in the task, not comments.",
-		"- Save delivery once with mission complete (landed commit, checks with brief rationale, open issues). No hash inventories, receipt files, duplicate handoffs or ACK-only replies. Start new chats for new features; delivered members may self-claim their own feedback follow-ups, within two additional tasks per chat lifetime (starting assignments excluded; completion/release never resets it). Ask the coordinator for a fresh chat after that.",
+		...(mission.planningVersion === undefined
+			? [
+					"- Save delivery once with mission complete (landed commit, checks with brief rationale, open issues). No hash inventories, receipt files, duplicate handoffs or ACK-only replies. Start new chats for new features; delivered members may self-claim their own feedback follow-ups, within two additional tasks per chat lifetime (starting assignments excluded; completion/release never resets it). Ask the coordinator for a fresh chat after that.",
+				]
+			: []),
 		'- Read extra decisions with `mission({action: "decisions"})`; changes arrive as notices. Post a handoff with log before stopping with unfinished work.',
 		...(mission.coordinator === "self"
 			? [
@@ -167,7 +179,7 @@ export function missionPrompt(
 		lines.push(`- This mission is ${mission.status}. Do not start new mission work unless the user asks.`);
 	if (mission.tasks.length)
 		lines.push(
-			`- Your tasks: ${mission.tasks.map((task) => `#${task.number} ${task.title} (${task.status.replace("_", " ")})`).join("; ")}.`,
+			`- Your tasks: ${mission.tasks.map((task) => `#${task.number} ${task.title} (${task.status.replace("_", " ")})${task.assignmentRevision === undefined ? "" : `, assignment revision ${task.assignmentRevision}`}`).join("; ")}.`,
 		);
 	if (mission.decisions.length)
 		lines.push(

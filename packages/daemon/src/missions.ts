@@ -51,6 +51,7 @@ import {
 	linearTarget,
 	reconcileLinearRecord,
 } from "./mission-linear-state.ts";
+import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
@@ -622,6 +623,10 @@ export class MissionStore {
 					COALESCE((SELECT MAX(number) FROM decisions WHERE mission_id = missions.id), 0))`);
 			this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS decision_numbers ON decisions(mission_id, number)");
 		});
+		if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "planning_version"))
+			this.db.exec("ALTER TABLE missions ADD COLUMN planning_version INTEGER");
+		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "assignment"))
+			this.db.exec("ALTER TABLE tasks ADD COLUMN assignment TEXT");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
 		for (const column of ["delegated_to", "delegated_from_status", "delegated_resource_id"])
@@ -2153,6 +2158,7 @@ export class MissionStore {
 	create(
 		input: {
 			projectId: string;
+			planningVersion?: 1;
 			title: unknown;
 			goal?: unknown;
 			brief?: unknown;
@@ -2160,6 +2166,10 @@ export class MissionStore {
 		},
 		actor: MissionActor = USER,
 	): Mission {
+		if (input.planningVersion !== undefined && input.planningVersion !== 1)
+			throw new Error("Unsupported planningVersion; only version 1 can be created");
+		if (input.planningVersion !== undefined && actor.sessionId)
+			throw new Conflict("Only the user can opt in to coordinator-owned planning");
 		const title = text(input.title, "title", MAX_TITLE)!;
 		const goal = text(input.goal ?? "", "goal", MAX_GOAL, { empty: true })!;
 		const brief = input.brief === undefined ? undefined : text(input.brief, "brief", MAX_BRIEF, { empty: true });
@@ -2180,6 +2190,8 @@ export class MissionStore {
 				now,
 				now,
 			);
+			if (input.planningVersion !== undefined)
+				this.run("UPDATE missions SET planning_version = ? WHERE id = ?", input.planningVersion, id);
 			this.event(id, "created", `Mission created: ${title}`, actor, { at: now });
 			if (brief) this.insertBrief(id, brief, 1, actor, now);
 			for (const task of tasks) this.insertTask(id, { title: task.title, body: task.body }, actor);
@@ -2189,6 +2201,8 @@ export class MissionStore {
 	}
 
 	update(id: string, patch: UpdateMissionRequest, actor: MissionActor = USER): Mission {
+		if ("planningVersion" in patch) throw new Conflict("Planning opt-in is creation-only; adoption is not supported");
+		this.assertPlanner(id, actor);
 		const mission = this.require(id);
 		const next = { ...mission };
 		const notes: Array<[MissionEventKind, string]> = [];
@@ -2314,6 +2328,50 @@ export class MissionStore {
 		this.changed(id, members);
 	}
 
+	/** Identity comes from worker IPC or the trusted local API path, never request payload fields. */
+	private assertPlanner(id: string, actor: MissionActor): void {
+		const mission = this.require(id);
+		if (mission.planningVersion === undefined) return;
+		if (mission.planningVersion !== 1) throw new Conflict("Unsupported mission planning version");
+		if (!actor.sessionId) return; // Trusted daemon/user path.
+		this.assertMember(id, actor.sessionId);
+		if (mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict(
+				"Coordinator-owned planning: propose changes with comment; report execution with status/log",
+			);
+	}
+
+	private assertTaskWriter(id: string, ref: string, write: MissionTaskWrite, actor: MissionActor): void {
+		const mission = this.require(id);
+		if (mission.planningVersion === undefined) return;
+		strictPlanningFields(write, TASK_WRITE_FIELDS);
+		if (mission.planningVersion !== 1) throw new Conflict("Unsupported mission planning version");
+		if (!actor.sessionId || mission.coordinatorSessionId === actor.sessionId) {
+			this.assertPlanner(id, actor);
+			return;
+		}
+		this.assertMember(id, actor.sessionId);
+		const task = this.resolveTask(id, ref);
+		if (
+			task.sessionId !== actor.sessionId ||
+			task.status === "done" ||
+			task.status === "dropped" ||
+			Object.keys(write).some((key) => key !== "status") ||
+			(write.status !== undefined && !["in_progress", "blocked", "in_review"].includes(write.status))
+		)
+			throw new Conflict(
+				"Coordinator-owned task definition; workers may only report their own execution status or propose changes with comment",
+			);
+	}
+
+	private validateAssignment(id: string, write: MissionTaskWrite, current?: MissionTask["assignment"]) {
+		const version = this.require(id).planningVersion;
+		if (version !== undefined) strictPlanningFields(write, TASK_WRITE_FIELDS);
+		if (write.assignment === undefined) return;
+		if (version !== 1) throw new Conflict("assignment requires planningVersion 1");
+		return assignmentWrite(write.assignment, current);
+	}
+
 	// Brief
 
 	brief(id: string, revision?: number): MissionBrief | undefined {
@@ -2341,6 +2399,7 @@ export class MissionStore {
 	}
 
 	writeBrief(id: string, markdown: unknown, expectedRevision: unknown, actor: MissionActor = USER): MissionBrief {
+		this.assertPlanner(id, actor);
 		const content = text(markdown, "markdown", MAX_BRIEF, { empty: true })!;
 		if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
 			throw new Error("expectedRevision must be a non-negative integer");
@@ -2532,6 +2591,7 @@ export class MissionStore {
 		peers: Map<string, { version: string; inactive: boolean }>,
 	): boolean {
 		const managed = this.linearSyncResource(resourceId);
+		if (managed && this.require(managed.missionId).planningVersion !== undefined) return false;
 		if (
 			!managed ||
 			managed.record.version !== version ||
@@ -2688,6 +2748,7 @@ export class MissionStore {
 	}
 
 	addPhase(id: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		this.assertPlanner(id, actor);
 		this.require(id);
 		const phaseId = randomUUID();
 		this.transaction(() => {
@@ -2717,6 +2778,7 @@ export class MissionStore {
 	}
 
 	updatePhase(id: string, ref: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		this.assertPlanner(id, actor);
 		const before = this.resolvePhase(id, ref);
 		const name = write.name === undefined ? before.name : text(write.name, "phase name", MAX_TITLE)!;
 		const goal = write.goal === undefined ? before.goal : text(write.goal, "phase goal", MAX_GOAL, { empty: true });
@@ -2741,6 +2803,7 @@ export class MissionStore {
 	}
 
 	removePhase(id: string, ref: string, actor: MissionActor = USER): void {
+		this.assertPlanner(id, actor);
 		const phase = this.resolvePhase(id, ref);
 		this.transaction(() => {
 			this.run(
@@ -2828,6 +2891,7 @@ export class MissionStore {
 	}
 
 	addTask(id: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		this.assertPlanner(id, actor);
 		this.require(id);
 		const task = this.transaction(() => this.insertTask(id, write, actor));
 		this.changed(id, task.sessionId ? [task.sessionId] : []);
@@ -2835,6 +2899,7 @@ export class MissionStore {
 	}
 
 	private insertTask(id: string, write: MissionTaskWrite, actor: MissionActor): MissionTask {
+		const assignment = this.validateAssignment(id, write);
 		// Task authoring uses Unicode code points, matching the agent schema and write boundary.
 		const title = text(write.title, "title", MAX_TITLE, { codePoints: true })!;
 		const fields = this.taskFields(id, write);
@@ -2867,6 +2932,7 @@ export class MissionStore {
 			now,
 			status === "done" ? now : null,
 		);
+		if (assignment) this.run("UPDATE tasks SET assignment = ? WHERE id = ?", JSON.stringify(assignment), taskId);
 		this.run("UPDATE tasks SET created_by_session_id = ? WHERE id = ?", actor.sessionId ?? null, taskId);
 		if (owner) this.rememberTaskClaim(owner, taskId, false);
 		this.event(id, "task", `Task #${number} added: ${title}`, actor, {
@@ -2988,6 +3054,7 @@ export class MissionStore {
 
 	/** Dedicated user preference only: no member callbacks, reconciliation or automation. */
 	taskModel(id: string, projectId: string, taskId: string, write: MissionTaskWrite): MissionTask {
+		this.assertPlanner(id, USER);
 		if (this.writing || this.batchedChanges || this.referenceBatch)
 			throw new Conflict("Preference changes cannot be batched");
 		if (this.require(id).projectId !== projectId) throw new Conflict("The confirmed project changed");
@@ -3005,6 +3072,8 @@ export class MissionStore {
 
 	/** One immutable, task-owned handoff. Retries return it, never add another event. */
 	completeTask(id: string, ref: unknown, sessionId: string, value: unknown) {
+		if (this.require(id).planningVersion !== undefined)
+			throw new Conflict("Report evidence with log; coordinator/user marks done separately");
 		this.assertMember(id, sessionId);
 		const task = this.resolveTask(id, ref);
 		if (task.sessionId !== sessionId) throw new Conflict("Only the task owner can complete it");
@@ -3071,25 +3140,42 @@ export class MissionStore {
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		this.assertTaskWriter(id, taskId, write, actor);
 		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
 			return this.releaseTask(id, taskId, actor);
 		const projected = this.resolveTask(id, taskId);
 		const before = this.rawTask(projected);
+		const assignment = this.validateAssignment(id, write, before.assignment);
 		const fields = this.taskFields(id, write, before.id);
 		const title =
 			write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE, { codePoints: true })!;
 		let owner = before.sessionId ?? null;
 		if (write.sessionId !== undefined) {
-			if (actor.sessionId) throw new Error("Chats claim tasks with the claim action; only the user assigns them");
+			if (actor.sessionId && this.require(id).planningVersion === undefined)
+				throw new Error("Chats claim tasks with the claim action; only the user assigns them");
 			if (write.sessionId !== null) this.assertMember(id, write.sessionId);
 			owner = write.sessionId;
 			if (owner && owner !== before.sessionId && write.overrideRetirement !== true) this.assertFreshMember(owner);
 		}
 		const status = fields.status ?? before.status;
-		if (status === "done" && before.status !== "done" && actor.sessionId && !this.completion(id, before.id))
+		if (
+			status === "done" &&
+			before.status !== "done" &&
+			actor.sessionId &&
+			this.require(id).planningVersion === undefined &&
+			!this.completion(id, before.id)
+		)
 			throw new Error("Use complete with commit, checks and issues to finish a task");
 		const now = Date.now();
 		this.transaction(() => {
+			if (assignment) {
+				// Revalidate against canonical state inside the transaction, never after model I/O alone.
+				const next = this.validateAssignment(id, write, this.task(id, before.id).assignment)!;
+				this.run("UPDATE tasks SET assignment = ? WHERE id = ?", JSON.stringify(next), before.id);
+				this.event(id, "task", `Task #${before.number} assignment revision ${next.revision}`, actor, {
+					taskId: before.id,
+				});
+			}
 			if (owner && owner !== before.sessionId) this.rememberTaskClaim(owner, before.id, false);
 			if (owner && owner !== before.sessionId && !actor.sessionId && write.overrideRetirement === true)
 				this.run("DELETE FROM retired_members WHERE session_id = ?", owner);
@@ -3188,6 +3274,7 @@ export class MissionStore {
 
 	/** Validate the whole selection before writing, then publish one update rather than one per task. */
 	groupTasks(id: string, refs: string[], milestone: string, actor: MissionActor = USER): MissionTask[] {
+		this.assertPlanner(id, actor);
 		this.require(id);
 		const group = text(milestone, "milestone", MAX_TITLE, { empty: true })!;
 		const tasks = [
@@ -3215,6 +3302,7 @@ export class MissionStore {
 	}
 
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
+		this.assertPlanner(id, actor);
 		const task = this.resolveTask(id, taskId);
 		if (this.one("SELECT 1 FROM resources WHERE task_id = ? AND linear_role = 'contribution'", task.id))
 			throw new Conflict("Detach Linear contributions before removing this task");
@@ -3313,6 +3401,7 @@ export class MissionStore {
 
 	/** Atomic: a task owned by another chat is never taken over. */
 	claimTask(id: string, taskId: unknown, sessionId: string, actor: MissionActor = { sessionId }): MissionTask {
+		this.assertPlanner(id, actor);
 		this.assertMember(id, sessionId);
 		const task = this.transaction(() => {
 			const task = this.resolveTask(id, taskId);
@@ -3324,6 +3413,7 @@ export class MissionStore {
 
 	/** The user and current coordinator may release any claim; members only their own. */
 	releaseTask(id: string, taskId: unknown, actor: MissionActor = USER): MissionTask {
+		this.assertPlanner(id, actor);
 		const mission = this.require(id);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
 		const before = this.rawTask(this.resolveTask(id, taskId));
@@ -3359,6 +3449,7 @@ export class MissionStore {
 	}
 
 	releaseTasks(id: string, refs: string[], actor: MissionActor = USER) {
+		this.assertPlanner(id, actor);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
 		const affected = new Set<string>();
 		const result = this.transaction(() => {
@@ -3400,6 +3491,7 @@ export class MissionStore {
 
 	/** Partial success for a batch, without exposing intermediate state to member contexts. */
 	claimTasks(id: string, refs: string[], sessionId: string, actor: MissionActor = { sessionId }) {
+		this.assertPlanner(id, actor);
 		this.assertMember(id, sessionId);
 		const result = this.transaction(() => {
 			const claimed: MissionTask[] = [];
@@ -3506,6 +3598,7 @@ export class MissionStore {
 		actor: MissionActor = USER,
 		audience: unknown = "reference",
 	): MissionDecision {
+		this.assertPlanner(id, actor);
 		this.require(id);
 		const decisionText = text(value, "text", MAX_TEXT)!;
 		const scope = decisionAudience(audience);
@@ -3548,6 +3641,7 @@ export class MissionStore {
 		audience?: unknown,
 	): MissionDecision {
 		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
+		this.assertPlanner(id, actor);
 		const before = this.decision(id, decisionId);
 		const decisionText = value === undefined ? before.text : text(value, "text", MAX_TEXT)!;
 		const scope = audience === undefined ? before.audience : decisionAudience(audience);
@@ -3575,6 +3669,7 @@ export class MissionStore {
 
 	removeDecision(id: string, decisionId: string, actor: MissionActor = USER): void {
 		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
+		this.assertPlanner(id, actor);
 		const before = this.decision(id, decisionId);
 		this.transaction(() => {
 			for (const task of this.tasks(id)) {
@@ -4372,6 +4467,8 @@ export class MissionStore {
 	}
 
 	private reconcileTaskPullRequests(id: string, taskId: string, handoffActor?: MissionActor): boolean {
+		// PR observations are evidence, not coordinator acceptance in the opted-in contract.
+		if (this.require(id).planningVersion !== undefined) return false;
 		if (!handoffActor && this.require(id).status !== "active") return false;
 		const task = this.rawTask(this.task(id, taskId));
 		if (
@@ -4843,6 +4940,7 @@ function statusLabel(status: MissionTaskStatus): string {
 
 function missionFrom(row: Row): Mission {
 	return {
+		...(row.planning_version != null ? { planningVersion: num(row.planning_version) } : {}),
 		id: str(row.id!),
 		projectId: str(row.project_id!),
 		title: str(row.title!),
@@ -4955,6 +5053,7 @@ function taskFrom(row: Row): MissionTask {
 		number: num(row.number!),
 		title: str(row.title!),
 		...(row.body ? { body: str(row.body) } : {}),
+		...(row.assignment ? { assignment: JSON.parse(str(row.assignment)) as MissionTask["assignment"] } : {}),
 		status: str(row.status!) as MissionTaskStatus,
 		...(row.delegated_to ? { delegatedTo: str(row.delegated_to) } : {}),
 		order: num(row.sort!),

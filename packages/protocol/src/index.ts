@@ -924,6 +924,8 @@ export type MissionEventKind =
 
 export interface Mission {
 	id: string;
+	/** Creation-only opt-in. Missing: legacy planning. Unknown versions are readable, not writable. */
+	planningVersion?: number;
 	/** Every member session belongs to this project. */
 	projectId: string;
 	title: string;
@@ -1045,6 +1047,8 @@ export interface MissionPhaseWrite {
 
 export interface MissionTask {
 	id: string;
+	/** Coordinator-owned definition, separate from execution status and log/comment reports. */
+	assignment?: MissionAssignment;
 	/** Per-mission display number, stable once assigned. */
 	number: number;
 	title: string;
@@ -1080,6 +1084,8 @@ export interface MissionTask {
 
 /** POST /api/missions/:id/tasks; PATCH /api/missions/:id/tasks/:taskId sends only changed fields. */
 export interface MissionTaskWrite {
+	/** Complete replacement, guarded by the current assignment revision (0 when absent). */
+	assignment?: MissionAssignmentWrite;
 	title?: string;
 	body?: string;
 	status?: MissionTaskStatus;
@@ -1103,6 +1109,24 @@ export interface MissionTaskWrite {
 	preferredModel?: string | null;
 	/** Thinking level for the preferred model; null clears. Requires a preferred model. */
 	preferredThinking?: string | null;
+}
+
+/** Small versioned planning contract. Does not grant build, review or merge authority. */
+export interface MissionAssignment {
+	/** Unknown stored versions remain inspectable; writes support only v1. */
+	version: number;
+	revision: number;
+	intent: string;
+	scope: string;
+	criteria: string[];
+}
+
+export interface MissionAssignmentWrite {
+	version: 1;
+	expectedRevision: number;
+	intent: string;
+	scope: string;
+	criteria: string[];
 }
 
 /** An artifact linked to a mission. It stays owned by its session. */
@@ -1262,6 +1286,8 @@ export interface MissionDetail {
 
 /** POST /api/missions. */
 export interface CreateMissionRequest {
+	/** Explicit new-mission opt-in only. Existing missions are never adopted implicitly. */
+	planningVersion?: 1;
 	projectId: string;
 	title: string;
 	/** Empty when omitted, for example while the chat drafts it. */
