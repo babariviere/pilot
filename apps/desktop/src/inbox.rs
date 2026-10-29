@@ -480,7 +480,8 @@ impl Render for Inbox {
             .filter
             .as_ref()
             .is_some_and(|id| !self.projects.iter().any(|p| &p.id == id));
-        ui::page().id("inbox-page").test_support().h_full().min_h_0()
+        div().id("inbox-pane").test_support().size_full().min_w_0().min_h_0()
+        .child(ui::page().id("inbox-page").test_support().h_full().min_h_0()
             .gap(px(Space::SIDEBAR))
             .child(div().v_flex().gap(px(Space::META))
                 .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()
@@ -499,7 +500,7 @@ impl Render for Inbox {
                     .child(div().v_flex().min_w_0().gap(px(Space::META))
                         .child(Notice::new("This project is no longer available").tone(Tone::Error))
                         .child(ui::text(Text::Caption, "Choose another project to see its chats.").text_color(cx.theme().muted_foreground)))))
-            .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list)))
+            .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list))))
     }
 }
 

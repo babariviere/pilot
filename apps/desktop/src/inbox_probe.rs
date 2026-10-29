@@ -15,6 +15,17 @@ fn settle(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
 }
+fn assert_column(w: &mut gpui_kit::Window) {
+    let pane = w.find("inbox-pane").bounds();
+    let page = w.find("inbox-page").bounds();
+    let list = w.find("inbox-list").bounds();
+    let header = w.find("inbox-scope-note").bounds();
+    let left = page.left() - pane.left();
+    let right = pane.right() - page.right();
+    assert!((f32::from(left - right)).abs() <= 1., "{pane:?} {page:?}");
+    assert_eq!(header.left(), list.left());
+    assert!(list.right() <= page.right() && list.left() >= page.left());
+}
 fn chats() -> Vec<Chat> {
     [
         json!({"id":"synthetic","title":"Review deployment options","projectId":"a","state":"idle","outcome":"question","attentionReason":{"kind":"asks","detail":"Which region should receive the canary?"}}),
@@ -174,6 +185,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(view.inbox.read(cx).probe(cx).1, 1);
                 assert!(w.try_find("attention-failed").is_some());
                 let pane = w.find("inbox-page").bounds();
+                assert_column(w);
                 let filter = w.find("inbox-project-filter").bounds();
                 assert!(filter.origin.x >= pane.origin.x && filter.right() <= pane.right());
                 assert!(
@@ -392,6 +404,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                 v.show_inbox(None,w,cx);
             })).unwrap();
             settle(cx, h);
+            cx.update_window(h, |_, w, _| assert_column(w)).unwrap();
             cx.update(|cx| {
                 let p = v.read(cx).inbox.read(cx).probe(cx);
                 assert_eq!(p.0, 1000);
@@ -400,6 +413,29 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
                     "only virtualized visible corner entities: {p:?}"
                 );
             });
+            cx.update_window(h, |_, w, cx| {
+                let list = v.read(cx).inbox.read(cx).list.clone();
+                list.update(cx, |l, cx| {
+                    l.set_selected_index(Some(IndexPath::new(15)), w, cx);
+                    l.focus(w, cx);
+                });
+                w.press("down", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    v.read(cx).inbox.read(cx).probe_selected(cx).as_deref(),
+                    Some("capacity-16")
+                );
+                let list = w.find("inbox-list").bounds();
+                let row = w.find("attention-capacity-16").bounds();
+                assert!(
+                    row.top() >= list.top() - px(1.) && row.bottom() <= list.bottom() + px(1.),
+                    "{row:?} {list:?}"
+                );
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| {
                 v.update(cx, |v, cx| {
                     v.state.chats = Arc::default();
@@ -421,6 +457,13 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             capture_state(cx, h, captures.as_deref(), width, mode, "empty");
+            cx.update_window(h, |_, w, _| {
+                assert_column(w);
+                let list = w.find("inbox-list").bounds();
+                let empty = w.find("inbox-empty-state").bounds();
+                assert!(empty.left() >= list.left() && empty.right() <= list.right());
+            })
+            .unwrap();
             cx.update(|cx| {
                 let p = v.read(cx).inbox.read(cx).probe(cx);
                 assert_eq!((p.0, p.1, p.2), (0, 0, 0));
