@@ -948,6 +948,7 @@ export class NativeAdapter {
 	/** Declare or withdraw a registered tool from the next request. Returns whether the tool is now active. */
 	setToolActive(name: string, active: boolean): boolean {
 		this.assertOpen();
+		this.#toolActivation.set(name, active);
 		const names = this.session.getActiveToolNames();
 		if (names.includes(name) !== active) {
 			this.session.setActiveToolsByName(active ? [...names, name] : names.filter((tool) => tool !== name));
@@ -958,6 +959,15 @@ export class NativeAdapter {
 
 	refreshTools(): Extension {
 		this.assertOpen();
+		// SDK reload restores defaults. Preserve explicit host tool availability across reloads.
+		const names = this.session.getActiveToolNames();
+		const active = new Set(names);
+		for (const [name, enabled] of this.#toolActivation) {
+			if (enabled) active.add(name);
+			else active.delete(name);
+		}
+		if ([...this.#toolActivation].some(([name, enabled]) => names.includes(name) !== enabled))
+			this.session.setActiveToolsByName([...active]);
 		// Reapply public presentation hooks only to discover hidden declarations. SDK already
 		// applies the descriptions to its wrapped AgentTools; callable native tools remain intact.
 		const infos = this.session.getAllTools();
@@ -1202,6 +1212,7 @@ export class NativeAdapter {
 	}
 
 	#diagnosticTools = new WeakSet<ToolDefinition>();
+	readonly #toolActivation = new Map<string, boolean>();
 	#toolOutputs = new Map<string, (text: string) => void>();
 
 	private preparationMark(): PreparationMark {

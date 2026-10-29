@@ -589,6 +589,7 @@ export class KernelSession {
 			adapter.coordinatorMemoryActive = () =>
 				!spec.pilot?.ask && spec.role !== "diagnostics" && mission.current?.coordinator === "self";
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
+			if (!spec.pilot?.ask) adapter.setToolActive("todo", mission.current?.coordinator !== "self");
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
 			if (!spec.pilot?.ask && hooks.callSlackStatus) adapter.setToolActive(SLACK_STATUS_TOOL, false);
 			const prepare = (extension: Extension) => {
@@ -1187,6 +1188,7 @@ export class KernelSession {
 			};
 		} else this.#mission.current = context;
 		try {
+			if (!this.#ask) this.adapter.setToolActive("todo", context?.coordinator !== "self");
 			if (coordinatorChanged && this.callMission)
 				this.adapter.registerHostTool(createMissionTool(this.callMission, context?.coordinator === "self"));
 			this.adapter.setToolActive(MISSION_TOOL, !!context);

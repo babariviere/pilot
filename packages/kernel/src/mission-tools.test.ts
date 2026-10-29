@@ -683,6 +683,12 @@ for (const ask of [false, true]) {
 			let requests = 0;
 			const check = async (role: MissionContext["coordinator"] | undefined) => {
 				const coordinator = role === "self";
+				const todoAvailable = !ask && !coordinator;
+				assert.equal(adapter.session.getCallableToolNames().includes("todo"), todoAvailable);
+				assert.equal(
+					(await session.conversation.agent(BACKGROUND_CONTEXT)).tools.some((tool) => tool.name === "todo"),
+					todoAvailable,
+				);
 				const native = adapter.session.getAllTools().find((tool) => tool.name === MISSION_TOOL)!;
 				const declared = (await session.conversation.agent(BACKGROUND_CONTEXT)).tools.find(
 					(tool) => tool.name === MISSION_TOOL,
@@ -706,6 +712,18 @@ for (const ask of [false, true]) {
 				assert.equal(!!schema.properties.model, coordinator);
 				assert.equal(!!schema.properties.thinking, coordinator);
 				const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+				adapter.session.agent.state.messages.push(
+					fauxAssistantMessage(
+						{ type: "toolCall", id: `todo-${requests}`, name: "codemode", arguments: {} },
+						{ stopReason: "toolUse" },
+					),
+				);
+				const todoResult = await codemode.execute(
+					`todo-${requests}`,
+					{ code: 'text(await describeTool("todo")); text(await tools.todo({action: "list"}));' },
+					undefined,
+				);
+				assert.equal(!!todoResult.isError, !todoAvailable, JSON.stringify(todoResult.content));
 				const result = await codemode.execute(
 					`describe-${requests}`,
 					{ code: 'text(await describeTool("mission"));' },
@@ -728,6 +746,10 @@ for (const ask of [false, true]) {
 					async (context) => {
 						try {
 							const tool = getCurrentTools(context.messages).find((tool) => tool.name === MISSION_TOOL);
+							assert.equal(
+								getCurrentTools(context.messages).some((tool) => tool.name === "todo"),
+								todoAvailable,
+							);
 							assert.equal(!!tool, !ask && role !== undefined);
 							if (ask)
 								assert.deepEqual(
