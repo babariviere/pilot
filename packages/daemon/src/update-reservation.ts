@@ -1,4 +1,4 @@
-/** Bounded admission ownership for an app update. Never drains, signals or stops work itself; the app drains agents first. */
+/** Bounded admission ownership for an explicit update. Never drains, signals or stops work itself. */
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { RuntimeResources } from "./runtime-admission.ts";
@@ -7,6 +7,8 @@ export interface ReservationReceipt {
 	schema: 1;
 	operationId: string;
 	token: string;
+	/** Omitted for legacy GUI-only updates, which leave pilotd running. */
+	purpose?: "daemon-upgrade";
 }
 
 export class UpdateReservation {
@@ -16,14 +18,17 @@ export class UpdateReservation {
 	private timer?: ReturnType<typeof setTimeout>;
 	private readonly used = new Set<string>();
 	private readonly resources: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
+	private readonly daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
 	private readonly now: () => number;
 	private readonly duration: number;
 	constructor(
 		resources: Pick<RuntimeResources, "freezeAdmissions" | "blockers">,
 		now = () => performance.now(),
 		duration = 180_000,
+		daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">,
 	) {
 		this.resources = resources;
+		this.daemonResources = daemonResources;
 		this.now = now;
 		this.duration = duration;
 	}
@@ -44,8 +49,10 @@ export class UpdateReservation {
 		);
 		this.timer.unref();
 	}
-	async prepare(operationId: string): Promise<ReservationReceipt> {
+	async prepare(operationId: string, purpose?: "daemon-upgrade"): Promise<ReservationReceipt> {
 		this.expire();
+		if (purpose !== undefined && (purpose !== "daemon-upgrade" || !this.daemonResources))
+			throw new Error("update_reservation_purpose_invalid");
 		if (
 			this.closed ||
 			this.preparing ||
@@ -61,9 +68,10 @@ export class UpdateReservation {
 		const until = this.now() + this.duration;
 		let inspectionTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			release = this.resources.freezeAdmissions();
+			const resources = purpose === "daemon-upgrade" ? this.daemonResources! : this.resources;
+			release = resources.freezeAdmissions();
 			const blockers = await Promise.race([
-				this.resources.blockers(),
+				resources.blockers(),
 				new Promise<never>((_, reject) => {
 					inspectionTimer = setTimeout(
 						() => reject(new Error("update_inspection_timeout")),
@@ -72,7 +80,12 @@ export class UpdateReservation {
 				}),
 			]);
 			if (blockers.length || this.closed || this.now() >= until) throw new Error("update_reservation_not_idle");
-			const receipt = { schema: 1 as const, operationId, token: randomBytes(32).toString("hex") };
+			const receipt: ReservationReceipt = {
+				schema: 1,
+				operationId,
+				token: randomBytes(32).toString("hex"),
+				...(purpose ? { purpose } : {}),
+			};
 			this.active = { ...receipt, until, release };
 			this.scheduleExpiry();
 			return receipt;
@@ -84,18 +97,24 @@ export class UpdateReservation {
 			this.preparing = false;
 		}
 	}
-	/** Called again AFTER OS-observed GUI exit. Success proves continuous ownership
-	 * from prepare through that exit, not a prediction based on a client timer. */
+	/** Proves continuous, unexpired ownership, not permission to signal a process.
+	 * GUI updaters verify after GUI exit; daemon adapters must verify before their stop intent. */
 	verify(receipt: ReservationReceipt): ReservationReceipt {
 		this.expire();
 		if (
 			!this.active ||
 			receipt.schema !== 1 ||
 			receipt.operationId !== this.active.operationId ||
+			receipt.purpose !== this.active.purpose ||
 			receipt.token !== this.active.token
 		)
 			throw new Error("update_reservation_expired");
-		return { schema: 1, operationId: this.active.operationId, token: this.active.token };
+		return {
+			schema: 1,
+			operationId: this.active.operationId,
+			token: this.active.token,
+			...(this.active.purpose ? { purpose: this.active.purpose } : {}),
+		};
 	}
 	cancel(receipt: ReservationReceipt): void {
 		this.verify(receipt);

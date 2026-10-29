@@ -65,6 +65,70 @@ the service's actual state before arranging deliberate recovery. Ordinary Local
 startup never replays this journal. There is no automatic rollback or recovery
 installer in this slice.
 
+## Daemon-safe admission prerequisite (service adapter contract)
+
+`pause.ready` proves a tool boundary, not the absence of jobs, PTYs or child
+processes. The existing macOS adapter above still uses only that pause lease.
+The backend now provides the stronger **opt-in** reservation below for the
+service-adapter follow-up. Until that adapter is wired, do not describe the
+existing upgrade action as preserving active jobs or terminals.
+
+After the exact process has acknowledged `POST /api/update/pause`, use the
+existing private `POST /__pilot_runtime_update/v1` channel, not a new restart API:
+
+```json
+{"boot":"<pinned boot>","nonce":"<fresh 64 hex>","action":"prepare","receipt":{"operationId":"<new UUID>","purpose":"daemon-upgrade"}}
+```
+
+The existing `x-pilot-update-proof` is HMAC-SHA256 over `update/v1\n` followed by
+the exact request bytes, using the private owner record's boot key. Validate the
+response MAC over `update/v1\n` plus the exact `body` bytes, then pin its nonce,
+boot, home hash, port, build and runtime root. This is the existing same-user
+owner proof, not public API authentication. A successful `body.receipt` is:
+
+```json
+{"schema":1,"operationId":"<same UUID>","token":"<opaque 64 hex>","purpose":"daemon-upgrade"}
+```
+
+- Require the exact echoed purpose. Old daemons may ignore the requested field
+  and return a GUI-only receipt. Missing support, a missing runtime root, failed
+  owner proof or any refusal must defer, never fall back to `pause.ready`.
+- One shared reservation slot excludes GUI and daemon reservations. All runtime
+  admissions freeze synchronously **before** async inspection. The daemon uses
+  the full `RuntimeResources` set, including session jobs/descendants and all live
+  PTYs (even detached or closing), transfers, mutations and setup/import work.
+  Missing/failed/changed worker inspection is Unknown and blocks. Inspection
+  times out after 10 seconds. Neither inspection nor refusal stops any work.
+- Send `action: "verify"` with the complete exact receipt immediately before the
+  adapter's durable stop intent. Validate the same signed identity and receipt.
+  `inspect` alone is not an admission ACK. Native owner/service/executable/exit
+  proofs, permanent handoff lock and singleton lease checks remain mandatory.
+- The nonrenewable hold expires 180 seconds from **before** prepare inspection.
+  Keep a conservative local deadline measured before sending prepare, and refuse
+  a delayed stop. Verification never extends this deadline. A repeated operation
+  ID cannot prepare again in that daemon boot, including after failure/expiry.
+- Before stop intent, `action: "cancel"` with the exact receipt releases the
+  hold. Wrong tokens/purposes do not release it. Errors/timeouts during inspection
+  and server shutdown release their hold. Legacy tool pause resumes within its
+  existing 30-second cycle once no independent maintenance hold remains.
+- Transport disconnect/lost ACK is **not** cancellation: a helper may already be
+  acting. An orphaned successful hold stays until expiry or daemon shutdown.
+  Persist adapter intent and the exact receipt before acting. Lost prepare ACK
+  means no stop; lost ACK after stop intent means Unknown, inspect only. Never
+  replay stop/start or automatically roll back. A new daemon boot cannot verify
+  an old receipt; the backend does not restore or replay handoffs.
+
+Omitting `purpose` retains the existing GUI-only contract, which intentionally
+permits paused workers, jobs and open terminals because pilotd survives. No
+public protocol/Swift mirror, service registration, signals, release policy or
+agent authority is added by this backend prerequisite.
+
+Synthetic coverage lives in `daemon-upgrade-reservation.test.ts` and
+`update-reservation.test.ts`; existing `update-pause.test.ts`,
+`runtime-admission.test.ts` and `runtime-owner.test.ts` cover tool recovery,
+resource composition and boot-bound private proofs. These tests use temporary
+profiles and fake workers/process inventories, never live user jobs or services.
+
 ## Verification boundaries
 
 Focused updater tests cover ordered single-start handoff, preflight/busy/cancel

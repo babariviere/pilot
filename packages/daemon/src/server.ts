@@ -498,12 +498,16 @@ export function createDaemonServer(
 						: source,
 			),
 		),
+		undefined,
+		undefined,
+		// Explicit daemon handoffs must also prove that jobs, descendants and PTYs are absent.
+		runtimeResources,
 	);
 	bootstrap?.updates(async (action, value) => {
 		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");
 		const receipt = value as ReservationReceipt;
 		if (action === "inspect") return receipt;
-		if (action === "prepare") return reservations.prepare(receipt.operationId);
+		if (action === "prepare") return reservations.prepare(receipt.operationId, receipt.purpose);
 		if (action === "cancel") {
 			reservations.cancel(receipt);
 			return receipt;

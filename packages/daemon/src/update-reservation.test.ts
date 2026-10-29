@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { UpdateReservation } from "./update-reservation.ts";
 
 const operation = "12345678-1234-1234-1234-123456789abc";
@@ -121,6 +122,62 @@ test("an early expiry callback reschedules rather than leaving an orphan freeze"
 		clock = 100;
 		t.mock.timers.tick(1);
 		assert.equal(frozen, 0);
+	} finally {
+		gate.close();
+	}
+});
+
+test("daemon purpose cannot silently fall back to GUI resources", async () => {
+	const f = fixture();
+	try {
+		await assert.rejects(f.reservation.prepare(operation, "daemon-upgrade"), /purpose_invalid/);
+		await assert.rejects(f.reservation.prepare(operation, "unknown" as "daemon-upgrade"), /purpose_invalid/);
+		assert.equal(f.frozen(), 0);
+	} finally {
+		f.reservation.close();
+	}
+});
+
+test("lost daemon ACK holds until expiry, never renews, and cannot survive a new owner", async () => {
+	const admission = new RuntimeAdmission();
+	const resources = new RuntimeResources([admission]);
+	let clock = 0;
+	const gate = new UpdateReservation(resources, () => clock, 100, resources);
+	const successor = new UpdateReservation(resources, () => clock, 100, resources);
+	try {
+		const receipt = await gate.prepare(operation, "daemon-upgrade");
+		// Dropping a transport/ACK is not cancellation: the helper may already have acted.
+		await assert.rejects(gate.prepare(operation, "daemon-upgrade"), /busy/);
+		assert.throws(() => admission.begin({ kind: "work", id: "race" }), /frozen/);
+		assert.throws(() => successor.verify(receipt), /expired/);
+		clock = 100;
+		assert.throws(() => gate.verify(receipt), /expired/);
+		admission.begin({ kind: "work", id: "released" })();
+		await assert.rejects(gate.prepare(operation, "daemon-upgrade"), /busy/);
+	} finally {
+		gate.close();
+		successor.close();
+	}
+});
+
+test("unknown or timed-out daemon inspection releases admission without a receipt", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const admission = new RuntimeAdmission();
+	const resources = new RuntimeResources([
+		admission,
+		{
+			freezeAdmissions: () => () => {},
+			blockers: () => new Promise<never>(() => {}),
+		},
+	]);
+	const gate = new UpdateReservation(resources, () => 0, 100, resources);
+	try {
+		const pending = gate.prepare(operation, "daemon-upgrade");
+		const rejected = assert.rejects(pending, /timeout/);
+		t.mock.timers.tick(100);
+		await rejected;
+		admission.begin({ kind: "work", id: "after-timeout" })();
+		await assert.rejects(gate.prepare(operation, "daemon-upgrade"), /busy/);
 	} finally {
 		gate.close();
 	}
