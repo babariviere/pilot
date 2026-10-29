@@ -1423,6 +1423,8 @@ fn group_menu(
         );
     }
     let (edit, settings) = (owner.clone(), owner.clone());
+    // Folders only organize this sidebar; the project's own settings (name,
+    // path, workspace) are a separate group that opens Settings.
     menu.item(
         PopupMenuItem::new("No folder")
             .checked(current.is_none())
@@ -1434,6 +1436,7 @@ fn group_menu(
             let _ = edit.update(cx, |v, cx| v.open_folder_editor(w, cx));
         }),
     )
+    .separator()
     .item(
         PopupMenuItem::new("Project settings…").on_click(move |_, w, cx| {
             let _ = settings.update(cx, |v, cx| v.open_project_settings(project.clone(), w, cx));
