@@ -92,8 +92,7 @@ fn status(s: &Snapshot, now_ms: u64) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
-/// Report time, every window with its reset, and provenance. Shown in the
-/// tooltip and in the expanded details.
+/// Report time, every window with its reset, and provenance in expanded details.
 fn details(s: &Snapshot, now_ms: u64) -> Vec<String> {
     let now = (now_ms / 1000) as i64;
     let mut lines = vec![match s.fetched_at {
@@ -161,7 +160,6 @@ pub(crate) fn section(
         let expanded = open.contains(&provider);
         let status = status(s, now_ms);
         let lines = details(s, now_ms);
-        let tip = SharedString::from(lines.join("\n"));
         let mut cells = div()
             .h_flex()
             .flex_wrap()
@@ -279,9 +277,6 @@ pub(crate) fn section(
             .items_start()
             .min_w_0()
             .gap(px(PROVIDER_GAP))
-            .tooltip(move |w, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(w, cx)
-            })
             .child(
                 ui::text(Text::Caption, provider)
                     .flex_shrink_0()

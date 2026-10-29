@@ -3,7 +3,7 @@ use super::LocalViewer;
 use crate::{local_model::LiveTranscript, model::Message};
 use gpui_kit::{
     AppContext, Bounds, HeadlessAppContext, ScrollDelta, SharedString, WindowBounds, WindowOptions,
-    point, px, size, test::TestWindowExt,
+    component::ActiveTheme, point, px, size, test::TestWindowExt,
 };
 use serde_json::json;
 use std::time::Duration;
@@ -326,6 +326,37 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
             cx.run_until_parked();
+            cx.update_window(handle, |_, w, cx| {
+                w.draw(cx).clear(cx);
+                w.hover(key.clone(), cx);
+            })
+            .unwrap();
+            cx.run_until_parked();
+            let before = cx
+                .update_window(handle, |_, w, cx| {
+                    w.draw(cx).clear(cx);
+                    let color: gpui_kit::Background = cx.theme().tokens.popover.into();
+                    w.painted_quads()
+                        .iter()
+                        .filter(|q| q.background == color)
+                        .count()
+                })
+                .unwrap();
+            cx.advance_clock(Duration::from_secs(1));
+            cx.run_until_parked();
+            cx.update_window(handle, |_, w, cx| {
+                w.draw(cx).clear(cx);
+                let color: gpui_kit::Background = cx.theme().tokens.popover.into();
+                assert_eq!(
+                    w.painted_quads()
+                        .iter()
+                        .filter(|q| q.background == color)
+                        .count(),
+                    before,
+                    "work summary hover must not paint a tooltip"
+                );
+            })
+            .unwrap();
             let mut entity = None;
             for phase in [
                 "live",
@@ -398,6 +429,36 @@ fn run_tool_presentation_probe(cx: &mut HeadlessAppContext) {
                     println!("{}",json!({"tool_fixture":"semantic-work-v2","phase":phase,"width":width,"appearance":mode.name(),"open":open,"synthetic_only":true,"production_root":true}));
                 }).unwrap();
                 cx.run_until_parked();
+                if phase == "expanded" {
+                    cx.update_window(handle, |_, w, cx| w.hover("step-toggle-call:command", cx))
+                        .unwrap();
+                    cx.run_until_parked();
+                    let before = cx
+                        .update_window(handle, |_, w, cx| {
+                            w.draw(cx).clear(cx);
+                            let color: gpui_kit::Background = cx.theme().tokens.popover.into();
+                            w.painted_quads()
+                                .iter()
+                                .filter(|q| q.background == color)
+                                .count()
+                        })
+                        .unwrap();
+                    cx.advance_clock(Duration::from_secs(1));
+                    cx.run_until_parked();
+                    cx.update_window(handle, |_, w, cx| {
+                        w.draw(cx).clear(cx);
+                        let color: gpui_kit::Background = cx.theme().tokens.popover.into();
+                        assert_eq!(
+                            w.painted_quads()
+                                .iter()
+                                .filter(|q| q.background == color)
+                                .count(),
+                            before,
+                            "tool row hover must not paint a tooltip"
+                        );
+                    })
+                    .unwrap();
+                }
                 if let Some(dir) = &captures {
                     cx.capture_screenshot(handle)
                         .unwrap()

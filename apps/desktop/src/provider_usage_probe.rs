@@ -5,7 +5,7 @@ use crate::{
 };
 use gpui_kit::{
     AppContext, Bounds, HeadlessAppContext, Pixels, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, Theme, ThemeMode},
     px, size,
     test::TestWindowExt,
 };
@@ -44,6 +44,13 @@ fn chat(v: Value) -> local_model::Chat {
 }
 fn label(w: &gpui_kit::Window, id: &str) -> String {
     w.find(id.to_owned()).label().unwrap_or_default().to_owned()
+}
+fn popover_quads(w: &gpui_kit::Window, cx: &gpui_kit::App) -> usize {
+    let color: gpui_kit::Background = cx.theme().tokens.popover.into();
+    w.painted_quads()
+        .iter()
+        .filter(|q| q.background == color)
+        .count()
 }
 fn sync(
     cx: &mut HeadlessAppContext,
@@ -130,6 +137,25 @@ pub fn run_provider_usage_probe(cx: &mut HeadlessAppContext) {
                 ),
             ];
             sync(cx, h, &v, common, None);
+            // Hover a usage value for longer than the tooltip delay.
+            cx.update_window(h, |_, w, cx| {
+                w.hover("home-subscription-Claude-window-0-label", cx)
+            })
+            .unwrap();
+            settle(cx, h);
+            let before = cx
+                .update_window(h, |_, w, cx| popover_quads(w, cx))
+                .unwrap();
+            cx.advance_clock(Duration::from_secs(1));
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(
+                    popover_quads(w, cx),
+                    before,
+                    "usage hover must not paint a tooltip"
+                )
+            })
+            .unwrap();
             cx.update_window(h, |_, w, _| {
                 for provider in ["Claude", "Codex"] {
                     let row = w.find(format!("home-subscription-{provider}")).bounds();

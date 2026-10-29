@@ -3,6 +3,42 @@
 //! A work group is one effects-first line. While its run is live and the user
 //! has not chosen, its latest steps show under the line; the chevron opens the
 //! full quiet list. An opened call shows its output first, then its code.
+
+#[cfg(test)]
+mod tooltip_regression {
+    #[test]
+    fn work_and_subscription_rows_do_not_attach_tooltips() {
+        let work = include_str!("work_view.rs");
+        let lead = work
+            .split(concat!("fn disclosure_", "lead("))
+            .nth(1)
+            .unwrap()
+            .split("fn ")
+            .next()
+            .unwrap();
+        let line = work
+            .split(concat!("    fn ", "line("))
+            .nth(1)
+            .unwrap()
+            .split(concat!("    fn reads_", "row("))
+            .next()
+            .unwrap();
+        let usage = include_str!("provider_usage_view.rs");
+        let row = usage
+            .split("        let row = div()")
+            .nth(1)
+            .unwrap()
+            .split("        let mut group")
+            .next()
+            .unwrap();
+        assert!(!lead.contains(".tooltip("));
+        assert!(!line.contains(".tooltip("));
+        assert!(!row.contains(".tooltip("));
+        assert!(lead.contains(".accessibility_label(title)"));
+        assert!(line.contains(".accessibility_label(title)"));
+        assert!(row.contains(".aria_label("));
+    }
+}
 use crate::{
     app_icon::AppIcon,
     tool_presentation::{Kind, Status, Step, Tone, Unit, Work},
@@ -195,8 +231,7 @@ fn disclosure_lead(
         .ghost()
         .small()
         .w_full()
-        .accessibility_label(title.clone())
-        .tooltip(title)
+        .accessibility_label(title)
         .child(
             div()
                 .h_flex()
@@ -644,8 +679,7 @@ impl WorkView {
             .ghost()
             .small()
             .w_full()
-            .accessibility_label(title.clone())
-            .tooltip(title)
+            .accessibility_label(title)
             .child(
                 div()
                     .h_flex()
