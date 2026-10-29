@@ -1140,14 +1140,33 @@ export interface MissionAssignment {
 	intent: string;
 	scope: string;
 	criteria: string[];
+	/** Planning assessment, not session capabilities, contribution proof or authority. Absent is unknown. */
+	classification?: MissionClassification;
 }
 
 export interface MissionAssignmentWrite {
 	version: 1;
 	expectedRevision: number;
+	/** Existing task-definition fence. Required when classification is supplied; 0 for task creation. */
+	expectedDefinitionRevision?: number;
+	/** Omission preserves on unchanged content, otherwise clears to unknown. Null explicitly clears. */
+	classification?: MissionClassification | null;
 	intent: string;
 	scope: string;
 	criteria: string[];
+}
+
+/** Independent planning dimensions. Role is assignment intent, not trusted membership. */
+export interface MissionClassification {
+	version: 1;
+	effort: "small" | "medium" | "large" | "unknown";
+	difficulty: "routine" | "substantive" | "hard" | "unknown";
+	risk: "low" | "medium" | "high" | "unknown";
+	uncertainty: "known" | "unknown";
+	scope: "bounded" | "expanded" | "unknown";
+	role: "builder" | "explorer" | "reviewer" | "unknown";
+	/** A declaration only. Research does not prove absence of code contributions. */
+	deliveryKind: "code" | "native-ui" | "research" | "unknown";
 }
 
 /** An artifact linked to a mission. It stays owned by its session. */

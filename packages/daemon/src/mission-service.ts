@@ -1582,6 +1582,7 @@ export class MissionService {
 		return {
 			...view.task(task, true),
 			id: task.id,
+			definitionRevision: this.store.sharedDefinitionRevision(task.id),
 			body: task.body ?? "",
 			completion: this.store.completion(missionId, task.id) ?? null,
 			dependsOn: view.dependencies(task),

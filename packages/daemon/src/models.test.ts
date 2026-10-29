@@ -10,6 +10,7 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionAttempt, type MemoryCompactionTrace } from "./memory-compaction.ts";
+import type { ModelRecommendationTask } from "./mission-model-recommendation.ts";
 import { modelScopeHash } from "./model-scope.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
@@ -970,6 +971,109 @@ test("task starts use the project scope, not every authenticated model", async (
 		/not available in the project's scope.*Allowed models: test\/claude-opus-5-5.*test\/small/,
 	);
 	await assert.rejects(catalog.selectTaskModel(root, "test/at-cap"), /not available in the project's scope/);
+});
+
+test("advisory recommendations reuse scoped price-capped catalog without settings or model calls", async (t) => {
+	const { root, catalog } = await taskCatalog(t, {
+		enabledModels: ["test/claude-opus-5-5", "test/small", "test/frontier"],
+	});
+	const settings = await readFile(join(root, "settings.json"), "utf8");
+	const task: ModelRecommendationTask = {
+		assignment: {
+			version: 1,
+			revision: 1,
+			intent: "Known work",
+			scope: "Bounded",
+			criteria: ["Tests"],
+			classification: {
+				version: 1,
+				effort: "medium",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "builder",
+				deliveryKind: "code",
+			},
+		},
+	};
+	const assessments = ["test/small", "test/frontier", "unknown/model"].map((model) => ({
+		model,
+		needs: ["bounded-work" as const],
+		provenance: "Synthetic fixture",
+		reason: "Assessed bounded work, not capability proof",
+	}));
+	const unknown = await catalog.recommendTaskModel(root, task, { assessments, availability: [] });
+	assert.equal(unknown.recommendedModel, null);
+	assert.ok(unknown.candidates.every((c) => c.availability === "unknown"));
+	assert.deepEqual(unknown.excludedAssessments, ["test/frontier", "unknown/model"]);
+	const available = await catalog.recommendTaskModel(root, task, {
+		assessments,
+		availability: [
+			{
+				model: "test/small",
+				status: "available",
+				source: "provider-observation",
+				provenance: "Synthetic provider fixture",
+				observedAt: Date.now() - 1000,
+				expiresAt: Date.now() + 60000,
+			},
+		],
+	});
+	assert.equal(available.recommendedModel, "test/small");
+	assert.equal(available.assignmentRevision, 1);
+	assert.equal(await readFile(join(root, "settings.json"), "utf8"), settings);
+});
+
+test("recommendations snapshot per-call assessments and task context across catalog I/O", async (t) => {
+	const catalog = new ModelCatalog("/unused");
+	let resume!: () => void;
+	const wait = new Promise<void>((resolve) => {
+		resume = resolve;
+	});
+	t.mock.method(catalog, "listTaskModels", async () => {
+		await wait;
+		return { models: [{ id: "test/scoped", provider: "test", name: "Scoped" }] };
+	});
+	const task: ModelRecommendationTask = {
+		assignment: {
+			version: 1,
+			revision: 1,
+			intent: "Original",
+			scope: "Bounded",
+			criteria: ["Checked"],
+			classification: {
+				version: 1,
+				effort: "medium",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "builder",
+				deliveryKind: "code",
+			},
+		},
+	};
+	const context = {
+		assessments: [
+			{
+				model: "test/scoped",
+				needs: ["bounded-work" as const],
+				provenance: "Fixture",
+				reason: "Original assessment",
+			},
+		],
+		availability: [],
+	};
+	const pending = catalog.recommendTaskModel("/unused", task, context);
+	task.assignment!.classification!.risk = "high";
+	context.assessments[0]!.reason = "Mutated";
+	resume();
+	const result = await pending;
+	assert.equal(result.advice.tier, "T1");
+	assert.equal(result.assignmentRevision, 1);
+	assert.equal(result.candidates[0]!.assessment?.reason, "Original assessment");
+	assert.equal(result.recommendedModel, null, "catalog authentication does not establish provider availability");
 });
 
 test("task model selection reads settings once and never broadens scope after lock exhaustion", async (t) => {

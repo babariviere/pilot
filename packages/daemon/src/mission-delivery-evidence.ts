@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { MissionAssignment, MissionNonCodeDeliveryReference, MissionTask } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { classificationWrite } from "./mission-classification.ts";
 import { canonicalJSON } from "./operation-journal.ts";
 
 export type DeliveryReference = MissionNonCodeDeliveryReference | { kind: "snapshot"; snapshotId: string };
@@ -87,7 +88,14 @@ export function deliveryDigest(value: unknown): string {
 	return createHash("sha256").update(canonicalJSON(value)).digest("hex");
 }
 export function deliveryAssignment(value: unknown): MissionAssignment {
-	fields(value, ["version", "revision", "intent", "scope", "criteria"]);
+	fields(value, [
+		"version",
+		"revision",
+		"intent",
+		"scope",
+		"criteria",
+		...(value && typeof value === "object" && "classification" in value ? ["classification"] : []),
+	]);
 	if (value.version !== 1) throw new Error("Unsupported delivery assignment version");
 	if (!Array.isArray(value.criteria) || value.criteria.length < 1 || value.criteria.length > 20)
 		throw new Error("Invalid delivery criteria");
@@ -97,6 +105,7 @@ export function deliveryAssignment(value: unknown): MissionAssignment {
 		intent: text(value.intent, 1000),
 		scope: text(value.scope, 4000),
 		criteria: Array.from(value.criteria, (c) => text(c, 1000)),
+		...("classification" in value ? { classification: classificationWrite(value.classification) } : {}),
 	};
 }
 export function deliveryReference(value: unknown): DeliveryReference {

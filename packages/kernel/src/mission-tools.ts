@@ -173,6 +173,25 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 								{
 									version: Type.Literal(1),
 									expectedRevision: Type.Integer({ minimum: 0 }),
+									expectedDefinitionRevision: Type.Optional(Type.Integer({ minimum: 0 })),
+									classification: Type.Optional(
+										Type.Union([
+											Type.Null(),
+											Type.Object(
+												{
+													version: Type.Literal(1),
+													effort: StringEnum(["small", "medium", "large", "unknown"]),
+													difficulty: StringEnum(["routine", "substantive", "hard", "unknown"]),
+													risk: StringEnum(["low", "medium", "high", "unknown"]),
+													uncertainty: StringEnum(["known", "unknown"]),
+													scope: StringEnum(["bounded", "expanded", "unknown"]),
+													role: StringEnum(["builder", "explorer", "reviewer", "unknown"]),
+													deliveryKind: StringEnum(["code", "native-ui", "research", "unknown"]),
+												},
+												{ additionalProperties: false },
+											),
+										]),
+									),
 									intent: Type.String({ minLength: 1, maxLength: 1000 }),
 									scope: Type.String({ minLength: 1, maxLength: 4000 }),
 									criteria: Type.Array(Type.String({ minLength: 1, maxLength: 1000 }), {
@@ -183,7 +202,7 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 								{
 									additionalProperties: false,
 									description:
-										"Planning v1 task assignment replacement; read current revision first (0 when absent). Does not grant execution authority.",
+										"Planning v1 assignment replacement; read revision (0 when absent). Classification/null also requires task definitionRevision (0 on creation). Omission preserves on unchanged intent/scope/criteria, otherwise clears to unknown. Role/kind confer no capabilities or contribution proof. Does not grant authority.",
 								},
 							),
 						),

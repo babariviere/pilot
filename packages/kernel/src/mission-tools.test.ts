@@ -62,6 +62,24 @@ test("coordinator planning schema exposes only strict versioned assignment write
 			arguments: value as typeof args,
 		});
 	validate(args);
+	const classification = {
+		version: 1,
+		effort: "unknown",
+		difficulty: "routine",
+		risk: "low",
+		uncertainty: "known",
+		scope: "bounded",
+		role: "explorer",
+		deliveryKind: "research",
+	};
+	validate({ ...args, assignment: { ...args.assignment, expectedDefinitionRevision: 0, classification } });
+	validate({ ...args, assignment: { ...args.assignment, expectedDefinitionRevision: 0, classification: null } });
+	assert.throws(() =>
+		validate({ ...args, assignment: { ...args.assignment, classification: { ...classification, risk: "none" } } }),
+	);
+	assert.throws(() =>
+		validate({ ...args, assignment: { ...args.assignment, classification: { ...classification, authority: true } } }),
+	);
 	for (const assignment of [
 		{ ...args.assignment, version: 2 },
 		{ ...args.assignment, expectedRevision: -1 },

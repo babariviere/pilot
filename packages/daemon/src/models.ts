@@ -28,6 +28,11 @@ import type { BackgroundAttribution, BackgroundCapture, CompletionRuntime } from
 import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { compactMemory, type MemoryCompactionObserver } from "./memory-compaction.ts";
+import {
+	type ModelRecommendationContext,
+	type ModelRecommendationTask,
+	recommendMissionModel,
+} from "./mission-model-recommendation.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
 import { readModelSettings, settingsPath } from "./model-settings.ts";
 import {
@@ -333,6 +338,17 @@ export class ModelCatalog {
 	async listTaskModels(cwd: string): Promise<ModelList> {
 		const { list, allowed } = await this.taskModels(cwd);
 		return { ...list, models: allowed.map(({ option }) => option) };
+	}
+
+	/** Ephemeral advice only. Reuses task-start eligibility; never selects/switches a running chat. */
+	async recommendTaskModel(
+		cwd: string,
+		task: ModelRecommendationTask,
+		context: Omit<ModelRecommendationContext, "now">,
+	) {
+		const snapshot = structuredClone({ task, context });
+		const allowed = await this.listTaskModels(cwd);
+		return recommendMissionModel(snapshot.task, allowed, { ...snapshot.context, now: Date.now() });
 	}
 
 	private async taskModels(cwd: string) {

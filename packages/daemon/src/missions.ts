@@ -916,10 +916,10 @@ export class MissionStore {
 			CREATE TRIGGER shared_task_definition_insert BEFORE INSERT ON tasks BEGIN
 				INSERT INTO shared_task_definitions VALUES(NEW.id,1); END;
 			DROP TRIGGER IF EXISTS shared_task_definition_update;
-			CREATE TRIGGER shared_task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone ON tasks
+			CREATE TRIGGER shared_task_definition_update BEFORE UPDATE OF title,body,depends_on,decision_ids,preferred_model,preferred_thinking,status,phase_id,session_id,milestone,assignment ON tasks
 			WHEN NOT EXISTS(SELECT 1 FROM shared_internal_projection) AND (OLD.title IS NOT NEW.title OR OLD.body IS NOT NEW.body OR OLD.depends_on IS NOT NEW.depends_on
 			OR OLD.decision_ids IS NOT NEW.decision_ids OR OLD.preferred_model IS NOT NEW.preferred_model OR OLD.preferred_thinking IS NOT NEW.preferred_thinking
-			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone)
+			OR OLD.status IS NOT NEW.status OR OLD.phase_id IS NOT NEW.phase_id OR OLD.session_id IS NOT NEW.session_id OR OLD.milestone IS NOT NEW.milestone OR OLD.assignment IS NOT NEW.assignment)
 			BEGIN UPDATE shared_task_definitions SET revision=revision+1 WHERE id=NEW.id; END;
 			CREATE TRIGGER IF NOT EXISTS shared_assignment_fence BEFORE UPDATE OF session_id ON tasks
 			WHEN NEW.session_id IS NOT NULL AND EXISTS(SELECT 1 FROM shared_allocations WHERE task_id=NEW.id AND sealed=0)
@@ -2401,12 +2401,16 @@ export class MissionStore {
 			);
 	}
 
-	private validateAssignment(id: string, write: MissionTaskWrite, current?: MissionTask["assignment"]) {
+	private validateAssignment(id: string, write: MissionTaskWrite, current?: MissionTask) {
 		const version = this.require(id).planningVersion;
 		if (version !== undefined) strictPlanningFields(write, TASK_WRITE_FIELDS);
 		if (write.assignment === undefined) return;
 		if (version !== 1) throw new Conflict("assignment requires planningVersion 1");
-		return assignmentWrite(write.assignment, current);
+		return assignmentWrite(
+			write.assignment,
+			current?.assignment,
+			current ? this.sharedDefinitionRevision(current.id) : 0,
+		);
 	}
 
 	// Brief
@@ -3425,7 +3429,7 @@ export class MissionStore {
 			return this.releaseTask(id, taskId, actor);
 		const projected = this.resolveTask(id, taskId);
 		const before = this.rawTask(projected);
-		const assignment = this.validateAssignment(id, write, before.assignment);
+		const assignment = this.validateAssignment(id, write, before);
 		const fields = this.taskFields(id, write, before.id);
 		const title =
 			write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE, { codePoints: true })!;
@@ -3450,7 +3454,7 @@ export class MissionStore {
 		this.transaction(() => {
 			if (assignment) {
 				// Revalidate against canonical state inside the transaction, never after model I/O alone.
-				const next = this.validateAssignment(id, write, this.task(id, before.id).assignment)!;
+				const next = this.validateAssignment(id, write, this.task(id, before.id))!;
 				this.run("UPDATE tasks SET assignment = ? WHERE id = ?", JSON.stringify(next), before.id);
 				this.event(id, "task", `Task #${before.number} assignment revision ${next.revision}`, actor, {
 					taskId: before.id,

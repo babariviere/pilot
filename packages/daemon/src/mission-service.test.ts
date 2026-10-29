@@ -725,6 +725,34 @@ test("planning v1 reuses relevant decision audiences/pins and changes context wh
 	assert.equal(f.service.context(member.id)?.tasks[0]?.assignmentRevision, 1);
 	const summary = (await f.service.call(member.id, "get", {})) as { planningVersion: number };
 	assert.equal(summary.planningVersion, 1);
+	const detail = (await f.service.call(lead.id, "get", { id: task.id })) as { definitionRevision: number };
+	assert.equal(detail.definitionRevision, f.store.sharedDefinitionRevision(task.id));
+	const classification = {
+		version: 1,
+		effort: "medium",
+		difficulty: "routine",
+		risk: "low",
+		uncertainty: "known",
+		scope: "bounded",
+		role: "builder",
+		deliveryKind: "research",
+	};
+	const write = {
+		id: task.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 1,
+			expectedDefinitionRevision: detail.definitionRevision,
+			intent: "Scoped intent",
+			scope: "Only this task",
+			criteria: ["Relevant context"],
+			classification,
+		},
+	};
+	await assert.rejects(f.service.call(member.id, "task", write), /Coordinator-owned/);
+	await f.service.call(lead.id, "task", write);
+	assert.deepEqual(f.store.task(mission.id, task.id).assignment?.classification, classification);
+	await assert.rejects(f.service.call(lead.id, "task", write), /Assignment revision conflict/);
 });
 
 test("user start can resume an opted-in task holder without pretending the worker self-claimed", async (t) => {

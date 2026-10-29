@@ -653,6 +653,21 @@ the assignment revision; `get` with a task ID returns its full assignment. Decis
 existing audiences and explicit task pins. This foundation does not add brief/policy approval,
 build admission, immutable evidence acceptance or a general context-revision engine.
 
+Assignments can also carry an optional version-1 `classification`: separate effort, difficulty, risk,
+uncertainty, scope, role intent and declared delivery kind. Only coordinator/user planning writes can
+replace or clear it. Supply `expectedRevision` and `expectedDefinitionRevision` (the existing task
+definition fence returned by task `get`, or 0 on creation). Changes invalidate revision-bound evidence.
+Old clients omitting classification preserve it on unchanged intent/scope/criteria, otherwise clear it
+to unknown. Legacy absence stays unknown. Expanded scope calls for rescoping, not permission to expand;
+role labels grant no capabilities, and research is not proof of code-free work.
+
+Host-only model advice reuses the current task-start catalog (scope, authentication and price cap).
+It explains Balanced review baselines and model needs using attributed per-call suitability assessments,
+not fixed model mappings. Provider observations have provenance and expiry; catalog membership or usage
+does not prove availability. User/task preferences never silently fall back or establish suitability.
+Unknown effort alone does not raise scrutiny. Review/check gates never weaken for a weaker or unavailable
+model. This foundation does not write preferences, change chats, start workers or activate delivery.
+
 Planning authorization uses the session identity bound by worker IPC, never an actor supplied in tool
 arguments. The loopback REST API remains the existing trusted user/daemon path, not an authenticated
 agent surface. This is not isolation against a full-access shell calling local REST or modifying local
