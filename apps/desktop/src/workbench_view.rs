@@ -61,6 +61,30 @@ impl LocalViewer {
         }
         cx.notify();
     }
+    /// Opens Settings on one exact project ID, for a project menu's Settings item. The page
+    /// stays on that ID even if the project is renamed or removed; it never falls back to another.
+    #[allow(dead_code)]
+    pub(crate) fn open_project_settings(
+        &mut self,
+        project_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_choices_ready(window, cx) {
+            return;
+        }
+        let Some(projects) = self.settings.read(cx).projects.clone() else {
+            return;
+        };
+        projects.update(cx, |p, cx| p.select(project_id, cx));
+        self.settings.update(cx, |owner, cx| {
+            if !owner.restart_locked {
+                owner.category = crate::settings_view::Category::Project;
+                cx.notify();
+            }
+        });
+        self.open_settings(window, cx);
+    }
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Same IME/search/picker guard as existing native navigation. Opening a separate
         // window never unmounts or retargets the transcript, composer or draft selection.

@@ -30,6 +30,7 @@ fn input(chats: Vec<local_model::Chat>, project: Option<&str>) -> OverviewInput 
             id: "p".into(),
             name: "Project".into(),
             path: "/synthetic/project".into(),
+            ..Default::default()
         }]),
         chats: Arc::new(chats),
         project: project.map(Into::into),

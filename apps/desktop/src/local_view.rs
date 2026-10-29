@@ -101,6 +101,9 @@ mod project_add_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "project_add_probe.rs"]
 pub(crate) mod project_add_probe;
+#[cfg(feature = "native-probes")]
+#[path = "project_settings_probe.rs"]
+pub(crate) mod project_settings_probe;
 #[path = "queued_message_view.rs"]
 pub(crate) mod queued_message_view;
 #[cfg(feature = "native-probes")]
@@ -452,6 +455,10 @@ impl LocalViewer {
             .map(|root| root.join("settings"))
             .map_err(|_| crate::settings_state::SettingsError::UnsafePath);
         view.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(root)));
+        let projects =
+            cx.new(|_| crate::project_settings_view::ProjectSettings::new(Some(options.clone())));
+        view.settings
+            .update(cx, |owner, _| owner.projects = Some(projects));
         view.connect_model_controls(options.clone(), window, cx);
         view.settings.update(cx, |owner, cx| {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1910,6 +1917,13 @@ impl LocalViewer {
         self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
         self.sync_mission_context(cx);
+        // Only a loaded catalog can show a project as removed.
+        if self.state.projects_loaded
+            && let Some(projects) = self.settings.read(cx).projects.clone()
+        {
+            let catalog = self.state.projects.clone();
+            projects.update(cx, |p, cx| p.catalog(catalog, cx));
+        }
         self.editor.update(cx, |editor, cx| {
             editor.projects(
                 self.state.projects.clone(),

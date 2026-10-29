@@ -38,6 +38,8 @@ pub(crate) enum Blocker {
     PreferencesLoading,
     Preferences(Hold),
     ScopedModels(Hold),
+    /// Project settings in the Settings window.
+    ProjectSettings(Hold),
     Jump,
     /// The convert-chat-to-mission sheet.
     Conversion(Hold),
@@ -94,6 +96,12 @@ impl Blocker {
             Self::ScopedModels(Unconfirmed) => {
                 "Your Scoped models save is unconfirmed. Check again in Scoped models first."
             }
+            Self::ProjectSettings(Sending) => {
+                "Project settings are still saving. Try again when the save finishes."
+            }
+            Self::ProjectSettings(_) => {
+                "Save or revert your project settings changes first. Nothing was discarded."
+            }
             Self::Jump => "Close the Jump palette first.",
             Self::Conversion(Sending) => {
                 "Converting the chat to a mission is still in progress. Try again when it finishes."
@@ -136,6 +144,7 @@ impl Blocker {
             Self::PreferencesFailed
             | Self::PreferencesLoading
             | Self::Preferences(_)
+            | Self::ProjectSettings(_)
             | Self::ChatAction => None,
             Self::ScopedModels(_) => Some(Destination::ScopedModels),
             Self::Composition | Self::Jump | Self::Conversion(_) | Self::AddProject(_) => {
@@ -178,6 +187,8 @@ mod tests {
             Blocker::ScopedModels(Hold::Unsaved),
             Blocker::ScopedModels(Hold::Sending),
             Blocker::ScopedModels(Hold::Unconfirmed),
+            Blocker::ProjectSettings(Hold::Unsaved),
+            Blocker::ProjectSettings(Hold::Sending),
             Blocker::Jump,
             Blocker::Conversion(Hold::Unsaved),
             Blocker::Conversion(Hold::Sending),

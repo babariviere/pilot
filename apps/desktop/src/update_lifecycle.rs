@@ -57,6 +57,13 @@ impl LocalViewer {
                 .as_ref()
                 .and_then(|m| m.read(cx).update_hold(cx))
                 .map(Blocker::ScopedModels)
+                .or_else(|| {
+                    owner
+                        .projects
+                        .as_ref()
+                        .and_then(|p| p.read(cx).update_hold())
+                        .map(Blocker::ProjectSettings)
+                })
         };
         preferences.or_else(|| self.secondary_blocker(window, cx))
     }

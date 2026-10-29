@@ -628,6 +628,7 @@ mod tests {
                     id: format!("p{i}"),
                     name: format!("Project {i}"),
                     path: "/same".into(),
+                    ..Default::default()
                 })
                 .collect(),
         );

@@ -41,6 +41,7 @@ pub(crate) struct SettingsPreferences {
     update_events: Vec<Subscription>,
     pub(crate) restart_locked: bool,
     pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
+    pub(crate) projects: Option<Entity<crate::project_settings_view::ProjectSettings>>,
     pub(super) state: SettingsState,
     source: Option<Result<PathBuf, SettingsError>>,
     worker: Option<SettingsWorker>,
@@ -67,6 +68,7 @@ impl SettingsPreferences {
             update_events: Vec::new(),
             restart_locked: false,
             models: None,
+            projects: None,
             state: SettingsState::default(),
             source,
             worker: None,
@@ -259,6 +261,10 @@ impl SettingsPreferences {
             && !self.state.dirty()
             && !self.state.unconfirmed()
             && self
+                .projects
+                .as_ref()
+                .is_none_or(|p| p.read(cx).unsettled().is_none())
+            && self
                 .models
                 .as_ref()
                 .is_none_or(|m| !m.read(cx).unsettled(cx));
@@ -278,6 +284,8 @@ pub(super) enum Category {
     Models,
     Updates,
     Diagnostics,
+    /// The project page selected in `ProjectSettings`.
+    Project,
 }
 impl Category {
     const ALL: [Self; 4] = [
@@ -292,6 +300,7 @@ impl Category {
             Self::Models => "Scoped models",
             Self::Updates => "Updates",
             Self::Diagnostics => "Diagnostics",
+            Self::Project => "Project",
         }
     }
     fn id(self) -> &'static str {
@@ -300,17 +309,75 @@ impl Category {
             Self::Models => "settings-models",
             Self::Updates => "settings-updates",
             Self::Diagnostics => "settings-diagnostics",
+            Self::Project => "settings-project",
         }
     }
 }
+const PROJECTS_SECTION: usize = 1;
+const PROJECTS_HEADER: f32 = 26.;
 struct Categories {
     current: Category,
+    /// Exact project ID shown when `current` is Project.
+    project: Option<String>,
+    projects: std::sync::Arc<Vec<crate::local_model::Project>>,
     selected: Option<IndexPath>,
+}
+impl Categories {
+    fn index(&self) -> Option<IndexPath> {
+        if self.current == Category::Project {
+            let id = self.project.as_deref()?;
+            let row = self.projects.iter().position(|p| p.id == id)?;
+            return Some(IndexPath::new(row).section(PROJECTS_SECTION));
+        }
+        Some(IndexPath::new(
+            Category::ALL.iter().position(|c| *c == self.current)?,
+        ))
+    }
 }
 impl ListDelegate for Categories {
     type Item = ListItem;
-    fn items_count(&self, _: usize, _: &App) -> usize {
-        Category::ALL.len()
+    fn sections_count(&self, _: &App) -> usize {
+        2
+    }
+    fn items_count(&self, section: usize, _: &App) -> usize {
+        if section == PROJECTS_SECTION {
+            self.projects.len()
+        } else {
+            Category::ALL.len()
+        }
+    }
+    fn section_header_height(&self, section: usize, _: &App) -> Option<gpui_kit::Pixels> {
+        Some(gpui_kit::px(if section == PROJECTS_SECTION {
+            PROJECTS_HEADER
+        } else {
+            0.
+        }))
+    }
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let projects = section == PROJECTS_SECTION;
+        Some(
+            div()
+                .h_flex()
+                .items_end()
+                .h(gpui_kit::px(if projects { PROJECTS_HEADER } else { 0. }))
+                .pl_2()
+                .pb_1()
+                .text_size(gpui_kit::px(ui::TextRole::CAPTION))
+                .font_semibold()
+                .text_color(cx.theme().muted_foreground)
+                .id(if projects {
+                    "settings-projects-heading"
+                } else {
+                    "settings-general-heading"
+                })
+                .test_support()
+                .when(projects, |d| d.child("Projects")),
+        )
     }
     fn render_item(
         &mut self,
@@ -318,6 +385,19 @@ impl ListDelegate for Categories {
         _: &mut Window,
         _: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
+        if ix.section == PROJECTS_SECTION {
+            let project = self.projects.get(ix.row)?;
+            let current = self.current == Category::Project
+                && self.project.as_deref() == Some(project.id.as_str());
+            return Some(
+                ListItem::new(SharedString::from(format!(
+                    "settings-project-{}",
+                    project.id
+                )))
+                .confirmed(current)
+                .child(ResourceLabel::new(project.name.clone())),
+            );
+        }
         let category = Category::ALL.get(ix.row)?;
         Some(
             ListItem::new(category.id())
@@ -380,6 +460,11 @@ impl SettingsView {
     ) -> Self {
         crate::typography::prepare(cx);
         let category = preferences.read(cx).category;
+        let project_owner = preferences.read(cx).projects.clone();
+        let (project, projects) = project_owner
+            .as_ref()
+            .map(|p| (p.read(cx).selected.clone(), p.read(cx).catalog.clone()))
+            .unwrap_or_default();
         if preferences.read(cx).diagnostics.is_none() {
             let diagnostics = cx.new(|cx| crate::diagnostics_view::Diagnostics::new(window, cx));
             preferences.update(cx, |owner, cx| {
@@ -391,6 +476,8 @@ impl SettingsView {
             ListState::new(
                 Categories {
                     current: category,
+                    project,
+                    projects,
                     selected: None,
                 },
                 window,
@@ -399,27 +486,42 @@ impl SettingsView {
             .searchable(false)
         });
         categories.update(cx, |list, cx| {
-            list.set_selected_index(
-                Some(IndexPath::new(
-                    Category::ALL.iter().position(|c| *c == category).unwrap(),
-                )),
-                window,
-                cx,
-            )
+            let ix = list.delegate().index();
+            list.set_selected_index(ix, window, cx)
         });
-        let observed = cx.observe(&preferences, |_, _, cx| cx.notify());
+        let observed = cx.observe_in(&preferences, window, |view, _, window, cx| {
+            view.sync_categories(window, cx);
+            cx.notify();
+        });
         let selected = cx.subscribe_in(&categories, window, |view, _, event, window, cx| {
             if view.models_marked(window, cx) {
                 return;
             }
-            if let ListEvent::Confirm(ix) = event
-                && let Some(category) = Category::ALL.get(ix.row).copied()
-            {
-                view.select_category(category, window, cx);
+            if let ListEvent::Confirm(ix) = event {
+                if ix.section == PROJECTS_SECTION {
+                    let id = view
+                        .categories
+                        .read(cx)
+                        .delegate()
+                        .projects
+                        .get(ix.row)
+                        .map(|p| p.id.clone());
+                    if let Some(id) = id {
+                        view.select_project(id, window, cx);
+                    }
+                } else if let Some(category) = Category::ALL.get(ix.row).copied() {
+                    view.select_category(category, window, cx);
+                }
             }
         });
         #[allow(unused_mut)]
         let mut subscriptions = vec![observed, selected];
+        if let Some(owner) = project_owner {
+            subscriptions.push(cx.observe_in(&owner, window, |view, _, window, cx| {
+                view.sync_categories(window, cx);
+                cx.notify();
+            }));
+        }
         // An install refusal's Show action for Scoped models selects that page here.
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         subscriptions.push(cx.subscribe_in(
@@ -460,8 +562,8 @@ impl SettingsView {
     fn select_category(&mut self, category: Category, window: &mut Window, cx: &mut Context<Self>) {
         self.categories.update(cx, |list, cx| {
             list.delegate_mut().current = category;
-            if let Some(ix) = Category::ALL.iter().position(|c| *c == category) {
-                list.set_selected_index(Some(IndexPath::new(ix)), window, cx);
+            if let Some(ix) = list.delegate().index() {
+                list.set_selected_index(Some(ix), window, cx);
             }
             cx.notify();
         });
@@ -476,6 +578,46 @@ impl SettingsView {
             models.update(cx, |m, cx| m.load(window, cx));
         }
         cx.notify();
+    }
+    /// Shows one exact project's page. The ID stays selected even if the project disappears.
+    pub(crate) fn select_project(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(owner) = self.preferences.read(cx).projects.clone() else {
+            return;
+        };
+        owner.update(cx, |o, cx| o.select(id, cx));
+        self.select_category(Category::Project, window, cx);
+    }
+    /// Keeps the sidebar list in step with the project catalog and the owner's selection.
+    fn sync_categories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let category = self.preferences.read(cx).category;
+        let (project, projects) = self
+            .preferences
+            .read(cx)
+            .projects
+            .as_ref()
+            .map(|p| (p.read(cx).selected.clone(), p.read(cx).catalog.clone()))
+            .unwrap_or_default();
+        let delegate = self.categories.read(cx).delegate();
+        if delegate.current == category
+            && delegate.project == project
+            && std::sync::Arc::ptr_eq(&delegate.projects, &projects)
+        {
+            return;
+        }
+        self.categories.update(cx, |list, cx| {
+            let d = list.delegate_mut();
+            d.current = category;
+            d.project = project;
+            d.projects = projects;
+            let ix = list.delegate().index();
+            list.set_selected_index(ix, window, cx);
+            cx.notify();
+        });
     }
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.models_marked(window, cx) {
@@ -625,6 +767,42 @@ impl SettingsView {
     }
     /// None when there is nothing to say or do: the footer then disappears.
     fn status(&mut self, cx: &mut Context<Self>) -> Option<gpui_kit::Div> {
+        let on_project = self.preferences.read(cx).category == Category::Project;
+        if on_project
+            && let Some(footer) = self.preferences.read(cx).projects.as_ref().and_then(|p| {
+                let close_notice = self.preferences.read(cx).close_notice;
+                crate::project_settings_view::ProjectSettings::footer(p, close_notice, cx)
+            })
+        {
+            return Some(footer);
+        }
+        if self.preferences.read(cx).close_notice
+            && let Some(name) = self
+                .preferences
+                .read(cx)
+                .projects
+                .as_ref()
+                .and_then(|p| p.read(cx).unsettled())
+        {
+            return Some(
+                div().child(
+                    Notice::new(format!(
+                        "Save or revert your changes to {name} before closing."
+                    ))
+                    .tone(Tone::Warning),
+                ),
+            );
+        }
+        if on_project {
+            let owner = self.preferences.read(cx);
+            let unsaved = owner.close_notice && (owner.state.dirty() || owner.state.saving());
+            return unsaved.then(|| {
+                div().child(
+                    Notice::new("Save or revert your appearance changes before closing.")
+                        .tone(Tone::Warning),
+                )
+            });
+        }
         if self.preferences.read(cx).close_notice
             && self
                 .preferences
@@ -830,6 +1008,7 @@ impl Render for SettingsView {
             Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
             Category::Updates => self.updates(cx).into_any_element(),
             Category::Diagnostics => div().children(self.preferences.read(cx).diagnostics.clone()).into_any_element(),
+            Category::Project => self.preferences.read(cx).projects.clone().map(|p| div().child(p).into_any_element()).unwrap_or_else(|| Notice::new("Project settings require the real Local viewer.").into_any_element()),
         };
         let status = self.status(cx);
         div()
@@ -859,7 +1038,12 @@ impl Render for SettingsView {
                 }
             }))
             .on_action(cx.listener(|view, _: &SaveSettings, window, cx| {
-                if view.preferences.read(cx).category == Category::Models {
+                let category = view.preferences.read(cx).category;
+                if category == Category::Project {
+                    if let Some(projects) = view.preferences.read(cx).projects.clone() {
+                        projects.update(cx, |p, cx| p.save(window, cx));
+                    }
+                } else if category == Category::Models {
                     if let Some(models) = view.preferences.read(cx).models.clone() {
                         models.update(cx, |m, cx| m.save(window, cx));
                     }

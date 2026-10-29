@@ -492,6 +492,7 @@ fn new_draft_model_is_bound_to_project_preserves_text_and_pending_cannot_retarge
                     id: "project-a".into(),
                     name: "A".into(),
                     path: "/synthetic/project".into(),
+                    ..Default::default()
                 }]),
                 true,
                 None,

@@ -66,6 +66,12 @@ path = "tests/chat_rename.rs"
 harness = false
 required-features = ["native-probes"]
 
+[[test]]
+name = "project_settings"
+path = "tests/project_settings.rs"
+harness = false
+required-features = ["native-probes"]
+
 [workspace]
 members = ["visual-worker"]
 exclude = ["updater"]

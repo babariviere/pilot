@@ -408,7 +408,7 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| assert_eq!(v.read(cx).selected.as_deref(), Some("other")));
             cx.update_window(h,|_,w,cx|v.update(cx,|v,cx|{
             v.state.chats=Arc::new((0..1000).map(|i|crate::local_model::chat(&json!({"id":format!("c{i}"),"title":format!("Conversation {i}"),"state":"idle"})).unwrap()).collect());
-            v.state.projects=Arc::new((0..256).map(|i|crate::local_model::Project{id:format!("p{i}"),name:format!("Project {i}"),path:"/synthetic/shared".into()}).collect());
+            v.state.projects=Arc::new((0..256).map(|i|crate::local_model::Project{id:format!("p{i}"),name:format!("Project {i}"),path:"/synthetic/shared".into(),..Default::default()}).collect());
             v.project_scope=None;v.rebuild_nav(w,cx);v.toggle_jump(w,cx);
         })).unwrap();
             settle(cx, h);

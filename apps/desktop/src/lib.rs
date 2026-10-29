@@ -78,6 +78,13 @@ pub use local_view::session_failure_probe::run_session_failure_probe;
 pub use local_view::workspace_changes_probe::run_workspace_changes_probe;
 mod chat_rename;
 mod chat_rename_view;
+mod project_settings;
+#[cfg(any(test, feature = "native-probes"))]
+mod project_settings_fixture;
+mod project_settings_transport;
+mod project_settings_view;
+#[cfg(feature = "native-probes")]
+pub use local_view::project_settings_probe::run_project_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_rename_probe::run_chat_rename_probe;
 #[cfg(any(test, feature = "native-probes"))]

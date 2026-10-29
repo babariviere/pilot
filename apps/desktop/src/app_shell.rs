@@ -667,11 +667,13 @@ mod workbench_tests {
                 id: "a".into(),
                 name: "Atlas".into(),
                 path: "/synthetic/shared".into(),
+                ..Default::default()
             },
             Project {
                 id: "ab".into(),
                 name: "Boreal".into(),
                 path: "/synthetic/shared".into(),
+                ..Default::default()
             },
         ]
     }

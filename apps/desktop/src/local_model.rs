@@ -9,11 +9,28 @@ pub(crate) const ENTRY_CAP: usize = 256;
 pub(crate) const ROW_CAP: usize = 512;
 pub(crate) const PROJECT_CAP: usize = 256;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Project {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) path: String,
+    pub(crate) policy: ProjectPolicy,
+}
+/// Workspace and publication policy as the daemon applies it: `workspace` other than
+/// "direct" means private clones, and only an explicit `requirePullRequest: false`
+/// permits direct default-branch pushes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectPolicy {
+    pub(crate) isolated: bool,
+    pub(crate) require_pull_request: bool,
+}
+impl Default for ProjectPolicy {
+    fn default() -> Self {
+        Self {
+            isolated: true,
+            require_pull_request: true,
+        }
+    }
 }
 pub(crate) fn projects(value: &Value) -> Result<Vec<Project>, &'static str> {
     let values = value.as_array().ok_or("Project list is unavailable.")?;
@@ -44,6 +61,10 @@ pub(crate) fn projects(value: &Value) -> Result<Vec<Project>, &'static str> {
                 240,
             ),
             path: path.into(),
+            policy: ProjectPolicy {
+                isolated: value["workspace"] != "direct",
+                require_pull_request: value["requirePullRequest"] != false,
+            },
         });
     }
     out.sort_by(|a, b| {
@@ -83,6 +104,19 @@ mod project_tests {
         assert_eq!(projects(&json!([])).unwrap(), Vec::new());
         let bounded = projects(&json!([{"id":"a","path":"/a","name":"é".repeat(400)}])).unwrap();
         assert!(bounded[0].name.len() <= 240);
+    }
+    #[test]
+    fn project_policy_matches_daemon_defaults() {
+        let p = projects(&json!([
+            {"id":"a","path":"/a"},
+            {"id":"b","path":"/b","workspace":"direct","requirePullRequest":false},
+            {"id":"c","path":"/c","workspace":"clone","requirePullRequest":true}
+        ]))
+        .unwrap();
+        assert_eq!(p[0].policy, ProjectPolicy::default());
+        assert!(p[0].policy.isolated && p[0].policy.require_pull_request);
+        assert!(!p[1].policy.isolated && !p[1].policy.require_pull_request);
+        assert_eq!(p[2].policy, ProjectPolicy::default());
     }
     #[test]
     fn projects_are_explicit_not_inferred_from_checkout_paths() {

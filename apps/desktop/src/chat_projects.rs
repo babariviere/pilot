@@ -329,11 +329,13 @@ mod tests {
                 id: "a".into(),
                 name: "Same title 日本語".into(),
                 path: "/tmp/shared".into(),
+                ..Default::default()
             },
             Project {
                 id: "ab".into(),
                 name: "Same title 日本語".into(),
                 path: "/tmp/shared".into(),
+                ..Default::default()
             },
         ])
     }

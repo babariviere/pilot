@@ -387,7 +387,7 @@ pub fn run_inbox_probe(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h,|_,w,cx|v.update(cx,|v,cx|{
                 v.state.projects_error = None;
-                v.state.projects=Arc::new((0..256).map(|i|crate::local_model::Project{id:format!("p{i}"),name:format!("Project {i}"),path:"/synthetic/shared".into()}).collect());
+                v.state.projects=Arc::new((0..256).map(|i|crate::local_model::Project{id:format!("p{i}"),name:format!("Project {i}"),path:"/synthetic/shared".into(),..Default::default()}).collect());
                 v.state.chats=Arc::new((0..1000).map(|i|crate::local_model::chat(&json!({"id":format!("capacity-{i}"),"title":format!("Attention {i}"),"projectId":format!("p{}",i%256),"state":"failed"})).unwrap()).collect());
                 v.show_inbox(None,w,cx);
             })).unwrap();

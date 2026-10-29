@@ -47,11 +47,13 @@ fn input(route: Option<Route>) -> Input {
                 id: "project-A".into(),
                 name: "Example 日本語".into(),
                 path: "/synthetic/a".into(),
+                ..Default::default()
             },
             crate::local_model::Project {
                 id: "project-B".into(),
                 name: "Other".into(),
                 path: "/synthetic/b".into(),
+                ..Default::default()
             },
         ]),
         chats: Arc::new(Vec::new()),

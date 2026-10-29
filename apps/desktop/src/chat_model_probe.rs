@@ -114,6 +114,7 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                                     id: "project-a".into(),
                                     name: "Atlas".into(),
                                     path: "/synthetic/project".into(),
+                                    ..Default::default()
                                 }]);
                                 v.transcript.update(cx, |t, cx| {
                                     t.replace_readonly(
