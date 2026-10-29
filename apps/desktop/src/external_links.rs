@@ -1,7 +1,8 @@
 //! Message links the user explicitly activates. Canonical Pilot chat links stay in the
 //! app; ordinary http(s) links go to the platform URL opener; everything else is refused.
 //! Service badges are Swift's local, deterministic GitHub/Linear/Slack labels: no fetch,
-//! resolver, desktop-app translation or rewritten destination.
+//! resolver or rewritten label. On macOS, Linear and Slack content links open in their
+//! desktop apps (`desktop_app_link`), falling back to the exact web URL.
 use gpui_kit::{App, Global};
 use std::sync::Arc;
 
@@ -67,7 +68,15 @@ impl Global for Opener {}
 pub(crate) fn open(url: &reqwest::Url, cx: &mut App) {
     match cx.try_global::<Opener>().cloned() {
         Some(opener) => (opener.0)(url.as_str(), cx),
-        None => cx.open_url(url.as_str()),
+        None => {
+            #[cfg(target_os = "macos")]
+            if crate::desktop_app_link::url(url, crate::desktop_app_link::slack_workspaces)
+                .is_some_and(|native| crate::desktop_app_link::launch(&native))
+            {
+                return;
+            }
+            cx.open_url(url.as_str())
+        }
     }
 }
 

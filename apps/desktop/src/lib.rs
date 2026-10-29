@@ -55,6 +55,8 @@ mod chat_links_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_links_probe::run_chat_links_probe;
 mod conversation_links;
+#[cfg(target_os = "macos")]
+mod desktop_app_link;
 mod external_links;
 mod session_clipboard;
 mod session_failure;
