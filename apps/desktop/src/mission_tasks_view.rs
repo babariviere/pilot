@@ -13,8 +13,7 @@ use gpui_kit::{
     IntoElement, ParentElement, Render, ScrollStrategy, SharedString, StatefulInteractiveElement,
     Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     component::{
-        ActiveTheme, Disableable, IndexPath, StyledExt, WindowExt,
-        checkbox::Checkbox,
+        ActiveTheme, Disableable, IndexPath, Selectable, StyledExt, WindowExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
         menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     },
@@ -917,6 +916,19 @@ impl Render for Pane {
                     .min_w_0()
                     .children(snapshot.as_ref().map(|s| Self::coverage(s, cx))),
             )
+            .when(!self.state.visibility.collapsed.is_empty(), |d| {
+                d.child(
+                    ui::action("mission-tasks-expand-all", "Expand all", Action::Quiet).on_click(
+                        cx.listener(|v, _, w, cx| {
+                            if !v.marked(w, cx) {
+                                v.state.visibility.collapsed.clear();
+                                v.rebuild(w, cx);
+                                cx.notify();
+                            }
+                        }),
+                    ),
+                )
+            })
             .child(
                 ui::icon_action(
                     "mission-tasks-refresh",
@@ -934,6 +946,23 @@ impl Render for Pane {
                 .on_click(cx.listener(|v, _, w, cx| v.read(w, cx))),
             )
             .child(
+                ui::icon_action(
+                    "mission-tasks-hide-finished",
+                    "Hide done and dropped",
+                    crate::app_icon::AppIcon::Filter,
+                    Action::Quiet,
+                )
+                .selected(self.state.visibility.hide_finished)
+                .toggled(self.state.visibility.hide_finished)
+                .on_click(cx.listener(|v, _, w, cx| {
+                    if !v.marked(w, cx) {
+                        v.state.visibility.hide_finished = !v.state.visibility.hide_finished;
+                        v.rebuild(w, cx);
+                        cx.notify();
+                    }
+                })),
+            )
+            .child(
                 ui::action("mission-task-new", "New task…", Action::Secondary)
                     .disabled(self.state.key.is_none())
                     .on_click(cx.listener(|v, _, w, cx| v.new_task(w, cx))),
@@ -947,38 +976,7 @@ impl Render for Pane {
             .min_w_0()
             .min_h_0()
             .gap(px(Space::CONTROL))
-            .child(toolbar)
-            .child(
-                div()
-                    .h_flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Checkbox::new("mission-tasks-hide-finished")
-                            .label("Hide done and dropped")
-                            .checked(self.state.visibility.hide_finished)
-                            .on_click(cx.listener(|v, checked, w, cx| {
-                                if !v.marked(w, cx) {
-                                    v.state.visibility.hide_finished = *checked;
-                                    v.rebuild(w, cx);
-                                    cx.notify();
-                                }
-                            })),
-                    )
-                    .when(!self.state.visibility.collapsed.is_empty(), |d| {
-                        d.child(
-                            ui::action("mission-tasks-expand-all", "Expand all", Action::Quiet)
-                                .on_click(cx.listener(|v, _, w, cx| {
-                                    if !v.marked(w, cx) {
-                                        v.state.visibility.collapsed.clear();
-                                        v.rebuild(w, cx);
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    }),
-            );
+            .child(toolbar);
         if let Some(e) = self.create_error {
             root = root.child(Notice::new(e).tone(Tone::Error));
         }

@@ -542,6 +542,21 @@ fn visibility_journey(
     name: &str,
 ) {
     let snapshot = cx.update(|cx| pane.read(cx).state.snapshot.clone().unwrap());
+    let filter_bounds = cx
+        .update_window(h, |_, w, _| {
+            let filter = w.find("mission-tasks-hide-finished");
+            let new_task = w.find("mission-task-new").bounds();
+            let refresh = w.find("mission-tasks-refresh").bounds();
+            assert_eq!(filter.label(), Some("Hide done and dropped"));
+            assert_eq!(filter.role(), Some(gpui_kit::Role::Button));
+            assert_eq!(filter.checked(), Some(false));
+            let bounds = filter.bounds();
+            assert_eq!(bounds.top(), new_task.top());
+            assert_eq!(bounds.size, refresh.size, "filter is one toolbar icon");
+            assert!(bounds.right() <= new_task.left());
+            bounds
+        })
+        .unwrap();
     click(cx, h, "mission-tasks-item-b-0");
     click(cx, h, "mission-tasks-hide-finished");
     cx.update(|cx| {
@@ -553,6 +568,11 @@ fn visibility_journey(
         assert!(Arc::ptr_eq(p.state.snapshot.as_ref().unwrap(), &snapshot));
     });
     cx.update_window(h, |_, w, _| {
+        assert_eq!(
+            w.find("mission-tasks-hide-finished").bounds(),
+            filter_bounds
+        );
+        assert_eq!(w.find("mission-tasks-hide-finished").checked(), Some(true));
         assert!(w.try_find("mission-tasks-item-b-0").is_none());
         assert!(w.try_find("mission-tasks-item-b-6").is_none());
         assert!(
@@ -566,7 +586,19 @@ fn visibility_journey(
     })
     .unwrap();
     click(cx, h, "mission-tasks-item-b-4");
-    click(cx, h, "mission-tasks-hide-finished");
+    cx.update_window(h, |_, w, cx| {
+        for _ in 0..60 {
+            w.press("tab", cx);
+            if w.find("mission-tasks-hide-finished").focused() == Some(true) {
+                break;
+            }
+        }
+        assert_eq!(w.find("mission-tasks-hide-finished").focused(), Some(true));
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert!(!pane.read(cx).state.visibility.hide_finished));
     click(cx, h, "mission-tasks-hide-finished");
     cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("b-4")));
     click(cx, h, "mission-tasks-phase-1");
