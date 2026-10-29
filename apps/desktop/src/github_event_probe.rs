@@ -69,7 +69,7 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
     let push = id_of(&rows, "Agent pushed");
     let pr = id_of(&rows, "Agent created PR #42");
     let failed = id_of(&rows, "Agent could not push");
-    let unknown = id_of(&rows, "Agent pushed · Outcome unknown");
+    let unknown = id_of(&rows, "Agent attempted to push");
     let mut backgrounds = Vec::new();
     for width in [680., 1100.] {
         for dark in [false, true] {

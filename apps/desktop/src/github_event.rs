@@ -173,8 +173,18 @@ impl Event {
         Self {
             kind: action.kind,
             text: match action.outcome {
-                Outcome::Succeeded | Outcome::Unknown => done,
+                Outcome::Succeeded => done,
                 Outcome::Failed(_) => failed,
+                Outcome::Unknown => match action.kind {
+                    Some(Kind::Push) => "Agent attempted to push".into(),
+                    Some(Kind::PrOpened) => format!("Agent attempted to create {pr}"),
+                    Some(Kind::PrReady) => format!("Agent attempted to mark {pr} ready"),
+                    Some(Kind::PrDraft) => format!("Agent attempted to mark {pr} draft"),
+                    Some(Kind::PrEdited) => format!("Agent attempted to edit {pr}"),
+                    Some(Kind::PrReopened) => format!("Agent attempted to reopen {pr}"),
+                    Some(Kind::Updated) => "Agent attempted a GitHub update".into(),
+                    None => "Agent attempted a GitHub action".into(),
+                },
             },
             branch: action.branch.clone(),
             title: action.title.clone(),
@@ -190,25 +200,15 @@ impl Event {
         matches!(self.outcome, Outcome::Failed(_))
     }
     pub(crate) fn sentence(&self) -> String {
-        let text = if self.count == 1 {
+        if self.count == 1 {
             self.text.clone()
-        } else if self.kind == Some(Kind::Push) && !self.failed() && self.branch.is_some() {
-            format!(
-                "Agent pushed {} times{}",
-                self.count,
-                if self.outcome == Outcome::Unknown {
-                    ""
-                } else {
-                    " to"
-                }
-            )
+        } else if self.kind == Some(Kind::Push)
+            && self.outcome == Outcome::Succeeded
+            && self.branch.is_some()
+        {
+            format!("Agent pushed {} times to", self.count)
         } else {
             format!("{} · {} times", self.text, self.count)
-        };
-        if self.outcome == Outcome::Unknown {
-            format!("{text} · Outcome unknown")
-        } else {
-            text
         }
     }
 
