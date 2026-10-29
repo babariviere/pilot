@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.95.0](https://github.com/babariviere/pilot/compare/v1.94.0...v1.95.0) (2026-10-29)
+
+
+### Features
+
+* **agents:** add read-only explorer role admission ([518f454](https://github.com/babariviere/pilot/commit/518f4545d9a27c0f32326a769ffd99b233b4ccb8))
+* **desktop:** add Open mission button to sidebar mission rows ([edecb6b](https://github.com/babariviere/pilot/commit/edecb6b96106d13f39899b92ad238222e4c134eb))
+* **desktop:** choose a new chat's project with one click ([b31622e](https://github.com/babariviere/pilot/commit/b31622eaf4088aace62c991e91ebc183e5527dc1))
+* **desktop:** drag the sidebar edge to resize it ([b287896](https://github.com/babariviere/pilot/commit/b2878965fd9e155187870120b0c52b468ccd59d5))
+* **desktop:** fill the sidebar state circle for unread replies ([39c5df5](https://github.com/babariviere/pilot/commit/39c5df500b1eccf8bfc0056bb10acf6d72c2f9bc))
+* **missions:** add non-code delivery record foundation ([b2b4548](https://github.com/babariviere/pilot/commit/b2b454896c3e9f507e503046026017af4cda0dba))
+* **planning:** enforce versioned assignment ownership ([213005b](https://github.com/babariviere/pilot/commit/213005b6227902b4d06562caa9dcfcbabe10ba5e))
+
+
+### Bug Fixes
+
+* **desktop:** explain composer path completion refusals ([b0066b9](https://github.com/babariviere/pilot/commit/b0066b9e914855bcf0a6936dfee4000470adba13))
+* **desktop:** keep a folded thread's roll-up beside its title ([92295e3](https://github.com/babariviere/pilot/commit/92295e323d2cbc0351a3e98f07884166cdb3c219))
+* **desktop:** keep partial daily usage subtotals and add chart axes ([d67da20](https://github.com/babariviere/pilot/commit/d67da20dab4ddae783970609d94f8f689b28c1e4))
+* **kernel:** suppress coordinator decision self-echoes ([39150f8](https://github.com/babariviere/pilot/commit/39150f85028af15c37fbbcc878694ec5186e8de4))
+* **usage:** pause subscription work at 99 percent ([71911fd](https://github.com/babariviere/pilot/commit/71911fd734c6f276d59ab17aea95a3b3465090fa))
+
 ## [1.94.0](https://github.com/babariviere/pilot/compare/v1.93.0...v1.94.0) (2026-10-29)
 
 
