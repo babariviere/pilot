@@ -253,24 +253,15 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("model-option-high", cx))
                 .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("new-chat-build", cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update(|cx| assert_eq!(editor.read(cx).shell_probe().2.unwrap().mode, "build"));
-            cx.update_window(h, |_, w, cx| {
-                w.press("enter", cx); // mode activation is not a submit
+            cx.update_window(h, |_, w, _cx| {
+                assert!(w.try_find("new-chat-ask").is_none());
+                assert!(w.try_find("new-chat-build").is_none());
             })
             .unwrap();
-            settle(cx, h);
+            cx.update(|cx| assert_eq!(editor.read(cx).shell_probe().2.unwrap().mode, "build"));
             assert!(writes.try_recv().is_err());
             assert_eq!(models.posts(), 0);
-            cx.update(|cx| {
-                assert_eq!(
-                    text.read(cx).selected_range(),
-                    metadata_selection,
-                    "project/model/mode presentation never replaces native selection"
-                )
-            });
+            cx.update(|cx| assert_eq!(text.read(cx).selected_range(), metadata_selection));
             cx.update_window(h, |_, w, cx| {
                 editor.update(cx, |e, cx| e.focus(w, cx));
                 w.render_frame(cx);
@@ -285,7 +276,7 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             let focused = cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap();
             cx.update_window(h, |_, w, cx| {
-                w.click("new-chat-ask", cx);
+                w.click("new-chat-project", cx);
                 assert_eq!(w.focused(cx), focused);
                 assert!(editor.update(cx, |e, cx| e.marked(w, cx)));
                 assert_eq!(editor.read(cx).shell_probe().2.unwrap().mode, "build");
@@ -430,9 +421,7 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
                 let tray = w.find("composer-tray").bounds();
                 assert!(recovery.bottom() <= tray.top());
                 assert_eq!(w.find("new-chat-project").disabled(), Some(true));
-                assert_eq!(w.find("new-chat-build").disabled(), Some(true));
                 assert_eq!(w.find("local-send").disabled(), Some(true));
-                w.click("new-chat-ask", cx);
                 w.click("local-send", cx);
                 assert_eq!(
                     editor.read(cx).shell_probe().2.unwrap().pending.as_deref(),

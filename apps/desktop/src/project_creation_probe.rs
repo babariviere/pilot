@@ -73,7 +73,7 @@ impl Server {
                             ("POST","/api/operations")=>{
                                 s.envelopes.push(payload.clone());assert_eq!(payload["kind"],"chat-create");
                                 let request:Value=serde_json::from_str(payload["payload"].as_str().unwrap()).unwrap();
-                                assert_eq!(request["projectId"],"project-ab");assert!(request.get("cwd").is_none());assert_eq!(request["mode"],"ask");
+                                assert_eq!(request["projectId"],"project-ab");assert!(request.get("cwd").is_none());assert_eq!(request["mode"],"build");
                                 let target=payload["targetId"].as_str().unwrap().to_owned();let id=payload["operationId"].as_str().unwrap().to_owned();
                                 s.projects.entry(target.clone()).or_insert_with(||"project-ab".into());
                                 let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":target,"state":"accepted","result":{"sessionId":target}});
@@ -82,7 +82,7 @@ impl Server {
                                 receipt
                             },
                             ("GET",path) if path.starts_with("/api/sessions/")=>{
-                                let id=path.strip_prefix("/api/sessions/").unwrap();json!({"id":id,"projectId":s.projects.get(id),"cwd":"/synthetic/shared","mode":"ask","state":"idle"})
+                                let id=path.strip_prefix("/api/sessions/").unwrap();json!({"id":id,"projectId":s.projects.get(id),"cwd":"/synthetic/shared","mode":"build","state":"idle"})
                             },
                             _=>panic!("Unexpected project fixture route {method} {path}"),
                         }};

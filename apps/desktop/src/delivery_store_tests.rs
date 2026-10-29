@@ -624,6 +624,7 @@ fn explicit_new_model_thinking_is_project_bound_and_only_new_payloads_get_overri
     let temp = Temp::new();
     let mut s = Store::open(temp.0.clone(), host()).unwrap();
     let mut d = draft(1, "私の下書き");
+    d.mode = "ask".into(); // A retained pre-change draft.
     d.model_choice = Some(crate::chat_models::DraftChoice {
         project_id: "project-a".into(),
         cwd: "/tmp".into(),
@@ -635,6 +636,9 @@ fn explicit_new_model_thinking_is_project_bound_and_only_new_payloads_get_overri
     let first = s.prepare("new:chosen", &d, true, false).unwrap();
     let payload: serde_json::Value =
         serde_json::from_str(&first.operation.as_ref().unwrap().payload).unwrap();
+    assert_eq!(payload["mode"], "build");
+    assert_eq!(payload["message"], "私の下書き");
+    assert_eq!(s.book.drafts["new:chosen"].mode, "ask");
     assert_eq!(payload["model"], "p/b");
     assert_eq!(payload["thinking"], "low");
     assert!(payload.get("cwd").is_none());

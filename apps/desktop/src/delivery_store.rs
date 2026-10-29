@@ -93,7 +93,7 @@ impl Default for Draft {
             cwd: String::new(),
             project_id: None,
             model_choice: None,
-            mode: "ask".into(),
+            mode: "build".into(),
             pending: None,
             last: None,
             created: None,
@@ -748,7 +748,7 @@ impl Store {
                 if create&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
                 // Project ID is the supported SpawnRequest contract. No cwd
                 // override: the daemon owns project/workspace resolution.
-                let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":captured.mode})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
+                let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":"build"})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
                 if create&&let Some(choice)=&captured.model_choice{
                     if captured.project_id.as_deref()!=Some(choice.project_id.as_str())||captured.cwd!=choice.cwd{return Err("Model choice belongs to another project directory. Choose it again explicitly.");}
                     payload["model"]=choice.choice.model.clone().into();
