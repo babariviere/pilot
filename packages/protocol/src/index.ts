@@ -233,6 +233,8 @@ export type GitHubAction = {
 	branch?: string;
 	prNumber?: number;
 	title?: string;
+	/** Exact URL of a PR the action created, only from confirmed `gh pr create` provenance. */
+	url?: string;
 	/** Top-level call, including when a nested codemode call performed the action. */
 	toolCallId?: string;
 	afterEntryId?: number;

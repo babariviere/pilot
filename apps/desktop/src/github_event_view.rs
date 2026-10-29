@@ -9,8 +9,8 @@ use crate::{
     ui::{self, Radius, Text},
 };
 use gpui_kit::{
-    App, Context, InteractiveElement, ParentElement, SharedString, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window,
+    App, ClipboardItem, Context, InteractiveElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Sizable, StyledExt,
         button::{Button, ButtonVariants},
@@ -160,6 +160,22 @@ impl TranscriptView {
                     .opacity(0.75)
             }))
             .children(show)
+            .children(event.url.clone().map(|url| {
+                // Pilot Next has no URL opener: the exact link is copied.
+                Button::new(("github-link", id))
+                    .ghost()
+                    .xsmall()
+                    .flex_none()
+                    .icon(AppIcon::Links.asset())
+                    .accessibility_label("Copy PR link")
+                    .tooltip(SharedString::from(format!("Copy link · {url}")))
+                    .opacity(0.)
+                    .group_hover("message", |s| s.opacity(1.))
+                    .focus_visible(|s| s.opacity(1.))
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(url.clone()))
+                    })
+            }))
             .child(div().flex_1())
             .child(
                 ui::text(Text::Caption, time)

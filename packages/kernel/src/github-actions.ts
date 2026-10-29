@@ -130,7 +130,10 @@ function options(words: string[]): { flags: Map<string, string>; positional: str
 	}
 	return { flags, positional, fields };
 }
-type Summary = Pick<GitHubAction, "summary" | "target" | "description" | "kind" | "branch" | "prNumber" | "title">;
+type Summary = Pick<
+	GitHubAction,
+	"summary" | "target" | "description" | "kind" | "branch" | "prNumber" | "title" | "url"
+>;
 export function githubCommandSummaries(
 	name: string,
 	args: Record<string, unknown>,
@@ -281,9 +284,10 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 						prNumber: Number(number),
 						target: `PR #${number}`,
 						description: `created PR #${number}`,
+						url: url!,
 					};
 			}
-			if (single && exitCode === 0 && initial.summary.startsWith("gh pr ") && !initial.target) {
+			if (single && exitCode === 0 && initial.summary.startsWith("gh pr ") && !summary.target) {
 				const output = (result.structuredContent as { output?: unknown } | undefined)?.output;
 				const text =
 					typeof output === "string"

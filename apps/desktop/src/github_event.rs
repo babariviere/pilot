@@ -51,6 +51,8 @@ pub(crate) struct Action {
     pub(crate) branch: Option<String>,
     pub(crate) pr: Option<u64>,
     pub(crate) title: Option<String>,
+    /// Exact URL of a PR the action created (confirmed provenance only).
+    pub(crate) url: Option<String>,
     pub(crate) tool_call: Option<String>,
     pub(crate) after_entry: Option<u64>,
     pub(crate) at: u64,
@@ -67,25 +69,42 @@ impl Action {
         let id = value["id"]
             .as_str()
             .filter(|id| !id.is_empty() && id.len() <= 512)?;
+        let kind = Kind::read(&value["kind"]);
+        let pr = value["prNumber"].as_u64().filter(|n| *n > 0);
+        let outcome = match value["exitCode"].as_i64() {
+            Some(0) => Outcome::Succeeded,
+            Some(code) => Outcome::Failed(code),
+            None => Outcome::Unknown,
+        };
+        // Only a confirmed creation's own PR: never shown for another kind,
+        // outcome or number than the one it names.
+        let url = value["url"]
+            .as_str()
+            .filter(|url| {
+                kind == Some(Kind::PrOpened)
+                    && outcome == Outcome::Succeeded
+                    && url.len() <= 2048
+                    && url.starts_with("https://")
+                    && !url.chars().any(char::is_whitespace)
+                    && pr.is_some_and(|n| url.ends_with(&format!("/pull/{n}")))
+            })
+            .map(str::to_owned);
         Some(Self {
             id: id.into(),
-            kind: Kind::read(&value["kind"]),
+            kind,
             description: text(&value["description"], 240)
                 .unwrap_or_else(|| "GitHub activity".into()),
             branch: text(&value["branch"], 240),
-            pr: value["prNumber"].as_u64().filter(|n| *n > 0),
+            pr,
             title: text(&value["title"], 240),
+            url,
             tool_call: value["toolCallId"]
                 .as_str()
                 .filter(|id| !id.is_empty() && id.len() <= 256)
                 .map(str::to_owned),
             after_entry: value["afterEntryId"].as_u64().filter(|id| *id < (1 << 53)),
             at: value["at"].as_u64().unwrap_or(0),
-            outcome: match value["exitCode"].as_i64() {
-                Some(0) => Outcome::Succeeded,
-                Some(code) => Outcome::Failed(code),
-                None => Outcome::Unknown,
-            },
+            outcome,
         })
     }
     /// The audit is a whole snapshot: the newest `CAP`, unreadable items and
@@ -110,6 +129,7 @@ pub(crate) struct Event {
     text: String,
     pub(crate) branch: Option<String>,
     pub(crate) title: Option<String>,
+    pub(crate) url: Option<String>,
     pub(crate) at: u64,
     pub(crate) end: Option<u64>,
     pub(crate) outcome: Outcome,
@@ -173,6 +193,7 @@ impl Event {
             },
             branch: action.branch.clone(),
             title: action.title.clone(),
+            url: action.url.clone(),
             at: action.at,
             end: None,
             outcome: action.outcome,
@@ -223,6 +244,7 @@ impl Event {
     pub(crate) fn help(&self) -> String {
         [
             Some(self.line()),
+            self.url.clone(),
             self.uncertainty().map(str::to_owned),
             self.detail(),
         ]
@@ -247,6 +269,7 @@ impl Event {
             && self.text == other.text
             && self.branch == other.branch
             && self.title == other.title
+            && self.url == other.url
             && self.outcome == other.outcome
     }
 }

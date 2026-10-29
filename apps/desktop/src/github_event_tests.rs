@@ -90,6 +90,59 @@ fn sentences_match_swift_and_unknown_or_failed_never_read_as_success() {
 }
 
 #[test]
+fn pr_link_is_only_a_confirmed_creations_own_exact_url() {
+    let url = "https://github.com/acme/app/pull/42";
+    let with = |mut v: Value, url: &str| {
+        v["url"] = json!(url);
+        Action::read(&v).unwrap()
+    };
+    let confirmed = with(opened("a", 1, json!(0)), url);
+    assert_eq!(confirmed.url.as_deref(), Some(url));
+    let event = Event::new(&confirmed);
+    assert_eq!(event.url.as_deref(), Some(url));
+    assert!(
+        event.help().contains(url),
+        "the exact link is in the row help"
+    );
+    // Never for a failed, unknown, other-kind, other-number or non-HTTPS record.
+    assert_eq!(with(opened_with_exit(json!(1)), url).url, None);
+    assert_eq!(with(opened_with_exit(Value::Null), url).url, None);
+    assert_eq!(with(push("p", 1, json!(0)), url).url, None);
+    assert_eq!(
+        with(
+            opened("b", 1, json!(0)),
+            "https://github.com/acme/app/pull/7"
+        )
+        .url,
+        None
+    );
+    assert_eq!(
+        with(
+            opened("c", 1, json!(0)),
+            "http://github.com/acme/app/pull/42"
+        )
+        .url,
+        None
+    );
+    assert_eq!(
+        with(
+            opened("d", 1, json!(0)),
+            "https://github.com/acme/app/pull/42 x"
+        )
+        .url,
+        None
+    );
+    assert_eq!(
+        Action::read(&opened_with_exit(json!(0))).unwrap().url,
+        None,
+        "older kernels"
+    );
+}
+fn opened_with_exit(exit: Value) -> Value {
+    opened("e", 1, exit)
+}
+
+#[test]
 fn audit_snapshot_is_bounded_deduplicated_and_skips_unreadable_items() {
     let mut items = vec![
         json!({"kind":"push"}),

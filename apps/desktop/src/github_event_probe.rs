@@ -26,9 +26,11 @@ fn action(id: &str, kind: &str, after: u64, exit: serde_json::Value) -> serde_js
     if kind.starts_with("pr_") {
         v["prNumber"] = json!(42);
         v["title"] = json!("Show confirmed pushes and PRs inline 👋");
+        v["url"] = json!(URL);
     }
     v
 }
+const URL: &str = "https://github.com/acme/app/pull/42";
 fn rows() -> Vec<Message> {
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"snapshot","entries":[
@@ -134,6 +136,15 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
                     w.find_all(("github-title", push)).is_empty(),
                     "no invented title"
                 );
+                // Only the confirmed PR offers its exact link; activation copies it.
+                assert!(w.find_all(("github-link", push)).is_empty());
+                let link = w.find(("github-link", pr));
+                assert_eq!(link.label(), Some("Copy PR link"));
+                assert!(!link.visible(), "revealed on hover or keyboard focus");
+                w.pointer_move(link.bounds().center(), None, cx);
+                w.click(("github-link", pr), cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), URL);
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
                 // Only a failure offers details; success and unknown don't.
                 assert!(w.find_all(("github-show", push)).is_empty());
                 assert!(w.find_all(("github-show", unknown)).is_empty());
@@ -178,6 +189,27 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
                 if w.focused(cx).is_none() {
                     w.focus_next(cx);
                 }
+            })
+            .unwrap();
+            // Keyboard: Tab reaches the PR link first; Enter copies the exact URL.
+            let mut on_link = false;
+            for _ in 0..40 {
+                on_link = cx
+                    .update_window(h, |_, w, cx| {
+                        w.press("tab", cx);
+                        w.find(("github-link", pr)).focused() == Some(true)
+                    })
+                    .unwrap();
+                settle(cx, h);
+                if on_link {
+                    break;
+                }
+            }
+            assert!(on_link, "Tab must reach the PR link");
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.find(("github-link", pr)).visible(), "focus reveals it");
+                w.press("enter", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), URL);
             })
             .unwrap();
             let mut reached = false;

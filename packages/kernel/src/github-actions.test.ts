@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, MemoryStorage } from "@earendil-works/pi-durable";
-import { actionText, appendGitHubAction, GitHubActionsDoc, githubCommandSummaries } from "./github-actions.ts";
+import type { GitHubAction } from "@pilot/protocol";
+import {
+	actionText,
+	appendGitHubAction,
+	GitHubActionsDoc,
+	githubActions,
+	githubCommandSummaries,
+} from "./github-actions.ts";
 
 const summaries = (command: string) => githubCommandSummaries("bash", { command }).summaries;
 test("write summaries retain operations and validated targets, never bodies or credentials", () => {
@@ -81,6 +88,33 @@ test("failure and unknown status never claim success", () => {
 	assert.match(actionText(action), /attempted:.*failed, exit 1/);
 	assert.match(actionText({ ...action, exitCode: null }), /attempted:.*unknown/);
 	assert.doesNotMatch(actionText({ ...action, exitCode: 0 }), /attempted|failed|unknown/);
+});
+test("only a confirmed PR creation records its exact URL", async () => {
+	const run = async (command: string, exitCode: number, output: string) => {
+		const recorded: GitHubAction[] = [];
+		const audit = githubActions(async (action) => {
+			recorded.push(action);
+		});
+		const tool = {
+			name: "bash",
+			execute: async () => ({
+				content: [{ type: "text", text: output }],
+				details: { __piNativeAdapter: { structuredContent: { exit_code: exitCode, output } } },
+			}),
+		};
+		// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic extension and call context.
+		const [wrapped] = audit.prepare({ tools: [tool] } as any).tools as any[];
+		await wrapped.execute({ command }, { callId: "call-1" }, {});
+		return recorded;
+	};
+	const url = "https://github.com/acme/app/pull/42";
+	const [opened] = await run("gh pr create --title 'Inline events'", 0, `${url}\n`);
+	assert.equal(opened?.url, url);
+	assert.equal(opened?.prNumber, 42);
+	assert.equal((await run("gh pr create --title 'Inline events'", 1, `${url}\n`))[0]?.url, undefined);
+	assert.equal((await run("gh pr create", 0, `See ${url} and more\n`))[0]?.url, undefined);
+	assert.equal((await run("gh pr ready 42", 0, `${url}\n`))[0]?.url, undefined);
+	assert.equal((await run("git push origin feat/a", 0, `${url}\n`))[0]?.url, undefined);
 });
 test("session audit is bounded, deduplicated and independent of conversation forks", async () => {
 	const session = createSession(new MemoryStorage());

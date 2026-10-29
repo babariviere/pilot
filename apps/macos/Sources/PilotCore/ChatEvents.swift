@@ -7,6 +7,8 @@ public struct GitHubAction: Equatable, Sendable {
     public let branch: String?
     public let prNumber: Int?
     public let title: String?
+    /// Exact URL of a PR the action created, from confirmed provenance only.
+    public let url: String?
     public let toolCallId: String?
     public let afterEntryId: Int?
     public let conversationId: String?
@@ -24,6 +26,7 @@ public struct GitHubAction: Equatable, Sendable {
         branch = json["branch"]?.string
         prNumber = json["prNumber"]?.int
         title = json["title"]?.string
+        url = json["url"]?.string
         toolCallId = json["toolCallId"]?.string
         afterEntryId = json["afterEntryId"]?.int
         conversationId = json["conversationId"]?.string
