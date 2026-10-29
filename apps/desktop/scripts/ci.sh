@@ -139,6 +139,10 @@ PY
     # tests run here too because their fixture/platform paths differ on macOS.
     updater_native_tests=(
       staging_keeps_installed_app_unchanged_and_holds_permanent_target_lock
+      macos_staging_never_exposes_intermediate_apps_beside_installation
+      temporary_payload_handoff_survives_worker_drop_and_relocated_target
+      purged_temporary_payload_never_replays_committed_install_or_loses_recovery
+      failed_download_cleans_only_its_exact_private_temporary_workspace
       ordinary_quit_eof_never_commits_or_replaces_the_bundle
       explicit_commit_is_durable_but_does_not_replace_a_living_parent
       native_atomic_swap_retains_old_bundle_and_requires_startup_ack
@@ -159,6 +163,9 @@ PY
       retained_transaction_bound_and_unpublished_cleanup_never_erase_ready_state
       actual_security_framework_validates_whole_temporary_bundle_identity_version_and_tampering
       local_signed_source_stages_then_normal_release_verification_still_works
+      prepared_payload_moves_extraction_before_commit_but_never_trusts_mutable_staging
+      prepared_payload_cancellation_can_retry_but_commit_never_discards_evidence
+      prepared_payload_still_requires_commit_and_fresh_post_exit_guard
     )
     cargo test --locked "${updater[@]}" --lib --features native-macos -- --list > target/ci-updater-macos-tests.txt
     for test in "${updater_native_tests[@]}"; do
@@ -256,7 +263,7 @@ PY
     echo 'Native capability/probes started; no success recorded.' > "$status"
     trap 'code=$?; if [[ $code -ne 0 ]]; then echo "FAILED (exit $code), not skipped/passed" >> "$status"; fi' EXIT
     # Compile every ordinary probe even on hosts without a Metal device.
-    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench glass catalog settings dogfooding_diagnostics mission project_creation missions project_add scoped_models artifact_images artifact_gallery inline_visual delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls mission_activity mission_brief mission_task_create mission_update fonts mission_create chat_rename task_status mission_metadata session_failure context_usage task_model task_edit conversation_links mission_lifecycle usage_overview provider_usage workspace_changes session_file_view conversation_images queued_message mission_decisions transcript_find session_todos session_jobs tool_diff_preview message_fold message_footer new_chat_view path_completion native_mermaid chart_keyboard mission_comments side_panel native_menus daemon_upgrade chat_links)
+    tests=(rendering chrome visuals disclosure style icons motion controls history shell navigation inbox jump workbench glass catalog settings dogfooding_diagnostics mission project_creation missions project_add scoped_models artifact_images artifact_gallery inline_visual delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls mission_activity mission_brief mission_task_create mission_update fonts mission_create chat_rename task_status mission_metadata session_failure context_usage task_model task_edit conversation_links mission_lifecycle usage_overview provider_usage workspace_changes session_file_view conversation_images queued_message mission_decisions transcript_find session_todos session_jobs tool_diff_preview message_fold question_entry github_events message_footer new_chat_view path_completion native_mermaid chart_keyboard mission_comments side_panel native_menus daemon_upgrade chat_links)
     args=()
     for test in "${tests[@]}"; do args+=(--test "$test"); done
     cargo test --locked --features native-probes --no-run "${args[@]}"
