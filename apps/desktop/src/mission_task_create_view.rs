@@ -38,6 +38,16 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Close> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// A typed, unsent task draft, or an unanswered create.
+    pub(crate) fn update_hold(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Hold> {
+        let typed = !self.title.read(cx).value().trim().is_empty()
+            || !self.body.read(cx).value().trim().is_empty();
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            !self.state.blocked() && typed,
+        )
+    }
     pub(crate) fn new(
         key: Key,
         options: LocalOptions,

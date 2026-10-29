@@ -21,6 +21,8 @@ pub(crate) enum Event {
     Changed,
     UpgradeDaemon,
     DaemonChanged,
+    /// Show the place named by the current install refusal.
+    ShowBlocker,
 }
 pub(crate) struct Updates {
     controller: Option<Updater<Worker>>,
@@ -31,6 +33,8 @@ pub(crate) struct Updates {
     pub(crate) fenced: bool,
     cancel_prepare: bool,
     pub(crate) notice: Option<&'static str>,
+    /// What the last install refusal named, for its Show action while that notice is shown.
+    pub(crate) blocker: Option<crate::update_hold::Blocker>,
     /// The profile daemon whose agents pause before installing, as in the Swift app.
     location: Option<Location>,
     external: bool,
@@ -628,6 +632,26 @@ impl Updates {
         }
         result
     }
+    /// A controller-free UI-only reload that is ready to install. No worker, trust,
+    /// transaction, daemon or profile exists, and agents are never paused for it.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_ready_local() -> Self {
+        let mut u = Self::blank(
+            Some(Location {
+                home: "/synthetic-managed".into(),
+                port: 1,
+                policy: Default::default(),
+            }),
+            false,
+        );
+        u.inspected = true;
+        u.local_build = true;
+        u.probe_state = Some(State::ReadyToRestart(pilot_desktop_updater::Candidate {
+            version: "synthetic-local".into(),
+            short_version: "0.1.1".into(),
+        }));
+        u
+    }
     /// Controller-free state; `new` attaches the worker.
     fn blank(location: Option<Location>, external: bool) -> Self {
         Self {
@@ -651,6 +675,7 @@ impl Updates {
             fenced: false,
             cancel_prepare: false,
             notice: None,
+            blocker: None,
             location,
             external,
             local_build: false,
@@ -1005,10 +1030,31 @@ impl Updates {
     }
     pub(crate) fn defer(&mut self, message: &'static str, cx: &mut Context<Self>) {
         self.notice = Some(message);
+        self.blocker = None;
         self.fenced = false;
         self.cancel_prepare = false;
         self.stop_pausing();
         cx.notify();
+    }
+    /// Defers with the blocker's own message and offers to show where it is.
+    pub(crate) fn block(&mut self, blocker: crate::update_hold::Blocker, cx: &mut Context<Self>) {
+        self.defer(blocker.message(), cx);
+        self.blocker = Some(blocker);
+    }
+    /// The Show label, only while the blocker's notice is the one displayed.
+    fn blocker_action(&self) -> Option<&'static str> {
+        use crate::update_hold::Destination;
+        let blocker = self.blocker.as_ref()?;
+        if self.notice != Some(blocker.message()) {
+            return None;
+        }
+        Some(match blocker.destination()? {
+            Destination::ScopedModels => "Open Scoped models",
+            Destination::MainWindow => "Show",
+            Destination::Chat(_) => "Open chat",
+            Destination::Missions => "Open Missions",
+            Destination::Mission(_) => "Open mission",
+        })
     }
     /// Pauses agents once their current tool calls finish before installing. Returns true
     /// once they are paused (or there is no daemon to pause). Until then the lease is
@@ -1547,6 +1593,14 @@ impl Render for Updates {
         }
         if let Some(notice) = self.notice {
             view = view.child(Notice::new(notice).tone(Tone::Warning));
+        }
+        if let Some(label) = self.blocker_action() {
+            view = view.child(
+                action_row().child(
+                    ui::action("updates-show-blocker", label, Action::Secondary)
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(Event::ShowBlocker))),
+                ),
+            );
         }
         view.child(ui::text(
             Text::Caption,

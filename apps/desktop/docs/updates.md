@@ -100,6 +100,11 @@ authentication for the ordinary loopback API.
 1. Fence UI admissions and reject preedit, unsaved secondary forms, unresolved
    deliveries/model changes/mission outcomes, active or unreaped visual helpers,
    and pending preference operations. Nothing is discarded to obtain readiness.
+   A form holds the install only while it has unsent input, an unanswered request
+   or (for preferences) an unconfirmed write; a form that was merely opened, closed
+   or answered does not, and an Unknown secondary outcome is never resent by a
+   restart. The refusal names the first blocker (`update_hold.rs`) and offers a
+   Show action that navigates to it through the ordinary guarded routes.
 2. Capture exact editor/draft/outbox/cache/question revisions. An ordered writer
    checkpoint returns an actual durable ACK; a timer is never a flush receipt.
    Missing default preferences may be persisted by this explicit checkpoint;

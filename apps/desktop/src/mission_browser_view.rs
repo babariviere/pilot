@@ -138,13 +138,45 @@ impl Browser {
         title.map(|title| (title, self.online))
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn restart_safe(&self, cx: &App) -> bool {
-        self.creation.is_none()
-            && self.lifecycle.is_empty()
-            && self.metadata.is_empty()
-            && self.brief.is_none()
-            && self.activity_browser.is_none()
-            && self.tasks_browser.read(cx).restart_safe()
+    /// The first retained form with unsent input or an unanswered request. Forms are kept
+    /// after closing so drafts survive; merely having opened one holds nothing.
+    pub(crate) fn update_blocker(&self, cx: &App) -> Option<crate::update_hold::Blocker> {
+        use crate::update_hold::Blocker;
+        if let Some(hold) = self
+            .creation
+            .as_ref()
+            .and_then(|f| f.read(cx).update_hold(cx))
+        {
+            return Some(Blocker::NewMission(hold));
+        }
+        let mission = |key: &Key, hold| Blocker::Mission {
+            key: key.clone(),
+            hold,
+        };
+        let lifecycle = self.lifecycle.iter().find_map(|f| {
+            let f = f.read(cx);
+            f.update_hold().map(|h| mission(&f.source.key, h))
+        });
+        let metadata = || {
+            self.metadata.iter().find_map(|f| {
+                let f = f.read(cx);
+                f.update_hold(cx).map(|h| mission(&f.source.key, h))
+            })
+        };
+        let brief = || {
+            let (key, hold) = self.brief.as_ref()?.read(cx).update_hold()?;
+            Some(mission(&key, hold))
+        };
+        let update = || {
+            let activity = self.activity_browser.as_ref()?.read(cx);
+            let (key, hold) = activity.update.read(cx).update_hold(cx)?;
+            Some(mission(&key, hold))
+        };
+        lifecycle
+            .or_else(metadata)
+            .or_else(brief)
+            .or_else(update)
+            .or_else(|| self.tasks_browser.read(cx).update_blocker(cx))
     }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let detail_scroll = gpui_kit::ScrollHandle::default();

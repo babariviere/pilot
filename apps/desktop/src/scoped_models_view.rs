@@ -169,13 +169,21 @@ impl ScopedModels {
         })
     }
     pub(crate) fn unsettled(&self, cx: &gpui_kit::App) -> bool {
-        self.busy
-            || self.unconfirmed
-            || self.edited
+        self.update_hold(cx).is_some()
+    }
+    /// Same conditions as `unsettled`, named for the update gate's message.
+    pub(crate) fn update_hold(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Hold> {
+        use crate::update_hold::Hold;
+        let changed = self.edited
             || self.baseline.as_ref().is_some_and(|b| {
                 let normalized = b.enabled_models.as_ref().filter(|p| !p.is_empty()).cloned();
                 normalized != self.selection(cx)
-            })
+            });
+        if self.unconfirmed {
+            Some(Hold::Unconfirmed)
+        } else {
+            Hold::of(self.busy, changed)
+        }
     }
     pub(crate) fn load(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.baseline.is_none() {

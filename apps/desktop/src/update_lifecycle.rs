@@ -1,5 +1,6 @@
 //! Explicit install intent, separate from ordinary Quit. No timer is a flush ACK.
 use super::*;
+use crate::update_hold::{Blocker, Hold};
 use gpui_kit::EntityInputHandler;
 use pilot_desktop_updater::{Flush, Runtime, Safety, State};
 
@@ -15,7 +16,10 @@ impl LocalViewer {
                 crate::updates_view::Event::Restart => view.begin_update_restart(window, cx),
                 crate::updates_view::Event::Changed => view.advance_update_restart(window, cx),
                 crate::updates_view::Event::UpgradeDaemon => view.begin_daemon_upgrade(window, cx),
-                crate::updates_view::Event::DaemonChanged => view.advance_daemon_upgrade(window, cx),
+                crate::updates_view::Event::DaemonChanged => {
+                    view.advance_daemon_upgrade(window, cx)
+                }
+                crate::updates_view::Event::ShowBlocker => view.show_update_blocker(window, cx),
             },
         ));
         self.update_events.push(
@@ -24,25 +28,133 @@ impl LocalViewer {
             }),
         );
     }
-    pub(super) fn secondary_update_safe(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        !self.mission_open
-            && !self.add_project_open
-            && self.jump.is_none()
-            && self.queue_checkpoint_safe(cx)
-            && self.chat_actions.read(cx).restart_safe()
-            && self.mission.read(cx).restart_safe(cx)
-            && self.missions.read(cx).restart_safe(cx)
-            && !self.add_project.read(cx).pending
-            && !self.add_project.read(cx).choosing
-            && self.add_project.read(cx).path.is_none()
-            && self.project_choices_ready(window, cx)
-            // Preedit in secondary fields is a veto, never committed or discarded.
-            && !self
-                .chats
-                .read(cx)
-                .query_input()
-                .update(cx, |q, cx| q.marked_text_range(window, cx).is_some())
-            && !self.missions.update(cx, |m, cx| m.brief_marked(window, cx))
+    /// The first preference or secondary form state an update restart would lose or leave
+    /// unconfirmed. The composer, its drafts and deliveries are checked by the checkpoint itself.
+    pub(super) fn update_blocker(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Blocker> {
+        let owner = self.settings.read(cx);
+        let s = &owner.state;
+        let preferences = if !s.loaded() {
+            Some(if s.error().is_some() {
+                Blocker::PreferencesFailed
+            } else {
+                Blocker::PreferencesLoading
+            })
+        } else if s.saving() {
+            Some(Blocker::Preferences(Hold::Sending))
+        } else if s.unconfirmed() {
+            Some(Blocker::Preferences(Hold::Unconfirmed))
+        } else if s.dirty() {
+            Some(Blocker::Preferences(Hold::Unsaved))
+        } else if s.error().is_some() {
+            Some(Blocker::PreferencesFailed)
+        } else {
+            owner
+                .models
+                .as_ref()
+                .and_then(|m| m.read(cx).update_hold(cx))
+                .map(Blocker::ScopedModels)
+        };
+        preferences.or_else(|| self.secondary_blocker(window, cx))
+    }
+    pub(super) fn secondary_blocker(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Blocker> {
+        use gpui_kit::component::WindowExt;
+        // Preedit in secondary fields is a veto, never committed or discarded.
+        if self
+            .chats
+            .read(cx)
+            .query_input()
+            .update(cx, |q, cx| q.marked_text_range(window, cx).is_some())
+            || self.missions.update(cx, |m, cx| m.brief_marked(window, cx))
+        {
+            return Some(Blocker::Composition);
+        }
+        if self.jump.is_some() {
+            return Some(Blocker::Jump);
+        }
+        if self.mission_open {
+            return Some(Blocker::Conversion(Hold::Unsaved));
+        }
+        if let Some(hold) = self.mission.read(cx).update_hold() {
+            return Some(Blocker::Conversion(hold));
+        }
+        let add = self.add_project.read(cx);
+        if add.pending {
+            return Some(Blocker::AddProject(Hold::Sending));
+        }
+        // A chosen folder outlives the closed sheet (and a finished registration) but holds
+        // no typed input; the writer's book owns sent registrations.
+        if self.add_project_open || add.choosing {
+            return Some(Blocker::AddProject(Hold::Unsaved));
+        }
+        if let Some(chat) = self.queue_hold_chat(cx) {
+            return Some(Blocker::QueuedMessage { chat });
+        }
+        let dialog = window.has_active_dialog(cx);
+        if let Some(blocker) = self
+            .chat_actions
+            .read(cx)
+            .update_blocker(dialog, cx)
+            .or_else(|| self.missions.read(cx).update_blocker(cx))
+        {
+            return Some(blocker);
+        }
+        // What remains is preedit in the composer, a queue editor or the Inbox picker.
+        (!self.project_choices_ready(window, cx)).then_some(Blocker::Composition)
+    }
+    /// Takes the user to the place named by the last refusal. Navigation goes through the
+    /// ordinary guarded routes; nothing is saved, discarded or opened for editing.
+    fn show_update_blocker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::navigation::{Location, Target};
+        use crate::update_hold::Destination;
+        let Some(destination) = self
+            .updater(cx)
+            .and_then(|u| u.read(cx).blocker.as_ref().and_then(Blocker::destination))
+        else {
+            return;
+        };
+        if destination == Destination::ScopedModels {
+            return; // The Settings window selects its own page.
+        }
+        window.activate_window();
+        match destination {
+            Destination::Chat(id) => {
+                let scoped = Location {
+                    scope: self.location(cx).scope,
+                    target: Target::Chat(id.clone()),
+                };
+                let location = if self.can_restore(&scoped, cx) {
+                    scoped
+                } else {
+                    Location {
+                        scope: None,
+                        target: Target::Chat(id),
+                    }
+                };
+                if location != self.location(cx)
+                    && self.can_restore(&location, cx)
+                    && self.prepare_navigation(window, cx)
+                    && self.restore_location(&location, window, cx)
+                {
+                    self.did_navigate(cx);
+                }
+            }
+            Destination::Missions => {
+                self.show_missions(window, cx);
+            }
+            Destination::Mission(key) => {
+                self.show_mission_overview(key, window, cx);
+            }
+            Destination::ScopedModels | Destination::MainWindow => {}
+        }
+        cx.notify();
     }
     fn begin_update_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(updater) = self.updater(cx) else {
@@ -67,21 +179,8 @@ impl LocalViewer {
             });
             return;
         }
-        let settings = &self.settings.read(cx).state;
-        if !settings.loaded()
-            || settings.dirty()
-            || settings.saving()
-            || settings.unconfirmed()
-            || settings.error().is_some()
-            || self
-                .settings
-                .read(cx)
-                .models
-                .as_ref()
-                .is_some_and(|m| m.read(cx).unsettled(cx))
-            || !self.secondary_update_safe(window, cx)
-        {
-            updater.update(cx,|u,cx|u.defer("Finish or preserve secondary editor changes and pending operations before installing. Nothing was discarded.",cx));
+        if let Some(blocker) = self.update_blocker(window, cx) {
+            updater.update(cx, |u, cx| u.block(blocker, cx));
             return;
         }
         // Like the Swift app, pause agents once their current tool calls finish. Input is not
@@ -115,6 +214,7 @@ impl LocalViewer {
         });
         updater.update(cx, |u, cx| {
             u.fenced = true;
+            u.blocker = None;
             u.notice = Some("Saving an exact draft/outbox/preferences checkpoint…");
             cx.notify();
         });
@@ -426,6 +526,302 @@ mod tests {
             assert_eq!(update_location(&value), None, "{value}");
         }
     }
+}
+
+/// The install gate on a production view: a clean loaded viewer, and forms that were opened
+/// and closed or already answered, reach the checkpoint; held work is named and shown, never
+/// discarded. No receipt, daemon, worker or profile is used; the writer only records.
+#[cfg(feature = "native-probes")]
+pub(crate) fn probe_update_blockers(cx: &mut gpui_kit::HeadlessAppContext) {
+    use crate::mission_browser::{Home, Key};
+    use crate::navigation::{Location, Target};
+    use crate::settings_state::{AppearancePreference, LoadedPreferences, Preferences};
+    use gpui_kit::{Bounds, WindowBounds, WindowOptions, size};
+    use serde_json::json;
+    let catalog = crate::local_model::projects(
+        &json!([{"id":"a","name":"Synthetic Atlas","path":"/synthetic/a"}]),
+    )
+    .unwrap();
+    let raw = json!({"id":"synthetic","projectId":"a","title":"Atlas conversation","cwd":"/synthetic/a","mode":"ask","state":"idle"});
+    let chats = vec![crate::local_model::chat(&raw).unwrap()];
+    let (client, _reads) = LocalClient::synthetic_commands();
+    let (writer, writes) = Interaction::recording();
+    let (h, v) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(680.), px(600.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                cx.new(|cx| {
+                    let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                    v.client = Some(client);
+                    v.writer = Some(writer.clone());
+                    v.editor
+                        .update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                    v.state.projects = Arc::new(catalog);
+                    v.state.projects_loaded = true;
+                    v.state.list_loaded = true;
+                    v.state.chats = Arc::new(chats);
+                    assert!(v.restore_location(&Location::home(), w, cx));
+                    v
+                })
+            },
+        )
+        .unwrap()
+    });
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            let options = crate::LocalOptions::synthetic(1);
+            let updater = cx.new(|_| crate::updates_view::Updates::probe_ready_local());
+            v.settings
+                .update(cx, |o, _| o.updater = Some(updater.clone()));
+            let notice = |cx: &App| updater.read(cx).notice;
+
+            // Preferences: loading, then the clean loaded baseline.
+            if !v.settings.read(cx).state.loaded() {
+                assert_eq!(v.update_blocker(w, cx), Some(Blocker::PreferencesLoading));
+                v.settings.update(cx, |o, _| {
+                    assert!(o.state.begin_load());
+                    assert!(o.state.finish_load(Ok(LoadedPreferences {
+                        preferences: Preferences::default(),
+                        persisted: true,
+                    })));
+                });
+            }
+            assert_eq!(v.update_blocker(w, cx), None, "clean loaded idle viewer");
+
+            // Each preference state is named, and Settings keeps the edit.
+            v.settings.update(cx, |o, _| {
+                assert!(o.state.set_appearance(AppearancePreference::Dark))
+            });
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::Preferences(Hold::Unsaved))
+            );
+            v.begin_update_restart(w, cx);
+            assert!(!v.restart_pending);
+            assert_eq!(
+                notice(cx),
+                Some(Blocker::Preferences(Hold::Unsaved).message())
+            );
+            assert_eq!(
+                v.settings.read(cx).state.current().appearance,
+                AppearancePreference::Dark,
+                "nothing was reverted"
+            );
+            let save = v.settings.update(cx, |o, _| o.state.begin_save().unwrap());
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::Preferences(Hold::Sending))
+            );
+            v.settings.update(cx, |o, _| {
+                o.state.finish_save(
+                    save,
+                    Err(crate::settings_state::SettingsError::DurabilityUnknown),
+                )
+            });
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::Preferences(Hold::Unconfirmed))
+            );
+            let retry = v.settings.update(cx, |o, _| o.state.begin_save().unwrap());
+            v.settings
+                .update(cx, |o, _| o.state.finish_save(retry, Ok(())));
+            assert_eq!(v.update_blocker(w, cx), None, "confirmed save settles");
+
+            // Forms that were opened and closed, or answered, hold nothing. Each of these
+            // made the former existence-based gate refuse for the rest of the session.
+            let key = Key {
+                home: Home {
+                    daemon: "synthetic-daemon".into(),
+                    lineage: "synthetic-lineage".into(),
+                },
+                id: "mission-1".into(),
+            };
+            let source = crate::mission_brief::Source {
+                key: key.clone(),
+                project: "a".into(),
+            };
+            let projects = v.state.projects.as_ref().clone();
+            let metadata = v.missions.update(cx, |b, cx| {
+                b.brief =
+                    Some(cx.new(|cx| {
+                        crate::mission_brief_view::Workspace::new(options.clone(), w, cx)
+                    }));
+                b.activity_browser = Some(cx.new(crate::mission_activity_view::Activity::new));
+                b.creation = Some(cx.new(|cx| {
+                    crate::mission_create_view::Form::new(projects, options.clone(), w, cx)
+                }));
+                b.lifecycle.push(cx.new(|cx| {
+                    crate::mission_lifecycle_view::Form::new(
+                        source.clone(),
+                        options.clone(),
+                        crate::mission_lifecycle::Action::Archive,
+                        cx,
+                    )
+                }));
+                let metadata = cx.new(|cx| {
+                    crate::mission_metadata_view::Form::new(source.clone(), options.clone(), w, cx)
+                });
+                b.metadata.push(metadata.clone());
+                metadata
+            });
+            v.add_project
+                .update(cx, |a, _| a.path = Some("/synthetic/added".into()));
+            let target = crate::chat_actions::Target::new(&options, v.state.chats[0].clone());
+            let evidence = crate::chat_actions::Evidence::read(&target, &raw, true).unwrap();
+            let rename =
+                cx.new(|cx| crate::chat_rename_view::Rename::new(options.clone(), evidence, w, cx));
+            rename.update(cx, |r, cx| {
+                r.input
+                    .update(cx, |i, cx| i.set_value("Renamed atlas", w, cx));
+                r.outcome = Some(crate::chat_actions::Outcome::Acknowledged);
+            });
+            v.chat_actions.update(cx, |a, _| {
+                a.renames.insert("synthetic".into(), rename.clone());
+                a.latest_rename = Some("synthetic".into());
+            });
+            v.mission.update(cx, |f, cx| {
+                f.open(
+                    crate::mission_conversion::Target {
+                        source: "synthetic".into(),
+                        project: "a".into(),
+                        generation: v.generation,
+                    },
+                    "Atlas conversation",
+                    w,
+                    cx,
+                );
+                f.close(w, cx);
+            });
+            // The former gate refused on existence alone: a retained brief, activity,
+            // creation, lifecycle or metadata form, any rename, a chosen project folder,
+            // or the conversion sheet's prefilled title.
+            let missions = v.missions.read(cx);
+            assert!(missions.brief.is_some() && missions.activity_browser.is_some());
+            assert!(missions.creation.is_some() && !missions.lifecycle.is_empty());
+            assert!(!missions.metadata.is_empty());
+            assert!(!v.chat_actions.read(cx).renames.is_empty());
+            assert!(v.add_project.read(cx).path.is_some());
+            assert!(!v.mission.read(cx).title.read(cx).value().is_empty());
+            assert_eq!(
+                v.update_blocker(w, cx),
+                None,
+                "opened, closed and answered forms"
+            );
+            v.begin_update_restart(w, cx);
+            assert!(v.restart_pending, "the existing checkpoint flow starts");
+            assert_eq!(updater.read(cx).blocker, None);
+            assert!(updater.read(cx).fenced);
+            v.end_update_restart("Probe cancelled before preparation.", cx);
+            assert!(!v.restart_pending);
+
+            // Unsent edits are named with a Show action and kept as typed.
+            metadata.update(cx, |f, cx| {
+                f.loaded = true;
+                f.title
+                    .update(cx, |t, cx| t.set_value("Retained 日本語 title", w, cx));
+            });
+            let held = Blocker::Mission {
+                key: key.clone(),
+                hold: Hold::Unsaved,
+            };
+            assert_eq!(v.update_blocker(w, cx), Some(held.clone()));
+            v.begin_update_restart(w, cx);
+            assert!(!v.restart_pending);
+            assert_eq!(notice(cx), Some(held.message()));
+            assert_eq!(updater.read(cx).blocker, Some(held));
+            assert_eq!(
+                metadata.read(cx).title.read(cx).value().as_ref(),
+                "Retained 日本語 title"
+            );
+            // An answered save is settled; an Unknown one is never resent, so it holds nothing.
+            let save = metadata.update(cx, |f, cx| {
+                let title = f.title.read(cx).value().to_string();
+                f.state.begin(&f.source, &title, "").unwrap()
+            });
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::Mission {
+                    key: key.clone(),
+                    hold: Hold::Sending
+                })
+            );
+            metadata.update(cx, |f, _| {
+                assert!(
+                    f.state
+                        .finish(&save, crate::mission_metadata::Outcome::Unknown("lost"))
+                )
+            });
+            assert_eq!(v.update_blocker(w, cx), None);
+
+            // A rename still waiting for Local names its chat, and Show opens it.
+            rename.update(cx, |r, _| {
+                r.outcome = None;
+                r.pending = true;
+            });
+            let held = Blocker::ChatRename {
+                chat: "synthetic".into(),
+                hold: Hold::Sending,
+            };
+            assert_eq!(v.update_blocker(w, cx), Some(held.clone()));
+            v.begin_update_restart(w, cx);
+            assert_eq!(notice(cx), Some(held.message()));
+            assert_eq!(v.location(cx), Location::home());
+            v.show_update_blocker(w, cx);
+            assert_eq!(v.location(cx).target, Target::Chat("synthetic".into()));
+            rename.update(cx, |r, _| r.pending = false);
+            // A closed rename's text is replaced on reopen; only the open dialog holds it.
+            assert_eq!(rename.read(cx).update_hold(true, cx), Some(Hold::Unsaved));
+            assert_eq!(v.update_blocker(w, cx), None);
+
+            // Preedit in a secondary field is a veto, kept rather than committed.
+            let query = v.chats.read(cx).query_input();
+            query.update(cx, |q, cx| {
+                q.replace_and_mark_text_in_range(None, "にほ", None, w, cx)
+            });
+            assert_eq!(v.update_blocker(w, cx), Some(Blocker::Composition));
+            assert!(query.update(cx, |q, cx| q.marked_text_range(w, cx).is_some()));
+            query.update(cx, |q, cx| {
+                q.unmark_text(w, cx);
+                q.set_value("", w, cx);
+            });
+            assert_eq!(v.update_blocker(w, cx), None);
+
+            // Pending project registration and an open conversion sheet are named.
+            v.add_project.update(cx, |a, _| a.pending = true);
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::AddProject(Hold::Sending))
+            );
+            v.add_project.update(cx, |a, _| a.pending = false);
+            v.mission_open = true;
+            assert_eq!(
+                v.update_blocker(w, cx),
+                Some(Blocker::Conversion(Hold::Unsaved))
+            );
+            v.mission_open = false;
+            assert_eq!(v.update_blocker(w, cx), None);
+        })
+    })
+    .unwrap();
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    cx.run_until_parked();
+    let commands: Vec<_> = std::iter::from_fn(|| writes.try_recv().ok()).collect();
+    assert!(
+        commands
+            .iter()
+            .all(|c| matches!(c, crate::interaction::WriteCommand::Checkpoint(_))),
+        "only the explicit checkpoint was written"
+    );
 }
 
 /// Hidden production-view restore checks. No receipt, daemon, writer or profile is read.

@@ -61,7 +61,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             assert!(!a.blocked(&id));
             assert!(a.read_only(&id));
             #[cfg(target_os = "macos")]
-            assert!(a.restart_safe());
+            assert_eq!(a.update_blocker(false, cx), None);
         });
         // Same target, fresh evidence; reject before POST by changing its stamp.
         let mut stale = evidence(&id, Behavior::Accept);
@@ -77,7 +77,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         cx.update(|cx| {
             assert!(!actions.read(cx).read_only(&id));
             #[cfg(target_os = "macos")]
-            assert!(actions.read(cx).restart_safe());
+            assert_eq!(actions.read(cx).update_blocker(false, cx), None);
         });
     }
     assert_eq!(server.posts(), 40);
@@ -93,7 +93,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
         assert!(a.blocked("pending") && a.blocked("unseen"));
         assert!(a.read_only("pending"));
         #[cfg(target_os = "macos")]
-        assert!(!a.restart_safe());
+        assert_eq!(
+            a.update_blocker(false, cx),
+            Some(crate::update_hold::Blocker::ChatAction)
+        );
     });
     submit(cx, pending.clone());
     let mut other = pending.clone();
@@ -130,14 +133,16 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             actions.read(cx).outcome(&id) == Some(&Outcome::Acknowledged)
         });
         cx.update(|cx| {
-            actions.update(cx, |a, _| {
+            actions.update(cx, |a, cx| {
                 assert!(a.blocked("unknown"));
                 assert!(a.read_only("unknown"));
                 assert!(a.inspection_ack("unknown").is_none());
                 a.inspected(&unknown, None);
                 assert!(a.read_only("unknown"));
+                // Unknown stays fenced for inspection, but a restart never resends it,
+                // so it does not hold an update.
                 #[cfg(target_os = "macos")]
-                assert!(!a.restart_safe());
+                assert_eq!(a.update_blocker(false, cx), None);
             })
         });
         submit(cx, unknown.clone());

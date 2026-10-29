@@ -53,11 +53,10 @@ impl EventEmitter<Event> for MissionForm {}
 
 impl MissionForm {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn restart_safe(&self, cx: &gpui_kit::App) -> bool {
-        !self.pending
-            && !self.open
-            && self.title.read(cx).value().is_empty()
-            && self.goal.read(cx).value().is_empty()
+    /// The open sheet, or a conversion still waiting for Local. A closed sheet's fields are
+    /// refilled from the writer's attempt or the chat title on the next open, so they hold nothing.
+    pub(crate) fn update_hold(&self) -> Option<crate::update_hold::Hold> {
+        crate::update_hold::Hold::of(self.pending, self.open)
     }
     pub(crate) fn new(
         client: Option<Interaction>,

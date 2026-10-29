@@ -131,6 +131,23 @@ impl Workspace {
                 .input
                 .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())
     }
+    /// A brief draft with edits no save has captured (or one that was rejected), or an
+    /// unanswered save. Confirmed and Unknown saves of the current draft hold nothing.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn update_hold(
+        &self,
+    ) -> Option<(crate::mission_browser::Key, crate::update_hold::Hold)> {
+        self.book.entries.iter().find_map(|e| {
+            let unsaved = e.draft.as_ref().is_some_and(|d| {
+                d.dirty()
+                    && e.attempt.as_ref().is_none_or(|a| {
+                        a.serial != d.serial
+                            || matches!(a.outcome, Outcome::Rejected(_) | Outcome::Conflict)
+                    })
+            });
+            crate::update_hold::Hold::of(e.pending(), unsaved).map(|h| (e.source.key.clone(), h))
+        })
+    }
     pub(crate) fn matches_options(&self, options: &LocalOptions) -> bool {
         self.options.host() == options.host() && self.options.loopback() == options.loopback()
     }

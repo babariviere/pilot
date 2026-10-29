@@ -69,6 +69,15 @@ impl Rename {
     pub(crate) fn blocked(&self) -> bool {
         self.pending || self.outcome == Some(Outcome::Unknown)
     }
+    /// An unanswered rename, or a changed title in the open dialog. A closed form's text
+    /// is replaced on the next open, so it holds nothing.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn update_hold(&self, open: bool, cx: &App) -> Option<crate::update_hold::Hold> {
+        let unsent = open
+            && matches!(self.outcome, None | Some(Outcome::Rejected(_)))
+            && self.title(cx).is_some();
+        crate::update_hold::Hold::of(self.pending, unsent)
+    }
     fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.input
             .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())

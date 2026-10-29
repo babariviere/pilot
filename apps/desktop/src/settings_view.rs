@@ -411,35 +411,44 @@ impl SettingsView {
             )
         });
         let observed = cx.observe(&preferences, |_, _, cx| cx.notify());
-        let selected = cx.subscribe_in(&categories, window, |view, list, event, window, cx| {
+        let selected = cx.subscribe_in(&categories, window, |view, _, event, window, cx| {
             if view.models_marked(window, cx) {
                 return;
             }
             if let ListEvent::Confirm(ix) = event
                 && let Some(category) = Category::ALL.get(ix.row).copied()
             {
-                list.update(cx, |list, cx| {
-                    list.delegate_mut().current = category;
-                    cx.notify();
-                });
-                view.preferences.update(cx, |owner, cx| {
-                    owner.category = category;
-                    cx.notify();
-                });
-                view.confirm_reload = false;
-                if category == Category::Models
-                    && let Some(models) = view.preferences.read(cx).models.clone()
-                {
-                    models.update(cx, |m, cx| m.load(window, cx));
-                }
-                cx.notify();
+                view.select_category(category, window, cx);
             }
         });
+        #[allow(unused_mut)]
+        let mut subscriptions = vec![observed, selected];
+        // An install refusal's Show action for Scoped models selects that page here.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        subscriptions.push(cx.subscribe_in(
+            &preferences,
+            window,
+            |view, owner, event: &crate::updates_view::Event, window, cx| {
+                let scoped = owner
+                    .read(cx)
+                    .updater
+                    .as_ref()
+                    .and_then(|u| u.read(cx).blocker.as_ref().and_then(|b| b.destination()))
+                    == Some(crate::update_hold::Destination::ScopedModels);
+                if matches!(event, crate::updates_view::Event::ShowBlocker)
+                    && scoped
+                    && !owner.read(cx).restart_locked
+                    && !view.models_marked(window, cx)
+                {
+                    view.select_category(Category::Models, window, cx);
+                }
+            },
+        ));
         Self {
             preferences,
             categories,
             focus: cx.focus_handle(),
-            _subscriptions: vec![observed, selected],
+            _subscriptions: subscriptions,
             confirm_reload: false,
             #[cfg(feature = "native-probes")]
             render_count: 0,
@@ -450,6 +459,26 @@ impl SettingsView {
     pub(crate) fn focus_categories(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.categories
             .update(cx, |list, cx| list.focus(window, cx));
+    }
+    fn select_category(&mut self, category: Category, window: &mut Window, cx: &mut Context<Self>) {
+        self.categories.update(cx, |list, cx| {
+            list.delegate_mut().current = category;
+            if let Some(ix) = Category::ALL.iter().position(|c| *c == category) {
+                list.set_selected_index(Some(IndexPath::new(ix)), window, cx);
+            }
+            cx.notify();
+        });
+        self.preferences.update(cx, |owner, cx| {
+            owner.category = category;
+            cx.notify();
+        });
+        self.confirm_reload = false;
+        if category == Category::Models
+            && let Some(models) = self.preferences.read(cx).models.clone()
+        {
+            models.update(cx, |m, cx| m.load(window, cx));
+        }
+        cx.notify();
     }
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.models_marked(window, cx) {

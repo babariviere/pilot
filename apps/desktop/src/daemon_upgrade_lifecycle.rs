@@ -37,27 +37,23 @@ impl LocalViewer {
             });
             return;
         }
-        let settings = &self.settings.read(cx).state;
-        let safe = settings.loaded()
-            && !settings.dirty()
-            && !settings.saving()
-            && !settings.unconfirmed()
-            && settings.error().is_none()
-            && self
-                .settings
-                .read(cx)
-                .models
-                .as_ref()
-                .is_none_or(|m| !m.read(cx).unsettled(cx))
-            && self
-                .settings
-                .read(cx)
-                .updater
-                .as_ref()
-                .is_none_or(|u| !u.read(cx).unsaved_access(cx))
-            && self.secondary_update_safe(window, cx);
-        if !safe {
-            upgrade.update(cx,|u,cx|u.set_notice("Finish secondary editor changes and pending operations before upgrading. Nothing was discarded.",cx));
+        if self
+            .settings
+            .read(cx)
+            .updater
+            .as_ref()
+            .is_some_and(|u| u.read(cx).unsaved_access(cx))
+        {
+            upgrade.update(cx, |u, cx| {
+                u.set_notice(
+                    "Use or clear the unsaved update access field before upgrading. It is never written to disk.",
+                    cx,
+                )
+            });
+            return;
+        }
+        if let Some(blocker) = self.update_blocker(window, cx) {
+            upgrade.update(cx, |u, cx| u.set_notice(blocker.message(), cx));
             return;
         }
         if !crate::visual_runtime::fence_for_restart() {

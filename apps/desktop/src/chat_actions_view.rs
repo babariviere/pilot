@@ -67,14 +67,27 @@ pub(crate) struct Actions {
 impl EventEmitter<Changed> for Actions {}
 impl Actions {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn restart_safe(&self) -> bool {
-        self.renames.is_empty()
-            && self.reports.values().all(|r| {
-                matches!(
-                    r.outcome,
-                    Some(Outcome::Acknowledged | Outcome::Rejected(_))
-                )
-            })
+    /// A rename or action still waiting for Local, or the open rename dialog's unsent title.
+    /// Settled and Unknown outcomes are not held: nothing resends them after a restart.
+    pub(crate) fn update_blocker(
+        &self,
+        dialog_open: bool,
+        cx: &gpui_kit::App,
+    ) -> Option<crate::update_hold::Blocker> {
+        use crate::update_hold::Blocker;
+        for (chat, form) in &self.renames {
+            let open = dialog_open && self.latest_rename.as_ref() == Some(chat);
+            if let Some(hold) = form.read(cx).update_hold(open, cx) {
+                return Some(Blocker::ChatRename {
+                    chat: chat.clone(),
+                    hold,
+                });
+            }
+        }
+        self.reports
+            .values()
+            .any(|r| r.outcome.is_none())
+            .then_some(Blocker::ChatAction)
     }
     pub(crate) fn new(_: &mut Context<Self>) -> Self {
         Self {

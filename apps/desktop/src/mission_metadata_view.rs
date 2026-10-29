@@ -41,6 +41,19 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Close> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// Edits differing from the loaded mission that were never sent, or an unanswered save.
+    pub(crate) fn update_hold(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Hold> {
+        let edited = self.loaded
+            && model::Metadata::capture(&self.title.read(cx).value(), &self.body.read(cx).value())
+                .ok()
+                .as_ref()
+                != self.base.as_ref();
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            !self.state.blocked() && edited,
+        )
+    }
     pub(crate) fn new(
         source: Source,
         options: LocalOptions,

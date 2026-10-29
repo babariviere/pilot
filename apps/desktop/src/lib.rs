@@ -10,6 +10,7 @@ mod bundled_runtime_view;
 pub mod desktop_entry;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod updates_view;
+mod update_hold;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod daemon_upgrade_view;
 #[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]

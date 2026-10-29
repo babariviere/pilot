@@ -37,6 +37,14 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Close> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// A typed, unposted update, or an unanswered post.
+    pub(crate) fn update_hold(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Hold> {
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            !self.state.blocked() && !self.text.read(cx).value().trim().is_empty(),
+        )
+    }
     fn new(key: Key, options: LocalOptions, w: &mut Window, cx: &mut Context<Self>) -> Self {
         if !cx.has_global::<Keys>() {
             cx.bind_keys([
@@ -225,6 +233,13 @@ pub(crate) struct Shelf {
     subscriptions: Vec<Subscription>,
 }
 impl Shelf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn update_hold(&self, cx: &App) -> Option<(Key, crate::update_hold::Hold)> {
+        self.forms.iter().find_map(|f| {
+            let f = f.read(cx);
+            f.update_hold(cx).map(|h| (f.key.clone(), h))
+        })
+    }
     pub(crate) fn new(_: &mut Context<Self>) -> Self {
         Self {
             forms: Vec::new(),

@@ -30,6 +30,14 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Close> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// Only an unanswered request is held; this form has no typed input.
+    pub(crate) fn update_hold(&self) -> Option<crate::update_hold::Hold> {
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            false,
+        )
+    }
     pub(crate) fn new(
         source: Source,
         options: LocalOptions,

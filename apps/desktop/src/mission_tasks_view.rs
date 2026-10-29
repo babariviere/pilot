@@ -114,15 +114,36 @@ pub(crate) struct Pane {
 }
 impl Pane {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn restart_safe(&self) -> bool {
-        self.creation.is_none()
-            && self.creations.is_empty()
-            && self.status_form.is_none()
-            && self.statuses.is_empty()
-            && self.edit_form.is_none()
-            && self.edits.is_empty()
-            && self.model_form.is_none()
-            && self.models.is_empty()
+    /// The first retained task form with unsent input or an unanswered request.
+    pub(crate) fn update_blocker(&self, cx: &gpui_kit::App) -> Option<crate::update_hold::Blocker> {
+        let mission =
+            |key: &crate::mission_browser::Key, hold| crate::update_hold::Blocker::Mission {
+                key: key.clone(),
+                hold,
+            };
+        let created = self.creations.iter().find_map(|(f, _)| {
+            let f = f.read(cx);
+            f.update_hold(cx).map(|h| mission(&f.key, h))
+        });
+        created
+            .or_else(|| {
+                self.statuses.iter().find_map(|(f, _)| {
+                    let f = f.read(cx);
+                    f.update_hold().map(|h| mission(&f.target.key, h))
+                })
+            })
+            .or_else(|| {
+                self.edits.iter().find_map(|(f, _)| {
+                    let f = f.read(cx);
+                    f.update_hold(cx).map(|h| mission(&f.source.key, h))
+                })
+            })
+            .or_else(|| {
+                self.models.iter().find_map(|(f, _)| {
+                    let f = f.read(cx);
+                    f.update_hold().map(|h| mission(&f.target.key, h))
+                })
+            })
     }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         Self {

@@ -730,9 +730,13 @@ impl LocalViewer {
     /// proceed. An empty per-chat form is only an allocation. Pending and
     /// uncertain receipts are drafts, so they keep this false.
     pub(super) fn queue_checkpoint_safe(&self, cx: &App) -> bool {
-        self.queue_forms.iter().all(|(f, _)| {
+        self.queue_hold_chat(cx).is_none()
+    }
+    /// The chat whose queue form holds an open editor or retained drafts.
+    pub(super) fn queue_hold_chat(&self, cx: &App) -> Option<String> {
+        self.queue_forms.iter().find_map(|(f, _)| {
             let f = f.read(cx);
-            f.editing.is_none() && f.drafts.is_empty()
+            (f.editing.is_some() || !f.drafts.is_empty()).then(|| f.source.chat.clone())
         })
     }
     fn queued_message_tray(&self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {

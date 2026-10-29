@@ -27,6 +27,14 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Event> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// A chosen, unsent status, or an unanswered change.
+    pub(crate) fn update_hold(&self) -> Option<crate::update_hold::Hold> {
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            !self.state.blocked() && self.chosen != self.target.current,
+        )
+    }
     pub(crate) fn new(target: Target, options: LocalOptions, cx: &mut Context<Self>) -> Self {
         Self {
             chosen: target.current.clone(),

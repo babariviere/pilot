@@ -52,6 +52,15 @@ pub(crate) struct Form {
 }
 impl EventEmitter<Close> for Form {}
 impl Form {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    /// A chosen, unsent model preference, or an unanswered save.
+    pub(crate) fn update_hold(&self) -> Option<crate::update_hold::Hold> {
+        let changed = self.loaded.as_ref().is_some_and(|l| l.value != self.value);
+        crate::update_hold::Hold::of(
+            matches!(self.state.attempt, Some((_, Outcome::Pending))),
+            !self.state.blocked() && changed,
+        )
+    }
     pub(crate) fn new(
         target: Target,
         options: LocalOptions,
