@@ -212,10 +212,8 @@ impl TranscriptView {
                                 cx,
                             ),
                             id,
-                            row.source(),
                         ),
                         id,
-                        row.source(),
                         Self::link_opener(owner.clone(), scope),
                     )
                     .selectable(true)

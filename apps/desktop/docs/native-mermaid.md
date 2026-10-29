@@ -55,8 +55,10 @@ Preparation runs inside the existing Markdown parse: on its background parser
 for streamed appends and replacements above 4 KiB, and synchronously only for
 the Kit's already bounded small replacements. Rendering only paints the prepared
 plan. An unclosed fence (a message still streaming) stays an ordinary code
-block with its exact source until its closing fence arrives. Rows with no fence
-marker do not install the hook, so prose never reparses for it.
+block with its exact source until its closing fence arrives. The fence and
+service-link hooks are installed before matching syntax arrives, keeping the
+parser configuration stable throughout streaming. A late fence or service URL
+therefore does not force a full reparse that clears an existing selection.
 
 A fence diagram and its source both take their natural height; the conversation
 scrolls, with no inner vertical cap. Wide diagrams scroll horizontally. Its

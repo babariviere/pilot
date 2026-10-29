@@ -32,15 +32,9 @@ struct Plugin {
     open: Open,
 }
 
-/// Rows that cannot hold a recognized host skip the extension, so ordinary prose never
-/// pays the reparse. Hosts are matched as written (lowercase), like the exact checks.
-pub(crate) fn install(view: TextView, owner: u64, source: &str, open: Open) -> TextView {
-    if !["github.com", "linear.app", "slack.com"]
-        .iter()
-        .any(|host| source.contains(host))
-    {
-        return view;
-    }
+/// Install before the first streamed link so its arrival cannot trigger a
+/// selection-clearing reparse. The plugin filters link nodes.
+pub(crate) fn install(view: TextView, owner: u64, open: Open) -> TextView {
     view.plugin(Plugin { owner, open })
 }
 

@@ -244,6 +244,85 @@ fn readonly_committed_label_keeps_unicode_selection_through_layout_and_parse(
     .unwrap();
 }
 
+/// Parser extensions must not turn an append into a full replacement when
+/// their first matching syntax arrives after a selection was made.
+fn streaming_extension_keeps_selection(cx: &mut TestAppContext, chunks: &[&str]) {
+    let key = crate::model::ReaderKey::model(20, 0, Some(0));
+    let mut source = "## 日本語 e\u{301} 👨‍👩‍👧 repeat\n\nrepeat repeat".to_string();
+    let row =
+        |source: &str| Message::live(20, "assistant".into(), source.into()).anchored(key.clone());
+    let (handle, view) = setup(cx, vec![row(&source)]);
+    let (selected, range, copied, query) = cx
+        .update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            let text = view.read(cx).text_states[0].as_ref().unwrap().clone();
+            let start = text.read(cx).bounds().origin + point(px(1.), px(10.));
+            window.drag(start, start + point(px(210.), px(0.)), cx);
+            let range = text.read(cx).selected_source_range().unwrap();
+            assert!(range.start >= 3, "heading marker is not selected");
+            assert!(source.is_char_boundary(range.start) && source.is_char_boundary(range.end));
+            let query = TextSelection::selected_text(window, cx);
+            window.press("secondary-c", cx);
+            let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(
+                copied.contains("日本語") && copied.contains("e\u{301}"),
+                "{copied:?}"
+            );
+            (text, range, copied, query)
+        })
+        .unwrap();
+    for chunk in chunks {
+        source.push_str(chunk);
+        cx.update(|cx| {
+            view.update(cx, |v, cx| {
+                v.replace_readonly(vec![row(&source)], false, cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).text_states[0].as_ref(), Some(&selected));
+            assert_eq!(view.read(cx).rows()[0].reader_key(), Some(key.clone()));
+            assert_eq!(selected.read(cx).rendered_text().source(), source);
+            assert_eq!(
+                selected.read(cx).selected_source_range(),
+                Some(range.clone()),
+                "selection survives streamed syntax: {chunk:?}"
+            );
+            assert_eq!(TextSelection::selected_text(window, cx), query);
+            window.press("secondary-c", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+        })
+        .unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn streaming_fences_keep_unicode_source_selection_and_copy(cx: &mut TestAppContext) {
+    streaming_extension_keeps_selection(
+        cx,
+        &[
+            "\n\n```rust\nlet local = 1;\n",
+            "```\n",
+            "\n~~~mermaid\ngraph TD\nA --> B\n",
+            "~~~\n",
+        ],
+    );
+}
+
+#[gpui_kit::test]
+fn streaming_service_links_keep_unicode_source_selection_and_copy(cx: &mut TestAppContext) {
+    streaming_extension_keeps_selection(
+        cx,
+        &[
+            "\n\n[repeat](https://github.com",
+            "/acme/repo/pull/1)",
+            "\n\n[repeat](https://linear.app/acme/issue/ABC-1)",
+            "\n\n[repeat](https://app.slack.com/archives/C1/p123)",
+        ],
+    );
+}
+
 #[gpui_kit::test]
 fn readonly_cannot_submit_and_images_never_reach_the_http_client(cx: &mut TestAppContext) {
     use std::sync::{

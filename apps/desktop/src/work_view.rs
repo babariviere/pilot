@@ -1100,6 +1100,19 @@ impl StepView {
                                     },
                                     cx,
                                 )
+                                .map(|view| match &self.step {
+                                    // An adopted note keeps the same parser configuration
+                                    // as its standalone transcript row. Dropping the hooks
+                                    // here would reparse and clear its retained selection.
+                                    Step::Note { id, .. } => {
+                                        crate::markdown_service_links::install(
+                                            crate::markdown_mermaid::install(view, *id),
+                                            *id,
+                                            Arc::new(|_, _, _| {}),
+                                        )
+                                    }
+                                    Step::Tool(_) => view,
+                                })
                                 .selectable(true)
                                 .scrollable(false)
                                 .on_link_click(|_, _, _, _| {}),

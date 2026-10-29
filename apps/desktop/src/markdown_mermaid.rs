@@ -13,12 +13,10 @@ use std::sync::Arc;
 
 const NAME: &str = "mermaid-fence";
 
-/// Attach the fence parser/renderer to an ordinary message view. Rows without
-/// any fence marker skip it, so prose never pays a reparse for the extension.
-pub(crate) fn install(view: TextView, owner: u64, source: &str) -> TextView {
-    if !source.contains("```") && !source.contains("~~~") {
-        return view;
-    }
+/// Keep the parser configuration stable before the first streamed fence.
+/// Enabling it only when a marker arrives reparses the entire document and
+/// clears an existing selection. The parser itself ignores non-Mermaid nodes.
+pub(crate) fn install(view: TextView, owner: u64) -> TextView {
     view.markdown_block_parser(parse)
         .markdown_block_renderer(NAME, move |node, _, _| {
             let Some(prepared) = node.data::<Arc<Prepared>>() else {
