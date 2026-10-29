@@ -6,7 +6,7 @@ import {
 	type SubscriptionUsageSource,
 } from "./subscription-usage.ts";
 
-export const SUBSCRIPTION_PAUSE_PERCENT = 95;
+export const SUBSCRIPTION_PAUSE_PERCENT = 99;
 
 /** Also written to a private, host-owned file read by parent and child admission gates. */
 export interface SubscriptionPolicy {

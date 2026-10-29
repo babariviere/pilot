@@ -121,7 +121,7 @@ test("live kernels contribute context and their physical provider for virtual mo
 	});
 });
 
-test("a 95% reading holds durable work, not idle results, and force is chat/child scoped", async (t) => {
+test("a 99% reading holds durable work, not idle results, and force is chat/child scoped", async (t) => {
 	const f = await fixture(t, { first: "openai-codex/gpt-5", second: "openai-codex/gpt-5" });
 	const first = f.ids.first!,
 		second = f.ids.second!;
@@ -136,7 +136,7 @@ test("a 95% reading holds durable work, not idle results, and force is chat/chil
 	const fetchedAt = Date.now();
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt,
-		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
+		snapshot: { windows: [{ label: "5h", usedPercent: 99, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
 	});
 	await f.cache().refresh();
 	await f.sessions["subscriptionPolicyWrites"];
@@ -200,7 +200,7 @@ test("a different-provider child cannot escape limits, and its parent exposes th
 	const fetchedAt = Date.now();
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt,
-		snapshot: { windows: [{ label: "Week", usedPercent: 97 }] },
+		snapshot: { windows: [{ label: "Week", usedPercent: 99 }] },
 	});
 	await f.cache().refresh();
 	await f.sessions["subscriptionPolicyWrites"];
@@ -223,7 +223,7 @@ test("force work stays on when a fresh reading moves the reset time or adds a wi
 	const fetchedAt = Date.now();
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt,
-		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
+		snapshot: { windows: [{ label: "5h", usedPercent: 99, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
 	});
 	await f.cache().refresh();
 	await f.sessions.forceSubscription(id, true);
@@ -231,8 +231,8 @@ test("force work stays on when a fresh reading moves the reset time or adds a wi
 		fetchedAt: fetchedAt + 1,
 		snapshot: {
 			windows: [
-				{ label: "5h", usedPercent: 97, resetsAt: new Date(fetchedAt + 60_001).toISOString() },
-				{ label: "Week", usedPercent: 96 },
+				{ label: "5h", usedPercent: 99, resetsAt: new Date(fetchedAt + 60_001).toISOString() },
+				{ label: "Week", usedPercent: 99 },
 			],
 		},
 	});
@@ -251,7 +251,7 @@ test("the reset timer releases work and expires force without a new provider rea
 	const reset = Date.now() + 60_000;
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt: Date.now(),
-		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(reset).toISOString() }] },
+		snapshot: { windows: [{ label: "5h", usedPercent: 99, resetsAt: new Date(reset).toISOString() }] },
 	});
 	await f.cache().refresh();
 	assert.ok(f.sessions.get(id)?.subscriptionPause);
@@ -286,7 +286,7 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 	const id = f.ids.chat!;
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt: Date.now(),
-		snapshot: { windows: [{ label: "Week", usedPercent: 97 }] },
+		snapshot: { windows: [{ label: "Week", usedPercent: 99 }] },
 	});
 	await f.cache().refresh();
 	await f.sessions.forceSubscription(id, true);
@@ -310,7 +310,7 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 	assert.equal(reopened.subscriptionPaused(id), true, "a missing provider reading cannot release the durable pause");
 	await reopened["start"](id);
 	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
-	assert.equal(policy.windows[0]?.usedPercent, 97);
+	assert.equal(policy.windows[0]?.usedPercent, 99);
 	assert.equal(policy.force, undefined);
 });
 

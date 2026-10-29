@@ -430,10 +430,10 @@ holds remain independent. Authentication, quota and provider errors are not trea
 
 ### Subscription limits
 
-Chats pause new model requests and tool calls at **95%** of any subscription window. Active tools finish
+Chats pause new model requests and tool calls at **99%** of any subscription window. Active tools finish
 safely, including nested calls in an active codemode script, before the chat shows as paused. Subagents
 respect their own provider's limits, even when it differs from the parent chat.
-Work resumes automatically when the blocked windows reset or a fresh usage reading drops below 95%.
+Work resumes automatically when the blocked windows reset or a fresh usage reading drops below 99%.
 Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
 additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.
 

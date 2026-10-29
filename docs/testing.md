@@ -478,7 +478,7 @@ not revoke a live writer's storage lease. No live chats, credentials or model se
 
 ## Subscription admission
 
-`subscription-policy.test.ts` and `session-subscription-usage.test.ts` cover the 95% boundary, all-window
+`subscription-policy.test.ts` and `session-subscription-usage.test.ts` cover the 99% boundary, all-window
 blocking, fresh lower readings, reset timers, unknown/error/stale readings, per-chat force expiry and
 restart persistence, and children using another provider. `subscription-pause.integration.test.ts`
 checks the real parent Harness/native adapter, safe tool drainage and SQLite recovery without replay.

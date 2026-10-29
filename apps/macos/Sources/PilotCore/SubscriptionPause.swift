@@ -34,7 +34,7 @@ public struct SubscriptionPauseWindow: Codable, Equatable, Hashable, Sendable {
 /// pilotd holds a chat's work while a provider window is at or above `limitPercent` and resumes it on its own once
 /// the window resets below it. `forced` means the user chose to keep working past the limit, so nothing is held.
 public struct SubscriptionPause: Codable, Equatable, Hashable, Sendable {
-    public static let limitPercent: Double = 95
+    public static let limitPercent: Double = 99
 
     public let windows: [SubscriptionPauseWindow]
     public let forced: Bool?

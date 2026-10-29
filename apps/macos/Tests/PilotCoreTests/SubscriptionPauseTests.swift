@@ -87,7 +87,7 @@ private func decodeSession(_ extra: String = "", state: String = "idle") throws 
                                    forced: true)
     #expect(text(forced) == "Working past usage limit · Codex 5-hour at 97%")
     #expect(!forced.notice(now: pauseNow).limited)
-    #expect(paused.helpText.contains("95%"))
+    #expect(paused.helpText.contains("99%"))
     #expect(paused.helpText.contains("Claude 5h: 97% used"))
 }
 

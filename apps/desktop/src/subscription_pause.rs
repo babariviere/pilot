@@ -1,11 +1,11 @@
 //! Read-only projection of SessionSummary.subscriptionPause and the words for its
-//! composer row. pilotd owns the policy (hold at 95%, resume on reset, Force);
+//! composer row. pilotd owns the policy (hold at 99%, resume on reset, Force);
 //! this only describes it and explains what continuing with another model does.
 use crate::chat_models::Catalog;
 use serde_json::Value;
 
 /// pilotd holds work once a window reaches this share.
-const LIMIT_PERCENT: u32 = 95;
+const LIMIT_PERCENT: u32 = 99;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Window {
