@@ -821,7 +821,9 @@ impl Tools {
         if run_live
             && let Some(index) = rows.iter().rposition(|row| row.work_data().is_some())
             && rows[index + 1..].iter().all(|row| {
-                row.label().starts_with("Assistant · streaming") || row.artifact_data().is_some()
+                row.label().starts_with("Assistant · streaming")
+                    || row.artifact_data().is_some()
+                    || row.github_event().is_some()
             })
         {
             let mut work = rows[index].work_data().unwrap().as_ref().clone();

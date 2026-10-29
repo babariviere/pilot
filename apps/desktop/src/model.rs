@@ -51,6 +51,8 @@ pub(crate) struct Message {
     question: Option<Arc<crate::question_entry::Record>>,
     /// Structured provenance of automatic input; None for typed input.
     automatic: Option<Arc<crate::automatic_input::Automatic>>,
+    /// A GitHub audit event: one quiet inline line, not a message.
+    github: Option<Arc<crate::github_event::Event>>,
 }
 
 impl Message {
@@ -82,6 +84,7 @@ impl Message {
             sent: None,
             question: None,
             automatic: None,
+            github: None,
         }
     }
     pub(crate) fn with_pending(mut self, status: &'static str) -> Self {
@@ -179,6 +182,16 @@ impl Message {
     }
     pub(crate) fn question_data(&self) -> Option<&Arc<crate::question_entry::Record>> {
         self.question.as_ref()
+    }
+    /// A GitHub audit event row; its source is the line's plain text.
+    pub(crate) fn github(id: u64, event: crate::github_event::Event) -> Self {
+        let mut row = Self::live(id, "GitHub event".into(), event.line());
+        row.sent = Some(event.at);
+        row.github = Some(Arc::new(event));
+        row
+    }
+    pub(crate) fn github_event(&self) -> Option<&Arc<crate::github_event::Event>> {
+        self.github.as_ref()
     }
     pub(crate) fn retained_bytes(&self) -> usize {
         self.source.len()
@@ -379,6 +392,7 @@ impl Transcript {
             sent: None,
             question: None,
             automatic: None,
+            github: None,
         });
     }
 
@@ -470,6 +484,7 @@ fn history_message(ix: usize) -> Message {
         sent: None,
         question: None,
         automatic: None,
+        github: None,
     }
 }
 

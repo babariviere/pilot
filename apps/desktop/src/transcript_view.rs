@@ -1,5 +1,7 @@
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
+#[path = "github_event_view.rs"]
+pub(crate) mod github_event_view;
 #[path = "inline_visual_transcript.rs"]
 pub(crate) mod inline_visual;
 #[path = "message_fold_view.rs"]
@@ -62,6 +64,7 @@ pub struct TranscriptView {
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
     questions: question_entry_view::Disclosures,
+    github_open: github_event_view::Open,
     images: conversation_images_view::Preview,
     inline_visuals: inline_visual::State,
     // The whole proof is bounded to 128 rows. A2 must evaluate a bounded cache
@@ -197,6 +200,7 @@ impl TranscriptView {
             fold_focus: Default::default(),
             fold_retired: Vec::new(),
             questions: Default::default(),
+            github_open: Default::default(),
             transcript,
             images: Default::default(),
             inline_visuals: Default::default(),
@@ -239,7 +243,10 @@ impl TranscriptView {
         cx: &mut Context<Self>,
     ) -> Option<Entity<TextViewState>> {
         let row = &self.transcript.messages()[ix];
-        if row.work_data().is_some() || row.artifact_data().is_some() || row.image_data().is_some()
+        if row.work_data().is_some()
+            || row.artifact_data().is_some()
+            || row.image_data().is_some()
+            || row.github_event().is_some()
         {
             return None;
         }
@@ -379,6 +386,7 @@ impl TranscriptView {
             let state = if row.work_data().is_some()
                 || row.artifact_data().is_some()
                 || row.image_data().is_some()
+                || row.github_event().is_some()
             {
                 self.text_subscriptions.remove(&row.id());
                 None
@@ -906,6 +914,9 @@ impl TranscriptView {
         }
         if row.question_data().is_some() {
             return self.question_row(ix, cx, owner);
+        }
+        if row.github_event().is_some() {
+            return self.github_row(ix, cx, owner);
         }
         if let Some(view) = self.work_ui.groups.get(&row.id()) {
             return div()

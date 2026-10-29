@@ -11,12 +11,14 @@ use gpui_kit::{
     IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Task,
     TestSupportExt, Window,
     base::SelectableText,
-    component::{ActiveTheme, Disableable, StyledExt},
+    component::{ActiveTheme, Disableable, Sizable, StyledExt, button::ButtonVariants},
     div, px,
 };
 use std::collections::HashSet;
 
 pub(crate) struct Close;
+/// The byline's chat link: the owner checks it is still a linkable member.
+pub(crate) struct OpenChat(pub(crate) String);
 pub(crate) struct Activity {
     pub(crate) state: Timeline,
     options: Option<LocalOptions>,
@@ -30,8 +32,11 @@ pub(crate) struct Activity {
     pub(crate) update: gpui_kit::Entity<crate::mission_update_view::Shelf>,
     update_events: Option<gpui_kit::Subscription>,
     update_error: Option<&'static str>,
+    /// Chat titles for GitHub event bylines, from the owner's current list.
+    pub(crate) chats: std::sync::Arc<Vec<crate::local_model::Chat>>,
 }
 impl EventEmitter<Close> for Activity {}
+impl EventEmitter<OpenChat> for Activity {}
 pub(crate) fn relative_time(at: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -63,6 +68,7 @@ impl Activity {
             update: cx.new(crate::mission_update_view::Shelf::new),
             update_events: None,
             update_error: None,
+            chats: Default::default(),
         }
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
@@ -180,6 +186,124 @@ impl Activity {
                 .retain(|id| self.state.rows.iter().any(|e| e.id == *id));
             cx.notify();
         }
+    }
+    /// A GitHub audit event as Swift's activity timeline line: the branch
+    /// glyph, the recorded text, then its chat and time. The daemon's text
+    /// already says when an attempt failed or its exit status is unknown.
+    fn github_row(
+        &self,
+        e: &crate::mission_activity::Entry,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let id = e.id;
+        let muted = cx.theme().muted_foreground;
+        let group = SharedString::from(format!("activity-card-{id}"));
+        let title = e.chat.as_ref().and_then(|chat| {
+            self.chats
+                .iter()
+                .find(|c| &c.id == chat && !c.local_draft)
+                .map(|c| c.title.clone())
+        });
+        let source = match (e.chat.clone(), title) {
+            (Some(chat), Some(title)) => gpui_kit::component::button::Button::new(
+                SharedString::from(format!("activity-chat-{id}")),
+            )
+            .ghost()
+            .xsmall()
+            .label(title.clone())
+            .accessibility_label(format!("Open chat {title}"))
+            .tooltip("Open this chat")
+            .on_click(cx.listener(move |v, _, _, cx| {
+                if v.state.generation == generation {
+                    cx.emit(OpenChat(chat.clone()));
+                }
+            }))
+            .into_any_element(),
+            (Some(_), None) => ui::text(Text::Caption, "A chat").into_any_element(),
+            (None, _) => ui::text(Text::Caption, "You or Pilot").into_any_element(),
+        };
+        let focus = self.focus.clone();
+        div()
+            .id(SharedString::from(format!("activity-event-{id}")))
+            .test_support()
+            .group(group.clone())
+            .h_flex()
+            .items_start()
+            .w_full()
+            .min_w_0()
+            .gap(px(Space::SIDEBAR))
+            .px(px(Space::SIDEBAR))
+            .child(
+                div()
+                    .id(SharedString::from(format!("activity-github-icon-{id}")))
+                    .test_support()
+                    .size(px(22.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(cx.theme().muted)
+                    .text_color(muted)
+                    .child(crate::app_icon::AppIcon::Branch.inline()),
+            )
+            .child(
+                div()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(3.))
+                    .pt(px(2.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("activity-github-text-{id}")))
+                            .test_support()
+                            .w_full()
+                            .min_w_0()
+                            .text_size(px(Text::Body.size()))
+                            .on_mouse_down(gpui_kit::MouseButton::Left, move |_, w, cx| {
+                                focus.focus(w, cx)
+                            })
+                            .child(SelectableText::new(
+                                SharedString::from(format!(
+                                    "activity-text-{}-{id}",
+                                    self.state.key.as_ref().map(|k| k.tag()).unwrap_or_default()
+                                )),
+                                SharedString::from(e.text.clone()),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .gap(px(Space::META))
+                            .text_size(px(Text::Caption.size()))
+                            .text_color(muted)
+                            .child(source)
+                            .child("·")
+                            .child(SharedString::from(relative_time(e.at))),
+                    ),
+            )
+            .child(
+                ui::icon_action(
+                    SharedString::from(format!("activity-copy-{id}")),
+                    "Copy event text",
+                    ui::IconRole::Copy,
+                    Action::Quiet,
+                )
+                .flex_none()
+                .opacity(0.)
+                .group_hover(group, |style| style.opacity(1.))
+                .focus_visible(|style| style.opacity(1.))
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    if v.state.generation == generation
+                        && let Some(e) = v.state.rows.iter().find(|e| e.id == id)
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(e.text.clone()));
+                    }
+                })),
+            )
     }
 }
 impl Render for Activity {
@@ -302,6 +426,10 @@ impl Render for Activity {
         content = content.child(ui::rule(w, cx));
         for e in &self.state.rows {
             let id = e.id;
+            if e.kind == "github" {
+                content = content.child(self.github_row(e, generation, cx));
+                continue;
+            }
             let expanded = self.expanded.contains(&id);
             let focus = self.focus.clone();
             let hover_group = SharedString::from(format!("activity-card-{id}"));

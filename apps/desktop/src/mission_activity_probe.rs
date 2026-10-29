@@ -40,6 +40,13 @@ fn activity(v: &Browser) -> &Entity<crate::mission_activity_view::Activity> {
     v.activity_browser.as_ref().unwrap()
 }
 fn event(id: u64) -> serde_json::Value {
+    // A confirmed push and a failed PR attempt, as the daemon records them.
+    if id == 59 {
+        return json!({"id":id,"kind":"github","text":"Same chat title pushed branch feat/inline-日本 · jj git push","sessionId":"chat-A","at":1700000000000u64+id});
+    }
+    if id == 57 {
+        return json!({"id":id,"kind":"github","text":"Same chat title attempted: created PR #42 (failed, exit 1) · gh pr create","sessionId":"not-loaded","at":1700000000000u64+id});
+    }
     json!({"id":id,"kind":if id==60{"handoff"}else{"task"},"text":if id==60 {format!("Same summary 私 👩‍💻\n{}", "A bounded handoff detail. ".repeat(8))}else{"Same summary 私 👩‍💻".into()},"sessionId":if id.is_multiple_of(2){Some("chat-A")}else{None},"at":1700000000000u64+id})
 }
 fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, name: String) {
@@ -55,6 +62,8 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, name: String) {
 pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+            let chat = crate::local_model::chat(&json!({"id":"chat-A","title":"Same chat title","missionId":"mission-A","projectId":"project-A","state":"idle"})).unwrap();
             let server = Server::start();
             server.reply(
                 "/api/missions/mission-A/events",
@@ -87,9 +96,10 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                         cx,
                         |w, cx| {
                             let view = cx.new(Browser::new);
+                            let opened = opened.clone();
                             view.update(cx, |v, cx| {
                                 // Same emitted route identities as the LocalViewer host; no data injection.
-                                cx.subscribe_in(&view, w, |v, _, e: &Event, w, cx| match e {
+                                cx.subscribe_in(&view, w, move |v, _, e: &Event, w, cx| match e {
                                     Event::Open { key, generation }
                                         if v.can_open(key, *generation) =>
                                     {
@@ -100,6 +110,7 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                                         v.route = Some(Route::Catalog);
                                         v.read(w, cx);
                                     }
+                                    Event::Chat { id, .. } => opened.borrow_mut().push(id.clone()),
                                     _ => {}
                                 })
                                 .detach();
@@ -109,7 +120,7 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                                         route: Some(Route::Catalog),
                                         filter: None,
                                         projects: Arc::new(vec![]),
-                                        chats: Arc::new(vec![]),
+                                        chats: Arc::new(vec![chat.clone()]),
                                         online: true,
                                         loaded: true,
                                     },
@@ -232,6 +243,30 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                 );
             })
             .unwrap();
+            // GitHub audit events are inline timeline lines like Swift, not cards.
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("activity-expand-59").is_none(),
+                    "no card disclosure"
+                );
+                assert!(w.try_find("activity-github-icon-59").is_some());
+                let line = w.find("activity-event-59").bounds();
+                assert!(line.right() <= px(width));
+                assert!(
+                    line.size.height < w.find("activity-event-58").bounds().size.height,
+                    "compact line, not a card"
+                );
+                let link = w.find("activity-chat-59");
+                assert_eq!(link.role(), Some(gpui_kit::Role::Button));
+                assert_eq!(link.label(), Some("Open chat Same chat title"));
+                // A chat this client hasn't loaded is named, never linked.
+                assert!(w.try_find("activity-chat-57").is_none());
+                assert!(w.try_find("activity-github-icon-57").is_some());
+                w.click("activity-chat-59", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert_eq!(*opened.borrow(), ["chat-A"], "exact chat link");
             capture(
                 cx,
                 h,

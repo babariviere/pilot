@@ -426,6 +426,15 @@ impl Browser {
         self.chats = chats;
         self.online = online;
         self.loaded = loaded;
+        if let Some(activity) = &self.activity_browser
+            && !Arc::ptr_eq(&activity.read(cx).chats, &self.chats)
+        {
+            let chats = self.chats.clone();
+            activity.update(cx, |v, cx| {
+                v.chats = chats;
+                cx.notify();
+            });
+        }
         if self.activity_open && (!online || self.route != route) {
             self.hide_activity(w, cx);
             if self.route == route {
@@ -883,9 +892,32 @@ impl Browser {
                 },
             )
             .detach();
+            cx.subscribe_in(
+                &activity,
+                w,
+                |v, activity, e: &crate::mission_activity_view::OpenChat, _, cx| {
+                    let Some(key) = activity.read(cx).state.key.clone() else {
+                        return;
+                    };
+                    let generation = v.generation;
+                    if v.can_link(&key, &e.0, generation) {
+                        cx.emit(Event::Chat {
+                            key,
+                            id: e.0.clone(),
+                            generation,
+                        });
+                    }
+                },
+            )
+            .detach();
             self.activity_browser = Some(activity);
         }
         self.activity_open = true;
+        let chats = self.chats.clone();
+        self.activity_browser
+            .as_ref()
+            .unwrap()
+            .update(cx, |v, _| v.chats = chats);
         self.tasks_browser.update(cx, |tasks, cx| {
             tasks.sync(None, self.options.clone(), w, cx)
         });

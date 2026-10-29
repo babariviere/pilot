@@ -411,6 +411,10 @@ pub(crate) struct LiveTranscript {
     /// entries instead of dropping them to admit newer ones.
     pub(crate) holding: bool,
     pub(crate) unsupported: usize,
+    /// The chat's latest GitHub audit snapshot, placed into rows on demand.
+    github: Vec<crate::github_event::Action>,
+    /// Stable row IDs per audit action ID, retained while the action is.
+    github_keys: HashMap<String, u64>,
 }
 
 struct SavedHistory {
@@ -448,6 +452,12 @@ impl LiveTranscript {
     pub(crate) fn rows(&mut self) -> Vec<Message> {
         self.presentation_dirty = false;
         let mut rows: Vec<_> = self.entries.values().flatten().cloned().collect();
+        rows = crate::github_event::place(
+            rows,
+            &self.github,
+            &self.github_keys,
+            self.cursor.is_some(),
+        );
         if let Some(live) = self.live.take() {
             rows.extend(self.assistant_rows(self.live_key, &live, None));
             self.live = Some(live);
@@ -981,6 +991,19 @@ impl LiveTranscript {
             "entry_appended" => {
                 self.user_arrived(&event["entry"]);
                 self.entry(&event["entry"], None)
+            }
+            "github_actions_update" => {
+                // A whole snapshot on every change and reconnect: replace, never append.
+                self.github = crate::github_event::Action::read_all(&event["actions"]);
+                let ids: std::collections::HashSet<_> =
+                    self.github.iter().map(|a| a.id.as_str()).collect();
+                self.github_keys.retain(|id, _| ids.contains(id.as_str()));
+                for ix in 0..self.github.len() {
+                    if !self.github_keys.contains_key(&self.github[ix].id) {
+                        let key = self.key();
+                        self.github_keys.insert(self.github[ix].id.clone(), key);
+                    }
+                }
             }
             "queue_update" => {
                 let next = crate::queued_message::Snapshot::read(&event["items"]);

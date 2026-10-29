@@ -440,6 +440,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "github_events"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "message_footer"
 harness = false
 required-features = ["native-probes"]
