@@ -230,10 +230,12 @@ Dither is atmosphere only: the Home sky (`home_sky`). Rows, the composer,
 buttons, progress bars and cards never carry it; the working line covers live work.
 Chat state on sidebar and Inbox rows is a still mark (`state_mark`, which also
 owns `Signal` and its tints for task status, attention, chat order and mission
-overview): amber dot Needs you and questions, red triangle Failed, green pull
-request Ready. Working and Background have no glyph (their neutral state word
-carries them; a collapsed mission's roll-up says "N working"), so their trailing
-slot stays empty but keeps the column. Marks
+overview): neutral 9pt circle Working (half opacity for Background), amber
+dot Needs you and questions, red triangle Failed, green pull request Ready.
+`state_mark::Glyph` adds the "new reply" state to the circle: hollow when read,
+filled when the agent replied since you looked, filled alone on a quiet row.
+Coloured marks ignore it. A collapsed mission's roll-up shows each glyph and its
+count (hollow ring for Working); its accessible name says the words. Marks
 never loop. `state_mark::Fade` cross-fades a changed mark once (180 ms) on the
 `transition::Transition` clock, requesting frames only while it runs; a first
 sight never fades and reduced motion swaps at once. The `style` native target
@@ -357,9 +359,9 @@ heights per kind through the patched Kit list's `ListDelegate::item_height`
 (`SidebarCollapse`/`SidebarExpand`, bound ahead of the search field's caret
 moves and passed on when they do nothing) collapse, expand or move between a
 member and its parent; Enter opens a row's chat, opens a coordinator-less
-mission or shows/hides finished members. Needs you (here or rolled up) hides
-the "new reply" dot and its spoken words. The small neutral "new reply" dot
-follows the title. The row's … menu overhangs the trailing slot, replacing the
+mission or shows/hides finished members. A new reply fills the trailing circle
+(no dot beside the title); Needs you, Failed or Ready on the row, or Needs you
+rolled up, hides it and its spoken words. The row's … menu overhangs the trailing slot, replacing the
 mark (and a one-line row's state word), and shows only on hover or on the
 keyboard-selected row while the list has keyboard focus; the right-click menu
 always reaches the same actions. Both
@@ -414,7 +416,7 @@ automatic notices there, and then moves only when the user sends to it from this
 app. A thread sorts by its coordinator, or by the user's sends to its members.
 Members sort by creation. The same file records the latest reply (`outcomeAt`
 of a done, question or failed result, never `updatedAt`) seen in each chat for
-the "new reply" dot; replies older than the file's first baseline never light
+the filled "new reply" circle; replies older than the file's first baseline never light
 up. Selection follows the row's key (chat id, `mission:<id>`, `fold:<id>`,
 `group:<section>`). The `style` native target also runs
 `sidebar_sections_probe`: both edges and the mark column, chevrons, captions,

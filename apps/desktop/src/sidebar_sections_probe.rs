@@ -633,6 +633,7 @@ pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             run_waiting_question(cx, width);
+            run_unread_circle(cx, width);
         }
     }
     run_many(cx, captures.as_deref());
@@ -738,16 +739,21 @@ fn check_thread(
                 .is_none(),
             "+N finished hangs off no branch"
         );
-        // Needs you already asks for a look: no "new reply" dot beside it.
-        // Working keeps only its word.
+        // Needs you already asks for a look: no new-reply state beside it.
+        // Working keeps its word and a hollow circle (nothing unread here).
         assert!(w.try_find("chat-reply-m-q").is_none());
         assert!(w.within("chat-mark-m-q").try_find("state-glyph").is_some());
+        assert!(
+            w.within("chat-mark-m-q")
+                .try_find("state-circle-filled")
+                .is_none()
+        );
         for id in ["coord", "m-x", "fix", "bg"] {
             assert!(
                 w.within(format!("chat-mark-{id}"))
-                    .try_find("state-glyph")
-                    .is_none(),
-                "{id}: no hollow Working glyph"
+                    .try_find("state-circle-hollow")
+                    .is_some(),
+                "{id}: hollow Working circle"
             );
         }
         assert!(
@@ -813,8 +819,14 @@ fn check_thread(
                 );
             }
         }
-        // The roll-up's amber dot stands in for its members' new replies.
+        // The roll-up's amber dot stands in for its members' new replies:
+        // the coordinator's Working circle stays hollow.
         assert!(w.try_find("chat-reply-coord").is_none());
+        assert!(
+            w.within("chat-mark-coord")
+                .try_find("state-circle-hollow")
+                .is_some()
+        );
         assert!(
             w.within("mission-rollup-NeedsYou")
                 .try_find("state-glyph")
@@ -822,8 +834,8 @@ fn check_thread(
         );
         assert!(
             w.within("mission-rollup-Working")
-                .try_find("state-glyph")
-                .is_none()
+                .try_find("state-circle-hollow")
+                .is_some()
         );
         let label = w
             .find("coord")
@@ -1311,4 +1323,184 @@ fn run_waiting_question(cx: &mut HeadlessAppContext, width: f32) {
 
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     cx.run_until_parked();
+}
+
+/// The trailing circle carries "replied since you looked": hollow when read,
+/// filled for a new reply (alone on a quiet row), never beside a coloured
+/// mark. Opening a chat empties it; collapsed missions and projects fill
+/// theirs for their chats' new replies. One mark column at every width.
+fn run_unread_circle(cx: &mut HeadlessAppContext, width: f32) {
+    let row = |id: &str, project: &str, mission: Option<&str>, reply: bool| {
+        let mut v = json!({"id":id,"title":format!("{id} 日本語 👩‍💻 title"),"projectId":project,
+            "state":"idle","createdAt":900.,"lastUserMessageAt":900.});
+        if let Some(mission) = mission {
+            v["missionId"] = json!(mission);
+        }
+        if reply {
+            v["outcome"] = json!("done");
+            v["outcomeAt"] = json!(10);
+        }
+        v
+    };
+    let mut coord = row("u-coord", "pilot", Some("gpui"), false);
+    coord["missionCoordinator"] = json!(true);
+    let background = |id: &str, reply: bool| {
+        let mut c = chat(row(id, "pilot", None, reply), Some(Signal::Working));
+        c.background_work = true;
+        c
+    };
+    let chats = vec![
+        chat(coord, Some(Signal::Working)),
+        chat(row("u-m", "pilot", Some("gpui"), true), None),
+        chat(
+            row("u-w", "pilot", Some("gpui"), false),
+            Some(Signal::Working),
+        ),
+        chat(row("w-read", "pilot", None, false), Some(Signal::Working)),
+        chat(row("w-new", "pilot", None, true), Some(Signal::Working)),
+        background("b-read", false),
+        background("b-new", true),
+        chat(row("q-read", "pilot", None, false), None),
+        chat(row("q-new", "pilot", None, true), None),
+        chat(row("n-new", "pilot", None, true), Some(Signal::NeedsYou)),
+        chat(row("f-new", "pilot", None, true), Some(Signal::Failed)),
+        chat(row("r-new", "pilot", None, true), Some(Signal::Ready)),
+        chat(row("d-new", "dotfiles", None, true), None),
+    ];
+    let (h, view) = open(cx, width, chats, &["project:dotfiles"]);
+    let label = |w: &gpui_kit::Window, id: &str| {
+        w.find(id.to_owned())
+            .label()
+            .map(|l| l.to_string())
+            .unwrap_or_default()
+    };
+    // (row, glyph, filled circle, hollow circle, spoken "new reply")
+    let expect = [
+        ("w-read", true, false, true, false),
+        ("w-new", true, true, false, true),
+        ("b-read", true, false, true, false),
+        ("b-new", true, true, false, true),
+        ("q-read", false, false, false, false),
+        ("q-new", true, true, false, true),
+        ("n-new", true, false, false, false),
+        ("f-new", true, false, false, false),
+        ("r-new", true, false, false, false),
+        ("u-coord", true, false, true, false),
+        ("u-m", true, true, false, true),
+        ("u-w", true, false, true, false),
+    ];
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        let column = w.find("chat-mark-w-read").bounds().center().x;
+        for (id, glyph, filled, hollow, spoken) in expect {
+            let mark = w.within(format!("chat-mark-{id}"));
+            assert_eq!(mark.try_find("state-glyph").is_some(), glyph, "{id}: glyph");
+            assert_eq!(
+                mark.try_find("state-circle-filled").is_some(),
+                filled,
+                "{id}: filled"
+            );
+            assert_eq!(
+                mark.try_find("state-circle-hollow").is_some(),
+                hollow,
+                "{id}: hollow"
+            );
+            assert!(
+                w.try_find(format!("chat-reply-{id}")).is_none(),
+                "{id}: no reply dot"
+            );
+            let l = label(w, id);
+            assert_eq!(l.contains("new reply"), spoken, "{id}: {l}");
+            // One mark column, centered on the title line.
+            let slot = w.find(format!("chat-mark-{id}")).bounds();
+            near(slot.center().x, column, id);
+            let title = w
+                .within(format!("chat-row-{id}"))
+                .try_find("sidebar-chat-title")
+                .or_else(|| {
+                    w.within(format!("chat-row-{id}"))
+                        .try_find("sidebar-mission-title")
+                })
+                .unwrap()
+                .bounds();
+            assert!(
+                title.right() <= slot.left() + px(0.5),
+                "{id}: title before the mark"
+            );
+            assert!(
+                (slot.center().y - title.center().y).abs() < px(1.5),
+                "{id}: mark on the title line"
+            );
+        }
+        // A collapsed project fills its circle for its chats' new replies.
+        assert!(
+            w.within("chat-mark-group:project:dotfiles")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
+    })
+    .unwrap();
+    // A collapsed mission fills its coordinator's circle for members' replies.
+    let set_thread = |cx: &mut HeadlessAppContext, collapse: bool| {
+        cx.update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| {
+                v.chats
+                    .update(cx, |l, _| l.delegate_mut().set_collapsed("gpui", collapse));
+                v.rebuild_nav(w, cx);
+            })
+        })
+        .unwrap();
+        settle(cx, h);
+    };
+    set_thread(cx, true);
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.within("chat-mark-u-coord")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
+        assert!(label(w, "u-coord").contains("new repl"));
+    })
+    .unwrap();
+    set_thread(cx, false);
+    // Opening a chat empties its circle; the rest keep theirs.
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.page = crate::app_shell::Page::Chat;
+            v.selected = Some("w-new".into());
+            v.rebuild_nav(w, cx);
+        })
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.within("chat-mark-w-new")
+                .try_find("state-circle-hollow")
+                .is_some()
+        );
+        assert!(
+            w.within("chat-mark-w-new")
+                .try_find("state-circle-filled")
+                .is_none()
+        );
+        assert!(!label(w, "w-new").contains("new reply"));
+        assert!(
+            w.within("chat-mark-b-new")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
+        assert!(
+            w.within("chat-mark-q-new")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
+        w.remove_window();
+    })
+    .unwrap();
+    cx.run_until_parked();
+    println!(
+        "{}",
+        json!({"width":width,"unread_circle":"hollow-read+filled-unread+attention-precedence+open-clears+collapsed-rollups","reply_dots":0})
+    );
 }

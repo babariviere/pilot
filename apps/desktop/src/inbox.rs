@@ -229,7 +229,7 @@ impl ListDelegate for InboxList {
             self.marks
                 .entry(chat.id.clone())
                 .or_default()
-                .show(Some(mark), window, cx);
+                .show(Some(mark.into()), window, cx);
         let owner = self.owner.clone();
         let id = chat.id.clone();
         Some(

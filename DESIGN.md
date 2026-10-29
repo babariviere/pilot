@@ -125,15 +125,18 @@ Chat motion plays on Core Animation (`LoopingLayerView`), never as per-frame Swi
 opacity, colour or a transform inside a fixed frame, so it never moves the layout.
 
 Pilot Next draws no row dither. A sidebar or Inbox row shows its state in words beside it or on its caption, plus
-one still mark in its trailing column: an amber dot for Needs you and questions, a red triangle for Failed and a
-green pull-request glyph for Ready to merge. Working and Background draw no mark; their neutral word says it, and a
-collapsed mission counts them in words ("2 working"). Quiet chats draw nothing. Colour is only amber, red and green;
-Working stays neutral, and the words and the
-accessible name always carry the state. Marks never loop: a change cross-fades once (180 ms), instantly under
-Reduce Motion, and never moves the row. A small neutral dot after a title means the agent replied since you last
-opened that chat. When you last looked is kept only on this machine (no read-status writes, nothing imported from
-Swift); opening the chat clears the dot, and a collapsed mission rolls up its members' dots. A row that needs you
-shows no reply dot (its amber dot already asks for a look), nor does a collapsed mission with a member that needs you.
+one still mark in its trailing column: a neutral circle for Working (fainter when only background jobs run), an
+amber dot for Needs you and questions, a red triangle for Failed and a green pull-request glyph for Ready to merge.
+The circle is also the "replied since you looked" mark: hollow once you have seen the latest reply, filled when the
+agent replied since you last opened that chat, and a quiet chat with a new reply shows it filled; there is no
+separate reply dot. A collapsed mission rolls up its members as each mark with a count (a hollow ring for Working).
+Quiet, read chats draw
+nothing. Colour is only amber, red and green; Working stays neutral, and the words and the accessible name always
+carry the state. Marks never loop: a change cross-fades once (180 ms), instantly under Reduce Motion, and never moves
+the row. When you last looked is kept only on this machine (no read-status writes, nothing imported from Swift);
+opening the chat empties the circle, and a collapsed mission or project fills its circle for its members' new
+replies. Needs you, Failed and Ready rows show no new-reply state (their coloured mark already asks for a look), nor
+does a collapsed mission with a member that needs you.
 
 ## Sidebar
 

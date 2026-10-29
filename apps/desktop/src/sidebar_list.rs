@@ -17,7 +17,7 @@ use crate::{
     local_model::{Chat, MissionAssociation, Project},
     sidebar_memory::Memory,
     sidebar_tree::{self, Row, Tree, group_key},
-    state_mark::{self, Fade, Mark},
+    state_mark::{self, Fade, Glyph, Mark},
 };
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu};
 use gpui_kit::{
@@ -375,29 +375,30 @@ impl ChatList {
     fn fade(
         &mut self,
         key: &str,
-        mark: Option<Mark>,
+        glyph: Option<Glyph>,
         window: &mut Window,
         cx: &App,
-    ) -> (Option<Mark>, Option<Mark>, f32) {
+    ) -> (Option<Glyph>, Option<Glyph>, f32) {
         self.marks
             .entry(key.to_owned())
             .or_default()
-            .show(mark, window, cx)
+            .show(glyph, window, cx)
     }
-    /// The trailing slot: the mark, swapped for the row's … menu on hover or
-    /// keyboard selection. The right-click menu reaches the same actions.
+    /// The trailing slot: the mark or circle (filled for a new reply), swapped
+    /// for the row's … menu on hover or keyboard selection. The right-click
+    /// menu reaches the same actions.
     #[allow(clippy::too_many_arguments)]
     fn trailing(
         &mut self,
         ix: IndexPath,
         key: &str,
         chat: Option<&Chat>,
-        mark: Option<Mark>,
+        glyph: Option<Glyph>,
         narrow: bool,
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Observed {
-        let (shown, previous, t) = self.fade(key, mark, window, cx);
+        let (shown, previous, t) = self.fade(key, glyph, window, cx);
         let menu_shown = self.menu_shown(ix, window);
         // The selected row keeps its button for Tab; the last opened menu's row
         // keeps it so Escape can return focus to the trigger.
@@ -565,7 +566,7 @@ impl ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> ListItem {
         let mark_state = Mark::of(&chat);
-        let unread = self.memory.unread(&chat) && !needs_you(mark_state);
+        let unread = self.memory.unread(&chat) && !asks_for_look(mark_state);
         // RowLine: project (only across all projects), then the state reason.
         // Quiet chats say nothing rather than a raw "idle".
         let project = self.project_name(Some(&chat), ix.section);
@@ -614,7 +615,15 @@ impl ChatList {
         let state_color = mark_state
             .filter(|m| m.bucket() != Mark::Working)
             .map_or(cx.theme().muted_foreground, |m| m.color(cx));
-        let trailing = self.trailing(ix, &chat.id, Some(&chat), mark_state, false, window, cx);
+        let trailing = self.trailing(
+            ix,
+            &chat.id,
+            Some(&chat),
+            Glyph::of(mark_state, unread),
+            false,
+            window,
+            cx,
+        );
         let height = if self.chat_caption(&chat, ix.section) {
             TWO_LINE_HEIGHT
         } else {
@@ -639,7 +648,6 @@ impl ChatList {
                             .truncate()
                             .text_size(px(TextRole::BODY))
                             .child(SharedString::from(chat.title.clone())),
-                        unread.then(|| reply(&chat.id, cx)),
                     ))
                     .child(trailing),
             )
@@ -722,8 +730,8 @@ impl ChatList {
             (None, None) => ("Mission name unavailable".to_owned(), false),
         };
         let mark = coordinator.as_ref().and_then(Mark::of);
-        // Needs you, here or rolled up, already asks for a look.
-        let needs = needs_you(mark) || (t.collapsed && t.rollup.needs > 0);
+        // Its own coloured mark, or Needs you rolled up, already asks for a look.
+        let needs = asks_for_look(mark) || (t.collapsed && t.rollup.needs > 0);
         let unread = !needs
             && (coordinator.as_ref().is_some_and(|c| self.memory.unread(c))
                 || (t.collapsed && t.rollup.unread));
@@ -776,7 +784,15 @@ impl ChatList {
                 .position(ix)
                 .and_then(|p| self.tree.rows.get(p + 1))
                 .is_some_and(|row| matches!(row, Row::Member { thread: m, .. } if *m == thread));
-        let trailing = self.trailing(ix, &key, coordinator.as_ref(), mark, true, window, cx);
+        let trailing = self.trailing(
+            ix,
+            &key,
+            coordinator.as_ref(),
+            Glyph::of(mark, unread),
+            true,
+            window,
+            cx,
+        );
         let menu = coordinator.is_some().then(|| self.menu_shown(ix, window));
         let keyboard = self.menu_shown(ix, window);
         // A collapsed thread's roll-up follows the title; only the project
@@ -800,9 +816,9 @@ impl ChatList {
                 .gap_x_1()
                 .text_size(px(TextRole::CAPTION))
                 .text_color(cx.theme().muted_foreground)
-                .children(counts.iter().enumerate().map(|(i, &(mark, n))| {
-                    // Working is counted in words; it has no glyph.
-                    let working = mark == Mark::Working;
+                .children(counts.iter().map(|&(mark, n)| {
+                    // Glyph and count; Working is a neutral hollow ring. The
+                    // accessible name keeps the words.
                     div()
                         .id(SharedString::from(format!("mission-rollup-{:?}", mark)))
                         .test_support()
@@ -810,20 +826,13 @@ impl ChatList {
                         .h_flex()
                         .items_center()
                         .gap_0p5()
-                        .text_color(if working {
+                        .text_color(if mark == Mark::Working {
                             cx.theme().muted_foreground
                         } else {
                             mark.color(cx)
                         })
-                        .when(!working, |d| {
-                            d.child(state_mark::slot(Some(mark), None, 1., cx))
-                        })
-                        .child(if working {
-                            // A dot keeps it apart from a glyph's count.
-                            format!("{}{n} working", if i > 0 { "· " } else { "" })
-                        } else {
-                            n.to_string()
-                        })
+                        .child(state_mark::slot(Some(mark.into()), None, 1., cx))
+                        .child(n.to_string())
                 }))
         });
         let height = if caption {
@@ -873,8 +882,8 @@ impl ChatList {
                                 )
                             }),
                     )
-                    // The title truncates first; the roll-up and the reply
-                    // dot after it stay whole.
+                    // The title truncates first; the roll-up after it stays
+                    // whole.
                     .child(
                         lane(
                             div()
@@ -889,10 +898,8 @@ impl ChatList {
                                 .font_medium()
                                 .when(accent, |d| d.text_color(accent_color))
                                 .child(SharedString::from(title)),
-                            None,
                         )
-                        .children(tally)
-                        .children(unread.then(|| reply(&key, cx))),
+                        .children(tally),
                     )
                     .children(word.map(|(word, mark)| state_word(word, mark, menu, cx)))
                     .child(trailing)
@@ -987,7 +994,7 @@ impl ChatList {
         cx: &mut Context<ListState<Self>>,
     ) -> ListItem {
         let mark = Mark::of(&chat);
-        let unread = self.memory.unread(&chat) && !needs_you(mark);
+        let unread = self.memory.unread(&chat) && !asks_for_look(mark);
         let state = chat_order::row_state(&chat);
         // A member from another project than its thread's section names it.
         let elsewhere = (!self.tree.groups.is_empty()
@@ -1014,7 +1021,15 @@ impl ChatList {
             .position(ix)
             .and_then(|p| self.tree.rows.get(p + 1))
             .is_some_and(|row| matches!(row, Row::Member { thread: t, .. } if *t == thread));
-        let trailing = self.trailing(ix, &chat.id, Some(&chat), mark, true, window, cx);
+        let trailing = self.trailing(
+            ix,
+            &chat.id,
+            Some(&chat),
+            Glyph::of(mark, unread),
+            true,
+            window,
+            cx,
+        );
         let menu = Some(self.menu_shown(ix, window));
         let frame = self.frame(ix, &chat.id, Some(&chat), MEMBER_HEIGHT, cx);
         let row = frame
@@ -1034,7 +1049,6 @@ impl ChatList {
                             d.text_color(cx.theme().muted_foreground)
                         })
                         .child(SharedString::from(chat.title.clone())),
-                    unread.then(|| reply(&chat.id, cx)),
                 )
                 // The title keeps its room; another project's name yields first.
                 .flex_auto(),
@@ -1131,8 +1145,8 @@ fn state_word(word: &'static str, mark: Mark, menu: Option<bool>, cx: &App) -> O
         })
         .child(word)
 }
-/// The title lane: the title, then the "new reply" dot right after it.
-fn lane(title: impl IntoElement, dot: Option<Observed>) -> Div {
+/// The title lane: the title takes the row's free width.
+fn lane(title: impl IntoElement) -> Div {
     div()
         .flex_1()
         .min_w_0()
@@ -1140,20 +1154,12 @@ fn lane(title: impl IntoElement, dot: Option<Observed>) -> Div {
         .items_center()
         .gap_1p5()
         .child(title)
-        .children(dot)
 }
-/// A Needs you (or question) mark already asks for a look, so its row shows
-/// no "new reply" dot beside the amber one.
-fn needs_you(mark: Option<Mark>) -> bool {
-    mark.map(Mark::bucket) == Some(Mark::NeedsYou)
-}
-/// The small neutral "replied since you looked" dot.
-fn reply(key: &str, cx: &App) -> Observed {
-    div()
-        .id(SharedString::from(format!("chat-reply-{key}")))
-        .test_support()
-        .flex_none()
-        .child(state_mark::reply_dot(cx))
+/// A Needs you, Failed or Ready mark already asks for a look, so its row
+/// shows no "new reply" state; the circle fills only for Working, Background
+/// and quiet rows.
+fn asks_for_look(mark: Option<Mark>) -> bool {
+    mark.is_some_and(Mark::asks_for_look)
 }
 /// A member's part of the thread tree: the stem from the parent's Compass and
 /// a short rounded branch to the title. The last member's branch ends the stem.
@@ -1370,7 +1376,9 @@ impl ChatList {
             spoken.push(group.rollup.words());
         }
         let spoken = label(&name, spoken.into_iter(), false);
-        let (shown, previous, t) = self.fade(&key, mark, window, cx);
+        // A collapsed section's circle fills for its chats' new replies.
+        let unread = group.collapsed && group.rollup.unread && !asks_for_look(mark);
+        let (shown, previous, t) = self.fade(&key, Glyph::of(mark, unread), window, cx);
         let menu_shown = self.menu_shown(ix, window);
         let menu_built = self.selected == Some(ix)
             || self.hovered.as_deref() == Some(key.as_str())

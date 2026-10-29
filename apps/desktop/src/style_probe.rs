@@ -128,9 +128,9 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                 .update_window(handle, |_, window, cx| {
                     window.render_frame(cx);
                     let v = view.read(cx);
-                    // Every state keeps its trailing slot. Attention, failure
-                    // and ready draw a still glyph; Working and Background draw
-                    // none (their state word says it); quiet rows draw none.
+                    // Every state keeps its trailing slot and a still glyph:
+                    // Working and Background a hollow circle (nothing unread),
+                    // attention, failure and ready their coloured mark.
                     for id in [
                         "style-fg",
                         "style-bg",
@@ -151,12 +151,14 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                             (mark.center().y - title.center().y).abs() < px(1.5),
                             "{id}: mark sits on the title line"
                         );
-                        let glyph = window
-                            .within(format!("chat-mark-{id}"))
-                            .try_find("state-glyph")
-                            .is_some();
+                        let mark = window.within(format!("chat-mark-{id}"));
+                        assert!(mark.try_find("state-glyph").is_some(), "{id}: glyph");
                         let working = matches!(id, "style-fg" | "style-bg");
-                        assert_eq!(glyph, !working, "{id}: glyph only beyond Working");
+                        assert_eq!(
+                            mark.try_find("state-circle-hollow").is_some(),
+                            working,
+                            "{id}: hollow circle only for Working"
+                        );
                         if working {
                             assert!(
                                 window
@@ -167,7 +169,7 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                             );
                         }
                     }
-                    // The coordinator's Working word stays; its slot is empty.
+                    // The coordinator keeps its Working word and hollow circle.
                     assert!(
                         window
                             .within("chat-row-style-coord")
@@ -177,8 +179,8 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                     assert!(
                         window
                             .within("chat-mark-style-coord")
-                            .try_find("state-glyph")
-                            .is_none()
+                            .try_find("state-circle-hollow")
+                            .is_some()
                     );
                     // A thread: the coordinator row is titled with the mission, its
                     // members are one-line rows indented under it.
@@ -202,8 +204,12 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                         "finished members fold"
                     );
                     assert!(window.try_find("mission-fold-style-mission").is_some());
-                    // The reply dot follows the title on its line.
-                    let dot = window.find("chat-reply-style-unread").bounds();
+                    // A new reply fills the trailing circle on the title line;
+                    // a quiet, read chat draws nothing.
+                    let dot = window
+                        .within("chat-mark-style-unread")
+                        .find("state-circle-filled")
+                        .bounds();
                     let title = window
                         .within("chat-row-style-unread")
                         .find("sidebar-chat-title")
@@ -212,7 +218,13 @@ pub fn run_style_probe(cx: &mut HeadlessAppContext) {
                         dot.left() >= title.right()
                             && (dot.center().y - title.center().y).abs() < px(1.5)
                     );
-                    assert!(window.try_find("chat-reply-style-idle").is_none());
+                    assert!(window.try_find("chat-reply-style-unread").is_none());
+                    assert!(
+                        window
+                            .within("chat-mark-style-idle")
+                            .try_find("state-glyph")
+                            .is_none()
+                    );
                     // Long Unicode titles truncate inside the row, never under the state word.
                     let word_right = window.find("chat-mark-style-member").bounds().left();
                     assert!(member_title.right() <= word_right);
@@ -606,12 +618,12 @@ fn run_large_thread(cx: &mut HeadlessAppContext, captures: Option<&std::path::Pa
             assert_eq!(row.size.height, px(super::sidebar_list::PARENT_HEIGHT));
             assert!(title.right() <= rollup.left() && rollup.left() - title.right() < px(8.));
             assert!((rollup.center().y - title.center().y).abs() < px(1.));
-            // Working rolls up in words, without a hollow glyph.
+            // Working rolls up as a hollow ring and its count.
             assert!(
                 window
                     .within("mission-rollup-Working")
-                    .try_find("state-glyph")
-                    .is_none()
+                    .try_find("state-circle-hollow")
+                    .is_some()
             );
             assert!(
                 window
@@ -670,23 +682,48 @@ fn run_reply_memory(cx: &mut HeadlessAppContext) {
     wait_for_file(cx, &|_| true);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find("chat-reply-seen").is_some());
-        assert!(window.try_find("chat-reply-unseen").is_some());
+        assert!(
+            window
+                .within("chat-mark-seen")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
+        assert!(
+            window
+                .within("chat-mark-unseen")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
         let label = window
             .find("seen")
             .label()
             .map(|l| l.to_string())
             .unwrap_or_default();
         assert!(label.ends_with("new reply"), "{label}");
-        // Opening the chat clears its dot.
+        // Opening the chat empties its circle.
         view.update(cx, |v, cx| {
             v.page = crate::app_shell::Page::Chat;
             v.selected = Some("seen".into());
             v.rebuild_nav(window, cx);
         });
+    })
+    .unwrap();
+    // The filled circle cross-fades out once (180 ms).
+    pulse(cx, handle, 12, 16);
+    cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find("chat-reply-seen").is_none());
-        assert!(window.try_find("chat-reply-unseen").is_some());
+        assert!(
+            window
+                .within("chat-mark-seen")
+                .try_find("state-circle-filled")
+                .is_none()
+        );
+        assert!(
+            window
+                .within("chat-mark-unseen")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
     })
     .unwrap();
     wait_for_file(cx, &|s| s.seen.contains_key("seen"));
@@ -700,7 +737,10 @@ fn run_reply_memory(cx: &mut HeadlessAppContext) {
         let loaded = cx
             .update_window(handle, |_, window, cx| {
                 window.render_frame(cx);
-                window.try_find("chat-reply-unseen").is_some()
+                window
+                    .within("chat-mark-unseen")
+                    .try_find("state-circle-filled")
+                    .is_some()
             })
             .unwrap();
         if loaded {
@@ -711,10 +751,18 @@ fn run_reply_memory(cx: &mut HeadlessAppContext) {
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(
-            window.try_find("chat-reply-seen").is_none(),
+            window
+                .within("chat-mark-seen")
+                .try_find("state-circle-filled")
+                .is_none(),
             "seen survives a restart"
         );
-        assert!(window.try_find("chat-reply-unseen").is_some());
+        assert!(
+            window
+                .within("chat-mark-unseen")
+                .try_find("state-circle-filled")
+                .is_some()
+        );
         window.remove_window();
     })
     .unwrap();

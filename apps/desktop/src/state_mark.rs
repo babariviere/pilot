@@ -4,7 +4,9 @@
 //! Marks never loop. A changed state cross-fades once on the shared
 //! `transition::Transition` clock, instantly under reduced motion. Colour only
 //! for amber Needs you, red Failed and green Ready; Working stays neutral.
-//! Working and Background have no glyph: the state word beside it says it.
+//! Working and Background draw a neutral circle (fainter for Background). The
+//! same circle fills when the agent replied since you last looked, and a quiet
+//! chat with a new reply shows it filled; there is no separate reply dot.
 use crate::{app_icon::AppIcon, local_model::Chat, transition::Transition};
 use gpui_kit::{
     AnyElement, App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Styled,
@@ -82,6 +84,51 @@ impl Mark {
             other => other,
         }
     }
+    /// Needs you, Failed and Ready already ask for a look, so their rows show
+    /// no separate "new reply" state.
+    pub(crate) fn asks_for_look(self) -> bool {
+        self.bucket() != Self::Working
+    }
+}
+
+/// What a trailing slot draws: a coloured mark or the neutral circle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Glyph {
+    /// Amber dot, red triangle or green pull request.
+    Mark(Mark),
+    /// Working (faint for Background), or a quiet chat with a new reply.
+    /// Filled while the agent has replied since you last looked.
+    Circle { faint: bool, filled: bool },
+}
+impl Glyph {
+    /// A row's glyph for its mark and "replied since you looked" state.
+    /// Coloured marks ignore `unread`; quiet, read chats draw nothing.
+    pub(crate) fn of(mark: Option<Mark>, unread: bool) -> Option<Self> {
+        match mark {
+            Some(mark) => Some(match Self::from(mark) {
+                Self::Circle { faint, .. } => Self::Circle {
+                    faint,
+                    filled: unread,
+                },
+                glyph => glyph,
+            }),
+            None => unread.then_some(Self::Circle {
+                faint: false,
+                filled: true,
+            }),
+        }
+    }
+}
+impl From<Mark> for Glyph {
+    fn from(mark: Mark) -> Self {
+        match mark {
+            Mark::Working | Mark::Background => Self::Circle {
+                faint: mark == Mark::Background,
+                filled: false,
+            },
+            mark => Self::Mark(mark),
+        }
+    }
 }
 
 /// One mark cross-fade.
@@ -89,12 +136,31 @@ pub(crate) const FADE: Duration = Duration::from_millis(180);
 /// Mark glyphs sit in a 12pt slot.
 pub(crate) const SLOT: f32 = 12.;
 
-/// A still 12pt glyph: amber dot Needs you, red triangle Failed, green pull
-/// request Ready. Working and Background draw none; their word carries them.
-pub(crate) fn glyph(mark: Mark, cx: &App) -> Option<AnyElement> {
+/// A still glyph: the neutral circle (hollow, or filled for a new reply),
+/// amber dot Needs you, red triangle Failed, green pull request Ready.
+pub(crate) fn glyph(glyph: Glyph, cx: &App) -> AnyElement {
+    let mark = match glyph {
+        Glyph::Circle { faint, filled } => {
+            let color = cx.theme().muted_foreground;
+            let circle = div()
+                .id(if filled {
+                    "state-circle-filled"
+                } else {
+                    "state-circle-hollow"
+                })
+                .test_support()
+                .size(px(9.))
+                .rounded_full()
+                .border(px(1.5))
+                .border_color(color);
+            let circle = if filled { circle.bg(color) } else { circle };
+            return if faint { circle.opacity(0.5) } else { circle }.into_any_element();
+        }
+        Glyph::Mark(mark) => mark,
+    };
     let color = mark.color(cx);
-    Some(match mark {
-        Mark::Working | Mark::Background => return None,
+    match mark {
+        Mark::Working | Mark::Background => self::glyph(Glyph::from(mark), cx),
         Mark::NeedsYou | Mark::Question => div()
             .size(px(7.))
             .rounded_full()
@@ -110,63 +176,52 @@ pub(crate) fn glyph(mark: Mark, cx: &App) -> Option<AnyElement> {
             .size_3()
             .text_color(color)
             .into_any_element(),
-    })
+    }
 }
 
 /// A centered 12pt slot holding the current glyph, with the previous one
 /// fading out on top while a change settles.
-pub(crate) fn slot(shown: Option<Mark>, previous: Option<Mark>, t: f32, cx: &App) -> Div {
-    let layer = |mark: Mark, opacity: f32| {
-        glyph(mark, cx).map(|glyph| {
-            div()
-                .id("state-glyph")
-                .test_support()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .opacity(opacity)
-                .child(glyph)
-        })
+pub(crate) fn slot(shown: Option<Glyph>, previous: Option<Glyph>, t: f32, cx: &App) -> Div {
+    let layer = |shown: Glyph, opacity: f32| {
+        div()
+            .id("state-glyph")
+            .test_support()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .opacity(opacity)
+            .child(glyph(shown, cx))
     };
     div()
         .relative()
         .flex_none()
         .size(px(SLOT))
-        .children(shown.and_then(|mark| layer(mark, t)))
+        .children(shown.map(|glyph| layer(glyph, t)))
         .children(
             previous
                 .filter(|_| t < 1.)
-                .and_then(|mark| layer(mark, 1. - t)),
+                .map(|glyph| layer(glyph, 1. - t)),
         )
 }
 
-/// The small neutral "new reply since you looked" dot.
-pub(crate) fn reply_dot(cx: &App) -> Div {
-    div()
-        .flex_none()
-        .size(px(6.))
-        .rounded_full()
-        .bg(cx.theme().muted_foreground)
-}
-
-/// One row's mark over time: a change cross-fades once, a first sight never does.
+/// One row's glyph over time: a change cross-fades once, a first sight never does.
 #[derive(Default)]
 pub(crate) struct Fade {
     seen: bool,
-    shown: Option<Mark>,
-    previous: Option<Mark>,
+    shown: Option<Glyph>,
+    previous: Option<Glyph>,
     transition: Transition,
 }
 impl Fade {
-    /// The mark to show, the one fading out and the fade progress (1 = settled).
+    /// The glyph to show, the one fading out and the fade progress (1 = settled).
     pub(crate) fn show(
         &mut self,
-        mark: Option<Mark>,
+        mark: Option<Glyph>,
         window: &mut Window,
         cx: &App,
-    ) -> (Option<Mark>, Option<Mark>, f32) {
+    ) -> (Option<Glyph>, Option<Glyph>, f32) {
         if !self.seen {
             self.seen = true;
             self.shown = mark;
@@ -229,5 +284,34 @@ mod tests {
         for s in [Signal::NeedsYou, Signal::Failed, Signal::Ready] {
             assert_eq!(s.rgb(false), s.rgb(true));
         }
+    }
+
+    #[test]
+    fn the_circle_fills_for_new_replies_and_coloured_marks_ignore_them() {
+        let circle = |faint, filled| Some(Glyph::Circle { faint, filled });
+        for unread in [false, true] {
+            assert_eq!(
+                Glyph::of(Some(Mark::Working), unread),
+                circle(false, unread)
+            );
+            assert_eq!(
+                Glyph::of(Some(Mark::Background), unread),
+                circle(true, unread)
+            );
+            for mark in [Mark::NeedsYou, Mark::Question, Mark::Failed, Mark::Ready] {
+                assert!(mark.asks_for_look());
+                assert_eq!(Glyph::of(Some(mark), unread), Some(Glyph::Mark(mark)));
+            }
+        }
+        assert_eq!(Glyph::of(None, true), circle(false, true));
+        assert_eq!(Glyph::of(None, false), None);
+        assert!(!Mark::Working.asks_for_look() && !Mark::Background.asks_for_look());
+        assert_eq!(
+            Glyph::from(Mark::Background),
+            Glyph::Circle {
+                faint: true,
+                filled: false
+            }
+        );
     }
 }
