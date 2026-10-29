@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.92.0](https://github.com/babariviere/pilot/compare/v1.91.0...v1.92.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** open Linear and Slack links in their macOS desktop apps ([c4dcc55](https://github.com/babariviere/pilot/commit/c4dcc552eb09d0f755887db450e01239fcc3f508))
+
+
+### Bug Fixes
+
+* **desktop:** unblock daemon upgrades and reconcile app recovery ([2bf3877](https://github.com/babariviere/pilot/commit/2bf387789d51ff4b51af080805bf0bd2e89861ff))
+
 ## [1.91.0](https://github.com/babariviere/pilot/compare/v1.90.0...v1.91.0) (2026-10-29)
 
 
