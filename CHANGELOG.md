@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.88.0](https://github.com/babariviere/pilot/compare/v1.87.0...v1.88.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** drop chat title from row menus and add Open mission ([020a567](https://github.com/babariviere/pilot/commit/020a5674300deb6bbbebf96ad170f01d20408a7b))
+* **desktop:** show GitHub push and PR events inline ([cbdc836](https://github.com/babariviere/pilot/commit/cbdc836adb9c2931dac96c1b04c113fd0748ac72))
+* **desktop:** show update version and download progress ([748dbd4](https://github.com/babariviere/pilot/commit/748dbd4ca63e14abb45693214a3051b4ccfc605c))
+* **desktop:** simplify tool work rendering into quiet call panels ([ef8b45a](https://github.com/babariviere/pilot/commit/ef8b45a5bfdf6d102f27d03d58f133d996e8be3e))
+* link agent-opened PRs on GitHub chat events ([54cafed](https://github.com/babariviere/pilot/commit/54cafed11e8223dd9462d196b245c98bc1786ae0))
+
+
+### Bug Fixes
+
+* **desktop:** name sidebar missions from the session socket list and underline only the name ([65ee908](https://github.com/babariviere/pilot/commit/65ee908f0ee69529408562d807696201d59e98f6))
+* **desktop:** show scoped models as flat single-line checkbox rows ([b9eba81](https://github.com/babariviere/pilot/commit/b9eba81f4f5daf5f420e77c202992346ce9dc2d7))
+
+
+### Performance Improvements
+
+* **updater:** prepare verified payload before quitting ([b912fae](https://github.com/babariviere/pilot/commit/b912fae0d47759b1a012b6af35b0d38a68a0a981))
+
 ## [1.87.0](https://github.com/babariviere/pilot/compare/v1.86.0...v1.87.0) (2026-10-29)
 
 
