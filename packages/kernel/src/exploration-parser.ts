@@ -1,7 +1,8 @@
 /** Syntax only. No compiler configuration, imports, plugins or repository code are executed. */
 import { parse } from "@babel/parser";
 
-type Node = Record<string, unknown> & { type: string; start: number; end: number };
+export type SyntaxNode = Record<string, unknown> & { type: string; start: number; end: number };
+type Node = SyntaxNode;
 export interface Declaration {
 	name: string;
 	kind: string;
@@ -12,11 +13,11 @@ export interface Declaration {
 	container?: string;
 }
 
-function node(value: unknown): value is Node {
+export function node(value: unknown): value is Node {
 	return !!value && typeof value === "object" && "type" in value && "start" in value && "end" in value;
 }
 
-function bindings(value: unknown): Node[] {
+export function bindings(value: unknown): Node[] {
 	const pending = [value];
 	const found: Node[] = [];
 	while (pending.length) {
@@ -25,6 +26,10 @@ function bindings(value: unknown): Node[] {
 		if (item.type === "Identifier") found.push(item);
 		else if (item.type === "RestElement") pending.push(item.argument);
 		else if (item.type === "AssignmentPattern") pending.push(item.left);
+		else if (
+			["TSNonNullExpression", "TSAsExpression", "TSTypeAssertion", "ParenthesizedExpression"].includes(item.type)
+		)
+			pending.push(item.expression);
 		else if (item.type === "ObjectPattern" && Array.isArray(item.properties)) {
 			for (const property of item.properties)
 				if (node(property)) pending.push(property.type === "RestElement" ? property.argument : property.value);
@@ -56,17 +61,20 @@ const MEMBERS = new Set([
 	"TSEnumMember",
 ]);
 
-export function parseDeclarations(text: string, path: string): Declaration[] {
+export function parseSource(text: string, path: string): Node {
 	const typescript = /\.(?:ts|tsx|mts|cts)$/.test(path);
 	const jsx = /\.(?:tsx|jsx)$/.test(path);
-	const ast = parse(text, {
+	return parse(text, {
 		sourceType: "unambiguous",
 		plugins: [...(typescript ? ["typescript" as const] : []), ...(jsx ? ["jsx" as const] : [])],
 		attachComment: false,
 		errorRecovery: false,
-	});
+	}).program as unknown as Node;
+}
+
+export function parseDeclarations(text: string, path: string, ast = parseSource(text, path)): Declaration[] {
 	const declarations: Declaration[] = [];
-	const pending: Array<{ value: unknown; container?: string }> = [{ value: ast.program }];
+	const pending: Array<{ value: unknown; container?: string }> = [{ value: ast }];
 	while (pending.length) {
 		const { value, container } = pending.pop()!;
 		if (!node(value)) continue;

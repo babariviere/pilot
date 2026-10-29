@@ -2,7 +2,14 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import type { ExplorationPage, ExplorationQuery, SourceHit } from "./exploration-contract.ts";
-import { type Declaration, parseDeclarations, supportedSyntax } from "./exploration-parser.ts";
+import { paginate } from "./exploration-page.ts";
+import {
+	type Declaration,
+	parseDeclarations,
+	parseSource,
+	type SyntaxNode,
+	supportedSyntax,
+} from "./exploration-parser.ts";
 import type { AskContext } from "./policy.ts";
 import { ReadLimitError, SourceReader, sourcePath } from "./source-reader.ts";
 
@@ -10,14 +17,13 @@ const MAX_ENTRIES = 10_000;
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_RESULTS = 1000;
-const MAX_OUTPUT_BYTES = 48 * 1024;
 const EXCLUDED = [".git", ".jj", "node_modules", "target", "dist", ".next", ".cache"];
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const order = (a: SourceHit, b: SourceHit) =>
 	b.score - a.score || compare(a.path, b.path) || a.span.start.offset - b.span.start.offset;
 const sha = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
-function positions(text: string) {
+export function positions(text: string) {
 	const starts = [0];
 	for (let i = 0; i < text.length; i++) if (text[i] === "\n") starts.push(i + 1);
 	const position = (offset: number) => {
@@ -34,10 +40,16 @@ function positions(text: string) {
 	return { starts, span };
 }
 
+export interface SourceObserver {
+	identity: unknown;
+	file(path: string, ast: SyntaxNode, hit: (start: number, end: number) => SourceHit): boolean;
+}
+
 export async function scanSource(
 	source: AskContext,
 	input: ExplorationQuery,
 	signal?: AbortSignal,
+	observer?: SourceObserver,
 ): Promise<ExplorationPage> {
 	const reader = new SourceReader(source);
 	const path = sourcePath(reader.root, input.path ?? ".");
@@ -52,6 +64,7 @@ export async function scanSource(
 	const fingerprint = createHash("sha256");
 	// Include the canonical *workspace*, query, engine version, and host-selected snapshot store.
 	fingerprint.update(JSON.stringify([1, identity, source.gitDir ? await realpath(source.gitDir) : null, query]));
+	if (observer) fingerprint.update(JSON.stringify(observer.identity));
 	const page: ExplorationPage = {
 		version: 1,
 		query,
@@ -199,10 +212,12 @@ export async function scanSource(
 			continue;
 		}
 		let declarations: Declaration[] = [];
+		let ast: SyntaxNode | undefined;
 		let coverage: "parsed" | "lexical" = "lexical";
 		if (supportedSyntax(name)) {
 			try {
-				declarations = parseDeclarations(text, name);
+				ast = parseSource(text, name);
+				if (!observer) declarations = parseDeclarations(text, name, ast);
 				coverage = "parsed";
 				page.coverage.parsed++;
 			} catch {
@@ -240,6 +255,13 @@ export async function scanSource(
 					: {}),
 			};
 		};
+		if (observer) {
+			if (ast && !observer.file(name, ast, (start, end) => hit(start, end, 0))) {
+				partial("call-graph-record-limit: narrow path");
+				break;
+			}
+			continue;
+		}
 		if (input.tool === "code_symbols") {
 			for (const declaration of declarations) {
 				if (query.exact ? declaration.name !== query.query : !declaration.name.includes(query.query)) continue;
@@ -278,38 +300,6 @@ export async function scanSource(
 	if (page.page.matchesObserved > MAX_RESULTS) partial("top-1000-results-only: narrow query");
 	page.freshness.fingerprint = fingerprint.digest("hex");
 	page.freshness.finishedAt = new Date().toISOString();
-	if (input.cursor) {
-		let cursor: { fingerprint?: unknown; offset?: unknown };
-		try {
-			cursor = JSON.parse(Buffer.from(input.cursor, "base64url").toString());
-		} catch {
-			throw new Error("Invalid exploration cursor; restart without cursor");
-		}
-		if (
-			!cursor ||
-			cursor.fingerprint !== page.freshness.fingerprint ||
-			!Number.isSafeInteger(cursor.offset) ||
-			Number(cursor.offset) < 0 ||
-			Number(cursor.offset) >= hits.length
-		)
-			throw new Error("Stale or invalid exploration cursor; source/query/workspace changed. Restart without cursor");
-		page.page.offset = Number(cursor.offset);
-	}
-	page.page.retained = hits.length;
-	for (const item of hits.slice(page.page.offset, page.page.offset + (input.limit ?? 25))) {
-		page.results.push(item);
-		if (Buffer.byteLength(JSON.stringify(page)) > MAX_OUTPUT_BYTES - 512) {
-			page.results.pop();
-			break;
-		}
-	}
-	page.page.returned = page.results.length;
-	if (hits.length > page.page.offset && !page.page.returned)
-		throw new Error("Exploration metadata exceeds page budget; narrow path/query");
-	const next = page.page.offset + page.page.returned;
-	if (next < hits.length)
-		page.page.nextCursor = Buffer.from(
-			JSON.stringify({ fingerprint: page.freshness.fingerprint, offset: next }),
-		).toString("base64url");
+	paginate(page, hits, input);
 	return page;
 }

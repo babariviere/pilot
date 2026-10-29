@@ -94,7 +94,17 @@ async function fixture(t: TestContext) {
 test("clean configuration has all bundled tools and required auth across reload", async (t) => {
 	const f = await fixture(t);
 	const adapter = await f.open();
-	for (const name of ["applyPatch", "web", "browser", "todo", "jobs", "subagent", "code_search", "code_symbols"])
+	for (const name of [
+		"applyPatch",
+		"web",
+		"browser",
+		"todo",
+		"jobs",
+		"subagent",
+		"code_call_paths",
+		"code_search",
+		"code_symbols",
+	])
 		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
 	assert.deepEqual(
 		adapter.extension.tools?.map((tool) => tool.name),
@@ -105,7 +115,7 @@ test("clean configuration has all bundled tools and required auth across reload"
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
 	assert.deepEqual(await adapter.jobs(), []);
 	await adapter.session.reload();
-	for (const name of ["jobs", "subagent", "todo", "web", "code_search", "code_symbols"])
+	for (const name of ["jobs", "subagent", "todo", "web", "code_call_paths", "code_search", "code_symbols"])
 		assert.ok(adapter.session.getCallableToolNames().includes(name));
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
 });
@@ -343,7 +353,7 @@ export default pi => {
 	await packet("ready");
 	const observed = JSON.parse(await readFile(marker, "utf8"));
 	assert.equal(observed.auth, "function");
-	for (const name of ["web", "browser", "todo", "applyPatch", "code_search", "code_symbols"])
+	for (const name of ["web", "browser", "todo", "applyPatch", "code_call_paths", "code_search", "code_symbols"])
 		assert.ok(observed.tools.includes(name), name);
 	for (const name of ["jobs", "subagent"]) assert.ok(!observed.tools.includes(name), name);
 	for (const id of ["first", "second"]) {

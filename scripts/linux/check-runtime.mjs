@@ -69,7 +69,16 @@ try {
 		settingsManager: SettingsManager.inMemory(),
 		sessionOptions: { modelRuntime: models, model: faux.getModel() },
 	});
-	for (const name of ["applyPatch", "web", "browser", "jobs", "subagent", "code_search", "code_symbols"])
+	for (const name of [
+		"applyPatch",
+		"web",
+		"browser",
+		"jobs",
+		"subagent",
+		"code_call_paths",
+		"code_search",
+		"code_symbols",
+	])
 		assert.ok(adapter.session.getCallableToolNames().includes(name), name);
 	await writeFile(join(isolated, "fixture.tsx"), "export const RuntimeFixture = () => <button />;");
 	const { runExploration } = await import("./packages/kernel/src/exploration-runner.ts");
@@ -79,6 +88,12 @@ try {
 	);
 	assert.equal(explored.results[0]?.name, "RuntimeFixture");
 	assert.equal(explored.results[0]?.coverage, "parsed");
+	const calls = await runExploration(
+		{ source: isolated },
+		{ tool: "code_call_paths", symbol: { path: "fixture.tsx", line: 1, column: 14 }, direction: "callees" },
+	);
+	assert.equal(calls.mode, "source-inferred-not-runtime");
+	assert.equal(calls.root.name, "RuntimeFixture");
 	const { prepareArtifact, getLibrary } = await import("@pilot/artifacts");
 	const artifact = await prepareArtifact({
 		title: "Linux production smoke",

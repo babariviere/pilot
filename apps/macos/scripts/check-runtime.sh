@@ -51,12 +51,15 @@ try {
   models.registerNativeProvider(faux.provider);
   parent = await NativeAdapter.open({ cwd: isolated, agentDir: isolated, projectTrusted: false, sessionId: 'runtime-profile', hostTools: [createTodoTool(async () => [], () => 'runtime-profile')], sessionFile: join(isolated, 'native.jsonl'), settingsManager: SettingsManager.inMemory(), sessionOptions: { modelRuntime: models, model: faux.getModel() } });
   const names = loader => loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]);
-  for (const name of ['applyPatch', 'web', 'browser', 'todo', 'jobs', 'subagent', 'code_search', 'code_symbols']) assert.ok(parent.session.getCallableToolNames().includes(name), name);
+  for (const name of ['applyPatch', 'web', 'browser', 'todo', 'jobs', 'subagent', 'code_call_paths', 'code_search', 'code_symbols']) assert.ok(parent.session.getCallableToolNames().includes(name), name);
   await writeFile(join(isolated, 'fixture.tsx'), 'export const RuntimeFixture = () => <button />;');
   const { runExploration } = await import('./packages/kernel/src/exploration-runner.ts');
   const explored = await runExploration({ source: isolated }, { tool: 'code_symbols', path: 'fixture.tsx', query: 'RuntimeFixture', exact: true });
   assert.equal(explored.results[0]?.name, 'RuntimeFixture');
   assert.equal(explored.results[0]?.coverage, 'parsed');
+  const calls = await runExploration({ source: isolated }, { tool: 'code_call_paths', symbol: { path: 'fixture.tsx', line: 1, column: 14 }, direction: 'callees' });
+  assert.equal(calls.mode, 'source-inferred-not-runtime');
+  assert.equal(calls.root.name, 'RuntimeFixture');
   const child = new EmbeddedResourceLoader(options, { requiredPaths: [CHILD_PROFILE_PATH, ANTHROPIC_AUTH_PATH], ownedPackages: {} });
   await child.reload();
   assert.deepEqual(child.getExtensions().errors, []);

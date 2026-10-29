@@ -6,16 +6,18 @@ import { performance } from "node:perf_hooks";
 import { runExploration } from "./exploration-runner.ts";
 
 const source = await mkdtemp(join(tmpdir(), "pilot-exploration-bench-"));
+const calls = process.argv.includes("--calls");
 try {
 	let bytes = 0;
 	for (let packageIndex = 0; packageIndex < 12; packageIndex++) {
 		const dir = join(source, "packages", `package-${packageIndex}`, "src");
 		await mkdir(dir, { recursive: true });
 		for (let file = 0; file < 10; file++) {
+			const symbols = calls ? 12 : 40;
 			const text = Array.from(
-				{ length: 40 },
+				{ length: symbols },
 				(_, symbol) =>
-					`export function operation${file}_${symbol}(value: string): string { return value + " fixture "; }\n`,
+					`export function operation${file}_${symbol}(value: string): string { return ${calls && symbol + 1 < symbols ? `operation${file}_${symbol + 1}(value)` : 'value + " fixture "'}; }\n`,
 			).join("");
 			bytes += Buffer.byteLength(text);
 			await writeFile(join(dir, `service-${file}.ts`), text);
@@ -37,7 +39,17 @@ try {
 		const cpu = process.cpuUsage();
 		const start = performance.now();
 		try {
-			const page = await runExploration({ source }, { tool: "code_search", query: "operation5_20", limit: 25 });
+			const page = calls
+				? await runExploration(
+						{ source },
+						{
+							tool: "code_call_paths",
+							symbol: { path: "packages/package-0/src/service-0.ts", line: 1, column: 17 },
+							direction: "callees",
+							depth: 6,
+						},
+					)
+				: await runExploration({ source }, { tool: "code_search", query: "operation5_20", limit: 25 });
 			const used = process.cpuUsage(cpu);
 			samples.push({
 				run,
@@ -60,6 +72,7 @@ try {
 				node: process.version,
 				platform: `${process.platform}/${process.arch}`,
 				sourceFiles: 132,
+				mode: calls ? "call-paths" : "search",
 				tsBytes: bytes,
 				notes: "Five fresh disposable workers, warm filesystem; RSS sampled every 5ms is process-wide and can miss peaks. No model/network calls or GUI measurements. No persistent cache, baseline speedup or token-savings claim.",
 				samples,

@@ -27,6 +27,7 @@ test("explorer uses read-only tools, reports findings, cancels research and rest
 		await rm(root, { recursive: true, force: true });
 	});
 	await writeFile(join(root, "source.txt"), "exploration evidence");
+	await writeFile(join(root, "entry.ts"), "function entry() { leaf(); } function leaf() {}");
 	const runtime = await ModelRuntime.create({
 		credentials: new InMemoryCredentialStore(),
 		modelsPath: null,
@@ -113,7 +114,7 @@ test("explorer uses read-only tools, reports findings, cancels research and rest
 	cleanup.push(() => session.close());
 	await session.watch("explorer", () => {});
 	const registered = native!.session.getAllTools().map((tool) => tool.name);
-	for (const name of ["read", "find", "grep", "ls", "web", "mission", "artifact", "ask_user"])
+	for (const name of ["read", "find", "grep", "ls", "web", "mission", "artifact", "ask_user", "code_call_paths"])
 		assert.ok(registered.includes(name), name);
 	for (const name of ["bash", "write", "edit", "jobs", "subagents"]) assert.ok(!registered.includes(name), name);
 	faux.setResponses([
@@ -126,6 +127,8 @@ text(await tools.read({path:'source.txt'}));
 text(await tools.find({pattern:'*.txt'}));
 text(await tools.grep({pattern:'evidence',path:'source.txt'}));
 text(await tools.ls({path:'.'}));
+const calls = await tools.code_call_paths({symbol:{path:'entry.ts',line:1,column:10},direction:'callees'});
+text({mode:calls.mode,target:calls.results[0].to.name});
 text(await tools.web({}));
 text(await tools.mission({action:'log',text:'Found source.txt, exploration evidence. Coverage limited.'}));
 text(await tools.mission({action:'comment',text:'Propose investigating another source before changing the brief.'}));
@@ -149,6 +152,7 @@ for (const name of ['ba'+'sh','wr'+'ite','edit','jobs','subagents']) {
 	assert.equal(results.find((message) => message.toolName === "codemode")?.isError, false, JSON.stringify(results));
 	assert.match(JSON.stringify(results), /exploration evidence/);
 	assert.match(JSON.stringify(results), /planning denied/);
+	assert.match(JSON.stringify(results), /source-inferred-not-runtime.*leaf/);
 	assert.doesNotMatch(JSON.stringify(results), /UNSAFE/);
 	assert.deepEqual(reports, ["log", "comment"]);
 	assert.equal(webCalls, 1);

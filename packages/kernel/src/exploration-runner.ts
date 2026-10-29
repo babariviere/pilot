@@ -1,5 +1,6 @@
 /** No persistent index/worker. Bound concurrent calls, cancel/join work before releasing its slot. */
 import { Worker } from "node:worker_threads";
+import type { CallPathPage, CallPathQuery } from "./call-path-contract.ts";
 import type { ExplorationPage, ExplorationQuery } from "./exploration-contract.ts";
 import type { AskContext } from "./policy.ts";
 
@@ -43,12 +44,41 @@ async function slot(signal?: AbortSignal): Promise<() => void> {
 	};
 }
 
-export async function runExploration(
+export function runExploration(source: AskContext, query: CallPathQuery, signal?: AbortSignal): Promise<CallPathPage>;
+export function runExploration(
 	source: AskContext,
 	query: ExplorationQuery,
 	signal?: AbortSignal,
-): Promise<ExplorationPage> {
-	if (query.query !== undefined && (query.query.length > 256 || /[\r\n]/.test(query.query)))
+): Promise<ExplorationPage>;
+export function runExploration(
+	source: AskContext,
+	query: ExplorationQuery | CallPathQuery,
+	signal?: AbortSignal,
+): Promise<ExplorationPage | CallPathPage>;
+export async function runExploration(
+	source: AskContext,
+	query: ExplorationQuery | CallPathQuery,
+	signal?: AbortSignal,
+): Promise<ExplorationPage | CallPathPage> {
+	if (query.tool === "code_call_paths") {
+		if (!["callers", "callees"].includes(query.direction))
+			throw new Error("Call-path direction must be callers or callees");
+		if (
+			!query.symbol ||
+			typeof query.symbol.path !== "string" ||
+			![query.symbol.line, query.symbol.column].every((n) => Number.isSafeInteger(n) && n >= 1)
+		)
+			throw new Error("Call-path symbol requires exact path/line/column");
+		if (query.symbol.contentHash !== undefined && !/^[a-f0-9]{64}$/.test(query.symbol.contentHash))
+			throw new Error("Invalid symbol contentHash");
+		if (
+			query.symbol.frameId !== undefined &&
+			(typeof query.symbol.frameId !== "string" || query.symbol.frameId.length > 4400)
+		)
+			throw new Error("Invalid symbol frameId");
+		if (query.depth !== undefined && (!Number.isSafeInteger(query.depth) || query.depth < 1 || query.depth > 6))
+			throw new Error("Call-path depth must be 1..6");
+	} else if (query.query !== undefined && (query.query.length > 256 || /[\r\n]/.test(query.query)))
 		throw new Error("Exploration query must be one line, at most 256 UTF-16 units");
 	if (query.tool === "code_search" && !query.query) throw new Error("code_search requires a nonempty literal query");
 	if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 50))
@@ -67,7 +97,7 @@ export async function runExploration(
 			workerData: { source, query },
 			resourceLimits: { maxOldGenerationSizeMb: 128 },
 		});
-		return await new Promise<ExplorationPage>((resolve, reject) => {
+		return await new Promise<ExplorationPage | CallPathPage>((resolve, reject) => {
 			let cancellation: unknown;
 			const stop = (reason: unknown) => {
 				if (cancellation) return;
@@ -80,7 +110,7 @@ export async function runExploration(
 			abort = () => stop(signal?.reason ?? new Error("Exploration cancelled"));
 			signal?.addEventListener("abort", abort, { once: true });
 			deadline = setTimeout(() => stop(new Error("Exploration deadline exceeded; narrow path/query")), 15_000);
-			worker!.once("message", (message: { result?: ExplorationPage; error?: string }) => {
+			worker!.once("message", (message: { result?: ExplorationPage | CallPathPage; error?: string }) => {
 				if (cancellation) reject(cancellation);
 				else if (message.error) reject(new Error(message.error));
 				else if (message.result) resolve(message.result);

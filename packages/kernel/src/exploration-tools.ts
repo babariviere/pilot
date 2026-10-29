@@ -1,10 +1,11 @@
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { CallPathOutput, type CallPathQuery, CallSymbol } from "./call-path-contract.ts";
 import { ExplorationOutput, type ExplorationQuery } from "./exploration-contract.ts";
 import { runExploration } from "./exploration-runner.ts";
 import type { AskContext } from "./policy.ts";
 
-export const EXPLORATION_TOOL_NAMES = ["code_search", "code_symbols"];
+export const EXPLORATION_TOOL_NAMES = ["code_search", "code_symbols", "code_call_paths"];
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 /** SDK definitions work directly and through codemode, including Ask's explicit allowlist. */
@@ -26,8 +27,13 @@ export function createExplorationTools(
 			}),
 		),
 	};
-	const execute = async (query: ExplorationQuery, signal: AbortSignal | undefined, ctx: ExtensionToolContext) => {
-		const result = await runExploration(typeof source === "function" ? source(ctx) : source, query, signal);
+	const execute = async (
+		query: ExplorationQuery | CallPathQuery,
+		signal: AbortSignal | undefined,
+		ctx: ExtensionToolContext,
+	) => {
+		const selected = typeof source === "function" ? source(ctx) : source;
+		const result = await runExploration(selected, query, signal);
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify(result) }],
 			details: undefined,
@@ -35,6 +41,27 @@ export function createExplorationTools(
 		};
 	};
 	return [
+		defineTool({
+			name: "code_call_paths",
+			label: "Source call paths",
+			annotations,
+			description:
+				"Explore bounded source-inferred callers/callees in TS/TSX/JS/JSX. Select exact declaration coordinates from code_symbols or returned frames (include contentHash/frameId to fence navigation). Returns callsite/frame spans and resolution provenance. Lexical direct calls and relative ESM only; no name-match linking, runtime stacks, type/dispatch or impact proof. Unknown/ambiguous calls, scan/depth/page limits are explicit. No callers found does not prove no impact. Fresh local read-only scan or host-pinned source, no code/config execution.",
+			parameters: Type.Object({
+				...common,
+				symbol: CallSymbol,
+				direction: Type.Union([Type.Literal("callers"), Type.Literal("callees")]),
+				depth: Type.Optional(
+					Type.Integer({
+						minimum: 1,
+						maximum: 6,
+						description: "Traversal hops, default 1. Cycles are marked and not repeatedly expanded.",
+					}),
+				),
+			}),
+			outputSchema: CallPathOutput,
+			execute: (_id, args, signal, _onUpdate, ctx) => execute({ ...args, tool: "code_call_paths" }, signal, ctx),
+		}),
 		defineTool({
 			name: "code_search",
 			label: "Code search",

@@ -57,7 +57,7 @@ for (const mode of ["ask", "build-investigate"] as const) {
 			},
 		});
 		t.after(() => adapter.close());
-		for (const name of ["code_search", "code_symbols"])
+		for (const name of ["code_call_paths", "code_search", "code_symbols"])
 			assert.ok(adapter.session.getCallableToolNames().includes(name), name);
 		const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
 		adapter.session.agent.state.messages.push(
@@ -74,6 +74,8 @@ const found = await searchTools("code_symbols");
 text(found.map(t => t.name));
 const symbols = await tools.code_symbols({query:"Widget",exact:true,path:"widget.tsx"});
 text({name:symbols.results[0].name,coverage:symbols.results[0].coverage});
+const calls = await tools.code_call_paths({symbol:{path:"widget.tsx",line:symbols.results[0].span.start.line,column:symbols.results[0].span.start.column,contentHash:symbols.results[0].contentHash},direction:"callees"});
+text({mode:calls.mode,root:calls.root.name,edges:calls.results.length});
 const search = await tools.code_search({query:"Widget",path:"widget.tsx"});
 text(search.results[0].citation);
 try { await tools.code_search({query:"Widget",path:"../outside"}); text("ESCAPED"); }
@@ -85,6 +87,7 @@ catch { text("ROOT_DENIED"); }
 		assert.ok(!result.isError, JSON.stringify(result));
 		assert.match(JSON.stringify(result), /Widget.*parsed/);
 		assert.match(JSON.stringify(result), /widget.tsx:1:14/);
+		assert.match(JSON.stringify(result), /source-inferred-not-runtime/);
 		assert.match(JSON.stringify(result), /ROOT_DENIED/);
 		assert.doesNotMatch(JSON.stringify(result), /ESCAPED/);
 		if (mode === "ask") {
@@ -109,6 +112,9 @@ test("relocated parser/worker payload needs no source writes, project setup or r
 		"exploration-worker.ts",
 		"exploration-scan.ts",
 		"exploration-parser.ts",
+		"exploration-page.ts",
+		"call-path-scan.ts",
+		"call-path-syntax.ts",
 		"source-reader.ts",
 	])
 		await cp(new URL(name, import.meta.url), join(stage, name));
@@ -133,6 +139,9 @@ globalThis.fetch = () => { throw new Error('offline only'); };
 const page = await runExploration({source:${JSON.stringify(root)}}, {tool:'code_symbols',path:'widget.tsx',query:'Widget',exact:true});
 assert.equal(page.results[0].name, 'Widget');
 assert.equal(page.results[0].coverage, 'parsed');
+const calls = await runExploration({source:${JSON.stringify(root)}}, {tool:'code_call_paths',symbol:{path:'widget.tsx',line:1,column:14},direction:'callees'});
+assert.equal(calls.mode, 'source-inferred-not-runtime');
+assert.equal(calls.root.name, 'Widget');
 console.log('relocated-parser-ok');
 `,
 	);
