@@ -518,6 +518,9 @@ separate working copies of a shared repository. **History and bookmarks are shar
 rewrites and pushes scoped to their own task. Git-only projects use private clones. Direct-checkout mode
 is also available, but edits there affect your checkout.
 
+New opted-in mission builder workspaces also record internal durable jj creator attribution.
+This does not adopt existing work or retain review content. See the [ledger contract](docs/jj-ownership.md).
+
 Project policy controls delivery. With **Require PR** enabled, agents deliver on a task branch for review.
 Disabling it permits direct default-branch delivery. Pilot never auto-merges pull requests.
 

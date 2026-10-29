@@ -25,6 +25,40 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("ownership scope is creation-only trusted builder assignment metadata, never legacy adoption", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const explorer = await f.spawn();
+	const reviewer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Attribution",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(explorer.id, mission.id, { sessionId: lead.id }, "explorer");
+	f.store.join(reviewer.id, mission.id, { sessionId: lead.id }, "reviewer");
+	const task = f.store.addTask(mission.id, { title: "Build", sessionId: worker.id });
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the daemon-only mission bridge, not an agent API.
+	const admission = f.sessions["missions"]!.ownershipScope!;
+	assert.deepEqual(admission(worker.id), {
+		version: 1,
+		sessionId: worker.id,
+		missionId: mission.id,
+		taskIds: [task.id],
+	});
+	for (const id of [lead.id, explorer.id, reviewer.id, "missing"]) assert.equal(admission(id), undefined);
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	assert.equal(admission(worker.id), undefined);
+	const legacy = f.store.create({ projectId: f.project.id, title: "Legacy" });
+	f.store.join(worker.id, legacy.id);
+	f.store.addTask(legacy.id, { title: "Legacy work", sessionId: worker.id });
+	assert.equal(admission(worker.id), undefined);
+});
+
 test("non-code delivery resolves pinned artifacts and cannot accept or retire work", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

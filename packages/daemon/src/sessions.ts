@@ -198,6 +198,8 @@ export interface MissionSpawnAdmission {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
+	ownershipScope?(sessionId: string): import("./jj-ownership.ts").JjWorkerScope | undefined;
 	/** Idempotent, atomic ownership move, retaining task links and PR observation tombstones. */
 	continueSession?(from: string, to: string): void;
 	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
@@ -7221,6 +7223,7 @@ export class SessionManager {
 		await this.modelCatalog.closeBackgroundUsage?.();
 		await this.usageHistory.close();
 		await this.lifecycle.close();
+		await this.sharedWorkspaces.close();
 	}
 
 	private async importLegacyUsage(): Promise<void> {
@@ -7314,6 +7317,7 @@ export class SessionManager {
 										meta.cwd,
 										this.shutdownSignal.signal,
 										plan.baseBranch,
+										this.missions?.ownershipScope?.(id),
 									)
 								: createWorkspace(
 										plan.source,
@@ -8422,6 +8426,10 @@ export class SessionManager {
 				void this.save(meta);
 			}
 			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
+			if (!packet.working && (wasWorking || packet.type === "ready") && meta.workspace?.shared)
+				void this.sharedWorkspaces
+					.observeOwnership(meta.cwd, meta.workspace.shared)
+					.catch((error: unknown) => console.warn(`pilotd: ownership observation failed: ${error}`));
 			if (!packet.working && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				void this.prepareCoordinatorRole(meta.id)
 					.then(() => this.resumeRoleWork(meta.id))

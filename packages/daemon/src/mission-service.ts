@@ -172,6 +172,16 @@ export class MissionService {
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
 		sessions.setMissionBridge({
+			ownershipScope: (sessionId) => {
+				const member = store.membership(sessionId);
+				if (!member?.active || member.coordinator || member.role !== "builder") return undefined;
+				if (store.require(member.missionId).planningVersion !== 1) return undefined;
+				const taskIds = store
+					.tasks(member.missionId)
+					.filter((task) => task.sessionId === sessionId && isOpen(task))
+					.map((task) => task.id);
+				return taskIds.length ? { version: 1, sessionId, missionId: member.missionId, taskIds } : undefined;
+			},
 			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
 			spawnProject: (missionId) => {

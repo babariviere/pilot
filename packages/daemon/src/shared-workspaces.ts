@@ -20,6 +20,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
+import { JjOwnershipStore, type JjWorkerScope, jjRepositoryIdentity } from "./jj-ownership.ts";
+import { workerScope } from "./jj-ownership-contract.ts";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import { authenticationHint, gitPromptlessEnvironment, toolTrustEnvironment } from "./workspace-environment.ts";
@@ -161,6 +163,7 @@ async function safeFile(root: string, path: string): Promise<boolean> {
 }
 
 export class SharedWorkspaceStore {
+	readonly ownership: JjOwnershipStore;
 	private readonly home: string;
 	/** Unwrapped runner, for the one Git check that needs its own GIT_INDEX_FILE. */
 	private readonly baseRunner: Runner;
@@ -169,6 +172,7 @@ export class SharedWorkspaceStore {
 	private readonly maintained = new Map<string, number>();
 	constructor(home: string, runner: Runner = run) {
 		this.home = home;
+		this.ownership = new JjOwnershipStore(join(home, "jj-ownership.sqlite"), runner);
 		this.baseRunner = runner;
 		this.runner = (file, args, cwd, timeout, signal, env) =>
 			runner(
@@ -824,7 +828,14 @@ export class SharedWorkspaceStore {
 		);
 	}
 
-	async create(source: string, destination: string, signal?: AbortSignal, baseBranch?: string): Promise<Workspace> {
+	async create(
+		source: string,
+		destination: string,
+		signal?: AbortSignal,
+		baseBranch?: string,
+		scope?: JjWorkerScope,
+	): Promise<Workspace> {
+		if (scope !== undefined) workerScope(scope);
 		source = await canonical(source);
 		destination = await canonical(destination);
 		if (!(await stat(join(source, ".jj")))) throw new Error("Shared workspaces require a jj source project");
@@ -880,6 +891,15 @@ export class SharedWorkspaceStore {
 			);
 			// Both source and child are non-colocated here: checkout once, without any Git import.
 			await this.jjChild(destination, shared);
+			// Capture the exact daemon-created change before colocation or worker code can rewrite it.
+			const creationOperation = scope ? await this.ownership.head(destination) : undefined;
+			const creation = scope
+				? {
+						...(await this.ids(destination, creationOperation)),
+						operationId: creationOperation!,
+						kind: "workspace-created" as const,
+					}
+				: undefined;
 			await this.colocate(destination, shared, signal);
 			binding.initialCommitId = (await this.ids(destination)).commitId;
 			await atomicJson(this.bindingPath(shared), binding);
@@ -889,6 +909,19 @@ export class SharedWorkspaceStore {
 			binding.state = "ready";
 			await atomicJson(this.bindingPath(shared), binding);
 			signal?.throwIfAborted();
+			if (scope && creation) {
+				await this.ownership.register(
+					{
+						...scope,
+						repositoryId: await jjRepositoryIdentity(repository),
+						repositoryPath: repository,
+						workspace: name,
+						path: destination,
+						startOperation: await this.ownership.head(destination),
+					},
+					creation,
+				);
+			}
 			return {
 				path: destination,
 				base: base.commitId,
@@ -900,10 +933,32 @@ export class SharedWorkspaceStore {
 		});
 	}
 
-	private async ids(cwd: string) {
+	/** No enrollment here. Existing/legacy workspaces remain unclaimed. */
+	async observeOwnership(cwd: string, shared: SharedWorkspace): Promise<void> {
+		if (!(await this.ownership.available())) return;
+		const repositoryId = await jjRepositoryIdentity(shared.repository);
+		if (!(await this.ownership.binding(repositoryId, shared.name))) return;
+		await this.owned(shared, cwd);
+		await this.ownership.observe(repositoryId, shared.name, cwd);
+	}
+
+	async close(): Promise<void> {
+		await this.ownership.close();
+	}
+
+	private async ids(cwd: string, operation?: string) {
 		const [commitId, changeId] = (
 			await this.jj(
-				["--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", 'commit_id ++ "\\0" ++ change_id'],
+				[
+					"--ignore-working-copy",
+					...(operation ? [`--at-op=${operation}`] : []),
+					"log",
+					"--no-graph",
+					"-r",
+					"@",
+					"-T",
+					'commit_id ++ "\\0" ++ change_id',
+				],
 				cwd,
 			)
 		).split("\0");
