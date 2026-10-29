@@ -50,6 +50,18 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
+	assertDeliveryAssignment,
+	type DeliveryObservation,
+	type DeliveryRecord,
+	type DeliveryResolver,
+	type DeliverySubmission,
+	deliveryDigest,
+	deliveryJudgementWrite,
+	deliverySubmissionWrite,
+	latestJudgement,
+	latestSubmission,
+} from "./mission-delivery-evidence.ts";
+import {
 	type LinearContributor,
 	type LinearSyncRecord,
 	linearTarget,
@@ -291,6 +303,18 @@ CREATE TABLE IF NOT EXISTS task_non_code_deliveries (
 	task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
 	record TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_delivery_evidence (
+	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	operation_id TEXT NOT NULL,
+	record_id TEXT NOT NULL UNIQUE,
+	record_type TEXT NOT NULL,
+	record TEXT NOT NULL,
+	UNIQUE (mission_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS delivery_evidence_by_task ON task_delivery_evidence(task_id, sequence);
+CREATE INDEX IF NOT EXISTS delivery_evidence_current ON task_delivery_evidence(task_id, record_type, sequence);
 CREATE TABLE IF NOT EXISTS retired_members (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -3186,6 +3210,202 @@ export class MissionStore {
 		}
 		this.transaction(() => this.run("INSERT INTO task_non_code_deliveries VALUES (?, ?)", task.id, encoded), true);
 		return record;
+	}
+
+	/** Internal history only. No legacy receipt is promoted into verified evidence. */
+	deliveryEvidence(id: string, taskId: string, before?: string, limit = 100): DeliveryRecord[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid delivery history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_id = ?",
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown delivery history cursor");
+		return this.all(
+			"SELECT record FROM task_delivery_evidence WHERE task_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?",
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((row) => JSON.parse(str(row.record!)) as DeliveryRecord);
+	}
+
+	/** Two latest records, independent of history page size or the number of review revisions. */
+	currentDeliveryEvidence(id: string, taskId: string): DeliveryRecord[] {
+		this.task(id, taskId);
+		return this.all(
+			`SELECT record FROM task_delivery_evidence WHERE sequence IN (
+			(SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_type = 'submission' ORDER BY sequence DESC LIMIT 1),
+			(SELECT sequence FROM task_delivery_evidence WHERE task_id = ? AND record_type = 'judgement' ORDER BY sequence DESC LIMIT 1)
+		) ORDER BY sequence`,
+			taskId,
+			taskId,
+		).map((row) => JSON.parse(str(row.record!)) as DeliveryRecord);
+	}
+
+	assertDeliveryEvidencePins(id: string, taskId: string, observations: DeliveryObservation[]): void {
+		for (const observation of observations) {
+			const item = observation.reference;
+			if (
+				item.kind === "brief" &&
+				(this.require(id).briefRevision !== item.revision || !this.brief(id, item.revision))
+			)
+				throw new Conflict("Brief delivery evidence is stale");
+			if (item.kind === "artifact") {
+				const links = this.artifactReferences(id, item.artifactId);
+				if (
+					!observation.sourceOwnerSessionId ||
+					links.some((link) => link.sessionId !== observation.sourceOwnerSessionId) ||
+					!links.some((link) => link.taskId === taskId && link.revision === item.revision)
+				)
+					throw new Conflict("Artifact delivery evidence must be pinned to this task, custodian and revision");
+			}
+		}
+	}
+
+	private assertDeliveryMember(id: string, sessionId: string): void {
+		this.assertMember(id, sessionId);
+		if (this.require(id).planningVersion !== 1) throw new Conflict("Delivery evidence requires planningVersion 1");
+	}
+
+	/** Retry recovery precedes mutable assignment/source checks, but cannot change actor/task/action/payload. */
+	private deliveryRetry(
+		id: string,
+		taskId: string,
+		sessionId: string,
+		type: DeliveryRecord["type"],
+		request: DeliveryRecord["request"],
+	): DeliveryRecord | undefined {
+		this.assertDeliveryMember(id, sessionId);
+		const row = this.one(
+			"SELECT record FROM task_delivery_evidence WHERE mission_id = ? AND operation_id = ?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const previous = JSON.parse(str(row.record!)) as DeliveryRecord;
+		if (
+			previous.taskId !== taskId ||
+			previous.actorSessionId !== sessionId ||
+			previous.type !== type ||
+			deliveryDigest(previous.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Delivery operation idempotency conflict");
+		return previous;
+	}
+
+	private insertDelivery(record: DeliveryRecord): void {
+		this.run(
+			"INSERT INTO task_delivery_evidence (mission_id, task_id, operation_id, record_id, record_type, record) VALUES (?, ?, ?, ?, ?, ?)",
+			record.missionId,
+			record.taskId,
+			record.request.operationId,
+			record.id,
+			record.type,
+			JSON.stringify(record),
+		);
+	}
+
+	/** Dormant host-only API. Resolver is host code, never request-supplied observations or passing booleans. */
+	async submitDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown, resolve: DeliveryResolver) {
+		const request = deliverySubmissionWrite(value);
+		const taskId = this.resolveTask(id, ref).id;
+		const retry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
+		if (retry) {
+			await this.durable();
+			return retry as DeliverySubmission;
+		}
+		const admit = () => {
+			this.assertDeliveryMember(id, sessionId);
+			const task = this.task(id, taskId);
+			if (!task.sessionId || (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId))
+				throw new Conflict("Only the task owner or coordinator may submit delivery");
+			if (task.status === "done" || task.status === "dropped") throw new Conflict("Delivery task is closed");
+			assertDeliveryAssignment(task, request.assignment);
+			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
+				throw new Conflict("Delivery task definition revision is stale");
+			if ((latestSubmission(this.currentDeliveryEvidence(id, taskId))?.id ?? null) !== request.expectedSubmissionId)
+				throw new Conflict("Delivery submission revision conflict");
+			return task.sessionId;
+		};
+		const ownerSessionId = admit();
+		const observations: DeliveryObservation[] = [];
+		// Sequential, bounded resolution avoids unbounded artifact/source fanout.
+		for (const reference of request.evidence) {
+			const observation = await resolve(reference);
+			if (
+				deliveryDigest(reference) !== deliveryDigest(observation.reference) ||
+				!/^[a-f0-9]{64}$/.test(observation.sha256) ||
+				!["retained", "partial", "unavailable"].includes(observation.availability)
+			)
+				throw new Conflict("Resolved delivery evidence identity mismatch");
+			observations.push(observation);
+		}
+		const saved = this.transaction(() => {
+			const concurrentRetry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
+			if (concurrentRetry) return concurrentRetry as DeliverySubmission;
+			if (admit() !== ownerSessionId) throw new Conflict("Delivery owner changed while resolving evidence");
+			// Recheck persisted pins/current brief after asynchronous host reads.
+			this.assertDeliveryEvidencePins(id, taskId, observations);
+			const record: DeliverySubmission = {
+				version: 1,
+				type: "submission",
+				id: randomUUID(),
+				missionId: id,
+				taskId,
+				actorSessionId: sessionId,
+				ownerSessionId,
+				createdAt: Date.now(),
+				request,
+				observations,
+			};
+			this.insertDelivery(record);
+			return record;
+		}, true);
+		await this.durable();
+		return saved;
+	}
+
+	/** Coordinator judgement only. Approval does not imply required checks, authority or integration. */
+	async judgeDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown) {
+		const request = deliveryJudgementWrite(value);
+		const taskId = this.resolveTask(id, ref).id;
+		const saved = this.transaction(() => {
+			const retry = this.deliveryRetry(id, taskId, sessionId, "judgement", request);
+			if (retry) return retry;
+			if (this.require(id).coordinatorSessionId !== sessionId)
+				throw new Conflict("Only the coordinator may record delivery judgement");
+			const task = this.task(id, taskId),
+				records = this.currentDeliveryEvidence(id, taskId);
+			const submission = latestSubmission(records);
+			if (!submission || submission.id !== request.submissionId)
+				throw new Conflict("Delivery judgement targets a stale submission");
+			assertDeliveryAssignment(task, submission.request.assignment);
+			if (this.sharedDefinitionRevision(taskId) !== submission.request.definitionRevision)
+				throw new Conflict("Delivery task definition revision is stale");
+			if (task.sessionId !== submission.ownerSessionId) throw new Conflict("Delivery owner is stale");
+			if ((latestJudgement(records)?.id ?? null) !== request.expectedJudgementId)
+				throw new Conflict("Delivery judgement revision conflict");
+			const record: DeliveryRecord = {
+				version: 1,
+				type: "judgement",
+				id: randomUUID(),
+				missionId: id,
+				taskId,
+				actorSessionId: sessionId,
+				createdAt: Date.now(),
+				request,
+			};
+			this.insertDelivery(record);
+			return record;
+		}, true);
+		await this.durable();
+		return saved;
 	}
 
 	retiredMember(sessionId: string): boolean {

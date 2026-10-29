@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
@@ -18,6 +18,7 @@ import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
+import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
 import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
 import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "./subscription-usage.ts";
@@ -134,6 +135,336 @@ test("non-code delivery resolves pinned artifacts and cannot accept or retire wo
 	await assert.rejects(
 		f.service.call(member.id, "complete", { id: task.id, completion: record }),
 		/coordinator\/user/,
+	);
+});
+
+test("revision-bound service submissions resolve exact artifacts, not latest, self-approval or claimed verification", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn(),
+		other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Research",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Compare sources",
+			scope: "Report only",
+			criteria: ["Trace findings"],
+		},
+	});
+	const artifacts = f.sessions["artifactStore"](worker.id);
+	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>Original sources</p>" });
+	const request = {
+		version: 1,
+		operationId: "report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Sources compared",
+		limitations: "No independent review",
+		coverage: [[0]],
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+	};
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, request), /authorized/);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	await assert.rejects(f.service.submitDeliveryEvidence(other.id, task.id, request), /owner or coordinator/);
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, { ...request, actor: lead.id }), /fields/);
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, { ...request, checksPassed: true }),
+		/fields/,
+	);
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: "snapshot-unavailable",
+			evidence: [{ kind: "snapshot", snapshotId: "a".repeat(64) }],
+		}),
+		/resolver is unavailable/,
+	);
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, mission.id); // Synthetic invalid membership must not bypass the service project boundary.
+	await assert.rejects(f.service.submitDeliveryEvidence(foreign.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateDeliveryEvidence(foreign.id, task.id), /project/i);
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const judge = {
+		version: 1,
+		operationId: "review",
+		submissionId: saved.id,
+		expectedJudgementId: null,
+		decision: "approve",
+		reason: "Report is useful, required gates still unavailable",
+	};
+	await assert.rejects(f.service.judgeDeliveryEvidence(worker.id, task.id, judge), /Only the coordinator/);
+	const approval = await f.service.judgeDeliveryEvidence(lead.id, task.id, judge);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "current");
+	await artifacts.update(artifact.id, { kind: "html", title: "Report", source: "<p>Revised sources</p>" }, 1);
+	// A mutable latest pointer does not substitute revision 2 for the exact pinned revision 1.
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "current");
+	const changed = {
+		...request,
+		operationId: "report2",
+		expectedSubmissionId: saved.id,
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 2 }],
+	};
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, changed), /revision.*linked|pinned/i);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 2,
+		taskId: task.id,
+	});
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "stale");
+	const revised = await f.service.submitDeliveryEvidence(worker.id, task.id, changed);
+	assert.notEqual(revised.observations[0]?.sha256, saved.observations[0]?.sha256);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.judgement, "stale");
+	const artifactRead = f.sessions.artifact.bind(f.sessions);
+	const corrupt = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof artifactRead>) => ({
+		...(await artifactRead(...args)),
+		source: "Altered content under the same revision",
+	}));
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "stale");
+	corrupt.mock.restore();
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
+	assert.deepEqual(await f.service.judgeDeliveryEvidence(lead.id, task.id, judge), approval);
+	const evaluation = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(evaluation.eligibility, "unavailable");
+	assert.ok(Object.values(evaluation.verification).every((value) => value === "unavailable"));
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.retiredMember(worker.id), false);
+});
+
+test("delivery evidence rechecks earlier artifact pins after later asynchronous reads", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Native UI record fixture",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Describe a native interaction",
+			scope: "Record fixtures, not UI implementation",
+			criteria: ["Capture", "Interaction report"],
+		},
+	});
+	const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
+	for (const title of ["Static capture fixture", "Interaction report fixture"]) {
+		const artifact = await f.sessions["artifactStore"](worker.id).create({
+			kind: "html",
+			title,
+			source: `<p>${title}. Not a native render or input test.</p>`,
+		});
+		await f.service.linkArtifact(mission.id, {
+			sessionId: worker.id,
+			artifactId: artifact.id,
+			revision: 1,
+			taskId: task.id,
+		});
+		refs.push({ kind: "artifact", artifactId: artifact.id, revision: 1 });
+	}
+	const request = {
+		version: 1,
+		operationId: "ui-fixture",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "native-ui",
+		claim: "Record examples only",
+		limitations: "No native renderer or interaction observed",
+		coverage: [[0], [1]],
+		evidence: refs,
+	};
+	const read = f.sessions.artifact.bind(f.sessions);
+	const revoke = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof read>) => {
+		const artifact = await read(...args);
+		if (artifact.id === refs[1]!.artifactId) f.store.unlinkArtifact(mission.id, refs[0]!.artifactId, {}, task.id);
+		return artifact;
+	});
+	await assert.rejects(f.service.submitDeliveryEvidence(worker.id, task.id, request), /pinned/);
+	assert.equal(f.store.deliveryEvidence(mission.id, task.id).length, 0);
+	revoke.mock.restore();
+	const first = await read(worker.id, refs[0]!.artifactId, 1);
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: first.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const result = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(saved.request.kind, "native-ui");
+	assert.equal(result.verification.independentReview, "unavailable");
+	assert.equal(result.eligibility, "unavailable");
+});
+
+test("frozen comparison identities are host-resolved, scoped to worker custody and never exact task proof", async (t) => {
+	let snapshot: ReviewSnapshot;
+	const f = await fixture(t, undefined, undefined, {
+		get: async (id) => {
+			if (!snapshot || snapshot.snapshotId !== id) throw new Error("Snapshot unavailable");
+			return snapshot;
+		},
+	});
+	const lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Code evidence",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Code",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			intent: "Bound source",
+			scope: "One layer",
+			criteria: ["Retained source"],
+		},
+	});
+	const manifest: ReviewSnapshot["manifest"] = {
+		version: 1,
+		request: {
+			requestId: "capture",
+			repositoryId: "a".repeat(64),
+			changeId: "k".repeat(32),
+			operationId: "a".repeat(128),
+			base: { changeId: "l".repeat(32), commitId: "b".repeat(40) },
+			head: { changeId: "k".repeat(32), commitId: "c".repeat(40) },
+			scope: { kind: "layer" },
+			source: "committed",
+		},
+		provenance: {
+			capturedAt: 1,
+			taskAttribution: "unknown",
+			ledger: {
+				repositoryId: "a".repeat(64),
+				changeId: "k".repeat(32),
+				discovery: "complete",
+				ownership: {
+					status: "owned",
+					binding: {
+						version: 1,
+						sessionId: worker.id,
+						missionId: mission.id,
+						taskIds: [task.id],
+						repositoryId: "a".repeat(64),
+						repositoryPath: "/retained-host",
+						workspace: "pilot-worker-aaaaaaaaaaaaaaaa",
+						path: "/retired-worker",
+						startOperation: "a".repeat(128),
+					},
+					creation: {
+						changeId: "k".repeat(32),
+						commitId: "c".repeat(40),
+						operationId: "a".repeat(128),
+						kind: "workspace-created",
+					},
+					taskAttribution: "unknown",
+				},
+				current: {
+					status: "observed",
+					revisions: [{ changeId: "k".repeat(32), commitId: "c".repeat(40), parents: ["b".repeat(40)] }],
+				},
+			},
+		},
+		status: "complete",
+		omissions: [],
+		before: [],
+		after: [],
+		changes: [],
+		trees: { before: "d".repeat(40), after: "d".repeat(40) },
+		diff: { sha256: createHash("sha256").update("").digest("hex"), bytes: 0 },
+	};
+	const pin = () => {
+		snapshot = {
+			snapshotId: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
+			manifest: structuredClone(manifest),
+		};
+	};
+	pin();
+	const request = {
+		version: 1,
+		operationId: "code-report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "code",
+		claim: "Source retained",
+		limitations: "No test, review, landing or exact task proof",
+		coverage: [[0]],
+		evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+	};
+	const saved = await f.service.submitDeliveryEvidence(worker.id, task.id, request);
+	const evaluation = await f.service.evaluateDeliveryEvidence(lead.id, task.id);
+	assert.equal(saved.observations[0]?.sha256, snapshot!.snapshotId);
+	assert.equal(evaluation.verification.taskAtOperation, "unavailable");
+	assert.equal(evaluation.verification.liveSource, "unavailable");
+	assert.equal(evaluation.integration, "unavailable");
+	// Same reference with altered retained bytes is not silently accepted as a fresh version.
+	snapshot!.manifest.omissions.push("corrupt manifest");
+	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
+	for (const status of ["partial", "unavailable"] as const) {
+		manifest.status = status;
+		pin();
+		const record = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: `code-${status}`,
+			expectedSubmissionId:
+				status === "partial"
+					? saved.id
+					: f.store.currentDeliveryEvidence(mission.id, task.id).find((r) => r.type === "submission")!.id,
+			evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		});
+		assert.equal(record.observations[0]?.availability, status);
+		assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
+	}
+	if (manifest.provenance.ledger.ownership.status === "owned")
+		manifest.provenance.ledger.ownership.binding.missionId = "other";
+	pin();
+	await assert.rejects(
+		f.service.submitDeliveryEvidence(worker.id, task.id, {
+			...request,
+			operationId: "wrong-scope",
+			expectedSubmissionId: f.store
+				.currentDeliveryEvidence(mission.id, task.id)
+				.find((r) => r.type === "submission")!.id,
+			evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		}),
+		/not authorized/,
 	);
 });
 
@@ -1414,6 +1745,7 @@ async function fixture(
 		},
 	},
 	usageSource?: SubscriptionUsageSource,
+	deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
@@ -1464,7 +1796,7 @@ async function fixture(
 		model: model ?? "test/model",
 		thinking: thinking ?? "medium",
 	}));
-	const service = new MissionService(store, sessions, projects);
+	const service = new MissionService(store, sessions, projects, deliverySnapshots);
 	await sessions.load();
 	t.after(async () => {
 		await service.notices.stop();

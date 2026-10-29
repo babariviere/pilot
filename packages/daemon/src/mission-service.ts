@@ -1,5 +1,5 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
-import { randomUUID } from "node:crypto";
+import { randomUUID, webcrypto } from "node:crypto";
 import type { MissionAction, MissionContext } from "@pilot/kernel";
 import { validateMissionAuthoring } from "@pilot/kernel/mission-authoring";
 import type {
@@ -21,6 +21,13 @@ import type {
 } from "@pilot/protocol";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import {
+	type DeliveryObservation,
+	type DeliveryReference,
+	deliveryDigest,
+	evaluateDelivery,
+	latestSubmission,
+} from "./mission-delivery-evidence.ts";
 import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
@@ -29,6 +36,7 @@ import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
 import { validateBaseBranch } from "./workspaces.ts";
@@ -158,6 +166,7 @@ export class MissionService {
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
+	private readonly deliverySnapshots?: Pick<ReviewSnapshotStore, "get">;
 	/** Last context sent per member, so unrelated mission changes do not churn kernels or prompts. */
 	private readonly contexts = new Map<string, string>();
 	/** Canonical mission/task keys reserved before any asynchronous start preparation. */
@@ -165,7 +174,13 @@ export class MissionService {
 	/** Scoped to an explicit user start, including the final synchronous spawn admission. */
 	private readonly phaseOverrides = new Set<string>();
 
-	constructor(store: MissionStore, sessions: SessionManager, projects: ProjectStore) {
+	constructor(
+		store: MissionStore,
+		sessions: SessionManager,
+		projects: ProjectStore,
+		deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
+	) {
+		this.deliverySnapshots = deliverySnapshots;
 		this.store = store;
 		this.sessions = sessions;
 		this.projects = projects;
@@ -403,6 +418,118 @@ export class MissionService {
 		const saved = this.store.saveNonCodeDelivery(missionId, task.id, sessionId, record, resolved);
 		await this.store.durable();
 		return saved;
+	}
+
+	/** Internal only. Future transports must supply the authenticated/IPC session, never payload identity. */
+	async submitDeliveryEvidence(sessionId: string, taskRef: string, value: unknown) {
+		const { missionId, taskId } = this.deliveryAccess(sessionId, taskRef);
+		return this.store.submitDeliveryEvidence(missionId, taskId, sessionId, value, (reference) =>
+			this.resolveDeliveryEvidence(sessionId, missionId, taskId, reference),
+		);
+	}
+
+	async judgeDeliveryEvidence(sessionId: string, taskRef: string, value: unknown) {
+		const { missionId, taskId } = this.deliveryAccess(sessionId, taskRef);
+		return this.store.judgeDeliveryEvidence(missionId, taskId, sessionId, value);
+	}
+
+	async evaluateDeliveryEvidence(sessionId: string, taskRef: string) {
+		const { missionId, taskId } = this.deliveryAccess(sessionId, taskRef);
+		const submission = latestSubmission(this.store.currentDeliveryEvidence(missionId, taskId));
+		let observations: DeliveryObservation[] | undefined;
+		if (submission) {
+			try {
+				observations = [];
+				for (const reference of submission.request.evidence)
+					observations.push(await this.resolveDeliveryEvidence(sessionId, missionId, taskId, reference));
+				this.store.assertDeliveryEvidencePins(missionId, taskId, observations);
+			} catch {
+				observations = undefined;
+			} // Unavailable is not passing or a live-source fallback.
+		}
+		this.deliveryAccess(sessionId, taskId); // Recheck access after reads.
+		return evaluateDelivery(
+			this.store.task(missionId, taskId),
+			this.store.require(missionId).coordinatorSessionId,
+			this.store.currentDeliveryEvidence(missionId, taskId),
+			observations,
+			this.store.sharedDefinitionRevision(taskId),
+		);
+	}
+
+	private deliveryAccess(sessionId: string, ref: string) {
+		const missionId = this.store.missionOf(sessionId);
+		if (!missionId) throw new Error("Mission membership required");
+		this.assertSameProject(sessionId, missionId);
+		if (this.store.require(missionId).planningVersion !== 1)
+			throw new Conflict("Delivery evidence requires planningVersion 1");
+		return { missionId, taskId: this.store.resolveTask(missionId, ref).id };
+	}
+
+	private async resolveDeliveryEvidence(
+		sessionId: string,
+		missionId: string,
+		taskId: string,
+		reference: DeliveryReference,
+	): Promise<DeliveryObservation> {
+		this.deliveryAccess(sessionId, taskId);
+		if (reference.kind === "brief") {
+			const brief = this.store.brief(missionId, reference.revision);
+			if (!brief || this.store.require(missionId).briefRevision !== reference.revision)
+				throw new Conflict("Brief delivery evidence is stale or missing");
+			return { reference, sourceOwnerSessionId: null, sha256: deliveryDigest(brief), availability: "retained" };
+		}
+		if (reference.kind === "artifact") {
+			const artifact = await this.readArtifactReference(sessionId, reference.artifactId, reference.revision);
+			if (
+				artifact.id !== reference.artifactId ||
+				artifact.revision !== reference.revision ||
+				!this.store
+					.artifactReferences(missionId, reference.artifactId)
+					.some(
+						(link) =>
+							link.taskId === taskId &&
+							link.sessionId === artifact.sessionId &&
+							link.revision === reference.revision,
+					)
+			)
+				throw new Conflict("Artifact delivery evidence must be pinned to this task, custodian and revision");
+			this.assertSameProject(artifact.sessionId, missionId);
+			// Image artifacts can contain large data URLs. Hash source bytes off the event loop;
+			// canonicalize only bounded metadata rather than duplicating that source as sorted JSON.
+			const { source, ...metadata } = artifact;
+			const sourceSha256 = Buffer.from(await webcrypto.subtle.digest("SHA-256", Buffer.from(source))).toString(
+				"hex",
+			);
+			return {
+				reference,
+				sourceOwnerSessionId: artifact.sessionId,
+				sha256: deliveryDigest({ metadata, sourceSha256 }),
+				availability: "retained",
+			};
+		}
+		if (!this.deliverySnapshots) throw new Conflict("Retained snapshot resolver is unavailable");
+		const snapshot = await this.deliverySnapshots.get(reference.snapshotId);
+		const manifestSha256 = Buffer.from(
+			await webcrypto.subtle.digest("SHA-256", Buffer.from(JSON.stringify(snapshot.manifest))),
+		).toString("hex");
+		if (snapshot.snapshotId !== reference.snapshotId || manifestSha256 !== reference.snapshotId)
+			throw new Conflict("Retained snapshot identity mismatch");
+		const provenance = snapshot.manifest.provenance.ledger.ownership;
+		// Frozen worker custody permits this host read. Enrollment tasks never establish exact task attribution.
+		if (
+			provenance.status !== "owned" ||
+			provenance.binding.missionId !== missionId ||
+			provenance.binding.sessionId !== this.store.task(missionId, taskId).sessionId
+		)
+			throw new Conflict("Retained snapshot is not authorized for this worker and mission");
+		this.deliveryAccess(sessionId, taskId);
+		return {
+			reference,
+			sourceOwnerSessionId: provenance.binding.sessionId,
+			sha256: snapshot.snapshotId,
+			availability: snapshot.manifest.status === "complete" ? "retained" : snapshot.manifest.status,
+		};
 	}
 
 	context(sessionId: string): MissionContext | undefined {
