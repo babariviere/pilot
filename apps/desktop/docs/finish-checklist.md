@@ -140,7 +140,8 @@ not an absence proof. Swift links are historical capability references only.
   and [chat_sending::shown_text](../src/chat_sending.rs) separate saved drafts,
   visible sends and immutable pending operations. The current owner services
   autosaves during ordinary Send, Stop, chat model/thinking selection and inspection,
-  subscription Force/Continue, child-message sends, question replies and explicit receipt recovery
+  subscription Force/Continue, child-message sends, chat-to-mission conversion,
+  question replies and explicit receipt recovery
   waits, but mutation/Stop/checkpoint commands remain FIFO. The [held Stop
   regression](stop-autosave.md) separates durable typing from Stop acknowledgment;
   it is not live Stop-latency qualification. The [model wait regression](model-autosave.md)
@@ -149,7 +150,9 @@ not an absence proof. Swift links are historical capability references only.
   Force meaning, continuation confirmation/admission and no replay. The
   [child-send wait regression](subagent-autosave.md) preserves the one-shot
   request ACK, exact child identity and Unknown/no replay without inventing
-  receipt/Inspect support. Project
+  receipt/Inspect support. The [conversion wait regression](mission-autosave.md)
+  retains guarded admission, one-shot captured intent, current-membership-only
+  inspection and volatile accepted evidence on private disk faults. Project
   default-model PATCH remains outside this coverage.
   #280's [restart evidence](../evidence/restart-retention.md)
   records synthetic lost-ACK/restart checks, not force-quit/power-loss qualification.

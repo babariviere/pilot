@@ -36,6 +36,9 @@ pub(crate) mod composer_probe;
 pub(crate) mod delivery_probe;
 #[path = "chat_draft_discard.rs"]
 mod draft_discard;
+#[cfg(feature = "native-probes")]
+#[path = "mission_wait_probe.rs"]
+mod mission_wait_probe;
 #[path = "chat_model_picker.rs"]
 mod model_picker;
 #[cfg(feature = "native-probes")]

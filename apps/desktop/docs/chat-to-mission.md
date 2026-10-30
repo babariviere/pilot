@@ -55,6 +55,11 @@ conversion attempt before its sole POST. A local attempt UUID is **not** a daemo
 idempotency key. HTTP retries are disabled. Double confirmation, sheet reopen,
 navigation, interrupted close and restart never resend an unknown attempt.
 
+Conversion admission, POST and inspection now use the existing sole-writer
+effect seam so ordinary draft autosaves can progress while HTTP waits. See
+[conversion autosaves](mission-autosave.md) for the bounded synthetic evidence
+and preserved ACK/Unknown limits, not a new endpoint or replay contract.
+
 - A validated durable HTTP201 identifies the created mission, not drafting
   delivery. A private receipt-write failure retains the known ID while exposing
   the write fault, not claiming rollback or a saved local receipt. The existing

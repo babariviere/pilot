@@ -608,24 +608,41 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 result: Ok(Inspection::Pending),
                             });
                             publish(updates, replace, status.clone());
-                            tokio::select! {
-                                result=crate::mission_transport::execute(&client,&options,store,&target,action,|store| {
-                                    status.book=Some(Arc::new(store.book.clone()));
-                                    publish(updates,replace,status.clone());
-                                })=>{
-                                    if let (Some(id), Ok(Inspection::Created { mission_id })) = (attempt_id, &result)
-                                        && let Some(attempt) = store.book.missions.get(&target.source)
-                                        && attempt.id == id && attempt.request.project_id == target.project {
-                                        Arc::make_mut(&mut status.mission_receipts).insert(target.source.clone(), Receipt {
-                                            attempt_id: id, project_id: target.project.clone(), mission_id: mission_id.clone(),
-                                        });
-                                    }
-                                    status.mission=Some(Reply {target,request,result});
-                                    if store.is_faulted() {status.error=Some("Private state write failed; preserve unsaved input before restarting.");}
-                                    Ok("")
-                                },
-                                _=close.recv()=>{closing=true;Ok("Closing. Interrupted mission conversion is not retried.")}
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
                             }
+                            .mission(&client, &options, &target, action)
+                            .await;
+                            if let (Some(id), Ok(Inspection::Created { mission_id })) =
+                                (attempt_id, &result)
+                                && let Some(attempt) = store.book.missions.get(&target.source)
+                                && attempt.id == id
+                                && attempt.request.project_id == target.project
+                            {
+                                Arc::make_mut(&mut status.mission_receipts).insert(
+                                    target.source.clone(),
+                                    Receipt {
+                                        attempt_id: id,
+                                        project_id: target.project.clone(),
+                                        mission_id: mission_id.clone(),
+                                    },
+                                );
+                            }
+                            status.mission = Some(Reply {
+                                target,
+                                request,
+                                result,
+                            });
+                            if store.is_faulted() {
+                                status.error = Some(
+                                    "Private state write failed; preserve unsaved input before restarting.",
+                                );
+                            }
+                            Ok("")
                         }
                         Some(WriteCommand::Answer {
                             key,

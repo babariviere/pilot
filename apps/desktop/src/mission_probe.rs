@@ -15,15 +15,20 @@ use gpui_kit::{
 use serde_json::json;
 use std::{path::PathBuf, sync::Mutex, time::Instant};
 
-struct Server {
-    options: LocalOptions,
-    seen: Arc<Mutex<Seen>>,
+pub(crate) struct Server {
+    pub(crate) options: LocalOptions,
+    pub(crate) seen: Arc<Mutex<Seen>>,
     released: Arc<tokio::sync::Notify>,
+    pub(crate) entered: async_channel::Receiver<()>,
+    pub(crate) release: async_channel::Sender<()>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
     fn start(behavior: Behavior, old: bool) -> Self {
+        Self::held(behavior, old, "")
+    }
+    pub(crate) fn held(behavior: Behavior, old: bool, hold: &'static str) -> Self {
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let (stop, shutdown) = tokio::sync::oneshot::channel();
         let thread = std::thread::spawn(move || {
@@ -32,7 +37,7 @@ impl Server {
                 .build()
                 .unwrap();
             runtime.block_on(async move {
-                let daemon = Daemon::start(behavior).await;
+                let daemon = Daemon::held(behavior, hold).await;
                 if old {
                     daemon.seen.lock().unwrap().hello["capabilities"]
                         .as_object_mut()
@@ -43,17 +48,22 @@ impl Server {
                     daemon.options.clone(),
                     daemon.seen.clone(),
                     daemon.released.clone(),
+                    daemon.entered.clone(),
+                    daemon.release.clone(),
                 ))
                 .unwrap();
                 let _ = shutdown.await;
                 drop(daemon);
             });
         });
-        let (options, seen, released) = rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (options, seen, released, entered, release) =
+            rx.recv_timeout(Duration::from_secs(3)).unwrap();
         Self {
             options,
             seen,
             released,
+            entered,
+            release,
             stop: Some(stop),
             thread: Some(thread),
         }

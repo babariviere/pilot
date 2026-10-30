@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     interaction::{Interaction, WriteCommand, WriteState},
-    mission_conversion::{Outcome, Request},
+    mission_conversion::{Action, Outcome, Request},
     mission_fixture::{Behavior, Daemon},
 };
 use serde_json::json;
@@ -19,6 +19,39 @@ impl Drop for Temp {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+// Transport/store contract adapter; production ownership is covered by interaction_mission_tests.
+async fn execute(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    store: &mut Store,
+    target: &Target,
+    action: Action,
+    prepared: impl FnOnce(&Store),
+) -> Result<Inspection, Failure> {
+    match action {
+        Action::Inspect if !store.book.missions.contains_key(&target.source) => {
+            Ok(Inspection::Ready {
+                title: admit(client, options, target).await?,
+            })
+        }
+        Action::Inspect | Action::Check => observe(client, options, target).await,
+        Action::Submit { id, request } => {
+            request.validate()?;
+            if request.from_session_id != target.source || request.project_id != target.project {
+                return Err("Captured mission source changed");
+            }
+            admit(client, options, target).await?;
+            let attempt = store.prepare_mission(&id, request)?;
+            prepared(store);
+            let result = submit_request(client, options, target, &attempt).await?;
+            if let Inspection::Created { mission_id } = &result {
+                return retain_receipt(store, target, &id, mission_id);
+            }
+            Ok(result)
+        }
+    }
+}
+
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .no_proxy()

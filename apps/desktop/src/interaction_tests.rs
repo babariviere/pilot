@@ -71,6 +71,8 @@ async fn diagnostic_creation_and_reply_preserve_role_without_project_reads_or_re
 mod catalog_waits;
 #[path = "interaction_draft_discard_tests.rs"]
 mod draft_discard;
+#[path = "interaction_mission_tests.rs"]
+mod mission_waits;
 #[path = "interaction_model_tests.rs"]
 mod model_waits;
 #[path = "interaction_recovery_tests.rs"]

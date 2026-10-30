@@ -74,6 +74,53 @@ impl DeliveryOwner<'_> {
         }
     }
 
+    /// Conversion keeps its staged one-shot intent; only draft edits overlap HTTP.
+    pub(super) async fn mission(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        target: &crate::mission_conversion::Target,
+        action: crate::mission_conversion::Action,
+    ) -> Result<crate::mission_conversion::Inspection, Failure> {
+        use crate::{
+            mission_conversion::{Action, Inspection},
+            mission_transport,
+        };
+        match action {
+            Action::Inspect if !self.store.book.missions.contains_key(&target.source) => {
+                Ok(Inspection::Ready {
+                    title: self
+                        .effect(mission_transport::admit(client, options, target))
+                        .await?,
+                })
+            }
+            Action::Inspect | Action::Check => {
+                self.effect(mission_transport::observe(client, options, target))
+                    .await
+            }
+            Action::Submit { id, request } => {
+                request.validate()?;
+                if request.from_session_id != target.source || request.project_id != target.project
+                {
+                    return Err("Captured mission source changed");
+                }
+                self.effect(mission_transport::admit(client, options, target))
+                    .await?;
+                let attempt = self.store.prepare_mission(&id, request)?;
+                self.prepared(self.status.notice);
+                let result = self
+                    .effect(mission_transport::submit_request(
+                        client, options, target, &attempt,
+                    ))
+                    .await?;
+                if let Inspection::Created { mission_id } = &result {
+                    return mission_transport::retain_receipt(self.store, target, &id, mission_id);
+                }
+                Ok(result)
+            }
+        }
+    }
+
     /// Model selection uses the same FIFO writer and edit mailbox as delivery.
     pub(super) async fn model(
         &mut self,

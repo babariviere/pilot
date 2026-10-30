@@ -2,7 +2,7 @@
 use crate::{
     LocalOptions,
     delivery_store::{Failure, Store, token},
-    mission_conversion::{Action, Inspection, Outcome, Target},
+    mission_conversion::{Inspection, Outcome, Target},
 };
 use serde_json::Value;
 
@@ -52,7 +52,7 @@ async fn source(
     Ok(source)
 }
 
-async fn admit(
+pub(crate) async fn admit(
     client: &reqwest::Client,
     options: &LocalOptions,
     target: &Target,
@@ -84,7 +84,7 @@ async fn admit(
         .collect())
 }
 
-async fn observe(
+pub(crate) async fn observe(
     client: &reqwest::Client,
     options: &LocalOptions,
     target: &Target,
@@ -108,61 +108,41 @@ async fn observe(
     Ok(Inspection::Membership { mission_id })
 }
 
-pub(crate) async fn execute(
+/// One captured POST. No private Store is borrowed while HTTP is pending.
+pub(crate) async fn submit_request(
     client: &reqwest::Client,
     options: &LocalOptions,
-    store: &mut Store,
     target: &Target,
-    action: Action,
-    prepared: impl FnOnce(&Store),
+    attempt: &crate::mission_conversion::Attempt,
 ) -> Result<Inspection, Failure> {
-    match action {
-        Action::Inspect if !store.book.missions.contains_key(&target.source) => {
-            Ok(Inspection::Ready {
-                title: admit(client, options, target).await?,
-            })
-        }
-        Action::Inspect | Action::Check => observe(client, options, target).await,
-        Action::Submit { id, request } => {
-            request.validate()?;
-            if request.from_session_id != target.source || request.project_id != target.project {
-                return Err("Captured mission source changed");
-            }
-            admit(client, options, target).await?;
-            let attempt = store.prepare_mission(&id, request)?;
-            prepared(store);
-            let response = client
-                .post(format!("{}/api/missions", options.loopback()))
-                .header("Content-Type", "application/json")
-                .body(
-                    serde_json::to_vec(&attempt.request)
-                        .map_err(|_| "Cannot encode mission request")?,
-                )
-                .send()
-                .await;
-            let Ok(response) = response else {
-                return Ok(Inspection::Uncertain);
-            };
-            // Even a non-201 response is not proof of pre-commit rejection:
-            // response construction/durability can fail after creation. Never retry.
-            if response.status() != reqwest::StatusCode::CREATED {
-                return Ok(Inspection::Uncertain);
-            }
-            let Ok(value) = body(response).await else {
-                return Ok(Inspection::Uncertain);
-            };
-            let Some(mission_id) = value["mission"]["id"].as_str().filter(|id| token(id)) else {
-                return Ok(Inspection::Uncertain);
-            };
-            if value["mission"]["projectId"] != target.project {
-                return Ok(Inspection::Uncertain);
-            }
-            retain_receipt(store, target, &id, mission_id)
-        }
+    let response = client
+        .post(format!("{}/api/missions", options.loopback()))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_vec(&attempt.request).map_err(|_| "Cannot encode mission request")?)
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return Ok(Inspection::Uncertain);
+    };
+    // Even non-201 may follow a committed creation. Never retry.
+    if response.status() != reqwest::StatusCode::CREATED {
+        return Ok(Inspection::Uncertain);
     }
+    let Ok(value) = body(response).await else {
+        return Ok(Inspection::Uncertain);
+    };
+    let Some(mission_id) = value["mission"]["id"].as_str().filter(|id| token(id)) else {
+        return Ok(Inspection::Uncertain);
+    };
+    if value["mission"]["projectId"] != target.project {
+        return Ok(Inspection::Uncertain);
+    }
+    Ok(Inspection::Created {
+        mission_id: mission_id.into(),
+    })
 }
 
-fn retain_receipt(
+pub(crate) fn retain_receipt(
     store: &mut Store,
     target: &Target,
     attempt: &str,
