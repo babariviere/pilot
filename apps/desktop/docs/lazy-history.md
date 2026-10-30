@@ -56,6 +56,13 @@ head. Canonical entry/model/block keys deduplicate boundaries and preserve the
 existing native reading anchor, selection/copy, focus and IME owners. No JS or
 mutation replay is introduced.
 
+Historical tool calls first discovered in a snapshot, legacy prefix or older page
+start as Status unknown unless a retained result or explicit running-tool record
+establishes their outcome. Historical admission settles only newly discovered
+call IDs, never unrelated live Pending/Running calls. Later results still supply
+their exact output and success/failure. Reducer equivalence tests project rows
+only at matching boundaries: `rows()` allocates presentation IDs and work groups.
+
 ## What is actually bounded
 
 Cold reads scan the recent range directly through indexed storage, before

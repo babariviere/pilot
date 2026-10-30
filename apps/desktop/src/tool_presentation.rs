@@ -737,12 +737,12 @@ impl Tools {
             }
         }
     }
-    /// Historical calls with no retained result are Unknown, never current work.
-    pub(crate) fn settle_history(&mut self) {
-        for tool in self.items.values_mut() {
-            if tool.status == Status::Pending {
-                Arc::make_mut(tool).status = Status::Interrupted;
-            }
+    /// A newly discovered historical call is Unknown, never current work.
+    pub(crate) fn settle_history(&mut self, id: &str) {
+        if let Some(tool) = self.items.get_mut(id)
+            && tool.status == Status::Pending
+        {
+            Arc::make_mut(tool).status = Status::Interrupted;
         }
     }
     pub(crate) fn orphan(&mut self, id: &str) {

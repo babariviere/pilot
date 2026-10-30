@@ -5,6 +5,10 @@ use crate::tool_presentation::Tools;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(test)]
+#[path = "local_model_tool_history_tests.rs"]
+mod tool_history_tests;
+
 pub(crate) const ENTRY_CAP: usize = 256;
 pub(crate) const ROW_CAP: usize = 512;
 pub(crate) const PROJECT_CAP: usize = 256;
@@ -592,7 +596,7 @@ impl LiveTranscript {
             self.cursor.is_some(),
         );
         if let Some(live) = self.live.take() {
-            rows.extend(self.assistant_rows(self.live_key, &live, None));
+            rows.extend(self.assistant_rows(self.live_key, &live, None, false));
             self.live = Some(live);
         }
         let referenced: std::collections::BTreeSet<_> = rows
@@ -677,13 +681,16 @@ impl LiveTranscript {
     pub(crate) fn has_capacity(&self) -> bool {
         self.history_context.is_some() || (self.entries.len() < ENTRY_CAP && !self.limited)
     }
-    fn register_calls(&mut self, value: &Value) {
+    fn register_calls(&mut self, value: &Value, historical: bool) {
         if let Some(blocks) = value["content"].as_array() {
             for block in blocks.iter().filter(|b| b["type"] == "toolCall") {
                 if let Some(id) = block["id"]
                     .as_str()
                     .filter(|id| !id.is_empty() && id.len() <= 256)
                 {
+                    // Loading history must not settle a call already known from
+                    // the live stream, even if execution has not started yet.
+                    let unseen_history = historical && !self.tools.contains(id);
                     let key = self.tools.key(id).unwrap_or_else(|| self.key());
                     if !self.tools.call(
                         id,
@@ -692,6 +699,9 @@ impl LiveTranscript {
                         &block["arguments"],
                     ) {
                         self.limited = true;
+                    }
+                    if unseen_history {
+                        self.tools.settle_history(id);
                     }
                 }
             }
@@ -702,6 +712,7 @@ impl LiveTranscript {
         key: u64,
         value: &Value,
         entry: Option<(u64, usize)>,
+        historical: bool,
     ) -> Vec<Message> {
         // Do this before slimming, row identity allocation and Message/Markdown
         // construction. Reasoning and empty shells have no transcript height.
@@ -718,7 +729,7 @@ impl LiveTranscript {
             return Vec::new();
         }
         let value = slim_message(value);
-        self.register_calls(&value);
+        self.register_calls(&value, historical);
         let Some(blocks) = value["content"].as_array() else {
             return vec![message(key, &value, "assistant")];
         };
@@ -795,7 +806,7 @@ impl LiveTranscript {
             key
         }
     }
-    fn entry(&mut self, entry: &Value, promote: Option<u64>) {
+    fn entry(&mut self, entry: &Value, promote: Option<u64>, historical: bool) {
         // Metadata is bounded independently from row admission. Even a user
         // entry beyond the visual row cap must close an old question.
         if !self.projecting_history {
@@ -914,7 +925,7 @@ impl LiveTranscript {
                     role
                 };
                 if role == "assistant" {
-                    rows.extend(self.assistant_rows(key, value, Some((id, ix))));
+                    rows.extend(self.assistant_rows(key, value, Some((id, ix)), historical));
                 } else if role == "toolResult" {
                     if let Some(call) = value["toolCallId"]
                         .as_str()
@@ -1140,7 +1151,7 @@ impl LiveTranscript {
                 };
                 self.projecting_history = self.history_context.is_some();
                 for entry in active[start..].iter().rev() {
-                    self.entry(entry, None);
+                    self.entry(entry, None, true);
                 }
                 self.projecting_history = false;
                 if self.history_context.is_some() && event["history"]["question"].is_object() {
@@ -1197,14 +1208,14 @@ impl LiveTranscript {
                         self.active_head = Some(self.active_head.map_or(head, |old| old.min(head)));
                     }
                     for entry in entries.iter().rev().take(ENTRY_CAP) {
-                        self.entry(entry, None);
+                        self.entry(entry, None, true);
                     }
                 }
                 self.finish_snapshot();
             }
             "entry_appended" => {
                 self.user_arrived(&event["entry"]);
-                self.entry(&event["entry"], None)
+                self.entry(&event["entry"], None, false)
             }
             "github_actions_update" => {
                 // A whole snapshot on every change and reconnect: replace, never append.
@@ -1254,7 +1265,7 @@ impl LiveTranscript {
                     }
                 }
                 if let Some(live) = self.live.clone() {
-                    self.register_calls(&live);
+                    self.register_calls(&live, false);
                 }
             }
             "message_end" => {
@@ -1265,7 +1276,7 @@ impl LiveTranscript {
                     }
                 }
                 self.user_arrived(&event["entry"]);
-                self.entry(&event["entry"], key);
+                self.entry(&event["entry"], key, false);
                 self.live = None;
                 self.live_block_keys.clear();
             }
@@ -1296,7 +1307,7 @@ impl LiveTranscript {
                         self.tools.orphan(id);
                     }
                 }
-                self.entry(&event["entry"], None);
+                self.entry(&event["entry"], None, false);
             }
             "run_end" => {
                 self.live = None;
@@ -1387,7 +1398,7 @@ impl LiveTranscript {
             self.live_block_keys.clear();
         }
         let slim = slim_message(&value);
-        self.register_calls(&slim);
+        self.register_calls(&slim, false);
         self.live = Some(slim);
     }
 
@@ -1480,15 +1491,12 @@ impl LiveTranscript {
         if let Some(entries) = value["entries"].as_array() {
             for entry in entries.iter() {
                 if let Some(id) = entry["id"].as_u64().filter(|id| *id < before) {
-                    self.entry(entry, None);
+                    self.entry(entry, None, true);
                     oldest = oldest.min(id);
                 }
             }
         }
         self.projecting_history = false;
-        if self.history_context.is_some() {
-            self.tools.settle_history();
-        }
         self.cursor = if self.history_context.is_some() {
             value["nextBefore"].as_u64()
         } else {

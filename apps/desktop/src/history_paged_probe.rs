@@ -127,9 +127,36 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                     generation: 10
                 })
             ));
-            assert!(model.page(5941,&json!({"context":context,"before":5941,"entries":(5917..5941).map(entry).collect::<Vec<_>>(),"more":true,"nextBefore":5917})));
+            model.apply(&json!({"type":"run_start"}));
+            model.apply(&json!({"type":"message_start","message":{"role":"assistant","timestamp":1,"content":[{"type":"toolCall","id":"paged-live","name":"read","arguments":{"path":"live.rs"}}]}}));
+            let mut older = (5917..5941).map(entry).collect::<Vec<_>>();
+            older[0] = json!({"id":5917,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"paged-history","name":"read","arguments":{"path":"history.rs"}}]}]});
+            assert!(model.page(5941,&json!({"context":context,"before":5941,"entries":older,"more":true,"nextBefore":5917})));
             page(cx, handle, &view, model.rows(), model.cursor, 2);
             assert!(!cx.update(|cx| view.read(cx).state.page_busy));
+            // Inspect the mounted production projection after the page renders.
+            cx.update(|cx| {
+                let rows = view.read(cx).transcript.read(cx).link_snapshot_rows();
+                for (id, expected) in [
+                    ("paged-history", "Status unknown"),
+                    ("paged-live", "Pending"),
+                ] {
+                    let tool = rows
+                        .iter()
+                        .filter_map(|row| row.work_data())
+                        .flat_map(|work| work.calls())
+                        .find(|tool| tool.id == id)
+                        .unwrap();
+                    assert_eq!(tool.status.label(), expected);
+                    assert!(
+                        crate::model::reader_index(
+                            &rows,
+                            &crate::model::ReaderKey::Tool(id.into())
+                        )
+                        .is_some()
+                    );
+                }
+            });
             assert!(
                 commands.try_recv().is_err(),
                 "prepend does not eagerly chain pages"
