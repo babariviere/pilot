@@ -6,6 +6,92 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { MissionStore } from "./missions.ts";
 
+// Characterize the legacy contract before exposing definition-only native editing.
+// These are observed limitations, not the safety contract a new editor requires.
+test("phase definition creation completes the empty phase and queues a coordinator notice", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Definition audit", planningVersion: 1 });
+	store.join("lead", id);
+	store.update(id, { coordinatorSessionId: "lead" });
+	assert.deepEqual(store.noticeDeadlines(Date.now(), id), []);
+	const phase = store.addPhase(id, { name: "Build", goal: "Definition only" });
+	assert.ok(phase.completedAt, "creation also mutates completion, even without tasks");
+	const deadlines = store.noticeDeadlines(Date.now(), id);
+	assert.equal(deadlines.length, 1);
+	const notice = store.prepareNotice(id, "lead", deadlines[0]!.at);
+	assert.ok(notice?.content.includes("Phase completed: Build"), "completion is eligible for notice delivery");
+	assert.deepEqual(store.tasks(id), []);
+});
+
+test("phase definition writes use ordinary reconciliation and non-passive publication", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Definition audit" });
+	const changes: { id: string; passive: boolean; preferenceOnly: boolean }[] = [];
+	store.onChange((id, passive, preferenceOnly) =>
+		changes.push({ id, passive: !!passive, preferenceOnly: !!preferenceOnly }),
+	);
+	const linear = t.mock.method(store as unknown as { reconcileLinearSync(): void }, "reconcileLinearSync", () => {});
+	const phase = store.addPhase(id, { name: "Build" });
+	store.updatePhase(id, phase.id, { goal: "Edited description" });
+	assert.deepEqual(changes, [
+		{ id, passive: false, preferenceOnly: false },
+		{ id, passive: false, preferenceOnly: false },
+	]);
+	assert.equal(linear.mock.calls.length, 2, "both writes enter global Linear reconciliation");
+});
+
+test("phase definition PATCH reference can fall back from a deleted ID to another phase name", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Definition audit" });
+	const captured = store.addPhase(id, { name: "Build" });
+	const other = store.addPhase(id, { name: captured.id });
+	assert.equal(store.resolvePhase(id, captured.id).id, captured.id, "ID wins while it exists");
+	store.removePhase(id, captured.id);
+	const result = store.updatePhase(id, captured.id, { name: "Stale edit", goal: "Captured for Build" });
+	assert.equal(result.id, other.id, "the stale canonical ID retargets a different phase");
+	assert.equal(store.resolvePhase(id, other.id).goal, "Captured for Build");
+});
+
+test("phase definition writes preserve planner admission but have no captured-row precondition", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Definition audit", planningVersion: 1 });
+	store.join("lead", id);
+	store.join("worker", id);
+	store.update(id, { coordinatorSessionId: "lead" });
+	const captured = store.addPhase(id, { name: "Build", goal: "Original" });
+	assert.throws(() => store.addPhase(id, { name: "Worker phase" }, { sessionId: "worker" }), /Coordinator-owned/);
+	assert.throws(
+		() => store.updatePhase(id, captured.id, { name: "Worker edit" }, { sessionId: "worker" }),
+		/Coordinator-owned/,
+	);
+	store.updatePhase(id, captured.id, { name: "Coordinator edit", goal: "New scope" }, { sessionId: "lead" });
+	const result = store.updatePhase(id, captured.id, { name: captured.name, goal: "Stale user description" });
+	assert.equal(result.name, "Build", "trusted local user write overwrites an unseen coordinator rename");
+	assert.equal(result.goal, "Stale user description");
+});
+
+test("phase definition publication failure can throw after the definition committed", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "Definition audit" });
+	const stop = store.onChange(() => {
+		throw new Error("Synthetic publication failure");
+	});
+	assert.throws(() => store.addPhase(id, { name: "Build" }), /Synthetic publication failure/);
+	const phase = store.phases(id)[0]!;
+	assert.equal(phase.name, "Build", "a thrown mutation is not evidence of non-application");
+	assert.throws(
+		() => store.updatePhase(id, phase.id, { goal: "Committed without ACK" }),
+		/Synthetic publication failure/,
+	);
+	assert.equal(store.resolvePhase(id, phase.id).goal, "Committed without ACK");
+	stop();
+});
+
 test("legacy milestones migrate in first appearance order to stable scoped phases", (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-phase-migration-"));
 	const file = join(dir, "missions.sqlite");
