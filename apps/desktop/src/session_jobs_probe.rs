@@ -8,6 +8,12 @@ use gpui_kit::{
 use serde_json::{Value, json};
 
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    // Retarget dialog Presence before advancing its theme transition.
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| w.draw(cx).clear(cx))
+        .unwrap();
+    let duration = cx.update(|cx| cx.theme().motion_tokens().duration_normal);
+    cx.advance_clock(duration);
     for _ in 0..6 {
         cx.run_until_parked();
         cx.advance_clock(Duration::from_millis(16));
