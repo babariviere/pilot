@@ -2,7 +2,9 @@
 
 Open **Usage…** in the sidebar. This passive native window leaves the current
 conversation, selection and draft mounted. Choose 7, 30 or 90 UTC days, ending
-at the explicit read time. Refresh is manual; nothing polls or mutates usage.
+at the explicit read time. Filter historical totals/trends by All projects, an
+exact ledger project or authoritative Unattributed records. Refresh is manual;
+nothing polls or mutates usage.
 
 The screen answers one question: what usage did this Local daemon retain for
 this date range? It leads with scope and coverage, then known-subtotal input,
@@ -53,19 +55,21 @@ API v1 permits a maximum366-day window, at most100 returned groups per response,
 at most400 time buckets, a4096-byte query, and512KiB response JSON. The ledger
 retains at most50,000 records,64MiB, with a30-day retention floor. The overview
 deliberately narrows the date choices to at most90 daily buckets and makes only
-one summary query and one bucket query, with no paging. Both content-length and
-streaming bodies are capped at512KiB before decode. Unknown versions, malformed,
-duplicate/out-of-range buckets and truncated responses fail closed. Every request
-has a5-second timeout and2-second connection timeout. One private worker owns
+one summary query, one bucket query and one bounded project-breakdown query,
+with no paging. Both content-length and streaming bodies are capped at512KiB before decode. Unknown versions, malformed,
+duplicate/out-of-range buckets and truncated summary/day responses fail closed.
+Every request
+has a5-second timeout and2-second connection timeout. One private reader worker owns
 one in-flight future; bounded1-slot input/output lanes coalesce replacement.
-Range replacement and window closure cancel the previous future. UI serial/range
+Range replacement and window closure cancel the previous future. UI serial/filter/range
 fences reject late completions, including failed ones. Options are immutable per
 window, so a completion cannot be adopted into another source.
 
 Summary values come only from the authoritative `total`, which represents dated
-requests. Never sum page totals, checkpoints or historical context. Bucket reads
-are separate dated observations, not a transactional snapshot; a generation
-change prevents adopting the trend. A failed trend does not replace a valid dated
+requests. Never sum page totals, checkpoints or historical context. Bucket and
+project-catalogue reads
+are separate dated observations, not a transactional snapshot; an observed
+generation change clears the whole observation. A failed trend does not replace a valid dated
 summary. Missing days/metrics remain unknown or unobserved, never synthetic zero.
 Daily input+output bars draw the known subtotal of each UTC day on a round token
 axis (cache read/write and reasoning are not added). A day where some requests
@@ -80,44 +84,60 @@ estimates, not billed charges, including when subscription usage is present.
 
 All history remains explicitly partial, with collection start and observation
 time visible. Old data retained after a failed same-window refresh is clearly
-marked as a previous observation. A different range clears old-range values.
-Longer ranges do not override retention or imply complete history. Group filters,
+marked as a previous observation. A different scope/range clears old-range values.
+Longer ranges do not override retention or imply complete history. Other group filters,
 records, reconciliation and informational budgets remain outside this overview.
 
-## Project-filter data gap
+## Project filtering
 
-The current window cannot honestly offer All / project / Unattributed filtering
-from its retained data. `usage_overview_reader::url` requests only `view: summary`
-and `view: buckets` with `bucketMs: 86400000`, without filters or a dimension.
-`Report.total` is an all-project aggregate; `Report.groups` contains UTC-day keys
-and aggregates. Neither carries project identity, project labels, per-project
-metrics or the number of records missing project attribution. In particular,
-missing attribution in this **projection** does not mean every underlying record
-is unattributed. An Unattributed choice would be just as unsupported as a known
-project choice. There is no record list in this window to filter instead.
+The retained Kit selector offers **All projects**, exact ledger project UUIDs,
+and **Unattributed** only when the project breakdown returns the authoritative
+JSON `null` key. A projection without project identity is not unattributed usage.
+The existing in-memory project catalogue supplies optional Unicode display names
+only. Deleted/unknown project UUIDs remain selectable without guessing a name,
+cwd or current-chat attribution. Labels never determine query identity.
 
-The ledger protocol separately supports `UsageObservation.attribution.projectId`,
-`view: breakdown` with `dimension: project` (the disk query returns a JSON string
-key for a known project ID and `null` for unattributed records),
-and `filters.projectId` / `filters.missing: ["project"]`. Those observations and
-breakdowns are not loaded by the overview. A project breakdown alone would not
-provide project-by-day trends. Using these API capabilities would require changed
-reads, not presentation-only filtering of existing rows, so none are introduced
-here. Current chat/project selection, titles, cwd and the project catalogue cannot
-reconstruct historical attribution. No project picker or synthetic unattributed
-total is added. Records/reconciliation/budgets remain separate residual work.
+Each explicit history read captures one UTC range and filter. It requests:
 
-Subscription limits remain global provider reports, independent of historical
-date ranges and any future project filter. Their `fetchedAt` / failed-report
-ordering is not the history query's `queriedAt` or a project freshness signal.
-No refresh, privacy epoch, clear, stale-result or report mutation path changes.
+- `view: summary`, optionally `filters: {projectId: <exact UUID>}` or
+  `filters: {missing: ["project"]}`;
+- `view: buckets`, the identical filter/range and `bucketMs: 86400000`;
+- one unfiltered `view: breakdown`, `dimension: project`, `limit: 100`, for
+  the date-range project catalogue.
 
-Focused regression coverage rejects known-project and null-attribution breakdown
-keys as summary/day evidence, keeps daily subtotals separate from authoritative
-totals, and pins both existing queries to their unfiltered UTC scope. Existing
-date/unknown/range-replacement and retained-error checks remain applicable.
-No new filter UI exists to qualify for keyboard, empty-project or native visual
-acceptance; the existing hidden overview probe covers the unchanged window.
+No cursor is followed or totals accumulated. The catalogue may be truncated and
+says so visibly; it is not a complete project inventory. An exact selected ID
+survives being absent from the current first page. Catalogue errors retain prior
+choices as a previous read, not a complete/current list. Summary/day truncation
+still fails closed. Summary totals come exclusively from that filtered query's
+`total`, never from a breakdown, bucket/page sum or previous selection.
+
+The existing GET route checks daemon/lineage, validates the bounded query, then
+calls `UsageHistoryService.analytics` through its two-query admission limit and
+worker RPC. `UsageHistoryDisk.analytics` uses the dated-request reduction and
+existing project/missing SQL predicates. It does not call providers, refresh
+subscriptions, list/spawn sessions, record observations, expire or erase rows.
+The ordinary lazy ledger worker/database opening can initialize storage/indexes;
+passive here does not promise a filesystem-pure read. Source evidence:
+`server.ts` usage-history route, `usage-history.ts` analytics/readQuery,
+`usage-history-worker.ts` analytics dispatch, `usage-history-disk.ts` analytics,
+FILTER_SQL/GROUP_SQL, and `usage-queries-server.test.ts`'s no-list/no-spawn GET
+boundary. Project UUIDs are the canonical lowercase ledger keys, not new client
+attribution or backend schema.
+
+Range/filter replacement cancels the in-flight future and serial/filter/range
+fences reject late successes and errors. Different scopes clear old totals before
+reading; same-scope failed refreshes retain explicitly dated previous values.
+Observed ledger generation changes between queries clear retained history and
+catalogue rather than resurrect pre-erasure values. A summary generation change
+from the prior observation is rejected before later read failures can retain the
+old report. Reads are not transactional:
+same-generation queries can still observe newly arriving records independently.
+An erasure not yet observed by an explicit read is not a live-clear notification.
+Subscription limits remain global and visibly separate, with their own original
+`fetchedAt`/failure ordering. History selection never refreshes providers or
+project-scopes subscription limits. No polling, account reads or mutations added.
+Records/reconciliation/budgets remain separate residual work.
 
 ## Verification scope
 
@@ -128,7 +148,12 @@ toolchain, mbx CPU2/4GiB bounds and private outputs. Full suites stay in CI.
 The native target covers680/1100 light/dark geometry, loading versus empty,
 coverage/summaries/trend, the partial-subtotal bar and axis ticks, 30/90-day
 ranges with billion-token days and a retention floor, pointer range replacement,
-disclosure, explicit retry, failed-refresh retention and close. Set
+disclosure, explicit retry, failed-refresh retention and close. Filter-specific
+checks exercise native selector keyboard selection, Unicode search cancellation and retained synthetic preedit during a read,
+Escape focus restoration, exact project/missing/All scope, filtered empty and
+retained-error states, plus bounded catalogue/error notices. Unit/faux-transport checks cover exact identity/query URLs,
+filter-only cancellation/races, catalogue truncation/errors, authoritative totals
+versus independent days, date replacement and observed erasure fencing. Set
 `PILOT_NEXT_USAGE_DIR` to save the captures. Captures are offscreen synthetic GPUI, not
 the user's app or real usage. No new animation/timer or scrolling hot path is
 introduced. No OS IME, live-daemon, Linux/Wayland, GPU performance or user acceptance

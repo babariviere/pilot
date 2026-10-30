@@ -1400,7 +1400,10 @@ and deterministic compaction records activity without invented inference cost. I
 diagnostic export. Separate [background completions](docs/background-inference-accounting.md), including titles,
 memory compaction (including historical Control usage), Slack classification and triage workers record observed usage before output validation
 or application. Capture and dashboard projections remain partial; neither establishes complete historical coverage
-or waives the dashboard performance/release gates.
+or waives the dashboard performance/release gates. Pilot Next’s passive
+[Local Usage overview](apps/desktop/docs/usage-overview.md) filters historical totals
+and daily trends by exact ledger project or Unattributed records, with a bounded
+project list. Subscription limits remain global and independent of those filters.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
 and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
 retain only bounded content-free metadata locally. Pilot does not ingest stacks or report bodies into those

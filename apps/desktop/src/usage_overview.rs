@@ -5,6 +5,72 @@ pub(crate) const DAY: u64 = 86_400_000;
 pub(crate) const WIRE_CAP: usize = 512 * 1024;
 const SAFE: u64 = 9_007_199_254_740_991;
 pub(crate) type Failure = &'static str;
+pub(crate) const ERASED: Failure =
+    "Local usage history changed during the read. Previous values cleared; refresh to retry.";
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Filter {
+    #[default]
+    All,
+    Project(String),
+    Unattributed,
+}
+impl Filter {
+    pub(crate) fn label(&self) -> String {
+        match self {
+            Self::All => "All projects".into(),
+            Self::Project(id) => format!("Project {id}"),
+            Self::Unattributed => "Unattributed".into(),
+        }
+    }
+    pub(crate) fn valid(&self) -> bool {
+        match self {
+            Self::Project(id) => uuid::Uuid::parse_str(id).is_ok_and(|u| u.to_string() == *id),
+            _ => true,
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum View {
+    Summary,
+    Buckets,
+    Projects,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct Catalogue {
+    pub(crate) filters: Vec<Filter>,
+    pub(crate) limited: bool,
+    pub(crate) generation: String,
+}
+impl Catalogue {
+    pub(crate) fn parse(value: serde_json::Value, range: Range) -> Result<Self, Failure> {
+        let report = Report::parse_view(value, range, View::Projects)?;
+        let filters = report
+            .groups
+            .iter()
+            .map(|g| {
+                let id: Option<String> = serde_json::from_str(&g.key)
+                    .map_err(|_| "Invalid Local project attribution key.")?;
+                let filter = id.map_or(Filter::Unattributed, Filter::Project);
+                if !filter.valid() {
+                    return Err("Invalid Local project attribution key.");
+                }
+                Ok(filter)
+            })
+            .collect::<Result<Vec<_>, Failure>>()?;
+        if filters
+            .iter()
+            .enumerate()
+            .any(|(i, f)| filters[..i].contains(f))
+        {
+            return Err("Duplicate Local project attribution key.");
+        }
+        Ok(Self {
+            filters,
+            limited: report.truncated,
+            generation: report.status.generation,
+        })
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Range {
     pub(crate) from: u64,
@@ -345,6 +411,21 @@ impl Report {
         range: Range,
         buckets: bool,
     ) -> Result<Self, Failure> {
+        Self::parse_view(
+            value,
+            range,
+            if buckets {
+                View::Buckets
+            } else {
+                View::Summary
+            },
+        )
+    }
+    pub(crate) fn parse_view(
+        value: serde_json::Value,
+        range: Range,
+        view: View,
+    ) -> Result<Self, Failure> {
         let report: Self = serde_json::from_value(value)
             .map_err(|_| "Malformed Local usage response. Missing evidence is not zero.")?;
         let s = &report.status;
@@ -369,9 +450,14 @@ impl Report {
             .any(|n| n > SAFE)
             || !report.total.valid()
             || report.groups.len() > 100
-            || (!buckets && !report.groups.is_empty())
-            || report.truncated
-            || report.next.is_some()
+            || (view == View::Summary && !report.groups.is_empty())
+            || (view != View::Projects && (report.truncated || report.next.is_some()))
+            || (view == View::Projects
+                && (report.truncated != report.next.is_some()
+                    || report
+                        .next
+                        .as_ref()
+                        .is_some_and(|s| s.is_empty() || s.len() > 2048)))
         {
             return Err(
                 "Local usage response is unsupported or truncated. No partial trend or invented totals shown.",
@@ -381,6 +467,12 @@ impl Report {
         // then sort numerically after decoding.
         let mut seen = std::collections::HashSet::new();
         for group in &report.groups {
+            if !group.aggregate.valid() {
+                return Err("Invalid Local usage aggregate.");
+            }
+            if view != View::Buckets {
+                continue;
+            }
             let at = group
                 .key
                 .parse::<u64>()
@@ -400,23 +492,31 @@ impl Report {
 #[derive(Clone, Debug)]
 pub(crate) struct Snapshot {
     pub(crate) range: Range,
+    pub(crate) filter: Filter,
     pub(crate) summary: Report,
     pub(crate) trend: Result<Report, Failure>,
+    pub(crate) projects: Result<Catalogue, Failure>,
 }
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) serial: u64,
     pub(crate) range: Option<Range>,
+    pub(crate) filter: Filter,
+    pub(crate) catalogue: Option<Catalogue>,
     pub(crate) busy: bool,
     pub(crate) snapshot: Option<Snapshot>,
     pub(crate) error: Option<Failure>,
 }
 impl State {
-    pub(crate) fn begin(&mut self, range: Range) -> u64 {
+    pub(crate) fn begin(&mut self, range: Range, filter: Filter) -> u64 {
         self.serial += 1;
         if self.range.is_some_and(|r| r.from != range.from) {
+            self.catalogue = None;
+        }
+        if self.range.is_some_and(|r| r.from != range.from) || self.filter != filter {
             self.snapshot = None;
         }
+        self.filter = filter;
         self.range = Some(range);
         self.busy = true;
         self.error = None;
@@ -426,18 +526,45 @@ impl State {
         &mut self,
         serial: u64,
         range: Range,
+        filter: &Filter,
         result: Result<Snapshot, Failure>,
     ) -> bool {
-        if self.serial != serial || self.range != Some(range) || !self.busy {
+        if self.serial != serial
+            || self.range != Some(range)
+            || &self.filter != filter
+            || !self.busy
+        {
+            return false;
+        }
+        if result
+            .as_ref()
+            .is_ok_and(|s| s.range != range || &s.filter != filter)
+        {
             return false;
         }
         self.busy = false;
         match result {
             Ok(s) => {
+                if self
+                    .catalogue
+                    .as_ref()
+                    .is_some_and(|c| c.generation != s.summary.status.generation)
+                {
+                    self.catalogue = None;
+                }
+                if let Ok(c) = &s.projects {
+                    self.catalogue = Some(c.clone());
+                }
                 self.snapshot = Some(s);
                 self.error = None;
             }
-            Err(e) => self.error = Some(e),
+            Err(e) => {
+                if e == ERASED {
+                    self.snapshot = None;
+                    self.catalogue = None;
+                }
+                self.error = Some(e);
+            }
         }
         true
     }

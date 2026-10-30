@@ -1,13 +1,14 @@
 //! Mounted production Usage page, synthetic GET-only server, offscreen only.
 use crate::{
-    usage_overview::{DAY, Range},
+    usage_overview::{DAY, Filter, Range, View},
     usage_overview_fixture as f,
     usage_overview_view::Usage,
 };
 use gpui_kit::{
-    AppContext, Bounds, Entity, HeadlessAppContext, WindowBounds, WindowOptions,
+    AppContext, Bounds, Entity, EntityInputHandler, HeadlessAppContext, ScrollDelta, WindowBounds,
+    WindowOptions,
     component::{ActiveTheme, Theme, ThemeMode},
-    px, size,
+    point, px, size,
     test::TestWindowExt,
 };
 use std::time::{Duration, Instant};
@@ -28,6 +29,19 @@ fn until(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, v: &Entity<U
         settle(cx, h);
         std::thread::yield_now();
     }
+    settle(cx, h);
+}
+fn reveal(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, id: &'static str) {
+    cx.update_window(h, |_, w, cx| {
+        let viewport = w.find("usage-page").bounds();
+        let target = w.find(id).bounds();
+        w.scroll(
+            "usage-page",
+            ScrollDelta::Pixels(point(px(0.), viewport.top() + px(24.) - target.top())),
+            cx,
+        );
+    })
+    .unwrap();
     settle(cx, h);
 }
 pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
@@ -54,6 +68,10 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                     |w, cx| {
                         let v = cx.new(|cx| Usage::new(Some(s.options.clone()), cx));
                         v.update(cx, |v, cx| {
+                            v.project_names.insert(
+                                f::PROJECT.into(),
+                                "研究 👩‍💻 é · very long project label, historical usage".into(),
+                            );
                             v.focus(w, cx);
                             v.request(range, w, cx);
                         });
@@ -77,7 +95,7 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             until(cx, h, &v);
             assert!(cx.update(|cx| v.read(cx).state.error.is_none()));
-            cx.update_window(h, |_, w, cx| {
+            cx.update_window(h, |_, w, _| {
                 for id in [
                     "usage-title",
                     "usage-controls",
@@ -95,9 +113,11 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 let bars = w.find("usage-bars").bounds();
                 let a = w.find(format!("usage-day-{}", range.from + DAY)).bounds();
                 assert!(a.left() >= bars.left() && a.right() <= bars.right());
-                w.click("usage-details", cx);
             })
             .unwrap();
+            reveal(cx, h, "usage-details");
+            cx.update_window(h, |_, w, cx| w.click("usage-details", cx))
+                .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("usage-details-body").is_some())
@@ -129,6 +149,7 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("usage-details", cx))
                 .unwrap();
             settle(cx, h);
+            reveal(cx, h, "usage-title");
             if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
                 let dir = std::path::PathBuf::from(dir);
                 std::fs::create_dir_all(&dir).unwrap();
@@ -136,6 +157,160 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                     .unwrap()
                     .save(dir.join(format!("usage-{width}-{mode:?}.png")))
                     .unwrap();
+            }
+            // The real Kit selector, keyboard navigation, cancelled Unicode
+            // search and focus restoration. No query changes before Confirm.
+            let project = Filter::Project(f::PROJECT.into());
+            for filter in [&project, &Filter::Unattributed] {
+                f::install_filter(&s, range, filter);
+            }
+            let mut empty_project = f::report(range, false);
+            empty_project["total"]["records"] = 0.into();
+            empty_project["total"]["unpriced"] = 0.into();
+            empty_project["total"]["metrics"] = serde_json::json!({});
+            s.reply(
+                &f::scoped_path(&s.options, range, &project, View::Buckets),
+                f::Reply::json(200, empty_project.clone()),
+            );
+            s.reply(
+                &f::scoped_path(&s.options, range, &project, View::Summary),
+                f::Reply::json(200, empty_project),
+            );
+            let mut pending = f::Reply::json(200, f::report(range, false));
+            pending.delay_ms = 500;
+            s.reply(&f::path(&s.options, range, false), pending);
+            let mut limited = f::projects(range);
+            limited["truncated"] = true.into();
+            limited["next"] = "bounded-next-page-not-followed".into();
+            let project_path = f::scoped_path(&s.options, range, &Filter::All, View::Projects);
+            s.reply(&project_path, f::Reply::json(200, limited.clone()));
+            cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.request(range, w, cx)))
+                .unwrap();
+            let serial = cx.update(|cx| v.read(cx).state.serial);
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| v.focus(w, cx));
+            })
+            .unwrap();
+            // Traverse the actual native focus order, rather than assuming
+            // one Tab stop per composite control or a fixed allocation order.
+            let mut reached = false;
+            for _ in 0..16 {
+                cx.update_window(h, |_, w, cx| w.focus_next(cx)).unwrap();
+                settle(cx, h);
+                reached = cx
+                    .update_window(h, |_, w, cx| v.read(cx).probe_filter_focused(w, cx))
+                    .unwrap();
+                if reached {
+                    break;
+                }
+            }
+            assert!(reached, "project selector is keyboard reachable");
+            cx.update_window(h, |_, w, cx| w.press("space", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("研究 👩‍💻 é".into()));
+                w.press("secondary-v", cx);
+                let query = v.read(cx).probe_query(cx);
+                query.update(cx, |q, cx| {
+                    q.replace_and_mark_text_in_range(None, "に", Some(1..1), w, cx)
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            until(cx, h, &v);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("usage-project-limited").is_some());
+                let query = v.read(cx).probe_query(cx);
+                assert_eq!(query.read(cx).value().as_ref(), "研究 👩‍💻 éに");
+                query.update(cx, |q, cx| {
+                    assert!(
+                        q.marked_text_range(w, cx).is_some(),
+                        "async catalogue preserves native preedit"
+                    );
+                    q.unmark_text(w, cx);
+                });
+            })
+            .unwrap();
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            settle(cx, h);
+            assert_eq!(
+                cx.update(|cx| v.read(cx).state.serial),
+                serial,
+                "cancelled search does not read"
+            );
+            s.reply(
+                &f::path(&s.options, range, false),
+                f::Reply::json(200, f::report(range, false)),
+            );
+            // Escape restores trigger focus. Reopen and navigate to the project.
+            cx.update_window(h, |_, w, cx| w.press("space", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                .unwrap();
+            settle(cx, h);
+            until(cx, h, &v);
+            cx.update(|cx| {
+                assert_eq!(v.read(cx).state.filter, project);
+                assert_eq!(v.read(cx).state.snapshot.as_ref().unwrap().range, range);
+            });
+            cx.update_window(h, |_, w, _| assert!(w.try_find("usage-empty").is_some()))
+                .unwrap();
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(
+                        std::path::PathBuf::from(dir)
+                            .join(format!("usage-project-{width}-{mode:?}.png")),
+                    )
+                    .unwrap();
+            }
+            // A failed filtered refresh retains exactly that project's empty report.
+            s.reply(
+                &f::scoped_path(&s.options, range, &project, View::Summary),
+                f::Reply::json(503, serde_json::json!({})),
+            );
+            cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.request(range, w, cx)))
+                .unwrap();
+            until(cx, h, &v);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("usage-error").is_some());
+                assert!(w.try_find("usage-empty").is_some());
+            })
+            .unwrap();
+            // Choose authoritative missing attribution, then All again, with
+            // the restored native trigger, not direct state mutation.
+            for (key, count, expected) in
+                [("down", 1, Filter::Unattributed), ("up", 2, Filter::All)]
+            {
+                if expected == Filter::Unattributed {
+                    s.reply(&project_path, f::Reply::json(503, serde_json::json!({})));
+                } else {
+                    s.reply(&project_path, f::Reply::json(200, limited.clone()));
+                }
+                cx.update_window(h, |_, w, cx| w.click("usage-project-filter", cx))
+                    .unwrap();
+                settle(cx, h);
+                for _ in 0..count {
+                    cx.update_window(h, |_, w, cx| w.press(key, cx)).unwrap();
+                    settle(cx, h);
+                }
+                cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                    .unwrap();
+                settle(cx, h);
+                until(cx, h, &v);
+                assert_eq!(cx.update(|cx| v.read(cx).state.filter.clone()), expected);
+                if expected == Filter::Unattributed {
+                    cx.update_window(h, |_, w, _| {
+                        assert!(w.try_find("usage-project-error").is_some())
+                    })
+                    .unwrap();
+                    assert!(cx.update(|cx| v.read(cx).state.catalogue.is_some()));
+                }
             }
             // Longer ranges, billions per day and a 30-day retention floor stay contained.
             for days in [30u64, 90] {
@@ -197,6 +372,7 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             let mut report = f::report(empty, false);
             report["total"]["records"] = 0.into();
             report["total"]["unpriced"] = 0.into();
+            report["total"]["metrics"] = serde_json::json!({});
             s.reply(
                 &f::path(&s.options, empty, false),
                 f::Reply::json(200, report),

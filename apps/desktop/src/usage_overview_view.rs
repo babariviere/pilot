@@ -2,15 +2,38 @@
 use crate::{
     LocalOptions,
     ui::{self, Action, Notice, Space, Text, Tone},
-    usage_overview::{self as model, Day, Range, State},
+    usage_overview::{self as model, Day, Filter, Range, State},
     usage_overview_reader::{Reader, Request, Response},
 };
 use gpui_kit::{
-    App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, TestSupportExt, Window,
-    component::{ActiveTheme, Disableable, StyledExt, scroll::ScrollableElement},
+    App, AppContext, Context, DismissEvent, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
+    Window,
+    component::{
+        ActiveTheme, Disableable, StyledExt,
+        scroll::ScrollableElement,
+        select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    },
     div, px,
 };
+#[derive(Clone)]
+struct Item {
+    filter: Filter,
+    label: SharedString,
+}
+impl SelectItem for Item {
+    type Value = Filter;
+    fn value(&self) -> &Filter {
+        &self.filter
+    }
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        div().truncate().child(self.title())
+    }
+}
+type Picker = SelectState<SearchableVec<Item>>;
 pub(crate) struct Usage {
     pub(crate) state: State,
     options: Option<LocalOptions>,
@@ -19,6 +42,9 @@ pub(crate) struct Usage {
     days: u64,
     details: bool,
     focus: FocusHandle,
+    picker: Option<Entity<Picker>>,
+    subscriptions: Vec<Subscription>,
+    pub(crate) project_names: std::collections::BTreeMap<String, String>,
     pub(crate) limits: Option<gpui_kit::Entity<crate::provider_refresh_view::Limits>>,
 }
 impl Usage {
@@ -31,6 +57,9 @@ impl Usage {
             days: 7,
             details: false,
             focus: cx.focus_handle(),
+            picker: None,
+            subscriptions: vec![],
+            project_names: Default::default(),
             limits: None,
         }
     }
@@ -52,7 +81,24 @@ impl Usage {
         self.request(range, w, cx);
     }
     pub(crate) fn request(&mut self, range: Range, w: &mut Window, cx: &mut Context<Self>) {
-        let serial = self.state.begin(range);
+        self.request_filter(range, self.state.filter.clone(), w, cx);
+    }
+    fn request_filter(
+        &mut self,
+        range: Range,
+        filter: Filter,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.init_picker(w, cx);
+        let previous_generation = self
+            .state
+            .snapshot
+            .as_ref()
+            .map(|s| s.summary.status.generation.clone())
+            .or_else(|| self.state.catalogue.as_ref().map(|c| c.generation.clone()));
+        let serial = self.state.begin(range, filter);
+        self.sync_picker(w, cx);
         if self.reader.is_none() {
             let started = self
                 .options
@@ -61,14 +107,15 @@ impl Usage {
                 .and_then(Reader::start);
             match started {
                 Err(e) => {
-                    self.state.accept(serial, range, Err(e));
+                    self.state
+                        .accept(serial, range, &self.state.filter.clone(), Err(e));
                     cx.notify();
                     return;
                 }
                 Ok((reader, output)) => {
                     self.reader = Some(reader);
                     self.updates=Some(cx.spawn_in(w,async move |view,cx|{
-                        while let Ok(response)=output.recv().await {if view.update(cx,|v,cx|v.accept(response,cx)).is_err(){return;}}
+                        while let Ok(response)=output.recv().await {if view.update_in(cx,|v,w,cx|v.accept(response,w,cx)).is_err(){return;}}
                         let _=view.update(cx,|v,cx|{v.reader=None;v.state.serial+=1;v.state.busy=false;v.state.error=Some("Couldn't update usage. Showing the last values; refresh to try again.");cx.notify();});
                     }));
                 }
@@ -78,21 +125,109 @@ impl Usage {
             r.request(Request {
                 generation: serial,
                 target: Some(range),
+                previous_generation,
+                filter: self.state.filter.clone(),
             })
         }) {
             self.state.accept(
                 serial,
                 range,
+                &self.state.filter.clone(),
                 Err("Local usage request could not be queued. Refresh to retry."),
             );
         }
         cx.notify();
     }
-    fn accept(&mut self, response: Response, cx: &mut Context<Self>) {
+    fn init_picker(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.picker.is_some() {
+            return;
+        }
+        let picker =
+            cx.new(|cx| Picker::new(SearchableVec::new(vec![]), None, w, cx).searchable(true));
+        self.subscriptions.push(cx.subscribe_in(
+            &picker,
+            w,
+            |v, p, event: &SelectEvent<SearchableVec<Item>>, w, cx| {
+                if let SelectEvent::Confirm(Some(filter)) = event
+                    && p.read(cx).selected_value() == Some(filter)
+                    && &v.state.filter != filter
+                {
+                    // Selection is an explicit passive read, never a provider refresh.
+                    if let Some(range) = v.state.range {
+                        v.request_filter(range, filter.clone(), w, cx);
+                    }
+                }
+            },
+        ));
+        self.subscriptions.push(
+            cx.subscribe_in(&picker, w, |v, _, _: &DismissEvent, w, cx| {
+                v.sync_picker(w, cx)
+            }),
+        );
+        self.picker = Some(picker);
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_filter_focused(&self, w: &Window, cx: &App) -> bool {
+        self.picker
+            .as_ref()
+            .is_some_and(|p| p.focus_handle(cx).is_focused(w))
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_query(&self, cx: &App) -> Entity<gpui_kit::component::input::InputState> {
+        self.picker
+            .as_ref()
+            .expect("mounted project selector")
+            .read(cx)
+            .query_input(cx)
+    }
+    fn sync_picker(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self
-            .state
-            .accept(response.generation, response.range, response.result)
+            .picker
+            .as_ref()
+            .is_some_and(|p| p.read(cx).query_input(cx).focus_handle(cx).is_focused(w))
         {
+            // A completed history read must not reset an active search/IME.
+            // Dismissal applies the newest catalogue to this same retained picker.
+            return;
+        }
+        let mut filters = vec![Filter::All];
+        if let Some(c) = &self.state.catalogue {
+            filters.extend(c.filters.clone());
+        }
+        // Preserve an exact selected ID even when absent from this limited page.
+        if !filters.contains(&self.state.filter) {
+            filters.push(self.state.filter.clone());
+        }
+        if let Some(picker) = &self.picker {
+            let items: Vec<Item> = filters
+                .into_iter()
+                .map(|filter| {
+                    let label = match &filter {
+                        Filter::Project(id) => self
+                            .project_names
+                            .get(id)
+                            .map(|name| format!("{name} · {id}")),
+                        _ => None,
+                    }
+                    .unwrap_or_else(|| filter.label())
+                    .into();
+                    Item { filter, label }
+                })
+                .collect();
+            picker.update(cx, |p, cx| {
+                p.set_items(SearchableVec::new(items), w, cx);
+                p.set_selected_value(&self.state.filter, w, cx);
+            });
+        }
+    }
+    fn accept(&mut self, response: Response, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.accept(
+            response.generation,
+            response.range,
+            &response.filter,
+            response.result,
+        ) {
+            self.sync_picker(w, cx);
             cx.notify();
         }
     }
@@ -138,8 +273,56 @@ impl Render for Usage {
                 ),
             )
             .child(controls);
+        if let Some(picker) = &self.picker {
+            page = page.child(
+                div()
+                    .id("usage-project-filter")
+                    .test_support()
+                    .w_full()
+                    .max_w(px(440.))
+                    .min_w_0()
+                    .child(
+                        Select::new(picker)
+                            .accessibility_label("Historical usage project")
+                            .menu_max_h(px(260.)),
+                    ),
+            );
+        }
+        if self.state.catalogue.as_ref().is_some_and(|c| c.limited) {
+            page = page.child(
+                div()
+                    .id("usage-project-limited")
+                    .test_support()
+                    .child(ui::text(
+                        Text::Caption,
+                        "Project list limited to the first 100 ledger groups in this range.",
+                    )),
+            );
+        }
+        if self.state.error.is_some() && self.state.catalogue.is_some() {
+            page = page.child(ui::text(
+                Text::Caption,
+                "Project choices retained from a previous read.",
+            ));
+        }
+        if let Some(Err(error)) = self.state.snapshot.as_ref().map(|s| &s.projects) {
+            page = page.child(
+                div().id("usage-project-error").test_support().child(
+                    Notice::new(
+                        "Project list unavailable. Any retained choices are from a previous read.",
+                    )
+                    .detail(*error)
+                    .tone(Tone::Quiet),
+                ),
+            );
+        }
         if let Some(limits) = &self.limits {
-            page = page.child(limits.clone());
+            page = page
+                .child(ui::text(
+                    Text::Caption,
+                    "Subscription limits · all projects, independent of history filters",
+                ))
+                .child(limits.clone());
         }
         if let Some(range) = self.state.range {
             page = page.child(
@@ -169,7 +352,7 @@ impl Render for Usage {
             page=page.child(div().id("usage-coverage").test_support().v_flex().gap(px(Space::META))
                 .child(ui::text(Text::Headline,"Partial retained history"))
                 .child(ui::text(Text::Body,format!("Collected since {}. Local observation: {}.",model::date(status.coverage_started_at),model::stamp(report.queried_at))))
-                .child(ui::text(Text::Caption,format!("Observed range: {}",snapshot.range.label())))
+                .child(ui::text(Text::Caption,format!("{} · {}",snapshot.filter.label(),snapshot.range.label())))
                 .child(ui::text(Text::Caption,"Known subtotals only. Gaps and missing metrics prevent complete-account claims.").text_color(cx.theme().muted_foreground)));
             if report.total.records == 0 {
                 page = page.child(
@@ -292,14 +475,17 @@ impl Render for Usage {
                 page = page.child(details);
             }
         }
-        crate::local_view::menu_routing::window_commands(div())
-            .id("usage-page")
-            .test_support()
+        let content = crate::local_view::menu_routing::window_commands(div())
             .track_focus(&self.focus)
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .overflow_y_scrollbar()
-            .child(page)
+            .child(page);
+        div()
+            .id("usage-page")
+            .test_support()
+            .size_full()
+            .child(content)
     }
 }

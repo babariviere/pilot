@@ -1,17 +1,32 @@
-//! One explicit read at a time. Replacement/drop cancels both bounded GETs.
+//! One explicit read at a time. Replacement/drop cancels bounded passive GETs.
 #[cfg(test)]
 #[path = "usage_overview_reader_tests.rs"]
 mod tests;
 use crate::{
     LocalOptions,
-    usage_overview::{self as model, Range, Snapshot},
+    usage_overview::{self as model, Filter, Range, Snapshot, View},
 };
 use serde_json::Value;
 use std::time::Duration;
-pub(crate) fn url(options: &LocalOptions, range: Range, buckets: bool) -> reqwest::Url {
+pub(crate) fn url(
+    options: &LocalOptions,
+    range: Range,
+    filter: &Filter,
+    view: View,
+) -> reqwest::Url {
     let host = options.host();
-    let mut query = serde_json::json!({"version":1,"from":range.from,"to":range.to,"view":if buckets {"buckets"}else{"summary"}});
-    if buckets {
+    let mut query = serde_json::json!({"version":1,"from":range.from,"to":range.to,"view":match view { View::Summary => "summary", View::Buckets => "buckets", View::Projects => "breakdown" }});
+    if view == View::Projects {
+        query["dimension"] = "project".into();
+        query["limit"] = 100.into();
+    } else {
+        match filter {
+            Filter::All => {}
+            Filter::Project(id) => query["filters"] = serde_json::json!({"projectId": id}),
+            Filter::Unattributed => query["filters"] = serde_json::json!({"missing": ["project"]}),
+        }
+    }
+    if view == View::Buckets {
         query["bucketMs"] = model::DAY.into();
         query["limit"] = 100.into();
     }
@@ -27,32 +42,58 @@ pub(crate) async fn fetch(
     client: &reqwest::Client,
     options: &LocalOptions,
     range: Range,
+    filter: &Filter,
+    previous_generation: Option<&str>,
 ) -> Result<Snapshot, &'static str> {
-    if !range.valid() {
+    if !range.valid() || !filter.valid() {
         return Err("Usage range exceeds the bounded UTC window.");
     }
     let hello = crate::local_client::hello(client, options).await?;
     if hello["capabilities"]["usageQueries"] != 1 {
         return Err("Local does not support usage queries v1. Usage is unknown, not zero.");
     }
-    let summary =
-        model::Report::parse(get(client, url(options, range, false)).await?, range, false)?;
+    let summary = model::Report::parse(
+        get(client, url(options, range, filter, View::Summary)).await?,
+        range,
+        false,
+    )?;
+    if previous_generation.is_some_and(|g| g != summary.status.generation) {
+        return Err(model::ERASED);
+    }
+    // Observe erasure across every successful ledger response, even if the
+    // response's projection is later rejected as malformed/truncated.
+    let mut erased = false;
     let trend = async {
         crate::local_client::hello(client, options).await?;
-        let trend =
-            model::Report::parse(get(client, url(options, range, true)).await?, range, true)?;
-        if trend.status.generation != summary.status.generation {
-            return Err("Local usage history changed between reads. Refresh to retry.");
-        }
+        let value = get(client, url(options, range, filter, View::Buckets)).await?;
+        erased |= changed(&value, &summary.status.generation);
+        let trend = model::Report::parse(value, range, true)?;
         Ok(trend)
     }
     .await;
+    let projects = async {
+        crate::local_client::hello(client, options).await?;
+        let value = get(client, url(options, range, &Filter::All, View::Projects)).await?;
+        erased |= changed(&value, &summary.status.generation);
+        model::Catalogue::parse(value, range)
+    }
+    .await;
+    if erased {
+        return Err(model::ERASED);
+    }
     crate::local_client::hello(client, options).await?;
     Ok(Snapshot {
         range,
+        filter: filter.clone(),
         summary,
         trend,
+        projects,
     })
+}
+fn changed(value: &Value, generation: &str) -> bool {
+    value["status"]["generation"]
+        .as_str()
+        .is_some_and(|s| s != generation)
 }
 async fn get(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, &'static str> {
     let mut response = client
@@ -90,10 +131,13 @@ async fn get(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, &'sta
 pub(crate) struct Request {
     pub(crate) generation: u64,
     pub(crate) target: Option<Range>,
+    pub(crate) filter: Filter,
+    pub(crate) previous_generation: Option<String>,
 }
 pub(crate) struct Response {
     pub(crate) generation: u64,
     pub(crate) range: Range,
+    pub(crate) filter: Filter,
     pub(crate) result: Result<Snapshot, &'static str>,
 }
 pub(crate) struct Reader {
@@ -178,11 +222,12 @@ async fn run(
         };
         let result = tokio::select! {biased;
             r=events.recv()=>{match r {Ok(r)=>next=Some(r),Err(_)=>return};continue;},
-            value=fetch(&client,&options,range)=>value,
+            value=fetch(&client,&options,range,&request.filter,request.previous_generation.as_deref())=>value,
         };
         let response = Response {
             generation: request.generation,
             range,
+            filter: request.filter,
             result,
         };
         if let Err(async_channel::TrySendError::Full(r)) = updates.try_send(response) {

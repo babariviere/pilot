@@ -189,23 +189,116 @@ fn stale_range_serials_are_fenced_and_failed_refresh_retains_dated_snapshot() {
     let r = range();
     let snapshot = Snapshot {
         range: r,
+        filter: Filter::All,
+        projects: Err("unavailable"),
         summary: Report::parse(f::report(r, false), r, false).unwrap(),
         trend: Err("not available"),
     };
     let mut s = State::default();
-    let a = s.begin(r);
-    let b = s.begin(r);
-    assert!(!s.accept(a, r, Ok(snapshot.clone())));
-    assert!(s.accept(b, r, Ok(snapshot)));
+    let a = s.begin(r, Filter::All);
+    let b = s.begin(r, Filter::All);
+    assert!(!s.accept(a, r, &Filter::All, Ok(snapshot.clone())));
+    assert!(s.accept(b, r, &Filter::All, Ok(snapshot)));
     let newer = Range {
         to: r.to + 1000,
         ..r
     };
-    let c = s.begin(newer);
+    let c = s.begin(newer, Filter::All);
     assert!(s.snapshot.is_some());
-    assert!(s.accept(c, newer, Err("offline")));
+    assert!(s.accept(c, newer, &Filter::All, Err("offline")));
     assert_eq!(s.snapshot.as_ref().unwrap().range, r);
-    s.begin(Range::preset(30, r.to).unwrap());
+    s.begin(Range::preset(30, r.to).unwrap(), Filter::All);
     assert!(s.snapshot.is_none());
-    assert!(!s.accept(c, newer, Err("late")));
+    assert!(!s.accept(c, newer, &Filter::All, Err("late")));
+}
+
+#[test]
+fn catalogue_is_bounded_exact_and_only_null_means_unattributed() {
+    let r = range();
+    let mut v = f::projects(r);
+    let c = Catalogue::parse(v.clone(), r).unwrap();
+    assert_eq!(
+        c.filters,
+        vec![Filter::Project(f::PROJECT.into()), Filter::Unattributed]
+    );
+    assert!(!c.limited);
+    v["truncated"] = json!(true);
+    v["next"] = json!("opaque-next-page-not-followed");
+    assert!(Catalogue::parse(v.clone(), r).unwrap().limited);
+    for key in [
+        json!(f::PROJECT),
+        json!("\"null\""),
+        json!(""),
+        json!([]),
+        json!(55),
+        json!("not-a-uuid"),
+    ] {
+        let mut bad = v.clone();
+        bad["groups"][0]["key"] = key;
+        assert!(Catalogue::parse(bad, r).is_err());
+    }
+    v["groups"] = json!([v["groups"][0].clone(), v["groups"][0].clone()]);
+    assert!(Catalogue::parse(v, r).is_err());
+    let mut empty = f::report(r, false);
+    empty["total"]["records"] = json!(0);
+    empty["total"]["unpriced"] = json!(0);
+    assert!(
+        Catalogue::parse(empty, r).unwrap().filters.is_empty(),
+        "missing projection identity cannot imply Unattributed"
+    );
+}
+
+fn snapshot(r: Range, filter: Filter) -> Snapshot {
+    Snapshot {
+        range: r,
+        filter,
+        summary: Report::parse(f::report(r, false), r, false).unwrap(),
+        trend: Ok(Report::parse(f::report(r, true), r, true).unwrap()),
+        projects: Ok(Catalogue::parse(f::projects(r), r).unwrap()),
+    }
+}
+#[test]
+fn filter_races_retained_errors_and_erasure_do_not_mix_or_resurrect_scopes() {
+    let r = range();
+    let p = Filter::Project(f::PROJECT.into());
+    let mut s = State::default();
+    let a = s.begin(r, Filter::All);
+    assert!(s.accept(a, r, &Filter::All, Ok(snapshot(r, Filter::All))));
+    let b = s.begin(r, p.clone());
+    assert!(s.snapshot.is_none());
+    assert!(s.catalogue.is_some(), "same-range choices remain mounted");
+    assert!(!s.accept(a, r, &Filter::All, Err("obsolete error")));
+    assert!(!s.accept(b, r, &p, Ok(snapshot(r, Filter::All))));
+    assert!(s.busy);
+    assert!(s.accept(b, r, &p, Ok(snapshot(r, p.clone()))));
+    let c = s.begin(r, p.clone());
+    assert!(s.accept(c, r, &p, Err("offline")));
+    assert_eq!(s.snapshot.as_ref().unwrap().filter, p);
+    let d = s.begin(r, Filter::Unattributed);
+    assert!(s.snapshot.is_none());
+    assert!(s.accept(
+        d,
+        r,
+        &Filter::Unattributed,
+        Ok(snapshot(r, Filter::Unattributed))
+    ));
+    let clear = s.begin(r, Filter::Unattributed);
+    assert!(s.accept(clear, r, &Filter::Unattributed, Err(ERASED)));
+    assert!(s.snapshot.is_none() && s.catalogue.is_none());
+    assert!(!s.accept(
+        d,
+        r,
+        &Filter::Unattributed,
+        Ok(snapshot(r, Filter::Unattributed))
+    ));
+    let next = s.begin(r, p.clone());
+    let mut new = snapshot(r, p.clone());
+    new.summary.status.generation = "post-clear".into();
+    new.projects = Err("catalogue unavailable");
+    assert!(s.accept(next, r, &p, Ok(new)));
+    assert!(s.catalogue.is_none());
+    assert_eq!(
+        s.snapshot.as_ref().unwrap().summary.status.generation,
+        "post-clear"
+    );
 }

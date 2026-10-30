@@ -2,7 +2,7 @@
 pub(crate) use crate::mission_browser_fixture::{Reply, Server};
 use crate::{
     LocalOptions,
-    usage_overview::{DAY, Range},
+    usage_overview::{DAY, Filter, Range, View},
     usage_overview_reader::url,
 };
 use serde_json::{Value, json};
@@ -71,15 +71,50 @@ pub(crate) fn long_report(range: Range, buckets: bool) -> Value {
     v
 }
 pub(crate) fn path(options: &LocalOptions, range: Range, buckets: bool) -> String {
-    let url = url(options, range, buckets);
+    let url = url(
+        options,
+        range,
+        &Filter::All,
+        if buckets {
+            View::Buckets
+        } else {
+            View::Summary
+        },
+    );
     format!("{}?{}", url.path(), url.query().unwrap())
 }
 pub(crate) fn install(s: &Server, range: Range) {
+    install_filter(s, range, &Filter::All);
+}
+
+pub(crate) fn scoped_path(
+    options: &LocalOptions,
+    range: Range,
+    filter: &Filter,
+    view: View,
+) -> String {
+    let url = url(options, range, filter, view);
+    format!("{}?{}", url.path(), url.query().unwrap())
+}
+pub(crate) const PROJECT: &str = "550e8400-e29b-41d4-a716-446655440000";
+pub(crate) fn projects(range: Range) -> Value {
+    let mut v = report(range, false);
+    v["groups"] = json!([
+        {"key":json!(PROJECT).to_string(), "aggregate":aggregate()},
+        {"key":"null", "aggregate":aggregate()}
+    ]);
+    v
+}
+pub(crate) fn install_filter(s: &Server, range: Range, filter: &Filter) {
     s.reply("/api/hello", Reply::json(200, hello()));
-    for buckets in [false, true] {
+    for (view, buckets) in [(View::Summary, false), (View::Buckets, true)] {
         s.reply(
-            &path(&s.options, range, buckets),
+            &scoped_path(&s.options, range, filter, view),
             Reply::json(200, report(range, buckets)),
         );
     }
+    s.reply(
+        &scoped_path(&s.options, range, &Filter::All, View::Projects),
+        Reply::json(200, projects(range)),
+    );
 }
