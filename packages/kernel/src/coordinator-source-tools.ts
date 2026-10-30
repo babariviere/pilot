@@ -11,7 +11,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
 import { ASK_ATTACHMENTS, createAskTools } from "./ask-tools.ts";
-import type { ReadCoordinatorSources } from "./coordinator-sources.ts";
+import { coordinatorSkillRead } from "./coordinator-skill-resources.ts";
+import type { ReadCoordinatorSourceAccess } from "./coordinator-sources.ts";
 import { contained, sourceContentPath, sourcePath } from "./source-reader.ts";
 
 /** Direct native writes and applyPatch's existing guard share the same scratch-only check. */
@@ -37,7 +38,7 @@ export function assertCoordinatorScratchWrite(scratch: string, path: string): vo
 }
 
 export async function createCoordinatorSourceTools(
-	readScope: ReadCoordinatorSources,
+	readScope: ReadCoordinatorSourceAccess,
 	cwd: string,
 	checkConfiguredRead: (path: string, recursive: boolean) => void,
 ): Promise<ToolDefinition[]> {
@@ -57,10 +58,11 @@ export async function createCoordinatorSourceTools(
 			}),
 			async execute(_id, _args, signal) {
 				const scope = await readScope(signal);
+				const roots = { main: scope.main, members: scope.members, scratch: scope.scratch };
 				return {
-					content: [{ type: "text", text: JSON.stringify(scope) }],
+					content: [{ type: "text", text: JSON.stringify(roots) }],
 					details: undefined,
-					structuredContent: { ...scope },
+					structuredContent: roots,
 				};
 			},
 		}),
@@ -99,6 +101,17 @@ export async function createCoordinatorSourceTools(
 						)
 							selected = ASK_ATTACHMENTS;
 						sourceOnly = false;
+					}
+					if (template.name === "read" && (!selected || selected === root)) {
+						const resource = coordinatorSkillRead(absolute, scope.skills);
+						if (resource) {
+							if (root) sourceContentPath(root, absolute);
+							checkConfiguredRead(absolute, false);
+							selected = resource.root;
+							absolute = resource.path;
+							// Keep source alias/hardlink checks on skill references as well.
+							sourceOnly = true;
+						}
 					}
 					if (!selected)
 						throw new Error("Coordinator source path is outside current main, member workspaces and scratch");

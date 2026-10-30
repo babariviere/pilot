@@ -826,7 +826,13 @@ atomic descriptor-anchored filesystem walk: concurrent ancestor replacement, esp
 swapped during open and restored before revalidation, remains a known limitation. Do not infer hostile
 filesystem-race or content-provenance isolation from the native path scope.
 Scratch, known artifact skill files/pasted images and the installed Pi documentation/examples have
-separate read handling; no session-directory or shared repository-object-store grant is implied.
+separate read handling. Native reads also admit the resource loader's currently selected skill entry
+files and references inside each portable skill bundle, with loader-time alias anchors rechecked on
+each call. Standalone Markdown skills grant only their exact entry file; broad home/configuration
+containers never become skill-reference roots. These are read-only resources, not search, write or
+process grants. Paths mentioned in skill prose or user messages (for example, an image in Downloads)
+do not grant arbitrary external-file access. No session-directory or shared repository-object-store
+grant is implied.
 
 This native-tool scope is not arbitrary-process or hostile-extension isolation. Shells, background jobs,
 subagents and trusted extension callbacks do not inherit a native source grant. Existing OS write

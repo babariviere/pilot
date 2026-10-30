@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs, { link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type TestContext, test } from "node:test";
 import {
 	fauxAssistantMessage,
@@ -16,7 +16,7 @@ import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
 import type { CoordinatorSources } from "./coordinator-sources.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 
-async function fixture(t: TestContext, mode = "off") {
+async function fixture(t: TestContext, mode = "off", withSkills = false) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-source-admission-")));
 	const main = join(root, "main");
 	const member = join(root, "member");
@@ -30,6 +30,38 @@ async function fixture(t: TestContext, mode = "off") {
 		else process.env.PI_CODING_AGENT_DIR = previousAgent;
 	});
 	for (const path of [main, member, scratch, other, agentDir, `${main}-unrelated`]) await mkdir(path);
+	const skillRoot = join(root, "personal-skills");
+	const skillEntries: string[] = [];
+	if (withSkills) {
+		for (const name of ["chezmoi", "commit", "tldraw-offline", "rex"]) {
+			const directory = join(skillRoot, name);
+			await mkdir(join(directory, "references"), { recursive: true });
+			const entry = join(directory, "SKILL.md");
+			await writeFile(
+				entry,
+				`---\nname: ${name}\ndescription: Fixture skill ${name}.\n---\nRead references/guide.md.\n`,
+			);
+			await writeFile(join(directory, "references", "guide.md"), `SELECTED_SKILL_REFERENCE_${name}`);
+			skillEntries.push(entry);
+		}
+		// A host-selected symlinked bundle is usable, but its anchor cannot silently retarget later.
+		await symlink(join(skillRoot, "rex"), join(main, "skill-alias"));
+		skillEntries[3] = join(main, "skill-alias", "SKILL.md");
+	}
+	const resourcePaths = [...skillEntries];
+	if (withSkills) {
+		for (const [path, name] of [
+			[join(root, "standalone.md"), "standalone"],
+			[join(agentDir, "SKILL.md"), "container"],
+		] as const) {
+			await writeFile(
+				path,
+				`---\nname: ${name}\ndescription: Fixture exact-file skill.\n---\nSELECTED_EXACT_FILE\n`,
+			);
+			resourcePaths.push(path);
+		}
+	}
+	let advertiseSkills = true;
 	for (const path of [main, member]) {
 		await writeFile(
 			join(path, "entry.ts"),
@@ -40,7 +72,10 @@ async function fixture(t: TestContext, mode = "off") {
 	}
 	await writeFile(join(other, "secret.ts"), "UNRELATED_SOURCE");
 	await writeFile(join(`${main}-unrelated`, "secret.ts"), "UNRELATED_SOURCE");
-	await writeFile(join(agentDir, "sandbox.json"), JSON.stringify({ mode, denyRead: [join(main, "private")] }));
+	await writeFile(
+		join(agentDir, "sandbox.json"),
+		JSON.stringify({ mode, denyRead: [join(main, "private"), join(skillRoot, "commit", "references", "guide.md")] }),
+	);
 	await mkdir(join(main, "private"));
 	await writeFile(join(main, "private", "denied.txt"), "CONFIG_DENIED");
 	let scope: CoordinatorSources = { main, members: [{ sessionId: "member", path: member }], scratch };
@@ -68,7 +103,14 @@ async function fixture(t: TestContext, mode = "off") {
 			return snapshot;
 		},
 		settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }),
-		loaderOptions: { cwd: scratch, agentDir, noSkills: true, noContextFiles: true },
+		loaderOptions: {
+			cwd: scratch,
+			agentDir,
+			noSkills: true,
+			noContextFiles: true,
+			additionalSkillPaths: resourcePaths,
+			skillsOverride: (loaded) => (advertiseSkills ? loaded : { ...loaded, skills: [] }),
+		},
 		sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
 	});
 	t.after(async () => {
@@ -109,6 +151,13 @@ async function fixture(t: TestContext, mode = "off") {
 		scratch,
 		other,
 		adapter,
+		skillRoot,
+		skillEntries,
+		resourcePaths,
+		agentDir,
+		removeSkills: () => {
+			advertiseSkills = false;
+		},
 		execute,
 		admissions: () => admissions,
 		revoke: () => {
@@ -119,6 +168,129 @@ async function fixture(t: TestContext, mode = "off") {
 		},
 	};
 }
+
+test("host-advertised coordinator skills and bundle references remain readable direct and nested", async (t) => {
+	const f = await fixture(t, "off", true);
+	assert.deepEqual(
+		f.adapter.session.resourceLoader.getSkills().skills.map((skill) => skill.filePath),
+		f.resourcePaths,
+	);
+	for (const nested of [false, true]) {
+		await t.test(nested ? "nested" : "direct", async () => {
+			for (const path of f.skillEntries.flatMap((entry) => [
+				entry,
+				join(dirname(entry), "references", "guide.md"),
+			])) {
+				const result = await f.execute(
+					nested ? "codemode" : "read",
+					nested ? { code: `text(await tools.read({path:${JSON.stringify(path)}}));` } : { path },
+				);
+				assert.ok(!result.isError, JSON.stringify(result));
+				assert.match(JSON.stringify(result), /Fixture skill|SELECTED_SKILL_REFERENCE/);
+			}
+		});
+	}
+	for (const path of [join(f.skillRoot, "rex", "references", "guide.md"), ...f.resourcePaths.slice(4)]) {
+		const result = await f.execute("read", { path });
+		assert.ok(!result.isError, JSON.stringify(result));
+		assert.match(JSON.stringify(result), /SELECTED_SKILL_REFERENCE_rex|SELECTED_EXACT_FILE/);
+	}
+	const roots = await f.execute("source_roots", {});
+	assert.deepEqual(Object.keys(roots.structuredContent!), ["main", "members", "scratch"]);
+});
+
+test("skill resources do not grant external references, parent roots, search or writes", async (t) => {
+	const f = await fixture(t, "workspace-write", true);
+	const downloads = join(f.root, "Downloads");
+	await mkdir(downloads);
+	const external = [
+		join(downloads, "callstack.jpeg"),
+		join(f.agentDir, "settings-secret.txt"),
+		join(f.root, "standalone-neighbor.md"),
+		join(f.skillRoot, "unadvertised", "SKILL.md"),
+	];
+	await mkdir(dirname(external[3]!), { recursive: true });
+	for (const path of external) await writeFile(path, "UNGRANTED_SKILL_NEIGHBOR");
+	const guide = join(f.skillRoot, "chezmoi", "references", "guide.md");
+	await writeFile(guide, `SELECTED_SKILL_REFERENCE\nRead ${external[0]}.`);
+	const deniedReference = join(f.skillRoot, "commit", "references", "guide.md");
+	const calls = [
+		...external.map((path) => ["read", { path }]),
+		["read", { path: deniedReference }],
+		["ls", { path: dirname(guide) }],
+		["find", { path: f.skillRoot, pattern: "*" }],
+		["grep", { path: f.skillRoot, pattern: "SELECTED" }],
+		["code_search", { path: f.skillRoot, query: "SELECTED" }],
+		["write", { path: guide, content: "mutated" }],
+		["edit", { path: guide, oldText: "SELECTED", newText: "mutated" }],
+		[
+			"applyPatch",
+			{ patch: `*** Begin Patch\n*** Add File: ${join(dirname(guide), "new.md")}\n+mutated\n*** End Patch` },
+		],
+	] as [string, JsonObject][];
+	for (const [name, args] of calls) {
+		const result = await f.execute(name, args);
+		assert.ok(result.isError, `${name}: ${JSON.stringify(result)}`);
+		assert.doesNotMatch(JSON.stringify(result.content), /UNGRANTED_SKILL_NEIGHBOR|SELECTED_SKILL_REFERENCE_commit/);
+		if (name === "read" && external.includes(args.path as string))
+			assert.match(JSON.stringify(result.content), /outside current main/);
+	}
+	const nested = await f.execute("codemode", {
+		code: `
+for (const [name,args] of ${JSON.stringify(calls)}) {
+ try { text(await tools[name](args)); text('ESCAPED'); }
+ catch { text('DENIED:'+name); }
+}`,
+	});
+	assert.ok(!nested.isError, JSON.stringify(nested));
+	assert.doesNotMatch(JSON.stringify(nested), /ESCAPED|UNGRANTED_SKILL_NEIGHBOR|SELECTED_SKILL_REFERENCE_commit/);
+	assert.match(await readFile(guide, "utf8"), /^SELECTED_SKILL_REFERENCE/);
+	await assert.rejects(readFile(join(dirname(guide), "new.md")), { code: "ENOENT" });
+	assert.ok(!(await f.execute("read", { path: guide })).isError);
+	assert.match(JSON.stringify(await f.execute("read", { path: deniedReference })), /denied by mode/);
+});
+
+test("skill references retain alias guards and resource reload revokes direct/nested reads", async (t) => {
+	const f = await fixture(t, "off", true);
+	const referenceDir = join(f.skillRoot, "chezmoi", "references");
+	await symlink(join(f.other, "secret.ts"), join(referenceDir, "symlink.md"));
+	await link(join(f.other, "secret.ts"), join(referenceDir, "hardlink.md"));
+	await mkdir(join(f.skillRoot, "chezmoi", ".git"));
+	await writeFile(join(f.skillRoot, "chezmoi", ".git", "config"), "UNRELATED_METADATA");
+	for (const path of [
+		join(referenceDir, "symlink.md"),
+		join(referenceDir, "hardlink.md"),
+		join(f.skillRoot, "chezmoi", ".git", "config"),
+	]) {
+		assert.ok((await f.execute("read", { path })).isError);
+		const nested = await f.execute("codemode", {
+			code: `try { text(await tools.read({path:${JSON.stringify(path)}})); text('ESCAPED'); } catch { text('DENIED'); }`,
+		});
+		assert.ok(!nested.isError, JSON.stringify(nested));
+		assert.doesNotMatch(JSON.stringify(nested), /ESCAPED|UNRELATED_SOURCE|UNRELATED_METADATA/);
+	}
+	const alias = join(f.main, "skill-alias");
+	await rm(alias);
+	await symlink(f.other, alias);
+	for (const path of [join(alias, "secret.ts"), join(f.skillRoot, "rex", "references", "guide.md")]) {
+		const result = await f.execute("read", { path });
+		assert.ok(result.isError);
+		assert.doesNotMatch(JSON.stringify(result.content), /UNRELATED_SOURCE|SELECTED_SKILL_REFERENCE_rex/);
+	}
+	await f.adapter.session.reload();
+	assert.ok(!(await f.execute("read", { path: f.skillEntries[0]! })).isError, "reload retains selected resources");
+	f.removeSkills();
+	await f.adapter.session.reload();
+	assert.equal(f.adapter.session.resourceLoader.getSkills().skills.length, 0);
+	const path = join(referenceDir, "guide.md");
+	assert.ok((await f.execute("read", { path })).isError);
+	const nested = await f.execute("codemode", {
+		code: `try { text(await tools.read({path:${JSON.stringify(path)}})); text('ESCAPED'); } catch { text('REVOKED'); }`,
+	});
+	assert.ok(!nested.isError, JSON.stringify(nested));
+	assert.match(JSON.stringify(nested), /REVOKED/);
+	assert.doesNotMatch(JSON.stringify(nested), /ESCAPED|SELECTED_SKILL_REFERENCE/);
+});
 
 test("coordinator native direct/nested source tools use current owned roots, not scratch cwd", async (t) => {
 	const f = await fixture(t);

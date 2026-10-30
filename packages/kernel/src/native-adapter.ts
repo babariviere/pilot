@@ -71,6 +71,7 @@ import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts"
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { memoryCachePayload } from "./coordinator-memory.ts";
 import { coordinatorMemoryModel } from "./coordinator-memory-model.ts";
+import { type CoordinatorSkillResource, snapshotCoordinatorSkills } from "./coordinator-skill-resources.ts";
 import { coordinatorSourceBridge } from "./coordinator-sources.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { DIAGNOSTIC_CONTEXT_TOOL } from "./diagnostic-context-tool.ts";
@@ -487,6 +488,7 @@ export class NativeAdapter {
 				renderPrompt = () => event.systemPrompt;
 			});
 		};
+		let coordinatorSkills: readonly CoordinatorSkillResource[] = [];
 		const loader = bundledResourceLoader(
 			readOnly
 				? {
@@ -519,13 +521,24 @@ export class NativeAdapter {
 						agentDir,
 						settingsManager,
 						additionalSkillPaths: [...artifactSkillPaths, ...(options.loaderOptions?.additionalSkillPaths ?? [])],
+						...(options.coordinatorSources
+							? {
+									skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
+										const selected = options.loaderOptions?.skillsOverride?.(loaded) ?? loaded;
+										coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);
+										return selected;
+									},
+								}
+							: {}),
 						extensionFactories: [
 							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),
 							...(options.hostExtensions ?? []),
-							...(options.coordinatorSources ? [coordinatorSourceBridge(options.coordinatorSources)] : []),
+							...(options.coordinatorSources
+								? [coordinatorSourceBridge(options.coordinatorSources, () => coordinatorSkills)]
+								: []),
 							...toolActivityFactories,
 							capture,
 						],
