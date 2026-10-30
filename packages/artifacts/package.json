@@ -14,7 +14,7 @@
 		"esbuild": "0.28.2",
 		"glslang-wasm-validator": "0.1.0",
 		"mermaid": "12.2.0",
-		"motion": "14.7.1",
+		"motion": "14.8.0",
 		"naga-wasm": "30.2.0",
 		"playwright": "1.64.1",
 		"quickjs-wasi": "3.6.3",
