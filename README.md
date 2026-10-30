@@ -228,6 +228,8 @@ launchd or systemd --user executes the verified immutable retained runtime indep
 GUI lifetime. Separately confirmed [daemon upgrades](apps/desktop/docs/daemon-upgrades.md)
 can replace a proven Swift launch agent while preserving its label, profile and PilotPower.
 Active jobs or failed inspection defer the switch; GUI installation itself never pauses agents.
+Drained, job-free subagents checkpoint and exit before the daemon switch, then resume their
+unfinished work without replaying completed tools. Unknown child processes still block it.
 Production macOS GUI updates admit up to four verified prior same-protocol runtimes,
 so installing a new GUI can leave the existing daemon running. macOS startup reconnects
 without publishing another runtime copy, including when the retained store is full.

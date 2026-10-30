@@ -1634,6 +1634,11 @@ export class KernelSession {
 		}
 	}
 
+	async checkpointForUpdate(): Promise<void> {
+		if (!this.#updateToolsPaused) throw new Error("Agents are not paused for update");
+		await this.subagents.lifecycle("checkpoint");
+	}
+
 	hasChildren(): Promise<boolean> {
 		return this.adapter.hasChildren();
 	}

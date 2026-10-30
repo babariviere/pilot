@@ -175,6 +175,7 @@ overrides:
   '@earendil-works/pi-tui': 1.4.0
 
 patchedDependencies:
+  '@babariviere/pi-extensions@0.1.0': 93ac376c8cf0474dce8e1e4142c478fe92c3f89d8fea64673a20ecb40f370c1a
   '@earendil-works/pi-coding-agent@1.4.0': e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1
   '@earendil-works/pi-durable@1.4.0': de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f
 
@@ -308,7 +309,7 @@ importers:
     dependencies:
       '@babariviere/pi-extensions':
         specifier: git+https://github.com/babariviere/pi-extensions.git#8a7655ee43b87a7fd57290c2cf55e8b6eed3a056
-        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/8a7655ee43b87a7fd57290c2cf55e8b6eed3a056(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0))(@earendil-works/pi-coding-agent@1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0))(@earendil-works/pi-tui@1.4.0)(@smithy/signature-v4@5.7.4)(typebox@1.4.3)(undici@8.12.3)
+        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/8a7655ee43b87a7fd57290c2cf55e8b6eed3a056(patch_hash=93ac376c8cf0474dce8e1e4142c478fe92c3f89d8fea64673a20ecb40f370c1a)(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0))(@earendil-works/pi-coding-agent@1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0))(@earendil-works/pi-tui@1.4.0)(@smithy/signature-v4@5.7.4)(typebox@1.4.3)(undici@8.12.3)
       '@babel/parser':
         specifier: 8.0.8
         version: 8.0.8
@@ -2141,7 +2142,7 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
-  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/8a7655ee43b87a7fd57290c2cf55e8b6eed3a056(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0))(@earendil-works/pi-coding-agent@1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0))(@earendil-works/pi-tui@1.4.0)(@smithy/signature-v4@5.7.4)(typebox@1.4.3)(undici@8.12.3)':
+  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/8a7655ee43b87a7fd57290c2cf55e8b6eed3a056(patch_hash=93ac376c8cf0474dce8e1e4142c478fe92c3f89d8fea64673a20ecb40f370c1a)(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0))(@earendil-works/pi-coding-agent@1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0))(@earendil-works/pi-tui@1.4.0)(@smithy/signature-v4@5.7.4)(typebox@1.4.3)(undici@8.12.3)':
     dependencies:
       '@earendil-works/chord': 1.4.0
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)

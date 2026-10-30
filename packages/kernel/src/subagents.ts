@@ -110,7 +110,7 @@ export class SubagentBridge {
 	}
 
 	/** Host-only lifecycle, deliberately without the ordinary command deadline. */
-	lifecycle(action: "quiesce" | "resumeTools"): Promise<void> {
+	lifecycle(action: "quiesce" | "checkpoint" | "resumeTools"): Promise<void> {
 		if (!this.#seen) return Promise.resolve();
 		const events = this.#events;
 		if (!events) return Promise.reject(new Error("Subagents are unavailable"));

@@ -24,5 +24,6 @@ allowBuilds:
   "@google/genai": true
 
 patchedDependencies:
+  '@babariviere/pi-extensions@0.1.0': patches/@babariviere__pi-extensions@0.1.0.patch
   '@earendil-works/pi-coding-agent@1.4.0': patches/@earendil-works__pi-coding-agent@1.4.0.patch
   '@earendil-works/pi-durable@1.4.0': patches/@earendil-works__pi-durable@1.4.0.patch

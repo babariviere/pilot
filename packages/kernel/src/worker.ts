@@ -398,6 +398,10 @@ export function runKernelWorker(): void {
 			case "inspectChildren":
 				await send({ type: "children", requestId: command.requestId, hasChildren: await session.hasChildren() });
 				break;
+			case "checkpointUpdate":
+				await session.checkpointForUpdate();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "watch":
 				await session.watch(
 					command.watchId,

@@ -1,0 +1,329 @@
+diff --git a/extensions/subagents/conversation-backend.ts b/extensions/subagents/conversation-backend.ts
+index 6c8bcd3b2d09b271dd026ee77e35d75dafb5ca6e..8f3cc1ab8b679d8f65768b425ffe41935ebae02e 100644
+--- a/extensions/subagents/conversation-backend.ts
++++ b/extensions/subagents/conversation-backend.ts
+@@ -25,6 +25,7 @@ export interface WorkerConnection {
+ 	stop(id: string): Promise<WorkerStatus>;
+ 	pause(): Promise<void>;
+ 	quiesce?(): Promise<void>;
++	checkpoint?(): Promise<void>;
+ 	resumeTools?(): void;
+ 	cancel(): Promise<void>;
+ }
+@@ -239,6 +240,24 @@ export function openConversationWorker(
+ 			await request({ type: "quiesce", id: randomUUID(), revision: ++toolsRevision }, 0);
+ 		},
+ 		resumeTools: () => send({ type: "resumeTools", revision: ++toolsRevision }),
++		checkpoint: async () => {
++			if (closing) throw new Error("Subagent worker is closing");
++			const checkpointed = (async () => {
++				// Unlike ordinary teardown, checkpoint must never kill on a deadline or infer
++				// success from exit alone. Require the durable ACK AND a clean observed exit.
++				await request({ type: "checkpoint", id: randomUUID(), revision: toolsRevision }, 0);
++				await closed;
++				if (child.exitCode !== 0 || child.signalCode !== null)
++					throw new Error(`Subagent checkpoint exit failed: ${child.exitCode}/${child.signalCode}`);
++			})();
++			closing = checkpointed;
++			try {
++				await checkpointed;
++			} catch (error) {
++				if (!ended) closing = undefined;
++				throw error;
++			}
++		},
+ 		pause: () => close("pause"),
+ 		cancel: () => close("cancel"),
+ 	};
+diff --git a/extensions/subagents/conversation-worker.ts b/extensions/subagents/conversation-worker.ts
+index f5c710ab4a2d07aa8601a3e7193914fc18e57fca..5de728e62b35cffe536aaeea52f33bbf40dfb733 100644
+--- a/extensions/subagents/conversation-worker.ts
++++ b/extensions/subagents/conversation-worker.ts
+@@ -5,7 +5,7 @@ import { buildNightContract } from "../night-mode/night-run.ts";
+ import { ConversationRuntime, type ConversationRuntimeOptions, type ReporterHandle } from "./conversation-runtime.ts";
+ import { openDurableStorage } from "./durable-storage.ts";
+ import { runCwd, type RunContext, type RunRequest } from "./run.ts";
+-import type { WorkerCommand, WorkerPacket, WorkerSpec } from "./worker-protocol.ts";
++import type { WorkerCommand, WorkerPacket, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
+ 
+ export type { WorkerCommand, WorkerPacket } from "./worker-protocol.ts";
+ type WorkerEvent = "message" | "disconnect" | "SIGTERM" | "SIGINT";
+@@ -13,7 +13,7 @@ export interface WorkerHost {
+ 	on(event: WorkerEvent, listener: (message?: unknown) => void): void;
+ 	off(event: WorkerEvent, listener: (message?: unknown) => void): void;
+ 	send(packet: WorkerPacket): Promise<void>;
+-	exit(code: number): void;
++	exit(code: number, checkpointed?: boolean): void;
+ }
+ export interface WorkerAdapter {
+ 	models: ConversationRuntimeOptions["models"];
+@@ -25,6 +25,7 @@ export interface WorkerAdapter {
+ 	prepareInput?(content: string): Promise<string>;
+ 	waitForSubscription?(signal?: AbortSignal): Promise<void>;
+ 	close(): Promise<void>;
++	checkpointSafe?(): Promise<void>;
+ }
+ export interface WorkerDependencies {
+ 	openStorage(directory: string): Promise<{ storage: Storage; release(): void }>;
+@@ -55,24 +56,29 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
+ 	let initialization: Promise<void> | undefined;
+ 	let commands: Promise<void> = Promise.resolve();
+ 	let toolsRevision = 0;
++	let quiescedRevision: number | undefined;
+ 	let mode: "pause" | "cancel" | undefined;
+ 	let ending: Promise<void> | undefined;
+ 	let disconnected = false;
+ 	let exited = false;
+ 	const observing = new Set<string>();
+-	const exit = (code: number) => {
++	const exit = (code: number, checkpointed = false) => {
+ 		if (exited) return;
+ 		exited = true;
+ 		host.off("message", onMessage);
+ 		host.off("disconnect", onDisconnect);
+ 		host.off("SIGTERM", onPause);
+ 		host.off("SIGINT", onPause);
+-		host.exit(code);
++		host.exit(code, checkpointed);
+ 	};
+ 	const send = async (packet: WorkerPacket) => {
+ 		if (!disconnected && !exited) await host.send(packet);
+ 	};
+-	const finish = (nextMode: NonNullable<typeof mode>, failure?: unknown): Promise<void> => {
++	const finish = (
++		nextMode: NonNullable<typeof mode>,
++		failure?: unknown,
++		checkpoint?: { id: string; status: WorkerStatus },
++	): Promise<void> => {
+ 		if (ending) return ending;
+ 		mode = nextMode;
+ 		ending = (async () => {
+@@ -112,12 +118,13 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
+ 			}
+ 			try {
+ 				if (cleanupError) await send({ type: "error", error: errorText(cleanupError) });
++				else if (checkpoint) await send({ type: "checkpointed", ...checkpoint });
+ 				else if (nextMode === "pause") await send({ type: "paused" });
+ 			} catch {
+ 				/* Parent disappeared during acknowledgment. Durable receipts remain available. */
+ 			} finally {
+ 				clearTimeout(watchdog);
+-				exit(cleanupError ? 1 : 0);
++				exit(cleanupError ? 1 : 0, !!checkpoint && !cleanupError);
+ 			}
+ 		})();
+ 		return ending;
+@@ -233,6 +240,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
+ 		if (!message || typeof message !== "object" || mode) return;
+ 		const packet = message as WorkerCommand;
+ 		if (packet.type === "resumeTools") {
++			quiescedRevision = undefined;
+ 			toolsRevision = Math.max(toolsRevision, packet.revision);
+ 			runtime?.resumeTools();
+ 			return;
+@@ -243,11 +251,27 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
+ 				await initialization;
+ 				await commands;
+ 				if (!runtime || mode) throw new Error("Worker is unavailable");
+-				if (toolsRevision === packet.revision) await runtime.quiesce();
++				if (toolsRevision === packet.revision) {
++					await runtime.quiesce();
++					if (toolsRevision === packet.revision) quiescedRevision = packet.revision;
++				}
+ 				await send({ type: "quiesced", id: packet.id, status: await runtime.status() });
+ 			})().catch((error) => send({ type: "error", id: packet.id, error: errorText(error) }).catch(() => {}));
+ 			return;
+ 		}
++		if (packet.type === "checkpoint") {
++			void (async () => {
++				await initialization;
++				await commands;
++				if (!runtime || !adapter?.checkpointSafe || mode || quiescedRevision !== packet.revision)
++					throw new Error("Subagent checkpoint requires an acknowledged tool drain");
++				await adapter.checkpointSafe();
++				const status = await runtime.status();
++				if (quiescedRevision !== packet.revision) throw new Error("Subagent pause changed");
++				await finish("pause", undefined, { id: packet.id, status });
++			})().catch((error) => send({ type: "error", id: packet.id, error: errorText(error) }).catch(() => {}));
++			return;
++		}
+ 		if (packet.type === "pause") {
+ 			onPause();
+ 			return;
+@@ -300,9 +324,9 @@ if (typeof process.send === "function") {
+ 				}
+ 				process.send!(packet, (error: Error | null) => (error ? reject(error) : resolve()));
+ 			}),
+-		exit: (code) => {
++		exit: (code, checkpointed) => {
+ 			// Only kill a detached private process group, never the caller's inherited group.
+-			if (process.platform !== "win32") {
++			if (!checkpointed && process.platform !== "win32") {
+ 				try {
+ 					process.kill(-process.pid, "SIGKILL");
+ 				} catch {
+diff --git a/extensions/subagents/durable-supervisor.ts b/extensions/subagents/durable-supervisor.ts
+index 355daa6592416a509f139c40f95cfa23361ed6b9..15b0c334aed5bb375d1c89b716c323048e668377 100644
+--- a/extensions/subagents/durable-supervisor.ts
++++ b/extensions/subagents/durable-supervisor.ts
+@@ -144,6 +144,9 @@ export class DurableSupervisor {
+ 	#closed = false;
+ 	#pausing = false;
+ 	#updatePaused = false;
++	#toolsRevision = 0;
++	#checkpointing?: Promise<void>;
++	#checkpointFailure?: { error: unknown };
+ 	#failure?: Error;
+ 	#attempts = new Map<string, number>();
+ 	#retries = new Map<string, ReturnType<typeof setTimeout>>();
+@@ -203,6 +206,7 @@ export class DurableSupervisor {
+ 		this.#listeners.clear();
+ 	}
+ 	async quiesce(): Promise<void> {
++		this.#toolsRevision++;
+ 		this.#updatePaused = true;
+ 		for (const timer of this.#retries.values()) clearTimeout(timer);
+ 		this.#retries.clear();
+@@ -218,7 +222,35 @@ export class DurableSupervisor {
+ 		);
+ 		await Promise.all([...this.#serial.values()]);
+ 	}
+-	resumeTools(): void {
++	/** Retire only drained, job-free children; pending inputs stay durable for recovery. */
++	checkpoint(): Promise<void> {
++		if (!this.#updatePaused) return Promise.reject(new Error("Subagents are not paused"));
++		if (this.#checkpointFailure) return Promise.reject(this.#checkpointFailure.error);
++		this.#checkpointing ??= (async () => {
++			try {
++				const results = await Promise.allSettled(
++					[...this.#workers.values()].map(async (worker) => {
++						if (!worker.connection.checkpoint) throw new Error("Subagent worker cannot checkpoint");
++						await worker.connection.checkpoint();
++					}),
++				);
++				const failed = results.find((result) => result.status === "rejected");
++				if (failed?.status === "rejected") throw failed.reason;
++			} catch (error) {
++				this.#checkpointFailure = { error };
++				throw error;
++			} finally {
++				this.#checkpointing = undefined;
++			}
++		})();
++		return this.#checkpointing;
++	}
++	async resumeTools(): Promise<void> {
++		const revision = ++this.#toolsRevision;
++		// A cancelled handoff cannot resume a child while its checkpoint is closing storage.
++		if (this.#checkpointing) await this.#checkpointing.catch(() => {});
++		if (revision !== this.#toolsRevision) return;
++		this.#checkpointFailure = undefined;
+ 		this.#updatePaused = false;
+ 		for (const worker of this.#workers.values()) worker.connection.resumeTools?.();
+ 		for (const record of this.#records.values()) {
+diff --git a/extensions/subagents/host-events.ts b/extensions/subagents/host-events.ts
+index 5e4cc9a69005ed54fb9662441b0779a7a76c78e3..a12b8b6f407cff2f8d7f8d21f1134bbd71cb4cae 100644
+--- a/extensions/subagents/host-events.ts
++++ b/extensions/subagents/host-events.ts
+@@ -41,6 +41,7 @@ export type SubagentHostCommand =
+ 	| { requestId: string; action: "send"; name: string; message: string; followUp?: boolean }
+ 	| { requestId: string; action: "stop"; name: string }
+ 	| { requestId: string; action: "quiesce" }
++	| { requestId: string; action: "checkpoint" }
+ 	| { requestId: string; action: "resumeTools" };
+ 
+ export interface SubagentHostCommandResult {
+diff --git a/extensions/subagents/index.ts b/extensions/subagents/index.ts
+index a85b72066b20d39a817a86d0b69d1960d94071ae..8b98117608a43aa58f3f484297027b316b41a796 100644
+--- a/extensions/subagents/index.ts
++++ b/extensions/subagents/index.ts
+@@ -244,9 +244,14 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps
+ 				try {
+ 					if (current !== generation || supervisor !== owner)
+ 						throw new Error("Subagents session is not initialized");
+-					if (command.action === "quiesce" || command.action === "resumeTools") {
++					if (
++						command.action === "quiesce" ||
++						command.action === "checkpoint" ||
++						command.action === "resumeTools"
++					) {
+ 						if (command.action === "quiesce") await owner.quiesce();
+-						else owner.resumeTools();
++						else if (command.action === "checkpoint") await owner.checkpoint();
++						else await owner.resumeTools();
+ 						answer({ requestId: command.requestId, ok: true });
+ 						return;
+ 					}
+diff --git a/extensions/subagents/native-adapter.ts b/extensions/subagents/native-adapter.ts
+index f86b267a9546961bc6ee738f4a057c34e3af850f..de8976cd7cf5131d719f5cdd042bc228c335cdc8 100644
+--- a/extensions/subagents/native-adapter.ts
++++ b/extensions/subagents/native-adapter.ts
+@@ -1,5 +1,6 @@
+ /** Native SDK resources and tool pipeline, without the SDK's model loop or persistent history. */
+ import type { Context as TaskContext, JsonValue } from "@earendil-works/chord";
++import { execFile } from "node:child_process";
+ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+ import {
+ 	contentText,
+@@ -456,6 +457,42 @@ export class NativeAdapter {
+ 		}
+ 	}
+ 
++	/** Only a tool-drained worker may ask; list without claiming or stopping any job. */
++	async checkpointSafe(): Promise<void> {
++		this.assertOpen();
++		const definition = this.session.getToolDefinition("jobs");
++		if (definition) {
++			const info = this.session.getAllTools().find((tool) => tool.name === "jobs");
++			if (!info) throw new Error("Subagent jobs inspection is unavailable");
++			const tool = wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner);
++			const result = await tool.execute("host:checkpoint", { action: "list" });
++			const jobs = result.structuredContent;
++			if (
++				result.isError ||
++				!Array.isArray(jobs) ||
++				jobs.some(
++					(job) =>
++						!job ||
++						typeof job !== "object" ||
++						!("state" in job) ||
++						typeof job.state !== "string" ||
++						!["done", "failed", "cancelled", "interrupted"].includes(job.state),
++				)
++			)
++				throw new Error("Subagent has running jobs or unknown job state");
++		}
++		// Child-owned shell processes (including unknown descendants behind transport wrappers)
++		// cannot be made safe by pausing tool admission. Keep them alive and refuse the handoff.
++		await new Promise<void>((resolve, reject) => {
++			execFile("pgrep", ["-P", String(process.pid)], { timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
++				if ((error as { code?: unknown } | null)?.code === 1 && !stdout.trim()) resolve();
++				else if (error) reject(error);
++				else if (stdout.trim()) reject(new Error("Subagent has child processes"));
++				else resolve();
++			});
++		});
++	}
++
+ 	refreshTools(): Extension {
+ 		this.assertOpen();
+ 		// Reapply public presentation hooks only to discover hidden declarations. SDK already
+diff --git a/extensions/subagents/worker-protocol.ts b/extensions/subagents/worker-protocol.ts
+index 4a5d39b83b39b234e5af0189f585c8437c711065..9d12544e0fa8f6e4451f0d36d1ccf69a9d427781 100644
+--- a/extensions/subagents/worker-protocol.ts
++++ b/extensions/subagents/worker-protocol.ts
+@@ -31,6 +31,7 @@ export type WorkerCommand =
+ 	| { type: "status"; id: string }
+ 	| { type: "artifact.result"; callId: string; result?: unknown; error?: string }
+ 	| { type: "quiesce"; id: string; revision: number }
++	| { type: "checkpoint"; id: string; revision: number }
+ 	| { type: "resumeTools"; revision: number }
+ 	| { type: "pause" }
+ 	| { type: "cancel" };
+@@ -42,5 +43,6 @@ export type WorkerPacket =
+ 	| { type: "status"; id: string; status: WorkerStatus }
+ 	| { type: "stopped"; id: string; status: WorkerStatus }
+ 	| { type: "quiesced"; id: string; status: WorkerStatus }
++	| { type: "checkpointed"; id: string; status: WorkerStatus }
+ 	| { type: "paused" }
+ 	| { type: "error"; id?: string; error: string };

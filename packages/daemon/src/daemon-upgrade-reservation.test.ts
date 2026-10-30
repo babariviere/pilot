@@ -132,6 +132,36 @@ for (const busy of ["job", "child", "unknown", "terminal"] as const) {
 	});
 }
 
+test("daemon reservation checkpoints owned subagents before the unchanged process census", async (t) => {
+	const f = await fixture(t);
+	let child = true;
+	let checkpoints = 0;
+	f.worker.hasChildren = async () => child;
+	f.worker.request = async (command) => {
+		assert.equal(command.type, "checkpointUpdate");
+		checkpoints++;
+		child = false; // Synthetic durable ACK plus child exit, not a pause-only allowlist.
+	};
+	const held = await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade" });
+	assert.equal(held.status, 200);
+	assert.equal(checkpoints, 1);
+	assert.equal((await f.request("cancel", held.receipt)).status, 200);
+	await f.sessions.resumeMaintenance();
+	assert.equal(f.commands.filter((command) => command.type === "update.resume").length, 1);
+});
+
+test("failed child checkpoint cannot be accepted through an empty jobs/process census", async (t) => {
+	const f = await fixture(t);
+	f.worker.request = async () => {
+		throw new Error("Child checkpoint ACK unavailable");
+	};
+	assert.equal((await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade" })).status, 409);
+	assert.equal(
+		f.commands.some((command) => command.type === "abort" || command.type === "shutdown"),
+		false,
+	);
+});
+
 test("daemon reservation echoes purpose, fences admission races, and cancellation releases without replay", async (t) => {
 	const f = await fixture(t);
 	const initialInputs = f.commands.filter((c) => c.type === "input").length;

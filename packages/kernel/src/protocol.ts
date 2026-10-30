@@ -298,6 +298,7 @@ export type KernelCommand =
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
+	| { type: "checkpointUpdate"; requestId: string }
 	| { type: "update.resume" }
 	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
 	| { type: "diagnostics.configure"; enabled: boolean }

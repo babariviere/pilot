@@ -4682,9 +4682,10 @@ export class SessionManager {
 		return this.updateGate.freezeAdmissions();
 	}
 
-	/** Safety inspection, unlike the display jobs() API: missing/failed inspection is never an empty list.
-	 * Tool drain must already be acknowledged. Exact non-MCP descendant inspection conservatively blocks
-	 * live child agents too, since their independently owned jobs cannot be proven absent from summaries.
+	/** Handoff preflight checkpoints owned drained subagents before independent safety inspection.
+	 * Unlike the display jobs() API, missing/failed inspection is never an empty list.
+	 * Tool drain must already be acknowledged. Remaining non-MCP descendants still block:
+	 * independently owned jobs cannot be proven absent from display summaries.
 	 */
 	blockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
 		this.runtimeInspecting ??= this.inspectRuntimeBlockers().finally(() => {
@@ -4721,6 +4722,9 @@ export class SessionManager {
 						return;
 					}
 					try {
+						// Tool pause alone leaves durable subagent processes alive. Checkpoint
+						// owned job-free children, then retain the independent jobs/OS census.
+						await worker.request({ type: "checkpointUpdate", requestId: randomUUID() });
 						const [jobs, children] = await Promise.all([worker.jobs(), worker.hasChildren()]);
 						if (
 							this.workers.get(sessionId) !== worker ||

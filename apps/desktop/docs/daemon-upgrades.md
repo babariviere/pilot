@@ -23,7 +23,9 @@ There is no automatic retry or blind replay after a failed or uncertain attempt.
 
 **Settings → Updates → Daemon → Upgrade daemon…** asks for explicit confirmation.
 Agents pause after their current tool calls finish. Chats, queued work and drafts
-are retained. Active jobs, terminals, child work, transfers or mutations defer the
+are retained. Drained, job-free subagents checkpoint their durable work and exit;
+unfinished inputs recover after replacement, or resume if preparation is cancelled.
+Active jobs, terminals, unknown child processes, transfers or mutations defer the
 upgrade, as does missing or failed resource inspection. Work is not interrupted. Cancel is effective
 before shutdown begins; once shutdown may have begun, the handoff finishes or
 reports an unknown outcome instead of attempting rollback.
@@ -191,8 +193,15 @@ owner proof, not public API authentication. A successful `body.receipt` is:
   admissions freeze synchronously **before** async inspection. The daemon uses
   the full `RuntimeResources` set, including session jobs/descendants and all live
   PTYs (even detached or closing), transfers, mutations and setup/import work.
-  Missing/failed/changed worker inspection is Unknown and blocks. Inspection
-  times out after 10 seconds. Neither inspection nor refusal stops any work.
+  After tool-drain ACK, each kernel receives `checkpointUpdate`. The pinned
+  subagent supervisor checkpoints only owned children with no running/unknown
+  jobs or OS children. Each child must acknowledge storage closure and exit
+  cleanly before the unchanged parent jobs/native-child census can pass.
+  Failed checkpoint proof stays failed until resume/recovery; an empty later
+  census cannot turn a missing ACK into success. Cancellation joins all started
+  checkpoints before child dispatch resumes. No job or unknown process is killed
+  to make inspection pass. Missing/failed/changed worker inspection is Unknown
+  and blocks. Inspection times out after 10 seconds.
 - Send `action: "verify"` with the complete exact receipt immediately before the
   adapter's durable stop intent. Validate the same signed identity and receipt.
   `inspect` alone is not an admission ACK. Native owner/service/executable/exit
@@ -222,6 +231,10 @@ Synthetic coverage lives in `daemon-upgrade-reservation.test.ts` and
 `runtime-admission.test.ts` and `runtime-owner.test.ts` cover tool recovery,
 resource composition and boot-bound private proofs. These tests use temporary
 profiles and fake workers/process inventories, never live user jobs or services.
+`subagent-pause.integration.test.ts` also exercises real offline child checkpoints,
+same-parent cancellation recovery and replacement recovery with exact conversation
+identity and no completed-tool replay. `subagent-checkpoint.test.ts` covers a failed
+peer while another checkpoint is still closing, and retained missing-ACK refusal.
 
 ## Verification boundaries
 

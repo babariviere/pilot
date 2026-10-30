@@ -31,16 +31,32 @@ async function until(check: () => boolean | Promise<boolean>) {
 function childProvider(root: string, mode: string): string {
 	return `
 import { existsSync, watch, writeFileSync, appendFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 const root = ${JSON.stringify(root)};
 const mode = ${JSON.stringify(mode)};
+const updating = mode.startsWith("update");
 globalThis.fetch = () => { throw new Error("Child fixture must stay offline"); };
+if (mode === "update-exit") {
+	const exit = process.exit.bind(process);
+	process.exit = code => exit(code === 0 ? 1 : code);
+}
+if (mode === "update-no-ack") {
+	const send = process.send.bind(process);
+	process.send = (packet, ...args) => {
+		if (packet?.type === "checkpointed") {
+			args.find(value => typeof value === "function")?.(null);
+			return true;
+		}
+		return send(packet, ...args);
+	};
+}
 export default pi => {
 	// The update drain must reach this worker before the in-flight tool is released. Record the
 	// host's quiesce request after the worker's own listener has handled it.
-	if (mode === "update") process.on("message", message => {
+	if (updating) process.on("message", message => {
 		if (message?.type === "quiesce") writeFileSync(join(root, "quiesce-received"), "ready");
 	});
 	const faux = fauxProvider({ tokensPerSecond: 100_000 });
@@ -48,7 +64,7 @@ export default pi => {
 	faux.setResponses(Array.from({length: 20}, () => async (request, options) => {
 		const results = request.messages.filter(message => message.role === "toolResult");
 		if (results.length === 0) return fauxAssistantMessage(
-			mode === "update" ? [call(1), call(2)] : [call(1)], {stopReason: "toolUse"});
+			updating ? [call(1), call(2)] : [call(1)], {stopReason: "toolUse"});
 		if (results.length === 1 && (mode === "sleep" || mode === "offline" || mode === "stop")) {
 			if (!existsSync(join(root, "model-blocked"))) {
 				writeFileSync(join(root, "model-blocked"), "ready");
@@ -66,12 +82,26 @@ export default pi => {
 		return fauxAssistantMessage("CHILD_COMPLETE");
 	}));
 	pi.registerProvider(faux.provider);
+	if (mode === "update-job" || mode === "update-unknown-jobs") pi.registerTool({
+		name: "jobs", label: "Synthetic jobs", description: "Synthetic job registry",
+		parameters: Type.Object({action: Type.String()}),
+		async execute() {
+			return {content:[{type:"text",text:"fixture"}], structuredContent: [{
+				id:"fixture", name:"fixture", state:mode === "update-job" ? "running" : "unrecognized",
+				startedAt:1, outputPath:join(root,"job-output")
+			}]};
+		},
+	});
 	pi.registerTool({
 		name: "pause_effect", label: "Offline effect", description: "Synthetic pause fixture",
 		parameters: Type.Object({step: Type.Number()}),
 		async execute(_id, {step}, signal) {
 			appendFileSync(join(root, "effects"), String(step));
-			if (mode === "update" && step === 1) await new Promise((resolve, reject) => {
+			if (mode === "update-child" && step === 1) {
+				const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio:"ignore"});
+				writeFileSync(join(root, "child-pid"), String(child.pid));
+			}
+			if (updating && step === 1) await new Promise((resolve, reject) => {
 				const watcher = watch(root, () => {
 					if (existsSync(join(root, "release"))) finish();
 				});
@@ -90,7 +120,19 @@ export default pi => {
 };`;
 }
 
-for (const mode of ["update", "sleep", "offline", "stop"] as const) {
+for (const mode of [
+	"update",
+	"update-resume",
+	"update-resume-race",
+	"update-job",
+	"update-unknown-jobs",
+	"update-child",
+	"update-exit",
+	"update-no-ack",
+	"sleep",
+	"offline",
+	"stop",
+] as const) {
 	test(`real child ${mode === "stop" ? "cancellation precedes" : "survives"} ${mode} replacement`, {
 		timeout: 60_000,
 	}, async (t) => {
@@ -103,8 +145,14 @@ for (const mode of ["update", "sleep", "offline", "stop"] as const) {
 			"PILOT_PI_EXTENSIONS_PROFILE",
 			"PILOT_ANTHROPIC_AUTH_EXTENSION",
 			"PILOT_CONNECTIVITY_POLICY",
+			"PILOT_CREDENTIAL_SOCKET",
+			"PILOT_CREDENTIAL_TOKEN",
+			"PILOT_REQUIRE_CREDENTIAL_BROKER",
+			"PILOT_SHARED_CATALOG_DIR",
+			"NODE_OPTIONS",
 		];
 		const before = names.map((name) => process.env[name]);
+		for (const name of names) delete process.env[name];
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		process.env.PI_OFFLINE = "1";
 		const connectivityPolicy = join(root, "connectivity.json");
@@ -118,6 +166,13 @@ for (const mode of ["update", "sleep", "offline", "stop"] as const) {
 		let session: KernelSession | undefined;
 		t.after(async () => {
 			await writeFile(join(root, "release"), "ready");
+			if (existsSync(join(root, "child-pid"))) {
+				try {
+					process.kill(Number(await readFile(join(root, "child-pid"), "utf8")), "SIGKILL");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+			}
 			await session?.close();
 			names.forEach((name, index) => {
 				if (before[index] === undefined) delete process.env[name];
@@ -212,24 +267,44 @@ for (const mode of ["update", "sleep", "offline", "stop"] as const) {
 				),
 			),
 		);
-		await until(() => existsSync(join(root, mode === "update" ? "effects" : "model-blocked")));
+		await until(() => existsSync(join(root, mode.startsWith("update") ? "effects" : "model-blocked")));
 		await until(() => session!.subagentList[0]?.conversationId !== undefined);
 		const identity = session.subagentList[0]!.conversationId;
-		if (mode === "update") {
+		if (mode.startsWith("update")) {
 			const paused = session.pauseForUpdate();
 			// Releasing tool 1 before the child sees quiesce would let it start tool 2 legitimately.
 			await until(() => existsSync(join(root, "quiesce-received")));
 			await writeFile(join(root, "release"), "ready");
 			await paused;
 			assert.equal(await readFile(join(root, "effects"), "utf8"), "1", "the drain freezes the queued child tool");
+			if (["update-job", "update-unknown-jobs", "update-child", "update-exit", "update-no-ack"].includes(mode)) {
+				await assert.rejects(
+					session.checkpointForUpdate(),
+					/jobs|job state|child processes|checkpoint exit failed|worker closed/,
+				);
+				assert.equal(await readFile(join(root, "effects"), "utf8"), "1", "refusal never resumes queued tools");
+				assert.equal(session.subagentList[0]?.conversationId, identity, "refusal preserves the child");
+				return;
+			}
+			if (mode === "update-resume-race") {
+				const checkpoint = session.checkpointForUpdate();
+				session.resumeAfterUpdate();
+				await checkpoint;
+			} else {
+				await session.checkpointForUpdate();
+				assert.equal(await session.hasChildren(), false, "daemon inspection checkpoints owned drained children");
+				await session.checkpointForUpdate();
+				assert.equal(await session.hasChildren(), false, "repeated inspection does not relaunch children");
+			}
 		}
 		if (mode === "offline") {
 			await online(false);
 			await until(() => existsSync(join(root, "model-cancelled")));
 			assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
 		}
-		await session.close();
-		assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
+		if (mode !== "update-resume-race") assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
+		if (mode === "update-resume") session.resumeAfterUpdate();
+		else if (mode !== "update-resume-race") await session.close();
 		if (mode === "stop") {
 			const stopped = await stopRecoveryChildren({
 				directory: spec.storageDir,
@@ -249,7 +324,7 @@ for (const mode of ["update", "sleep", "offline", "stop"] as const) {
 			assert.equal(session.subagentList[0]?.state, "idle");
 			return;
 		}
-		session = await open();
+		if (mode !== "update-resume" && mode !== "update-resume-race") session = await open();
 		if (mode === "offline") {
 			await delay(50);
 			assert.equal(
