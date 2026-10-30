@@ -19,7 +19,7 @@
 	},
 	"dependencies": {
 		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#8a7655ee43b87a7fd57290c2cf55e8b6eed3a056",
-		"@babel/parser": "8.0.8",
+		"@babel/parser": "8.0.10",
 		"@earendil-works/chord": "1.4.0",
 		"@earendil-works/pi-agent-core": "1.4.0",
 		"@earendil-works/pi-ai": "1.4.0",
