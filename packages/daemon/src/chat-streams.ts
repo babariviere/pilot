@@ -8,7 +8,12 @@ import { randomUUID } from "node:crypto";
 import type { AgentEvent, ChatServerMessage } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
 
-type Subscribe = (sessionId: string, listener: (events: AgentEvent[]) => void, trace?: TraceCarrier) => () => void;
+type Subscribe = (
+	sessionId: string,
+	listener: (events: AgentEvent[]) => void,
+	trace?: TraceCarrier,
+	recent?: boolean,
+) => () => void;
 type Snapshot = Extract<AgentEvent, { type: "snapshot" }>;
 
 export interface ChatStreamOptions {
@@ -31,6 +36,7 @@ interface Frame {
 interface Stream {
 	id: string;
 	sessionId: string;
+	recent: boolean;
 	/** Last sequence number assigned. */
 	seq: number;
 	frames: Frame[];
@@ -80,10 +86,11 @@ export class ChatStreams {
 		sink: (data: string) => void,
 		resume?: { streamId: string; after: number },
 		trace?: TraceCarrier,
+		recent = false,
 	): ChatAttachment {
 		const previous = resume ? this.streams.get(resume.streamId) : undefined;
 		// A reconnect can arrive before pilotd notices the old socket closed. The new socket takes the stream over.
-		const owned = previous?.sessionId === sessionId ? previous : undefined;
+		const owned = previous?.sessionId === sessionId && previous.recent === recent ? previous : undefined;
 		if (owned && resume && this.canReplay(owned, resume.after)) {
 			clearTimeout(owned.timer);
 			owned.timer = undefined;
@@ -99,6 +106,7 @@ export class ChatStreams {
 		const stream: Stream = {
 			id: randomUUID(),
 			sessionId,
+			recent,
 			seq: 0,
 			frames: [],
 			bytes: 0,
@@ -107,7 +115,7 @@ export class ChatStreams {
 		};
 		this.streams.set(stream.id, stream);
 		try {
-			stream.unsubscribe = this.subscribe(sessionId, (events) => this.push(stream, events), trace);
+			stream.unsubscribe = this.subscribe(sessionId, (events) => this.push(stream, events), trace, recent);
 		} catch (error) {
 			this.streams.delete(stream.id);
 			throw error;
@@ -181,6 +189,7 @@ export class ChatStreams {
 		const index = events.findIndex((event) => event.type === "snapshot");
 		if (index < 0 || events.some((event, i) => i > index && event.type === "snapshot")) return [events];
 		const snapshot = events[index] as Snapshot;
+		if (snapshot.history) return [events];
 		const entries = snapshot.entries;
 		const counted = { ...snapshot, historyCount: entries.length } as Snapshot;
 		if (entries.length <= this.tailEntries) {

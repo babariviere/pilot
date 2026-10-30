@@ -8,6 +8,8 @@ use gpui_kit::{
     test::TestWindowExt,
 };
 use serde_json::json;
+#[path = "history_paged_probe.rs"]
+mod paged;
 
 fn rows(start: u64, end: u64) -> Vec<Message> {
     (start..end).map(|id| Message::live(id, "assistant".into(),
@@ -61,6 +63,7 @@ fn page(
             state.rows = rows;
             state.cursor = cursor;
             state.page_busy = false;
+            state.page_error = false;
             state.page_revision = revision;
             view.accept(state, window, cx);
         })
@@ -258,6 +261,10 @@ fn newest_window(
 
 pub fn run_history_probe(cx: &mut HeadlessAppContext) {
     let only = std::env::var("PILOT_NEXT_HISTORY_CASE").ok();
+    if only.as_deref() == Some("paged") {
+        paged::run(cx);
+        return;
+    }
     if let Some(case) = &only {
         assert!(
             [

@@ -119,6 +119,7 @@ fn route() -> ReadRoute {
     ReadRoute::History {
         id: "owner".into(),
         before: 50,
+        context: None,
     }
 }
 
@@ -131,7 +132,7 @@ async fn large_history_pages_with_inline_images_load_with_both_framings() {
     assert!(payload.len() > 4 * 1024 * 1024);
     for framing in [Framing::Length, Framing::Chunked] {
         let server = Server::start(payload.clone(), framing, 0).await;
-        let page = history(&client(), &server.options, "owner".into(), 50)
+        let page = history(&client(), &server.options, "owner".into(), 50, None)
             .await
             .unwrap();
         assert_eq!(page["entries"][0]["model"][0]["content"][1]["data"], image);
@@ -157,7 +158,7 @@ async fn small_reads_json_errors_and_interrupted_bodies_remain_distinct() {
     let server = Server::start("{\"entries\":[],\"more\":false}".into(), Framing::Length, 0).await;
     assert!(hello(&client(), &server.options).await.is_ok());
     assert_eq!(
-        history(&client(), &server.options, "owner".into(), 50)
+        history(&client(), &server.options, "owner".into(), 50, None)
             .await
             .unwrap()["more"],
         false
@@ -168,7 +169,7 @@ async fn small_reads_json_errors_and_interrupted_bodies_remain_distinct() {
     ] {
         let server = Server::start(body.into(), framing, 0).await;
         assert_eq!(
-            history(&client(), &server.options, "owner".into(), 50)
+            history(&client(), &server.options, "owner".into(), 50, None)
                 .await
                 .unwrap_err(),
             error
@@ -186,7 +187,7 @@ async fn history_rechecks_identity_before_exposing_a_page() {
         )
         .await;
         assert!(
-            history(&client(), &server.options, "owner".into(), 50)
+            history(&client(), &server.options, "owner".into(), 50, None)
                 .await
                 .unwrap_err()
                 .contains("identity changed")
@@ -235,7 +236,7 @@ async fn hello_and_history_cross_the_removed_caps_with_both_framings() {
     for framing in [Framing::Length, Framing::Chunked] {
         let server = Server::with_hello_padding(body.clone(), framing, 0, 4 * 1024 * 1024).await;
         assert!(hello(&client(), &server.options).await.is_ok());
-        let page = history(&client(), &server.options, "owner".into(), 50)
+        let page = history(&client(), &server.options, "owner".into(), 50, None)
             .await
             .unwrap();
         assert_eq!(page["entries"], json!([]));

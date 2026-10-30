@@ -466,8 +466,12 @@ pub(crate) struct LiveTranscript {
     next_key: u64,
     tools: Tools,
     block_aliases: HashMap<(u64, usize, usize), u64>,
+    image_aliases: HashMap<(u64, usize, usize), u64>,
     live_block_keys: HashMap<usize, u64>,
     pub(crate) cursor: Option<u64>,
+    /// Immutable conversation/range admitted by an opt-in recent snapshot.
+    pub(crate) history_context: Option<Value>,
+    projecting_history: bool,
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
     pub(crate) queued: usize,
@@ -657,7 +661,7 @@ impl LiveTranscript {
     }
 
     pub(crate) fn has_capacity(&self) -> bool {
-        self.entries.len() < ENTRY_CAP && !self.limited
+        self.history_context.is_some() || (self.entries.len() < ENTRY_CAP && !self.limited)
     }
     fn register_calls(&mut self, value: &Value) {
         if let Some(blocks) = value["content"].as_array() {
@@ -780,7 +784,9 @@ impl LiveTranscript {
     fn entry(&mut self, entry: &Value, promote: Option<u64>) {
         // Metadata is bounded independently from row admission. Even a user
         // entry beyond the visual row cap must close an old question.
-        self.question_pending.observe(entry);
+        if !self.projecting_history {
+            self.question_pending.observe(entry);
+        }
         let Some(id) = entry["id"].as_u64().filter(|id| *id < (1 << 53)) else {
             return;
         };
@@ -858,18 +864,22 @@ impl LiveTranscript {
             }
         } else if let Some(models) = entry["model"].as_array().filter(|m| !m.is_empty()) {
             let automatic = crate::automatic_input::Automatic::read(entry);
-            for (ix, value) in models.iter().take(32).enumerate() {
+            for (ix, value) in models.iter().enumerate() {
                 let first_row = rows.len();
                 if ix == 0
                     && let Some(key) = promote
                 {
                     self.aliases.insert((id, ix), key);
                 }
-                let key = self
-                    .aliases
-                    .get(&(id, ix))
-                    .copied()
-                    .unwrap_or(id * 64 + ix as u64);
+                let key = if let Some(key) = self.aliases.get(&(id, ix)) {
+                    *key
+                } else if ix < 32 {
+                    id * 64 + ix as u64
+                } else {
+                    let key = self.key();
+                    self.aliases.insert((id, ix), key);
+                    key
+                };
                 let role = match value["role"].as_str() {
                     Some("user") => "user",
                     Some("assistant") => "assistant",
@@ -934,23 +944,26 @@ impl LiveTranscript {
                     }
                 }
                 if matches!(role, "user" | "assistant" | "toolResult")
-                    && let Some(blocks) = value["content"].as_array().filter(|blocks| {
-                        blocks
-                            .iter()
-                            .take(256)
-                            .any(|block| block["type"] == "image")
-                    })
+                    && let Some(blocks) = value["content"]
+                        .as_array()
+                        .filter(|blocks| blocks.iter().any(|block| block["type"] == "image"))
                 {
                     for (block_ix, block) in blocks
                         .iter()
-                        .take(256)
                         .enumerate()
                         .filter(|(_, b)| b["type"] == "image")
                     {
                         let mut image = crate::conversation_images::Source::read(block_ix, block);
                         image.owner = self.image_owner.clone();
                         // A separate presentation allocation, never a guessed canonical ID.
-                        let row_key = self.block_key(key, block_ix + 256, Some((id, ix)));
+                        let row_key = if let Some(key) = self.image_aliases.get(&(id, ix, block_ix))
+                        {
+                            *key
+                        } else {
+                            let key = self.key();
+                            self.image_aliases.insert((id, ix, block_ix), key);
+                            key
+                        };
                         rows.push(
                             Message::image(row_key, format!("Stored image · {label}"), image)
                                 .anchored(crate::model::ReaderKey::model(id, ix, Some(block_ix))),
@@ -993,6 +1006,9 @@ impl LiveTranscript {
     /// tail by dropping its oldest entries for a newer one. While the reader
     /// holds an older position, the newer entry is omitted and recorded.
     fn admit(&mut self, id: u64, rows: usize) -> bool {
+        if self.history_context.is_some() {
+            return true;
+        }
         let newer = rows <= ROW_CAP - 33
             && self
                 .entries
@@ -1070,6 +1086,10 @@ impl LiveTranscript {
         }
         match event["type"].as_str().unwrap_or("") {
             "snapshot" => {
+                self.history_context = event["history"]["context"]
+                    .is_object()
+                    .then(|| event["history"]["context"].clone());
+                self.tools.paged_history(self.history_context.is_some());
                 self.compactions_stale = false;
                 self.compactions = event["compactions"]
                     .as_array()
@@ -1078,7 +1098,9 @@ impl LiveTranscript {
                     .filter_map(|task| task["taskId"].as_u64())
                     .collect();
                 let active = event["entries"].as_array().cloned().unwrap_or_default();
-                let head = active.iter().filter_map(|e| e["head"].as_u64()).min();
+                let head = event["history"]["context"]["head"]["start"]
+                    .as_u64()
+                    .or_else(|| active.iter().filter_map(|e| e["head"].as_u64()).min());
                 let kept = self.saved_history.take().unwrap_or_else(|| SavedHistory {
                     question_pending: std::mem::take(&mut self.question_pending),
                     head: self.active_head,
@@ -1097,9 +1119,18 @@ impl LiveTranscript {
                 self.limited = false;
                 self.behind = false;
                 self.unsupported = 0;
-                let start = active.len().saturating_sub(ENTRY_CAP);
+                let start = if self.history_context.is_some() {
+                    0
+                } else {
+                    active.len().saturating_sub(ENTRY_CAP)
+                };
+                self.projecting_history = self.history_context.is_some();
                 for entry in active[start..].iter().rev() {
                     self.entry(entry, None);
+                }
+                self.projecting_history = false;
+                if self.history_context.is_some() && event["history"]["question"].is_object() {
+                    self.question_pending.observe(&event["history"]["question"]);
                 }
                 self.prefix_pending = event["prefixPending"] == true;
                 self.cursor = head.filter(|h| *h > 1);
@@ -1110,7 +1141,7 @@ impl LiveTranscript {
                 self.set_live(event["generation"]["message"].clone());
                 self.tools.interrupt();
                 if let Some(tools) = event["tools"].as_array() {
-                    for tool in tools.iter().filter(|t| t["status"] == "running").take(32) {
+                    for tool in tools.iter().filter(|t| t["status"] == "running") {
                         if let Some(id) = tool["callId"].as_str().filter(|id| id.len() <= 256) {
                             let key = self.tools.key(id).unwrap_or_else(|| self.key());
                             self.tools
@@ -1125,6 +1156,11 @@ impl LiveTranscript {
                 }
                 if !self.prefix_pending {
                     self.finish_snapshot();
+                    if self.history_context.is_some() {
+                        self.cursor = (event["history"]["more"] == true)
+                            .then(|| event["history"]["before"].as_u64())
+                            .flatten();
+                    }
                 }
             }
             "compaction_start" => {
@@ -1264,6 +1300,8 @@ impl LiveTranscript {
                 .retain(|(id, _), _| self.entries.contains_key(id));
             self.block_aliases
                 .retain(|(id, _, _), _| self.entries.contains_key(id));
+            self.image_aliases
+                .retain(|(id, _, _), _| self.entries.contains_key(id));
             let mut ids = std::collections::BTreeSet::new();
             for row in self.entries.values().flatten() {
                 ids.extend(row.tool_ids().into_iter().flatten().cloned());
@@ -1293,7 +1331,10 @@ impl LiveTranscript {
 
     fn finish_snapshot(&mut self) {
         self.loaded = true;
-        let kept = self.saved_history.take();
+        let kept = self
+            .saved_history
+            .take()
+            .filter(|_| self.history_context.is_none());
         self.cursor = self.active_head.filter(|h| *h > 1);
         if let Some(kept) = kept
             && self.active_head.is_some()
@@ -1393,21 +1434,53 @@ impl LiveTranscript {
         *live = slim_message(live);
     }
 
-    pub(crate) fn page(&mut self, before: u64, value: &Value) {
+    pub(crate) fn page(&mut self, before: u64, value: &Value) -> bool {
         self.presentation_dirty = true;
         if self.prefix_pending || self.cursor != Some(before) {
-            return;
+            return false;
+        }
+        if let Some(context) = &self.history_context {
+            let next = value["nextBefore"].as_u64();
+            let entries = value["entries"].as_array();
+            if value["context"] != *context
+                || value["before"].as_u64() != Some(before)
+                || !value["more"].is_boolean()
+                || !value["entries"].is_array()
+                || (value["more"] == true && next.is_none_or(|n| n <= 1 || n >= before))
+                || (value["more"] == false && !value["nextBefore"].is_null())
+                || entries.is_some_and(|entries| {
+                    entries.iter().any(|entry| {
+                        entry["id"]
+                            .as_u64()
+                            .is_none_or(|id| id == 0 || id >= before || id >= 1 << 53)
+                            || !entry["kind"].is_string()
+                    })
+                })
+                || (value["more"] == true && entries.is_some_and(Vec::is_empty))
+            {
+                return false;
+            }
         }
         let mut oldest = before;
+        self.projecting_history = self.history_context.is_some();
         if let Some(entries) = value["entries"].as_array() {
-            for entry in entries.iter().take(24) {
+            for entry in entries.iter() {
                 if let Some(id) = entry["id"].as_u64().filter(|id| *id < before) {
                     self.entry(entry, None);
                     oldest = oldest.min(id);
                 }
             }
         }
-        self.cursor = (value["more"] == true && oldest < before && oldest > 1).then_some(oldest);
+        self.projecting_history = false;
+        if self.history_context.is_some() {
+            self.tools.settle_history();
+        }
+        self.cursor = if self.history_context.is_some() {
+            value["nextBefore"].as_u64()
+        } else {
+            (value["more"] == true && oldest < before && oldest > 1).then_some(oldest)
+        };
+        true
     }
 }
 
@@ -1440,7 +1513,7 @@ fn slim_message(value: &Value) -> Value {
     if let Some(text) = value["content"].as_str() {
         content.push(serde_json::json!({"type":"text","text":text}));
     } else if let Some(blocks) = value["content"].as_array() {
-        for block in blocks.iter().take(256) {
+        for block in blocks.iter() {
             let kind = match block["type"].as_str() {
                 Some("text") => "text",
                 Some("thinking") => "thinking",
@@ -2340,6 +2413,70 @@ mod tests {
             vec![1280, 2560, 3200]
         );
         assert_eq!(model.cursor, Some(20));
+    }
+
+    #[test]
+    fn paged_snapshot_is_ready_without_prefix_and_has_no_history_capacity_ceiling() {
+        let started = std::time::Instant::now();
+        let context = json!({"conversationId":0,"tail":6000});
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":(5941..=6000).map(|id|entry(id,"exact 日本")).collect::<Vec<_>>(),"history":{"context":context,"more":true,"before":5941,"question":null}}));
+        assert!(model.loaded && !model.prefix_pending);
+        assert_eq!(model.entries.len(), 60);
+        assert_eq!(model.cursor, Some(5941));
+        let ready = started.elapsed();
+        // An older in-flight page does not suppress the independently live tail.
+        model.apply(&json!({"type":"entry_appended","entry":entry(6001,"live tail")}));
+        model.apply(&json!({"type":"compaction_start","taskId":42}));
+        while let Some(before) = model.cursor {
+            let start = before.saturating_sub(24).max(1);
+            let page = json!({"context":context,"before":before,"entries":(start..before).map(|id|entry(id,"exact 日本")).collect::<Vec<_>>(),"more":start>1,"nextBefore":(start>1).then_some(start)});
+            assert!(model.page(before, &page));
+            // Duplicate boundary delivery cannot append or change the next cursor.
+            assert!(!model.page(before, &page));
+        }
+        assert_eq!(model.entries.len(), 6001);
+        assert!(model.compacting());
+        assert!(!model.limited && !model.behind);
+        assert_eq!(model.rows().len(), 6001);
+        println!(
+            "synthetic paged reducer: initial60 ready={ready:?}; full6001 projection={:?}; no transport/native draw timing",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn paged_snapshot_replacement_and_bad_page_never_infer_exhaustion_or_pending_question() {
+        let context = json!({"conversationId":3,"tail":100});
+        let mut model = LiveTranscript::default();
+        let snapshot = json!({"type":"snapshot","entries":[entry(100,"tail")],"history":{"context":context,"more":true,"before":100,"question":null}});
+        model.apply(&snapshot);
+        for bad in [
+            json!({}),
+            json!({"context":context,"before":100,"more":true,"nextBefore":100,"entries":[]}),
+            json!({"context":context,"before":100,"more":true,"nextBefore":90,"entries":[]}),
+            json!({"context":context,"before":100,"more":false,"entries":[{}]}),
+            json!({"context":{"conversationId":4,"tail":100},"before":100,"more":false,"entries":[]}),
+        ] {
+            assert!(!model.page(100, &bad));
+            assert_eq!(model.cursor, Some(100));
+        }
+        assert!(model.page(100,&json!({"context":context,"before":100,"more":true,"nextBefore":90,"entries":[question_entry(90,1)]})));
+        assert!(
+            matches!(model.question(), crate::question::Projection::None),
+            "old pages cannot resurrect questions"
+        );
+        model.apply(&snapshot);
+        assert_eq!(
+            model.entries.len(),
+            1,
+            "replacement never retains older pages by same head"
+        );
+        assert_eq!(model.cursor, Some(100));
+        assert!(!model.page(
+            90,
+            &json!({"context":context,"before":90,"more":false,"entries":[entry(1,"stale")]})
+        ));
     }
     #[test]
     fn history_paging_stops_on_empty_nonprogress_and_overlapping_pages() {

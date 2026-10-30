@@ -8,15 +8,16 @@ import {
 	readSubagentTranscript,
 } from "./snapshot.ts";
 
-const { directory, cwd, includeTodos, subagentConversation, after, earlier, diagnosticHistory, todoCount } =
+const { directory, cwd, includeTodos, subagentConversation, after, earlier, diagnosticHistory, todoCount, recent } =
 	workerData as {
 		directory: string;
 		cwd: string;
 		includeTodos?: boolean;
+		recent?: boolean;
 		subagentConversation?: string;
 		after?: number;
 		/** Read a page of entries hidden by compaction instead of the active view. */
-		earlier?: { before: number; limit: number };
+		earlier?: { before: number; limit: number; view?: import("@pilot/protocol").TranscriptContext };
 		diagnosticHistory?: {
 			target: import("@pilot/protocol").DiagnosticTargetReference;
 			before?: number;
@@ -35,9 +36,9 @@ try {
 					diagnosticHistory.limit,
 				)
 			: earlier !== undefined
-				? await readEarlierEntries(directory, earlier.before, earlier.limit)
+				? await readEarlierEntries(directory, earlier.before, earlier.limit, earlier.view)
 				: subagentConversation === undefined
-					? await readSessionSnapshot(directory, cwd, includeTodos)
+					? await readSessionSnapshot(directory, cwd, includeTodos, recent)
 					: await readSubagentTranscript(directory, subagentConversation, after);
 	parentPort?.postMessage({ view, bytes: Buffer.byteLength(JSON.stringify(view)) });
 } catch (error) {

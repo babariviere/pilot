@@ -176,6 +176,12 @@ pub(super) fn probe_make_mission(
 impl LocalViewer {
     pub(super) fn sync_history_controls(&mut self, cx: &mut Context<Self>) {
         let presentation = crate::transcript_view::HistoryControls {
+            older: self.state.cursor.is_some(),
+            complete: self.state.loaded
+                && self.state.cursor.is_none()
+                && !self.state.limited
+                && !self.state.behind,
+            loading_all: self.loading_full_history,
             behind: self.state.behind,
             refreshing: self.refreshing,
             failed: self.refreshing && self.state.chat_issue,

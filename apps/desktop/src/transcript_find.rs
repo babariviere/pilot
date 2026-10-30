@@ -13,8 +13,6 @@ use std::{
     },
 };
 
-pub(super) const ROWS: usize = 512;
-const BYTES: usize = 2 * 1024 * 1024;
 const MATCHES: usize = 1000;
 pub(super) const QUERY_BYTES: usize = 1024;
 
@@ -58,27 +56,21 @@ pub(super) fn scan(rows: Vec<Message>, query: &str, cancel: &AtomicBool) -> Resu
     if query.is_empty() || query.len() > QUERY_BYTES {
         return result;
     }
-    let mut bytes = 0;
-    for (count, row) in rows.iter().filter(|row| eligible(row)).enumerate() {
+    let mut keys = std::collections::BTreeMap::new();
+    for row in &rows {
+        if let Some(key) = row.reader_key() {
+            *keys.entry(key).or_insert(0_usize) += 1;
+        }
+    }
+    for row in rows.iter().filter(|row| eligible(row)) {
         if cancel.load(Ordering::Relaxed) {
             return Results::default();
         }
-        if count == ROWS || bytes == BYTES {
-            result.limited = true;
-            break;
-        }
         let source = row.shared_source();
-        let mut end = source.len().min(BYTES - bytes);
-        while !source.is_char_boundary(end) {
-            end -= 1;
-        }
-        bytes += end;
-        result.limited |= end < source.len();
+        let end = source.len();
         // Placeholder inspection is inside the same byte budget as matching.
         // Ambiguous canonical keys must not advertise unnavigable matches.
-        if placeholder(&source[..end])
-            || crate::model::reader_index(&rows, &row.reader_key().unwrap()).is_none()
-        {
+        if placeholder(&source[..end]) || keys.get(&row.reader_key().unwrap()) != Some(&1) {
             continue;
         }
         for (start, text) in source[..end].match_indices(query) {

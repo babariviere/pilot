@@ -323,6 +323,7 @@ pub struct LocalViewer {
     sidebar_width_save: Option<Task<()>>,
     refreshing: bool,
     earlier_attempt: Option<(u64, u64)>,
+    loading_full_history: bool,
     earlier_request: Option<(u64, u64, u64)>,
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
@@ -1347,6 +1348,19 @@ impl LocalViewer {
                 }
             },
         );
+        let full_history_events = cx.subscribe_in(
+            &transcript,
+            window,
+            |view, _, event: &crate::transcript_view::FullHistoryRequested, _, cx| {
+                if event.0 == view.generation && view.page == Page::Chat {
+                    view.loading_full_history = !view.loading_full_history;
+                    if view.loading_full_history {
+                        view.earlier(true, cx);
+                    }
+                    view.sync_history_controls(cx);
+                }
+            },
+        );
         let latest_events = cx.subscribe_in(
             &transcript,
             window,
@@ -1472,6 +1486,7 @@ impl LocalViewer {
                 editor_events,
                 artifact_events,
                 history_events,
+                full_history_events,
                 latest_events,
                 following_events,
                 project_events,
@@ -1490,6 +1505,7 @@ impl LocalViewer {
             sidebar_width_save: None,
             refreshing: false,
             earlier_attempt: None,
+            loading_full_history: false,
             earlier_request: None,
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
@@ -1596,6 +1612,7 @@ impl LocalViewer {
         self.nav_error = None;
         self.pending_transcript = None;
         self.earlier_attempt = None;
+        self.loading_full_history = false;
         self.earlier_request = None;
         self.refreshing = false;
         let key = format!("chat:{}", chat.id);
@@ -1757,6 +1774,14 @@ impl LocalViewer {
         self.restore_reader(cx);
         self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);
+        if self.loading_full_history && !self.state.page_busy {
+            if self.state.cursor.is_none() || self.state.page_error {
+                self.loading_full_history = false;
+                self.sync_history_controls(cx);
+            } else {
+                self.earlier(true, cx);
+            }
+        }
         self.artifacts.update(cx, |pane, cx| {
             pane.context(self.selected.clone(), self.state.artifacts.clone(), cx);
             pane.artifact_metadata(self.state.artifact_metadata.clone(), cx);
@@ -1783,6 +1808,7 @@ impl LocalViewer {
         self.refreshing = false;
         self.generation += 1;
         self.earlier_attempt = None;
+        self.loading_full_history = false;
         self.earlier_request = None;
         self.selected = None;
         self.sync_mission_context(cx);
@@ -2356,6 +2382,8 @@ impl Render for LocalViewer {
             .unwrap_or_default();
         let history_status = if self.earlier_request.is_some() {
             "Loading earlier messages…"
+        } else if self.state.page_error {
+            "Earlier messages could not be loaded"
         } else {
             self.state.chat_status.as_str()
         };
@@ -2500,6 +2528,7 @@ impl Render for LocalViewer {
                                 let b=Button::new("artifact-gallery").ghost().small();
                                 if self.artifacts_open {b.icon(AppIcon::Back.asset()).label("Back to chat")} else {b.icon(AppIcon::Artifacts.asset()).accessibility_label("Artifacts").tooltip("Artifacts")}
                                 .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))}))
+                            .when(self.state.page_error && !self.state.page_busy, |this| this.child(crate::ui::action("history-retry", "Retry earlier", crate::ui::Action::Quiet).small().on_click(cx.listener(|v,_,_,cx|v.earlier(true,cx)))))
                             .children(self.mission_context_action(cx))
                             .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))

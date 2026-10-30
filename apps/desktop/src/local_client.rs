@@ -205,11 +205,11 @@ impl LocalOptions {
         match chat {
             None => Ok("/api/ws".into()),
             Some(id) if local_model::valid_id(id) => {
-                let mut path = format!("/api/sessions/{id}/ws");
+                let mut path = format!("/api/sessions/{id}/ws?history=paged-v1");
                 if let Some(resume) = resume
                     && local_model::valid_id(&resume.stream)
                 {
-                    path.push_str(&format!("?stream={}&after={}", resume.stream, resume.seq));
+                    path.push_str(&format!("&stream={}&after={}", resume.stream, resume.seq));
                 }
                 Ok(path)
             }
@@ -254,6 +254,7 @@ enum ReadRoute {
     History {
         id: String,
         before: u64,
+        context: Option<Value>,
     },
     Artifact {
         owner: String,
@@ -299,8 +300,21 @@ impl ReadRoute {
                 id,
                 revision,
             } => format!("/api/sessions/{owner}/artifacts/{id}?revision={revision}"),
-            Self::History { id, before } => {
-                format!("/api/sessions/{id}/history?before={before}&limit=24")
+            Self::History {
+                id,
+                before,
+                context,
+            } => {
+                let path = format!("/api/sessions/{id}/history?before={before}&limit=24");
+                if let Some(context) = context {
+                    let mut url = reqwest::Url::parse(&format!("http://localhost{path}"))
+                        .expect("history URL");
+                    url.query_pairs_mut()
+                        .append_pair("view", &context.to_string());
+                    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+                } else {
+                    path
+                }
             }
         }
     }
@@ -341,6 +355,7 @@ pub(crate) struct Presentation {
     pub(crate) generation: u64,
     pub(crate) cursor: Option<u64>,
     pub(crate) page_busy: bool,
+    pub(crate) page_error: bool,
     pub(crate) status: String,
     pub(crate) chat_status: String,
     pub(crate) limited: bool,
@@ -367,7 +382,7 @@ impl Presentation {
     pub(crate) fn question_fresh(&self, selected: Option<&str>, generation: u64) -> bool {
         self.generation == generation
             && self.loaded
-            && !self.page_busy
+            && !self.chat_issue
             && selected.is_some_and(|id| {
                 self.chats.iter().any(|chat| {
                     chat.id == id
@@ -542,6 +557,7 @@ enum Incoming {
     Page {
         generation: u64,
         before: u64,
+        revision: u64,
         result: Result<Value, Failure>,
     },
 }
@@ -664,9 +680,19 @@ async fn history(
     options: &LocalOptions,
     id: String,
     before: u64,
+    context: Option<Value>,
 ) -> Result<Value, Failure> {
     gate(client, options).await?;
-    let value = get(client, options, ReadRoute::History { id, before }).await?;
+    let value = get(
+        client,
+        options,
+        ReadRoute::History {
+            id,
+            before,
+            context,
+        },
+    )
+    .await?;
     gate(client, options).await?;
     Ok(value)
 }
@@ -948,6 +974,8 @@ async fn run(
     let mut control = socket_task(options.clone(), client.clone(), None, 0, inbox.clone());
     let mut chat_socket: Option<JoinHandle<()>> = None;
     let mut page_task: Option<JoinHandle<()>> = None;
+    let mut snapshot_revision = 0_u64;
+    let mut awaiting_snapshot = false;
     let mut selected: Option<String> = None;
     let mut model = LiveTranscript::default();
     let mut view = Presentation {
@@ -968,12 +996,13 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.chat_status.clear();view.chat_issue=false;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
+                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.page_error=false;view.chat_status.clear();view.chat_issue=false;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
                     if fenced || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
+                    awaiting_snapshot = true;
                     view.todos = crate::session_todos::Feed::new(crate::session_todos::Source::new(options.clone(), id.clone(), generation));
                     selected = Some(id.clone());
                     view.artifacts=Arc::new(Vec::new());
@@ -981,21 +1010,23 @@ async fn run(
                     model = LiveTranscript::default();
                     model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
-                    view.generation = generation; view.page_busy = false; view.chat_status = "Loading chat…".into(); view.chat_issue=false; view.batches=0;view.queued=0;view.user_queue=Arc::default();
+                    view.generation = generation; view.page_busy = false; view.page_error=false; view.chat_status = "Loading chat…".into(); view.chat_issue=false; view.batches=0;view.queued=0;view.user_queue=Arc::default();
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
                 Ok(Command::Earlier { before, generation }) => {
                     if fenced || generation != view.generation || view.page_busy || model.cursor != Some(before) || model.prefix_pending || !model.has_capacity() { continue; }
                     let Some(id) = selected.clone() else { continue; };
                     let (options, client, inbox) = (options.clone(),client.clone(),inbox.clone());
-                    view.page_busy = true;
+                    view.page_busy = true; view.page_error=false;
+                    let revision = snapshot_revision;
+                    let context = model.history_context.clone();
                     page_task = Some(tokio::spawn(async move {
-                        let result = history(&client,&options,id,before).await;
-                        let _ = inbox.send(Incoming::Page { generation,before,result }).await;
+                        let result = history(&client,&options,id,before,context).await;
+                        let _ = inbox.send(Incoming::Page { generation,before,revision,result }).await;
                     }));
                 }
                 Ok(Command::Reconnect) => {
-                    model.thinking=false; model.stale();
+                    model.thinking=false; model.stale(); awaiting_snapshot=true;
                     set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
                     inbox.epoch+=1; fenced=false;
@@ -1027,30 +1058,35 @@ async fn run(
                     if !chat || generation == view.generation { model.thinking=false; }
                     if chat { if generation != view.generation { continue; }
                         view.chat_issue = text!="Connected · Local";
-                        if view.chat_issue{view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
+                        if view.chat_issue{snapshot_revision+=1; if let Some(task)=page_task.take(){task.abort();} view.page_busy=false; view.page_revision+=1; view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
                     else {
                         if text != "Connected · Local" { set_daemon(ConnectedDaemon::NotConnected); }
                         view.status = text.into();
                     }
                 }
                 Ok((_, Incoming::Daemon(version))) => set_daemon(ConnectedDaemon::Connected(version)),
-                Ok((_, Incoming::Page { generation,before,result })) => {
-                    if generation != view.generation { continue; }
+                Ok((_, Incoming::Page { generation,before,revision,result })) => {
+                    if generation != view.generation || revision != snapshot_revision { continue; }
                     view.page_busy = false;
                     view.page_revision+=1;
-                    match result { Ok(value) => model.page(before,&value), Err(e) => view.chat_status = e.into() }
+                    match result {
+                        Ok(value) if model.page(before,&value) => { view.page_error=false; },
+                        _ => { view.page_error=true; }
+                    }
                 }
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
                     if is_chat {
                         if generation != view.generation || value["sessionId"].as_str()!=selected.as_deref() { continue; }
-                        if value["type"] == "chat.stream" {view.todos.stream();model.compaction_stream(value["resumed"] == true);}
+                        if value["type"] == "chat.stream" {awaiting_snapshot = value["resumed"] != true; snapshot_revision += 1; if let Some(task) = page_task.take() { task.abort(); } view.page_busy=false; view.page_error=false; view.page_revision+=1; view.todos.stream();model.compaction_stream(value["resumed"] == true);}
                         else if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
                             let reader = holding.load(std::sync::atomic::Ordering::Relaxed);
                             model.holding = reader >> 1 == generation && reader & 1 == 1;
                             for event in events {
+                                if event["type"] == "snapshot" { awaiting_snapshot=false; snapshot_revision += 1; if let Some(task) = page_task.take() { task.abort(); } view.page_busy=false; view.page_revision+=1; }
                                 view.todos.apply(event);
+                                if event["type"] == "history_error" { model.stale(); view.chat_issue=true; view.chat_status="Chat history could not be loaded. Reconnect to retry.".into(); }
                                 if event["type"] != "todos_update" { model.apply(event); }
                             }
                             // Repeated reasoning deltas only update bounded
@@ -1094,7 +1130,7 @@ async fn run(
         view.limited = model.limited;
         view.behind = model.behind;
         view.omitted = model.unsupported;
-        view.loaded = model.loaded && !model.prefix_pending;
+        view.loaded = model.loaded && !model.prefix_pending && !awaiting_snapshot;
         view.queued = model.queued;
         view.user_queue = if fenced {
             Arc::new(crate::queued_message::Snapshot {
@@ -1255,12 +1291,18 @@ mod tests {
             let mut stale = raw.clone();
             match case {
                 0 => stale.loaded = false,
-                1 => stale.page_busy = true,
+                1 => stale.chat_issue = true,
                 2 => stale.question_awaited = false,
                 _ => stale.question = Projection::Unavailable,
             }
             assert!(Arc::ptr_eq(&raw.chats, &stale.for_display(Some("a")).chats));
         }
+        let mut paging = raw.clone();
+        paging.page_busy = true;
+        assert!(
+            paging.question_fresh(Some("a"), 5),
+            "older-page work is not incomplete live metadata"
+        );
         // The exact user answer clears attention even while the run continues.
         model.apply(&json!({"type":"entry_appended","entry":{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Threads"}]}}));
         raw.question = model.question();
@@ -1321,6 +1363,7 @@ mod tests {
         assert_eq!(
             options.http_url(&ReadRoute::History {
                 id: "abc-123".into(),
+                context: None,
                 before: 4
             }),
             "http://127.0.0.1:4319/api/sessions/abc-123/history?before=4&limit=24"

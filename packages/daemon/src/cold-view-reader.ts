@@ -6,7 +6,7 @@ import {
 	type SubagentTranscriptRead,
 	snapshotWorkerEntry,
 } from "@pilot/kernel";
-import type { DiagnosticHistoryPage, DiagnosticTargetReference } from "@pilot/protocol";
+import type { DiagnosticHistoryPage, DiagnosticTargetReference, TranscriptContext } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
@@ -17,13 +17,14 @@ type Job = {
 	directory: string;
 	cwd: string;
 	includeTodos: boolean;
+	recent?: boolean;
 	promise?: Promise<PersistedSessionView>;
 	unlisten?(): void;
 	/** Read a pi-extensions subagent conversation from `runs.sqlite` instead of the session. */
 	subagentConversation?: string;
 	after?: number;
 	/** Read a page of entries hidden by compaction instead of the active view. */
-	earlier?: { before: number; limit: number };
+	earlier?: { before: number; limit: number; view?: TranscriptContext };
 	/** Read a bounded page from one explicitly authorized diagnostics target. */
 	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
 	todoCount?: boolean;
@@ -43,14 +44,20 @@ export class ColdViewReader {
 	}
 
 	/** Abort only queued work. Once started, a read can still populate a shared snapshot cache. */
-	read(directory: string, cwd: string, includeTodos = true, signal?: AbortSignal): Promise<SizedSessionView> {
+	read(
+		directory: string,
+		cwd: string,
+		includeTodos = true,
+		signal?: AbortSignal,
+		recent = false,
+	): Promise<SizedSessionView> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
 		if (signal?.aborted) return Promise.reject(new DOMException("Session snapshot read cancelled", "AbortError"));
 		if (this.waiting.length >= MAX_QUEUED_READS)
 			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
 		let job!: Job;
 		const promise = new Promise<SizedSessionView>((resolve, reject) => {
-			job = { directory, cwd, includeTodos, resolve, reject };
+			job = { directory, cwd, includeTodos, recent, resolve, reject };
 			if (signal) {
 				const cancel = () => this.cancelQueued(job);
 				job.unlisten = () => signal.removeEventListener("abort", cancel);
@@ -98,7 +105,12 @@ export class ColdViewReader {
 	}
 
 	/** One-shot read of the session's entries below `before`, hidden from the active view by compaction. */
-	readEarlier(directory: string, before: number, limit: number): Promise<EarlierEntriesRead> {
+	readEarlier(
+		directory: string,
+		before: number,
+		limit: number,
+		view?: TranscriptContext,
+	): Promise<EarlierEntriesRead> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
 		if (this.waiting.length >= MAX_QUEUED_READS)
 			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
@@ -107,7 +119,7 @@ export class ColdViewReader {
 				directory,
 				cwd: directory,
 				includeTodos: false,
-				earlier: { before, limit },
+				earlier: { before, limit, ...(view ? { view } : {}) },
 				resolve,
 				reject,
 			});
@@ -161,6 +173,7 @@ export class ColdViewReader {
 						directory: job.directory,
 						cwd: job.cwd,
 						includeTodos: job.includeTodos,
+						recent: job.recent,
 						...(job.subagentConversation === undefined ? {} : { subagentConversation: job.subagentConversation }),
 						...(job.after === undefined ? {} : { after: job.after }),
 						...(job.earlier === undefined ? {} : { earlier: job.earlier }),

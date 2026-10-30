@@ -264,7 +264,8 @@ export interface GitHubActionsUpdateEvent {
 	actions: GitHubAction[];
 }
 export type AgentEvent =
-	| DurableAgentEvent
+	| (DurableAgentEvent & { history?: TranscriptHistory })
+	| { type: "history_error" }
 	| QueueUpdateEvent
 	| TodosUpdateEvent
 	| SnapshotPrefixEvent
@@ -1840,11 +1841,33 @@ export interface SessionJobsResponse {
  * which compaction or reset hides from the snapshot. Read from storage without waking a parked session. Entries are
  * oldest first and include older compaction and reset markers. `limit` defaults to 100 (at most 500); a page may
  * end early when its entries are large.
+ * With optional JSON `view=TranscriptContext`, reads the immutable paged-snapshot range, including not-yet-loaded
+ * active entries, and echoes context/before plus an explicit nextBefore. Legacy calls are unchanged.
  */
 export interface SessionHistoryPage {
 	entries: EntryRecord[];
 	/** True when older entries may remain: request again with the oldest returned entry ID as `before`. */
 	more: boolean;
+	/** Opt-in paged snapshot context, echoed exactly. Legacy reads omit these fields. */
+	context?: TranscriptContext;
+	before?: number;
+	nextBefore?: number;
+}
+
+/** Immutable storage range, not a mutation ACK or proof of the current agent context. */
+export interface TranscriptContext {
+	conversationId: number;
+	tail: number;
+	head?: { id: number; start: number };
+}
+
+/** Present only on explicitly requested recent snapshots. No prefix frame follows. */
+export interface TranscriptHistory {
+	/** Current question boundary, not inferred by loading historical question records. */
+	question?: EntryRecord | null;
+	context: TranscriptContext;
+	more: boolean;
+	before?: number;
 }
 
 /**

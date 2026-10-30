@@ -17,6 +17,7 @@ import type {
 	DiagnosticHistoryPage,
 	DiagnosticTargetReference,
 	SessionCompletion,
+	TranscriptContext,
 } from "@pilot/protocol";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
@@ -24,6 +25,7 @@ import { chatEventEntries } from "./chat-events.ts";
 import { GitHubActionsDoc } from "./github-actions.ts";
 import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
+import { readQuestionBoundary, readRecentEntries, readTranscriptPage } from "./paged-history.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
 import { TodoProgressDoc, todosUpdate } from "./todos.ts";
@@ -41,15 +43,17 @@ async function conversationView(
 	storage: Storage,
 	id: ConversationId,
 	includeTodos = false,
+	recent = false,
 ): Promise<{ events: AgentEvent[]; completion?: SessionCompletion }> {
 	const session = createSession(storage);
 	try {
 		// Match the durable structural view: newest head marker first, then all retained
 		// non-head entries. Compaction/reset history is not the active transcript.
-		const head = await storage.findLatestHeadMarker(id, undefined, context);
+		const head = recent ? undefined : await storage.findLatestHeadMarker(id, undefined, context);
+		const bounded = recent ? await readRecentEntries(storage, id, context) : undefined;
 		const range: EntryRecord[] = [];
 		let cursor: Cursor | undefined;
-		do {
+		while (!bounded) {
 			const page = await storage.scanEntries(
 				{ conversationId: id, ...(head ? { minEntryId: head.head } : {}) },
 				256,
@@ -58,7 +62,8 @@ async function conversationView(
 			);
 			range.push(...page.items);
 			cursor = page.next;
-		} while (cursor !== undefined);
+			if (cursor === undefined) break;
+		}
 		range.reverse();
 		const [agent, live, inbox, usage, attention] = await Promise.all([
 			session.snapshot(AgentDoc, id, context),
@@ -67,12 +72,20 @@ async function conversationView(
 			session.snapshot(UsageDoc, id, context),
 			session.snapshot(AttentionDoc, id, context),
 		]);
+		if (bounded) {
+			const held = await session.snapshot(HeldInputsDoc, id, context);
+			bounded.history.question =
+				held?.questionPending === false
+					? null
+					: await readQuestionBoundary(storage, bounded.history.context, context);
+		}
 		const snapshot: AgentEvent = {
 			type: "snapshot",
+			...(bounded ? { history: bounded.history } : {}),
 			entries: await chatEventEntries(
 				session,
 				await new InputOrigins(storage, await lineage(storage, id, context), context).entries(
-					head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
+					bounded?.entries ?? (head ? [head, ...range.filter((entry) => entry.head === undefined)] : range),
 				),
 				context,
 			),
@@ -207,12 +220,41 @@ export async function readEarlierEntries(
 	directory: string,
 	before: number,
 	limit: number,
-): Promise<EarlierEntriesRead> {
+	view?: TranscriptContext,
+): Promise<EarlierEntriesRead & Partial<import("@pilot/protocol").SessionHistoryPage>> {
 	if (!Number.isSafeInteger(before) || before < 0) throw new Error(`Invalid cursor: ${before}`);
 	if (!Number.isSafeInteger(limit) || limit < 1) throw new Error(`Invalid limit: ${limit}`);
-	if (before <= 1) return { entries: [], more: false };
+	if (before <= 1 && !view) return { entries: [], more: false };
 	const storage = await openSessionReader(directory);
-	if (!storage) return { entries: [], more: false };
+	if (!storage) {
+		if (view) throw new Error("Captured transcript storage is unavailable");
+		return { entries: [], more: false };
+	}
+	if (view) {
+		try {
+			if (
+				!(await storage.conversation(view.conversationId as ConversationId, context)) ||
+				(view.tail > 0 &&
+					!(await storage.entry(view.conversationId as ConversationId, view.tail as EntryRecord["id"], context)))
+			)
+				throw new Error("Captured transcript range is unavailable");
+			if (before <= 1) return { entries: [], more: false, context: view, before };
+			const page = await readTranscriptPage(storage, view, before, limit, context);
+			const session = createSession(storage);
+			page.entries = await chatEventEntries(
+				session,
+				await new InputOrigins(
+					storage,
+					await lineage(storage, view.conversationId as ConversationId, context),
+					context,
+				).entries(page.entries),
+				context,
+			);
+			return page;
+		} finally {
+			await storage.close(context);
+		}
+	}
 	const entries: EntryRecord[] = [];
 	let bytes = 0;
 	let more = false;
@@ -438,11 +480,13 @@ export async function readSessionSnapshot(
 	directory: string,
 	_cwd: string,
 	includeTodos = true,
+	recent = false,
 ): Promise<PersistedSessionView> {
 	const storage = await openSessionReader(directory);
 	let events: AgentEvent[];
 	let completion: SessionCompletion | undefined;
 	if (!storage) {
+		if (recent) throw new Error("Transcript storage is unavailable");
 		events = [
 			{
 				type: "snapshot",
@@ -459,7 +503,7 @@ export async function readSessionSnapshot(
 			todosUpdate(undefined),
 		];
 	} else {
-		const view = await conversationView(storage, await activeConversation(storage, context), includeTodos);
+		const view = await conversationView(storage, await activeConversation(storage, context), includeTodos, recent);
 		events = view.events;
 		completion = view.completion;
 	}

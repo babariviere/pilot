@@ -56,10 +56,14 @@ fn limits_empty_query_and_cancellation_are_honest() {
             .is_empty()
     );
     let r = run((0..513).map(|i| row(i, "You", "x")).collect(), "absent");
-    assert!(r.limited);
+    assert!(!r.limited);
     assert!(r.hits.is_empty());
-    let r = run(vec![row(1, "You", &"日".repeat(BYTES / 3 + 10))], "absent");
-    assert!(r.limited);
+    let r = run(
+        vec![row(1, "You", &format!("{}needle", "日".repeat(800_000)))],
+        "needle",
+    );
+    assert!(!r.limited);
+    assert_eq!(r.hits.len(), 1);
     assert!(
         scan(vec![row(1, "You", "x")], "x", &AtomicBool::new(true))
             .hits

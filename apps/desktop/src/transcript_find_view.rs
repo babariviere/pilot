@@ -17,7 +17,9 @@ use gpui_kit::{
         input::{Input, InputState},
         text::{RangeHighlight, RenderedText},
     },
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::sync::{
     Arc,
@@ -169,7 +171,6 @@ impl TranscriptView {
             .messages()
             .iter()
             .filter(|r| transcript_find::eligible(r))
-            .take(transcript_find::ROWS + 1)
             .cloned()
             .collect();
         let sources: Vec<_> = rows
@@ -505,7 +506,37 @@ impl TranscriptView {
                                 .h_flex()
                                 .flex_wrap()
                                 .gap_2()
-                                .child(ui::text(Text::Caption, "Loaded messages · literal source"))
+                                .child(ui::text(
+                                    Text::Caption,
+                                    if self.history_controls.complete {
+                                        "All messages · literal source"
+                                    } else {
+                                        "Loaded messages only · literal source"
+                                    },
+                                ))
+                                .when(self.history_controls.older, |this| {
+                                    this.child(
+                                        ui::action(
+                                            "find-load-history",
+                                            if self.history_controls.loading_all {
+                                                "Stop loading history"
+                                            } else {
+                                                "Load full history"
+                                            },
+                                            Action::Quiet,
+                                        )
+                                        .xsmall()
+                                        .on_click(
+                                            cx.listener(|v, _, w, cx| {
+                                                if !v.find_marked(w, cx) {
+                                                    cx.emit(super::FullHistoryRequested(
+                                                        v.history_scope,
+                                                    ));
+                                                }
+                                            }),
+                                        ),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .id("find-status")

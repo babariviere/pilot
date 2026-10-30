@@ -579,11 +579,15 @@ fn lower_first(text: &str) -> String {
 }
 #[derive(Default)]
 pub(crate) struct Tools {
+    paged: bool,
     items: BTreeMap<String, Arc<Tool>>,
     groups: BTreeMap<String, u64>,
     orphans: BTreeSet<String>,
 }
 impl Tools {
+    pub(crate) fn paged_history(&mut self, paged: bool) {
+        self.paged = paged;
+    }
     pub(crate) fn contains(&self, id: &str) -> bool {
         self.items.contains_key(id)
     }
@@ -593,7 +597,7 @@ impl Tools {
     fn change(&mut self, id: &str, key: u64, change: impl FnOnce(&mut Tool)) -> bool {
         if id.is_empty()
             || id.len() > 256
-            || (!self.items.contains_key(id) && self.items.len() >= TOOL_CAP)
+            || (!self.paged && !self.items.contains_key(id) && self.items.len() >= TOOL_CAP)
         {
             return false;
         }
@@ -603,18 +607,21 @@ impl Tools {
             .map(|t| (**t).clone())
             .unwrap_or_else(|| Tool::new(id, key));
         change(&mut next);
-        let other = self
-            .items
-            .iter()
-            .filter(|(key, _)| *key != id)
-            .map(|(_, t)| t.bytes())
-            .sum::<usize>();
-        if other + next.bytes() > DETAIL_CAP {
+        let other = if self.paged {
+            0
+        } else {
+            self.items
+                .iter()
+                .filter(|(key, _)| *key != id)
+                .map(|(_, t)| t.bytes())
+                .sum::<usize>()
+        };
+        if !self.paged && other + next.bytes() > DETAIL_CAP {
             next.output = Arc::new(String::new());
             next.diff = Arc::new(String::new());
             next.limited = true;
         }
-        if other + next.bytes() > DETAIL_CAP {
+        if !self.paged && other + next.bytes() > DETAIL_CAP {
             return false;
         }
         self.items.insert(id.into(), Arc::new(next));
@@ -726,6 +733,14 @@ impl Tools {
     pub(crate) fn interrupt(&mut self) {
         for tool in self.items.values_mut() {
             if tool.status.live() {
+                Arc::make_mut(tool).status = Status::Interrupted;
+            }
+        }
+    }
+    /// Historical calls with no retained result are Unknown, never current work.
+    pub(crate) fn settle_history(&mut self) {
+        for tool in self.items.values_mut() {
+            if tool.status == Status::Pending {
                 Arc::make_mut(tool).status = Status::Interrupted;
             }
         }

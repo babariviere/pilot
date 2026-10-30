@@ -565,9 +565,12 @@ The composer uses one continuous tray surface, Kit-owned text padding and a
 compact control row, with the single transient activity line just above it.
 See [composer layout correction](evidence/composer-layout.md) for native bounds,
 synthetic captures and interaction-preservation checks.
-Scrolling to the transcript top loads the previous bounded history page while
-holding the reading position and selection. Earlier remains a manual retry;
-failed pages do not retry automatically on repeated overscroll. See
+With a paged-history daemon, opening a chat reads only its recent page. Scrolling
+near the top loads an older page, holding the reading position and selection.
+Failures retain content and offer Retry earlier; repeated overscroll never retries
+a failed page automatically. Find labels partial coverage and offers Load full
+history on demand, with Stop loading history while it pages. Opening Find alone
+never starts that crawl. See [lazy history](docs/lazy-history.md) and the existing
 [scroll-history checks](evidence/scroll-history.md).
 The Local viewer starts at Home with loaded-chat activity and configured projects.
 Home includes all projects; selecting a project filters chat browsing by exact
@@ -638,23 +641,26 @@ replacement split snapshots retain the last visible projection until complete.
 
 The sidebar retains all summaries supplied by the Local snapshot and live session
 events, then filters by project/archive and renders a virtualized list. No summary
-count limit silently drops newly created chats. Transcript: 256 entries, at most 512 rows before
-work folding, up to 32 running progress slots and 64 KiB per running tool output.
-Loaded message text and inline images have no per-message or aggregate source-byte
-limit. Entry/row capacity still stops further entry/history admission without
-silently evicting selected rows. Initial oversized histories show a bounded
-suffix and a capacity warning. These count limits are prototype limits, not
-production parity. Image decoder compressed/pixel/allocation limits remain
-separate from retained sources.
-Escaped display strings, parser graphs, raw in-flight JSON, saved split-snapshot
-history, queued projections and GPU allocations are additional memory. Memory
-scales with retained source; no RSS ceiling is claimed. One retained parser per
-admitted row is count-bounded, but not an LRU solution for arbitrary history.
+count limit silently drops newly created chats. Paged transcripts retain every
+loaded entry/row/call, without a total count or source-byte cap. Initial history is
+60 recent entries (plus the current head marker); older pages request 24 entries.
+Storage reads stop between entries near 256 KiB, always including one oversized
+entry. Current run/generation, tools, queue and TODO contracts remain independent
+of paging. Decoder compressed/pixel/allocation limits remain separate.
 
-Tool presentation retains at most 256 call identities. Already-received arguments
+Old daemons that do not implement `history=paged-v1` keep their legacy full/split
+snapshot behavior. That compatibility path still has the prototype 256-entry /
+512-row window; Find never labels a limited window complete. Updating source does
+not upgrade or restart an installed daemon. New paged transcripts have no such
+window and do not drop live tail entries while reading older pages.
+
+Escaped display strings, parser graphs, raw in-flight JSON, queued projections
+and GPU allocations add memory. Memory grows with loaded history; no RSS ceiling,
+LRU parser policy or full-store execution speedup is claimed.
+
+Paged tool presentation retains all loaded call identities; the legacy fallback retains at most 256. Already-received arguments
 and prepared command/code sources have no presentation byte limit; memory scales
-with retained source. Metadata, output and diff previews share a separate 2 MiB
-reserve, with 40 KiB output and 12 KiB diff per call. Preview capacity never replaces
+with retained source. Legacy metadata/output/diff previews share a 2 MiB reserve. Per-call previews remain 40 KiB output and 12 KiB diff; paging does not change their existing disclosure contract. Preview capacity never replaces
 arguments or command/code with sentinel data. Upstream omission evidence is retained.
 Oversize/capacity preview cases are explicit. Incomplete output prefixes do not receive
 later deltas as if complete; full updates/results can replace them. Wire output

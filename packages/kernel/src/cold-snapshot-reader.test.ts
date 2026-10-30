@@ -35,6 +35,63 @@ import {
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { subagentStorageSignature } from "./subagent-watch.ts";
 
+test("paged cold snapshot and pinned older pages preserve metadata and exact legacy entries", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-paged-reader-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const owned = await openSessionStorage(dir);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context);
+		const empty = (await readSessionSnapshot(dir, dir, true, true)).events[0];
+		assert.equal(empty?.type, "snapshot");
+		assert.deepEqual(empty.entries, []);
+		assert.equal(empty.history?.more, false, "existing empty storage is distinguishable from missing storage");
+		await root.commit(async (tx) => {
+			for (let i = 0; i < 300; i++)
+				await tx.appendEntry(root.id, {
+					kind: "pi.user",
+					model: [{ role: "user", content: `exact 日本 ${i}`, timestamp: i }],
+				});
+			(await tx.doc(LiveDoc, root.id)).run = { taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
+		}, context);
+		const legacy = (await readSessionSnapshot(dir, dir)).events[0];
+		const recent = (await readSessionSnapshot(dir, dir, true, true)).events[0];
+		assert.equal(legacy?.type, "snapshot");
+		assert.equal(recent?.type, "snapshot");
+		assert.equal(recent.entries.length, 60);
+		assert.deepEqual(recent.run, legacy.run);
+		assert.ok(recent.history?.more);
+		const entries = [...recent.entries];
+		let before = recent.history.before;
+		// Live appends never change the immutable range covered by the captured pages.
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "new-live" });
+		}, context);
+		while (before !== undefined) {
+			const page = await readEarlierEntries(dir, before, 24, recent.history.context);
+			assert.deepEqual(page.context, recent.history.context);
+			assert.equal(page.before, before);
+			entries.unshift(...page.entries);
+			before = page.nextBefore;
+		}
+		assert.deepEqual(entries, legacy.entries);
+		assert.deepEqual(await readEarlierEntries(dir, 0, 24, recent.history.context), {
+			entries: [],
+			more: false,
+			context: recent.history.context,
+			before: 0,
+		});
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+	await assert.rejects(readEarlierEntries(join(dir, "missing"), 4, 24, { conversationId: 0, tail: 4 }), /unavailable/);
+	await assert.rejects(readSessionSnapshot(join(dir, "missing"), dir, true, true), /unavailable/);
+	const legacyMissing = (await readSessionSnapshot(join(dir, "missing"), dir)).events[0];
+	assert.equal(legacyMissing?.type, "snapshot");
+	assert.deepEqual(legacyMissing.entries, [], "legacy missing-storage behavior is unchanged");
+});
+
 test("cold snapshot matches durable active view under a writer lease, without running pending tools", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-reader-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
@@ -464,7 +521,7 @@ test("diagnostic history cold-reads active and compacted entries with explicit b
 		assert.equal(newest.pagination.more, true);
 		assert.equal(newest.pagination.nextBefore, ids[1]);
 		assert.equal(newest.pagination.scannedEntries, 3, "internal state is skipped under an explicit scan bound");
-		assert.doesNotMatch(JSON.stringify(newest), /mustNotAppear|\"kind\":\"note\"/);
+		assert.doesNotMatch(JSON.stringify(newest), /mustNotAppear|"kind":"note"/);
 		assert.equal(newest.entries[0]?.truncated, true);
 		assert.doesNotMatch(newest.entries[0]!.excerpt, /attachment-secret/);
 		assert.doesNotMatch(newest.entries[0]!.excerpt, /credential-secret/);

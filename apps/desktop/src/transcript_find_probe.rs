@@ -50,7 +50,7 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             let (writer, writes) = Interaction::recording();
-            let (client, _read_commands) = LocalClient::synthetic_commands();
+            let (client, read_commands) = LocalClient::synthetic_commands();
             let (h, v) = cx
                 .update(|cx| {
                     gpui_kit::open_window(
@@ -562,6 +562,84 @@ pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
                 );
             })
             .unwrap();
+            while read_commands.try_recv().is_ok() {} // Previous scroll/navigation checks have their own requests.
+            // Opening Find never crawls older pages. Full-history loading is explicit,
+            // cancellable and retains the query entity while pages arrive.
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    v.selected = Some("paged-fixture".into());
+                    v.generation = 1200;
+                    v.state.generation = 1200;
+                    v.state.loaded = true;
+                    v.state.page_busy = false;
+                    v.state.page_error = false;
+                    v.earlier_attempt = None;
+                    v.earlier_request = None;
+                    v.state.cursor = Some(200);
+                    v.state.chat_status = "Connected · Local".into();
+                    v.sync_history_controls(cx);
+                });
+                t.update(cx, |t, cx| {
+                    t.history_scope(1200);
+                    t.open_find(w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(
+                read_commands.try_recv().is_err(),
+                "Find mount cannot fetch history"
+            );
+            if let Some(p) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(p.join(format!("partial-coverage-{width}-{dark}.png")))
+                    .unwrap();
+            }
+            let retained_query = cx.update(|cx| t.read(cx).find_probe_input());
+            cx.update_window(h, |_, w, cx| w.click("find-load-history", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(
+                read_commands.try_recv(),
+                Ok(Command::Earlier {
+                    before: 200,
+                    generation: 1200
+                })
+            ));
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut state = v.state.clone();
+                    state.rows = vec![row(2), row(38), row(201)];
+                    state.cursor = None;
+                    state.page_busy = false;
+                    state.page_revision += 1;
+                    v.accept(state, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            assert_eq!(
+                retained_query.entity_id(),
+                cx.update(|cx| t.read(cx).find_probe_input().entity_id())
+            );
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("find-load-history").is_none(),
+                    "full coverage removes loading action"
+                );
+                retained_query.update(cx, |i, cx| i.set_value("日本", w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("find-status").label(), Some("1 of 3"))
+            })
+            .unwrap();
+            assert!(
+                read_commands.try_recv().is_err(),
+                "exhausted history never fetches again"
+            );
             assert!(writes.try_recv().is_err(), "No send/submit bleed");
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

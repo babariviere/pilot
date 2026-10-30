@@ -199,6 +199,6 @@ fn faux_reader_keeps_exact_hello_chat_entry_block_source_and_only_gets() {
     assert!(
         requests
             .iter()
-            .any(|request| request == "GET /api/sessions/owner/ws HTTP/1.1")
+            .any(|request| request == "GET /api/sessions/owner/ws?history=paged-v1 HTTP/1.1")
     );
 }

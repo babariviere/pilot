@@ -93,6 +93,7 @@ import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-too
 import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
+import { recentSnapshot } from "./paged-history.ts";
 import { PerformanceLog } from "./performance.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
@@ -1676,6 +1677,7 @@ export class KernelSession {
 		listener: (events: AgentEvent[]) => unknown,
 		includeTodos = true,
 		activityOnly = false,
+		recent = false,
 	): Promise<void> {
 		if (this.#watches.has(watchId)) return;
 		if (activityOnly) {
@@ -1693,6 +1695,11 @@ export class KernelSession {
 			return;
 		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
+		const displaySnapshot = async (snapshot: typeof stream.snapshot) => {
+			if (!recent) return snapshot;
+			const held = await this.harness.snapshot(HeldInputsDoc, this.conversation.id, context);
+			return { ...snapshot, ...recentSnapshot(snapshot.entries, this.conversation.id, held?.questionPending) };
+		};
 		const displayQueue = async (inbox: Readonly<InboxState> | null) =>
 			queueUpdateForDisplay(
 				inbox,
@@ -1720,7 +1727,11 @@ export class KernelSession {
 		}
 		try {
 			await listener([
-				...(await chatEvents(this.harness, await this.#origins.events([stream.snapshot]), context)),
+				...(await chatEvents(
+					this.harness,
+					await this.#origins.events([await displaySnapshot(stream.snapshot)]),
+					context,
+				)),
 				await displayQueue(queue.value),
 			]);
 			await listener([{ type: "github_actions_update", actions: [...(audit?.value?.actions ?? [])] }]);
@@ -1736,7 +1747,19 @@ export class KernelSession {
 			await listener([todosUpdate(state)]);
 		});
 		stream.start(async (events) => {
-			await listener(await chatEvents(this.harness, await this.#origins.events(events), context));
+			await listener(
+				await chatEvents(
+					this.harness,
+					await this.#origins.events(
+						recent
+							? await Promise.all(
+									events.map((event) => event.type === "snapshot" ? displaySnapshot(event) : event),
+								)
+							: events,
+					),
+					context,
+				),
+			);
 		});
 		queue.start(async (inbox) => {
 			await listener([await displayQueue(inbox)]);

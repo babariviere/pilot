@@ -1689,6 +1689,12 @@ test("history route validates its cursor and limit and forwards the page request
 		await bad.arrayBuffer();
 	}
 	assert.equal(history.mock.callCount(), 2);
+	const captured = { conversationId: 3, tail: 100, head: { id: 80, start: 12 } };
+	assert.equal((await fetch(`${base}?before=42&limit=24&view=${encodeURIComponent(JSON.stringify(captured))}`)).status, 200);
+	assert.deepEqual(history.mock.calls[2]?.arguments, ["session-1", 42, 24, captured]);
+	for (const view of [null, {}, { conversationId: 3, tail: -1 }, { ...captured, head: null }, { ...captured, head: { id: 1, start: 2 } }]) {
+		assert.equal((await fetch(`${base}?before=42&view=${encodeURIComponent(JSON.stringify(view))}`)).status, 400);
+	}
 });
 
 test("subagent routes decode names, validate bodies and forward transcript, message and stop requests", async (t) => {

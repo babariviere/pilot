@@ -18,6 +18,7 @@ use tokio_tungstenite::tungstenite::{
 #[derive(Clone, Copy)]
 enum Scenario {
     Normal,
+    Paged,
     Incompatible,
     BadIdentity,
     Redirect,
@@ -129,6 +130,7 @@ struct Mock {
     sockets: Arc<AtomicUsize>,
     task: JoinHandle<()>,
     step: async_channel::Sender<()>,
+    page_step: async_channel::Sender<()>,
 }
 impl Drop for Mock {
     fn drop(&mut self) {
@@ -155,6 +157,7 @@ impl Mock {
         let attempts = Arc::new(AtomicUsize::new(0));
         let hellos = Arc::new(AtomicUsize::new(0));
         let (step, steps) = async_channel::bounded::<()>(2);
+        let (page_step, page_steps) = async_channel::bounded::<()>(2);
         let task = tokio::spawn(async move {
             let mut handlers = tokio::task::JoinSet::new();
             loop {
@@ -164,6 +167,7 @@ impl Mock {
                         let (record,active,attempts)=(record.clone(),active.clone(),attempts.clone());
                         let hellos=hellos.clone();
                         let steps=steps.clone();
+                        let page_steps=page_steps.clone();
                         handlers.spawn(async move {
                             let mut reader=BufReader::new(stream);
                             let mut headers=String::new();
@@ -193,6 +197,20 @@ impl Mock {
                                 stream.write_all(response.as_bytes()).await.unwrap(); return;
                             }
                             if path.contains("/history?") {
+                                if matches!(scenario,Scenario::Paged) {
+                                    let url=reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+                                    let query:std::collections::HashMap<_,_>=url.query_pairs().into_owned().collect();
+                                    let context:Value=serde_json::from_str(&query["view"]).unwrap();
+                                    let before=query["before"].parse::<u64>().unwrap();
+                                    assert_eq!(context["conversationId"],0);
+                                    assert_eq!(query["limit"],"24");
+                                    let index=record.lock().unwrap().iter().filter(|r|r.contains("/history?")).count();
+                                    if page_steps.recv().await.is_err(){return;}
+                                    let body=json!({"context":context,"before":before,"entries":[entry(3,"earlier"),entry(4,"older")],"more":true,"nextBefore":3}).to_string();
+                                    let status=if index==4 {"500 Synthetic failure"} else {"200 OK"};
+                                    let _=stream.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
+                                    return;
+                                }
                                 assert_eq!(path,"/api/sessions/a/history?before=5&limit=24");
                                 let body=json!({"entries":[entry(3,"earlier"),entry(4,"older")],"more":true}).to_string();
                                 stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap(); return;
@@ -272,11 +290,19 @@ impl Mock {
                                 let resumed=matches!(scenario,Scenario::Resume | Scenario::CompactionResume)&&attempt>0;
                                 socket.send(Frame::Text(json!({"type":"chat.stream","sessionId":id,"streamId":"synthetic-stream","resumed":resumed}).to_string().into())).await.unwrap();
                                 if resumed {
-                                    assert!(path.ends_with("?stream=synthetic-stream&after=2"));
+                                    assert!(path.ends_with("&stream=synthetic-stream&after=2"));
                                     socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"entry_appended","entry":entry(8,"resumed")}]}).to_string().into())).await.unwrap();
                                 } else {
                                     let mut head=entry(5,&format!("{id} tail")); head["head"]=json!(5);
-                                    socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":1,"events":[{"type":"snapshot","entries":[head]}]}).to_string().into())).await.unwrap();
+                                    let mut initial=json!({"type":"snapshot","entries":[head]});
+                                    if matches!(scenario,Scenario::Paged) {initial["history"]=json!({"context":{"conversationId":if id=="a"{0}else{1},"tail":5},"more":true,"before":5,"question":null});}
+                                    socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":1,"events":[initial]}).to_string().into())).await.unwrap();
+                                    if matches!(scenario,Scenario::Paged)&&attempt==0 {
+                                        if steps.recv().await.is_err(){return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(6,"live while paging")}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err(){return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"snapshot","entries":[entry(9,"replacement tail")],"history":{"context":{"conversationId":0,"tail":9},"more":true,"before":9,"question":null}}]}).to_string().into())).await.unwrap();
+                                    }
                                     if matches!(scenario,Scenario::LargeFrame | Scenario::LargeFragmentedMessage) {
                                         let payload=json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(6,&large_stream_text())}]}).to_string();
                                         assert!(payload.len()>8*1024*1024);
@@ -349,6 +375,7 @@ impl Mock {
             sockets,
             task,
             step,
+            page_step,
         }
     }
 }
@@ -549,6 +576,117 @@ async fn real_sockets_are_readonly_paged_switch_fenced_and_cancelled() {
 }
 
 #[tokio::test]
+async fn captured_pages_keep_live_tail_and_fence_snapshot_navigation_reconnect_and_failure() {
+    async fn requested(mock: &Mock, n: usize) {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while mock
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.contains("/history?"))
+                .count()
+                < n
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let mock = Mock::start(Scenario::Paged).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    until(&rx, |v| v.list_loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 1,
+    });
+    let recent = until(&rx, |v| v.generation == 1 && v.loaded).await;
+    assert_eq!(recent.rows.len(), 1);
+    assert_eq!(recent.cursor, Some(5));
+    assert!(
+        !mock
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.contains("/history?")),
+        "initial readiness cannot crawl history"
+    );
+    client.command(Command::Earlier {
+        before: 5,
+        generation: 1,
+    });
+    requested(&mock, 1).await;
+    mock.step.send(()).await.unwrap();
+    let streaming = until(&rx, |v| v.rows.len() == 2).await;
+    assert!(streaming.loaded && streaming.page_busy);
+    assert_eq!(streaming.rows[1].source(), "live while paging");
+    mock.step.send(()).await.unwrap();
+    let replacement = until(&rx, |v| v.cursor == Some(9) && !v.page_busy).await;
+    assert_eq!(replacement.rows.len(), 1);
+    assert_eq!(replacement.rows[0].source(), "replacement tail");
+    mock.page_step.send(()).await.unwrap(); // Obsolete pre-replacement response.
+    client.command(Command::Earlier {
+        before: 9,
+        generation: 1,
+    });
+    requested(&mock, 2).await;
+    client.command(Command::Open {
+        id: "b".into(),
+        generation: 2,
+    });
+    until(&rx, |v| v.generation == 2 && v.loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 3,
+    });
+    let back = until(&rx, |v| v.generation == 3 && v.loaded).await;
+    assert_eq!(back.rows.len(), 1);
+    assert_eq!(back.rows[0].source(), "a tail");
+    mock.page_step.send(()).await.unwrap(); // A/B/A cannot accept generation1.
+    client.command(Command::Earlier {
+        before: 5,
+        generation: 3,
+    });
+    requested(&mock, 3).await;
+    let batches = back.batches;
+    client.command(Command::Reconnect);
+    let reconnected = until(&rx, |v| {
+        v.generation == 3 && v.loaded && !v.page_busy && v.batches > batches
+    })
+    .await;
+    assert_eq!(reconnected.rows.len(), 1);
+    mock.page_step.send(()).await.unwrap(); // Old connection epoch cannot replace new snapshot.
+    client.command(Command::Earlier {
+        before: 5,
+        generation: 3,
+    });
+    requested(&mock, 4).await;
+    mock.page_step.send(()).await.unwrap();
+    let failure = until(&rx, |v| v.page_error).await;
+    assert!(failure.loaded && !failure.page_busy);
+    assert_eq!(failure.cursor, Some(5));
+    assert_eq!(failure.rows.len(), 1);
+    client.command(Command::Earlier {
+        before: 5,
+        generation: 3,
+    });
+    requested(&mock, 5).await;
+    mock.page_step.send(()).await.unwrap();
+    let retried = until(&rx, |v| v.cursor == Some(3)).await;
+    assert_eq!(retried.rows.len(), 3);
+    assert!(!retried.page_error);
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.starts_with("GET "))
+    );
+}
+
+#[tokio::test]
 async fn hello_is_validated_before_any_socket_and_redirects_are_not_followed() {
     for scenario in [Scenario::BadIdentity, Scenario::Redirect] {
         let mock = Mock::start(scenario).await;
@@ -583,7 +721,7 @@ async fn reconnect_resumes_after_applied_sequence_without_duplicate_rows() {
     let requests = mock.requests.lock().unwrap();
     let second = requests
         .iter()
-        .position(|r| r.contains("?stream=synthetic-stream&after=2"))
+        .position(|r| r.contains("&stream=synthetic-stream&after=2"))
         .unwrap();
     assert!(requests[..second].last().unwrap().contains("/api/hello"));
 }
@@ -650,8 +788,8 @@ async fn session_todos_use_only_selected_public_stream_and_retain_bad_replacemen
     assert!(requests.iter().all(|r| r.starts_with("GET ")));
     assert!(requests.iter().all(|r| r.contains("/api/hello ")
         || r.contains("/api/ws ")
-        || r.contains("/api/sessions/a/ws ")
-        || r.contains("/api/sessions/b/ws ")));
+        || r.contains("/api/sessions/a/ws?history=paged-v1 ")
+        || r.contains("/api/sessions/b/ws?history=paged-v1 ")));
 }
 #[test]
 fn session_todos_source_equality_includes_exact_home_daemon_lineage_port() {

@@ -64,7 +64,10 @@ impl Server {
                         stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes())?;
                         return Ok(());
                     }
-                    assert!(matches!(path, "/api/ws" | "/api/sessions/owner/ws"));
+                    assert!(matches!(
+                        path,
+                        "/api/ws" | "/api/sessions/owner/ws?history=paged-v1"
+                    ));
                     // Header names are case-insensitive, values are not.
                     let key = headers
                         .lines()
@@ -79,7 +82,9 @@ impl Server {
                 })();
                 // ReadRoute has already been recorded above; decide without logging content.
                 let path = record.lock().unwrap().last().cloned().unwrap_or_default();
-                if path.contains("/ws ") {
+                if path.contains("/api/ws ")
+                    || path.contains("/api/sessions/owner/ws?history=paged-v1 ")
+                {
                     let mut socket = WebSocket::from_raw_socket(stream, Role::Server, None);
                     let values = if path.contains("/sessions/") {
                         vec![

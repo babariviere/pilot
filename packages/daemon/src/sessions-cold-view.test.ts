@@ -162,6 +162,43 @@ test("cold viewing after daemon restart never starts a worker, then receives a f
 	assert.equal(reads, 1);
 });
 
+test("recent viewers bypass full snapshot cache and retain opt-in on live attachment", async (t) => {
+	const flags: Array<boolean | undefined> = [];
+	const paged: AgentEvent = {
+		...cold,
+		history: { context: { conversationId: 0, tail: 4000 }, more: true, before: 3941 },
+	};
+	const f = await fixture(t, {}, async (_directory, _cwd, _todos, recent) => {
+		flags.push(recent);
+		return { events: [recent ? paged : cold] };
+	});
+	const manager = await f.open();
+	const legacy: AgentEvent[][] = [],
+		recent: AgentEvent[][] = [];
+	const off = manager.subscribe(f.id, (events) => legacy.push(events));
+	await until(() => legacy.length === 1);
+	const offRecent = manager.subscribe(f.id, (events) => recent.push(events), undefined, true);
+	await until(() => recent.length === 1);
+	assert.deepEqual(flags, [undefined, true]);
+	assert.deepEqual(recent[0], [paged]);
+	await manager.send(f.id, "new input");
+	assert.ok(f.workers[0]!.sent.some((command) => command.type === "watch" && command.recent === true));
+	off();
+	offRecent();
+});
+
+test("failed recent read reports unavailable, never an authoritative empty history", async (t) => {
+	const f = await fixture(t, {}, async () => {
+		throw new Error("synthetic read failure");
+	});
+	const manager = await f.open();
+	const batches: AgentEvent[][] = [];
+	const off = manager.subscribe(f.id, (events) => batches.push(events), undefined, true);
+	await until(() => batches.length === 1);
+	assert.deepEqual(batches, [[{ type: "history_error" }]]);
+	off();
+});
+
 test("daemon restart normalizes legacy persisted attention without the worker or native SDK", async (t) => {
 	const f = await fixture(t);
 	const owned = await openSessionStorage(join(f.home, "sessions", f.id, "durable"));

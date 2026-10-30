@@ -1626,7 +1626,32 @@ export function createDaemonServer(
 			const limit = url.searchParams.get("limit") ?? String(HISTORY_PAGE_DEFAULT);
 			if (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > HISTORY_PAGE_MAX)
 				throw new HttpError(400, `limit must be between 1 and ${HISTORY_PAGE_MAX}`);
-			const page: SessionHistoryPage = await sessions.history(parts[2]!, Number(before), Number(limit));
+			let view: import("@pilot/protocol").TranscriptContext | undefined;
+			const captured = url.searchParams.get("view");
+			if (captured !== null) {
+				try {
+					view = JSON.parse(captured);
+				} catch {
+					throw new HttpError(400, "Invalid transcript context");
+				}
+				const natural = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+				if (
+					!view ||
+					!natural(view.conversationId) ||
+					!natural(view.tail) ||
+					(view.head !== undefined &&
+						(!view.head ||
+						!natural(view.head.id) ||
+							!natural(view.head.start) ||
+							view.head.start > view.head.id ||
+							view.head.id > view.tail)) ||
+					Number(before) > view.tail + 1
+				)
+					throw new HttpError(400, "Invalid transcript context");
+			}
+			const page: SessionHistoryPage = view
+				? await sessions.history(parts[2]!, Number(before), Number(limit), view)
+				: await sessions.history(parts[2]!, Number(before), Number(limit));
 			return json(res, 200, page);
 		}
 		if (
@@ -2024,7 +2049,9 @@ export function createDaemonServer(
 		for (const ws of setupWss.clients) ws.terminate();
 		setupWss.close();
 	});
-	const chatStreams = new ChatStreams((sessionId, listener, trace) => sessions.subscribe(sessionId, listener, trace));
+	const chatStreams = new ChatStreams((sessionId, listener, trace, recent) =>
+		sessions.subscribe(sessionId, listener, trace, recent),
+	);
 	server.on("close", () => chatStreams.close());
 	server.on("upgrade", (req, socket, head) => {
 		const url = new URL(req.url ?? "/", "http://localhost");
@@ -2411,6 +2438,7 @@ export function createDaemonServer(
 				sendData,
 				streamId ? { streamId, after } : undefined,
 				historyTrace,
+				params.get("history") === "paged-v1",
 			);
 			detach = attachment.detach;
 			if (attachment.resumed && historyTrace) {

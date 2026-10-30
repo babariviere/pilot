@@ -60,6 +60,8 @@ impl TranscriptView {
 }
 pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
+pub(crate) struct FullHistoryRequested(pub(crate) u64);
+impl gpui_kit::EventEmitter<FullHistoryRequested> for TranscriptView {}
 pub(crate) struct LatestRequested(pub(crate) u64);
 impl gpui_kit::EventEmitter<LatestRequested> for TranscriptView {}
 /// Whether the reader follows the newest rows of history scope `.0`.
@@ -67,6 +69,9 @@ pub(crate) struct Following(pub(crate) u64, pub(crate) bool);
 impl gpui_kit::EventEmitter<Following> for TranscriptView {}
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HistoryControls {
+    pub(crate) older: bool,
+    pub(crate) complete: bool,
+    pub(crate) loading_all: bool,
     /// Newer entries were omitted while reading older ones. Reaching the
     /// bottom requests the newest bounded window once.
     pub(crate) behind: bool,

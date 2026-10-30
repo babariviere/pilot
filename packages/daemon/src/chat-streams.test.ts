@@ -24,6 +24,31 @@ const snapshot = (count: number, text = "x") =>
 	}) as AgentEvent;
 const queue: AgentEvent = { type: "queue_update", items: [] };
 
+test("opt-in recent snapshots stay authoritative, never gain a prefix or resume a legacy stream", () => {
+	const modes: boolean[] = [];
+	const streams = new ChatStreams(
+		(_id, listener, _trace, recent) => {
+			modes.push(recent ?? false);
+			const event = snapshot(60);
+			if (recent && event.type === "snapshot")
+				event.history = { context: { conversationId: 0, tail: 6000 }, more: true, before: 5941 };
+			listener([event, queue]);
+			return () => {};
+		},
+		{ tailEntries: 2 },
+	);
+	const frames: ChatServerMessage[] = [];
+	const sink = (data: string) => frames.push(JSON.parse(data));
+	const recent = streams.attach("s1", sink, undefined, undefined, true);
+	assert.equal(frames.length, 2, "hello plus one complete bounded snapshot");
+	assert.ok(!JSON.stringify(frames).includes("prefixPending"));
+	recent.detach();
+	const replaced = streams.attach("s1", sink, { streamId: recent.streamId, after: 1 });
+	assert.equal(replaced.resumed, false);
+	assert.deepEqual(modes, [true, false]);
+	streams.close();
+});
+
 function harness(options: ConstructorParameters<typeof ChatStreams>[1] = {}) {
 	const listeners: Listener[] = [];
 	let unsubscribed = 0;

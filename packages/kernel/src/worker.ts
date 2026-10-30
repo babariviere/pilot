@@ -409,6 +409,7 @@ export function runKernelWorker(): void {
 					(events) => send({ type: "events", watchId: command.watchId, events }),
 					command.includeTodos,
 					command.activityOnly,
+					command.recent,
 				);
 				break;
 			case "unwatch":

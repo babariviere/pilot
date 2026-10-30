@@ -16,7 +16,7 @@ import {
 	Type,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { SessionCompletion } from "@pilot/protocol";
+import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import type { DatabaseCall } from "./database-tool.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
@@ -263,9 +263,22 @@ test("Stop cancels a suspended script without running its catch or subsequent ef
 	await f.session.submit("ask", "Ask", "followUp");
 	await questionPublished(f.session);
 	await f.session.submit("mission:send:auto", "Keep held", "followUp");
+	const snapshots: AgentEvent[] = [];
+	const capture = (events: AgentEvent[]) => snapshots.push(...events);
+	await f.session.watch("paged-pending", capture, false, false, true);
+	assert.ok(snapshots.find((e) => e.type === "snapshot")?.history?.question);
+	await f.session.unwatch("paged-pending");
 	await f.session.abort();
+	snapshots.length = 0;
+	await f.session.watch("paged-stopped", capture, false, false, true);
+	assert.equal(snapshots.find((e) => e.type === "snapshot")?.history?.question, null);
+	await f.session.unwatch("paged-stopped");
 	assert.deepEqual(f.effects, ["before"]);
 	await f.reopen();
+	snapshots.length = 0;
+	await f.session.watch("paged-restored", capture, false, false, true);
+	assert.equal(snapshots.find((e) => e.type === "snapshot")?.history?.question, null);
+	await f.session.unwatch("paged-restored");
 	assert.deepEqual(f.effects, ["before"]);
 	assert.equal(f.faux.state.callCount, 1);
 });

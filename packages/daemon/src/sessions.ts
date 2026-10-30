@@ -12,7 +12,6 @@ import {
 	type AskContext,
 	type DiagnosticLogRequest,
 	type DiagnosticLogResult,
-	type EarlierEntriesRead,
 	type ExecutionPermission,
 	formatFailure,
 	inheritedExecutionPermission,
@@ -347,11 +346,21 @@ export interface SessionFactories {
 	/** Credential-free cancellation, after the failed storage owner has closed. */
 	stopRecovery?: (spec: import("@pilot/kernel").RecoveryStop) => Promise<KernelSubagent[]>;
 	/** Read-only persisted view, independent of the worker/SDK factory. */
-	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
+	snapshot?: (
+		directory: string,
+		cwd: string,
+		includeTodos?: boolean,
+		recent?: boolean,
+	) => Promise<PersistedSessionView>;
 	/** Read-only subagent transcript events from a child's private storage directory. */
 	subagentRead?: (directory: string, conversationId: string, after?: number) => Promise<SubagentTranscriptRead>;
 	/** Read-only page of a session's entries hidden by compaction. */
-	historyRead?: (directory: string, before: number, limit: number) => Promise<EarlierEntriesRead>;
+	historyRead?: (
+		directory: string,
+		before: number,
+		limit: number,
+		view?: import("@pilot/protocol").TranscriptContext,
+	) => Promise<SessionHistoryPage>;
 	/** Bounded cold-storage read for an explicitly authorized diagnostics target. */
 	diagnosticHistoryRead?: (
 		directory: string,
@@ -1258,6 +1267,7 @@ export class SessionManager {
 	private readonly metas = new Map<string, SessionMeta>();
 	private readonly workers = new Map<string, SessionWorker>();
 	/** sessionId -> watchId -> listener */
+	private readonly recentWatches = new Set<string>();
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly coldWatches = new Map<string, () => void>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
@@ -6425,14 +6435,19 @@ export class SessionManager {
 	 * Entries older than the active transcript (hidden by compaction or reset), read from storage without waking a
 	 * parked kernel. Readers do not block the live writer, so this works while the session runs.
 	 */
-	async history(id: string, before: number, limit: number): Promise<SessionHistoryPage> {
+	async history(
+		id: string,
+		before: number,
+		limit: number,
+		view?: import("@pilot/protocol").TranscriptContext,
+	): Promise<SessionHistoryPage> {
 		const meta = this.require(id);
 		this.validateMode(meta);
 		const directory = join(this.dir(id), "durable");
 		const read = this.factories.historyRead
-			? await this.factories.historyRead(directory, before, limit)
-			: await this.coldReader.readEarlier(directory, before, limit);
-		return { entries: read.entries, more: read.more };
+			? await this.factories.historyRead(directory, before, limit, view)
+			: await this.coldReader.readEarlier(directory, before, limit, view);
+		return view ? read : { entries: read.entries, more: read.more };
 	}
 
 	/** Role-authorized bounded storage read. Legacy focus/history flags are not access gates. */
@@ -6929,7 +6944,7 @@ export class SessionManager {
 	}
 
 	/** View parked history without waking the kernel; attach live if work starts later. */
-	subscribe(id: string, listener: EventListener, trace?: TraceCarrier): () => void {
+	subscribe(id: string, listener: EventListener, trace?: TraceCarrier, recent = false): () => void {
 		const meta = this.require(id);
 		if (this.closing) throw new Error("pilotd is shutting down");
 		try {
@@ -6945,9 +6960,11 @@ export class SessionManager {
 		const finishHistory = (events: AgentEvent[] | undefined, outcome: "completed" | "unavailable") => {
 			if (!trace || historyObserved) return;
 			historyObserved = true;
-			const count = events?.find(
+			const snapshot = events?.find(
 				(event): event is Extract<AgentEvent, { type: "snapshot" }> => event.type === "snapshot",
-			)?.entries.length;
+			);
+			// A recent page is not evidence of the transcript's total size.
+			const count = snapshot?.history ? undefined : snapshot?.entries.length;
 			let bucket: "0" | "1-100" | "101-1000" | "1001+" | undefined;
 			if (count === 0) bucket = "0";
 			else if (count !== undefined && count <= 100) bucket = "1-100";
@@ -6977,6 +6994,7 @@ export class SessionManager {
 		if (!worker && !meta.failure && !meta.recoveryStopped && !this.isRetainedHistory(meta))
 			this.updateGate.assertOpen();
 		const watchId = randomUUID();
+		if (recent) this.recentWatches.add(watchId);
 		let watchers = this.watchers.get(id);
 		if (!watchers) {
 			watchers = new Map();
@@ -6985,7 +7003,8 @@ export class SessionManager {
 		watchers.set(watchId, observedListener);
 		this.lastUse.set(id, Date.now());
 		if (meta.preparing && meta.cancelled) observedListener([emptySnapshot]);
-		if (worker && !meta.failure) worker.send({ type: "watch", watchId });
+		if (worker && !meta.failure)
+			worker.send({ type: "watch", watchId, ...(this.recentWatches.has(watchId) ? { recent: true } : {}) });
 		else if (
 			(!meta.nextAttemptModel || meta.recoveryModel) &&
 			!this.sleepPause &&
@@ -7018,6 +7037,7 @@ export class SessionManager {
 		return () => {
 			finishHistory(undefined, "unavailable");
 			watchers.delete(watchId);
+			this.recentWatches.delete(watchId);
 			this.coldWatches.get(watchId)?.();
 			// The inactivity clock starts when the last viewer leaves.
 			this.lastUse.set(id, Date.now());
@@ -7042,7 +7062,7 @@ export class SessionManager {
 			this.watchers.get(id)?.get(watchId) === listener &&
 			(!this.workers.has(id) || (!!failure && this.workers.get(id) === worker)) &&
 			this.workerGenerations.get(id) === generation;
-		const read = this.coldSnapshot(meta);
+		const read = this.recentWatches.has(watchId) ? this.recentColdSnapshot(meta) : this.coldSnapshot(meta);
 		this.coldConsumers.set(read, (this.coldConsumers.get(read) ?? 0) + 1);
 		const release = (cancel: boolean) => {
 			if (this.coldWatches.get(watchId) !== cancelRead) return;
@@ -7094,9 +7114,19 @@ export class SessionManager {
 			.catch((error: unknown) => {
 				if (error instanceof Error && error.name === "AbortError") return;
 				if (!this.closing) console.warn(`pilotd: could not read session ${id}: ${error}`);
-				if (current()) listener([emptySnapshot]);
+				if (current()) listener(this.recentWatches.has(watchId) ? [{ type: "history_error" }] : [emptySnapshot]);
 			})
 			.finally(() => release(false));
+	}
+
+	private recentColdSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
+		// Do not reuse the legacy full-history cache, or fill one by opening a paged viewer.
+		const read = this.factories.snapshot
+			? this.factories.snapshot(join(this.dir(meta.id), "durable"), meta.cwd, meta.mode !== "ask", true)
+			: this.coldReader.read(join(this.dir(meta.id), "durable"), meta.cwd, meta.mode !== "ask", undefined, true);
+		this.coldReads.add(read);
+		void read.finally(() => this.coldReads.delete(read)).catch(() => undefined);
+		return read;
 	}
 
 	private coldSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
@@ -7835,7 +7865,8 @@ export class SessionManager {
 			for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
 			this.lastUse.set(id, Date.now());
 			// Reattach existing subscribers, for example after a kernel restart.
-			for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });
+			for (const watchId of this.watchers.get(id)?.keys() ?? [])
+				worker.send({ type: "watch", watchId, ...(this.recentWatches.has(watchId) ? { recent: true } : {}) });
 			// A new kernel starts without slack_status; declare it if the chat is attached to a Slack triage message.
 			if (meta.projectId && !meta.ask) this.refreshSlackLinks(meta.projectId);
 			this.emit(meta);

@@ -244,7 +244,7 @@ export type KernelCommand =
 			message?: string;
 			mode?: DeliveryMode;
 	  }
-	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean }
+	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean; recent?: boolean }
 	| { type: "unwatch"; watchId: string }
 	/** Replaces the mission context; omitted when the chat left its mission. */
 	| { type: "mission.context"; context?: MissionContext }
