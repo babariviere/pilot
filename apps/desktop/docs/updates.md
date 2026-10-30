@@ -131,7 +131,7 @@ authentication for the ordinary loopback API.
 3. Validate the whole authenticated candidate, retained capsule, exact process
    executable, configuration and owner generation. Persist a guard in the private
    same-volume transaction and start the matching helper. On macOS the helper
-   re-authenticates/extracts/syncs its own private OS-temporary installation payload before
+   re-authenticates/extracts its own disposable private OS-temporary installation payload before
    readiness, then waits for COMMIT. The GUI is still open during this work;
    restart admission/editing fences remain held.
    Bundled GUI updates and local reloads inspect the retained proof without reserving the daemon.
@@ -217,8 +217,14 @@ mode0700 OS temporary directory, not `/Applications`. The helper inherits the ta
 lock and reopens the exact private path/device/inode recorded in the durable
 transaction; GUI lifetime or differing helper environment cannot delete or redirect
 it. Purged/replaced temporary data refuses installation while durable recovery
-evidence remains. Successful swap cleans only that workspace. Unknown/committed
-failures are retained, not automatically retried or cleaned.
+evidence remains. Disposable preview/preparation trees are not fsynced; the retained
+authenticated archive and final same-volume candidate, rollback and journal remain
+durable. Successful relaunch precedes cleanup of that exact workspace. If the helper
+is interrupted, normal recovery inspection under the target/journal locks can clean
+only a proven post-swap workspace (authenticated archive plus exact rollback inode).
+Unknown/committed failures, changed workspace ownership and pending journal writes
+are retained, not automatically retried or cleaned. Startup ACK is independent of
+cleanup success; no rollback bundle or receipt is deleted.
 
 The installed target remains `/Applications/Pilot Next.app` (or the original supported
 relocated target). Journals, signed metadata, an authenticated archive copy, receipts

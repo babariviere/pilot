@@ -912,6 +912,110 @@ fn macos_staging_never_exposes_intermediate_apps_beside_installation() {
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 #[test]
+fn interrupted_disposable_preparation_is_never_adopted_as_a_ready_payload() {
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    let preview = installer::preview_bundle(staged.root(), &trust()).unwrap();
+    let workspace = preview.parent().unwrap().parent().unwrap();
+    let interrupted = workspace.join("install-payload");
+    fs::create_dir(&interrupted).unwrap();
+    fs::write(interrupted.join("partial"), "crash during extraction").unwrap();
+    let archive = fs::read(staged.root.join("archive.zip")).unwrap();
+    let root = staged.root.clone();
+    let target = staged.target.clone();
+    let lock = staged.lock.try_clone().unwrap();
+    drop(staged);
+    let reopened = installer::Staged::reopen(&root, &target, &trust(), lock).unwrap();
+    assert!(
+        reopened
+            .prepare_payload(&trust(), &FakePlatform::default())
+            .is_err()
+    );
+    assert_eq!(
+        installer::recovery_phase(&root).unwrap(),
+        installer::Phase::Ready
+    );
+    assert_eq!(fs::read(root.join("archive.zip")).unwrap(), archive);
+    assert_eq!(
+        fs::read_to_string(target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    drop(reopened);
+    assert_eq!(
+        installer::discard_uncommitted(&target, &trust()).unwrap(),
+        1
+    );
+    assert!(!workspace.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn final_candidate_sync_failure_never_advances_the_journal_or_swaps() {
+    struct LostCandidate;
+    impl installer::Platform for LostCandidate {
+        fn verify(
+            &self,
+            path: &Path,
+            trust: &manifest::Trust,
+            build: &str,
+            short: Option<&str>,
+        ) -> Result<(), Error> {
+            FakePlatform::default().verify(path, trust, build, short)
+        }
+        fn verify_candidate(
+            &self,
+            path: &Path,
+            trust: &manifest::Trust,
+            manifest: &manifest::Manifest,
+        ) -> Result<(), Error> {
+            FakePlatform::default().verify_candidate(path, trust, manifest)?;
+            if path.file_name().unwrap() == "bundle" {
+                // Isolated fault immediately before mandatory final-tree sync.
+                fs::rename(path, path.with_file_name("interrupted-copy")).unwrap();
+            }
+            Ok(())
+        }
+        fn swap(&self, _: &File, _: &Path, _: &Path) -> Result<(), Error> {
+            panic!("sync failure must prevent exchange")
+        }
+        fn relaunch(&self, _: &Path, _: &Path) -> Result<(), Error> {
+            panic!("sync failure must prevent relaunch")
+        }
+    }
+    let temp = Temp::new();
+    let staged = fixture_stage(&temp);
+    let prepared = staged.prepare_payload(&trust(), &LostCandidate).unwrap();
+    let archive = fs::read(staged.root.join("archive.zip")).unwrap();
+    let preview = installer::preview_bundle(staged.root(), &trust()).unwrap();
+    let workspace = preview.parent().unwrap().parent().unwrap();
+    commit(&staged);
+    assert_eq!(
+        prepared.apply_after_exit(
+            &trust(),
+            &LostCandidate,
+            helper::ExitedParent::synthetic(),
+            |_| Ok(())
+        ),
+        Err(Error::Filesystem)
+    );
+    assert_eq!(
+        installer::recovery_phase(staged.root()).unwrap(),
+        installer::Phase::Committed
+    );
+    assert_eq!(
+        fs::read_to_string(staged.target.join("Contents/build")).unwrap(),
+        "100.1"
+    );
+    assert_eq!(fs::read(staged.root.join("archive.zip")).unwrap(), archive);
+    assert!(
+        workspace.is_dir(),
+        "committed failures retain their temporary evidence"
+    );
+    fs::remove_dir_all(workspace).unwrap(); // fixture-owned teardown only
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
 fn temporary_payload_handoff_survives_worker_drop_and_relocated_target() {
     use std::os::unix::fs::MetadataExt;
     let temp = Temp::new();
@@ -943,7 +1047,7 @@ fn temporary_payload_handoff_survives_worker_drop_and_relocated_target() {
         .unwrap();
     assert!(
         !workspace.exists(),
-        "successful exchange cleans ephemeral payloads only"
+        "successful relaunch cleans ephemeral payloads only"
     );
     let rollback = installer::rollback_bundle(&root, &trust());
     assert_eq!(rollback.file_name().unwrap(), "bundle");
@@ -954,6 +1058,134 @@ fn temporary_payload_handoff_survives_worker_drop_and_relocated_target() {
     assert!(!root.join("payload").exists());
     assert!(!root.join("install-payload/Pilot Next.app").exists());
     installer::acknowledge_startup(&root, "101.1", &trust(), &platform, &target).unwrap();
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn temporary_cleanup_follows_relaunch_and_recovers_without_replaying_installation() {
+    struct InterruptedLaunch(PathBuf);
+    impl installer::Platform for InterruptedLaunch {
+        fn verify(
+            &self,
+            path: &Path,
+            trust: &manifest::Trust,
+            build: &str,
+            short: Option<&str>,
+        ) -> Result<(), Error> {
+            FakePlatform::default().verify(path, trust, build, short)
+        }
+        fn swap(&self, parent: &File, relative: &Path, target: &Path) -> Result<(), Error> {
+            FakePlatform::default().swap(parent, relative, target)
+        }
+        fn relaunch(&self, _: &Path, transaction: &Path) -> Result<(), Error> {
+            assert!(
+                self.0.is_dir(),
+                "temporary deletion must not delay relaunch"
+            );
+            assert_eq!(
+                installer::recovery_phase(transaction)?,
+                installer::Phase::RelaunchRequested
+            );
+            Err(Error::Native) // isolated interruption before the deferred cleanup
+        }
+    }
+    for fault in [
+        "none",
+        "ack",
+        "purged",
+        "pending",
+        "archive",
+        "rollback",
+        "workspace",
+    ] {
+        let temp = Temp::new();
+        let staged = fixture_stage(&temp);
+        let preview = installer::preview_bundle(staged.root(), &trust()).unwrap();
+        let workspace = preview.parent().unwrap().parent().unwrap().to_owned();
+        let saved_workspace = workspace.with_file_name(format!(
+            "saved-{}",
+            workspace.file_name().unwrap().to_str().unwrap()
+        ));
+        let prepared = staged
+            .prepare_payload(&trust(), &FakePlatform::default())
+            .unwrap();
+        commit(&staged);
+        assert_eq!(
+            prepared.apply_after_exit(
+                &trust(),
+                &InterruptedLaunch(workspace.clone()),
+                helper::ExitedParent::synthetic(),
+                |_| Ok(())
+            ),
+            Err(Error::RecoveryRequired)
+        );
+        let root = staged.root.clone();
+        let target = staged.target.clone();
+        let rollback = installer::rollback_bundle(&root, &trust());
+        let archive = fs::read(root.join("archive.zip")).unwrap();
+        let mut current = trust();
+        current.current_build = "101.1".into();
+        match fault {
+            "ack" => installer::acknowledge_startup(
+                &root,
+                "101.1",
+                &current,
+                &FakePlatform::default(),
+                &target,
+            )
+            .unwrap(),
+            "purged" => fs::remove_dir_all(&workspace).unwrap(),
+            "pending" => fs::write(root.join("journal.pending"), "interrupted").unwrap(),
+            "archive" => fs::write(root.join("archive.zip"), "changed").unwrap(),
+            "rollback" => {
+                fs::rename(&rollback, root.join("saved-rollback")).unwrap();
+                fs::create_dir(&rollback).unwrap();
+            }
+            "workspace" => {
+                fs::rename(&workspace, &saved_workspace).unwrap();
+                fs::create_dir(&workspace).unwrap();
+            }
+            _ => {}
+        }
+        assert!(workspace.exists() || fault == "purged");
+        // A live helper owns the target lock. Startup cannot clean around it.
+        let _ = installer::reconcile_recovery(&target, &current, &FakePlatform::default());
+        assert!(workspace.exists() || fault == "purged");
+        drop(staged);
+        let _ = installer::reconcile_recovery(&target, &current, &FakePlatform::default());
+        if matches!(fault, "none" | "ack" | "purged") {
+            assert!(
+                !workspace.exists(),
+                "interrupted cleanup is recoverable: {fault}"
+            );
+            assert_eq!(fs::read(root.join("archive.zip")).unwrap(), archive);
+            assert_eq!(
+                fs::read_to_string(rollback.join("Contents/build")).unwrap(),
+                "100.1"
+            );
+            assert_eq!(
+                installer::recovery_phase(&root).unwrap(),
+                if fault == "ack" {
+                    installer::Phase::StartupAcknowledged
+                } else {
+                    installer::Phase::RelaunchRequested
+                }
+            );
+        } else {
+            assert!(workspace.exists(), "Unknown evidence must survive: {fault}");
+        }
+        assert_eq!(
+            fs::read_to_string(target.join("Contents/build")).unwrap(),
+            "101.1"
+        );
+        // Only fixture-owned paths are removed, including substituted evidence.
+        if workspace.exists() {
+            fs::remove_dir_all(&workspace).unwrap();
+        }
+        if saved_workspace.exists() {
+            fs::remove_dir_all(saved_workspace).unwrap();
+        }
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

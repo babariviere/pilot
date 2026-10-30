@@ -10,7 +10,7 @@ which is distinct from its later exact durable startup acknowledgement.
 These are failure bounds, not unconditional sleeps:
 
 - GUI checkpoint: 15 seconds, refuses without the exact writer acknowledgement.
-- Helper readiness: macOS 120 seconds including pre-quit full extraction/sync;
+- Helper readiness: macOS 120 seconds including pre-quit full extraction/verification;
   Linux 30 seconds. The GUI remains open, with restart editing/admission fences.
 - Helper COMMIT receipt: 30 seconds, lost receipt remains Unknown.
 - Helper COMMIT input: 60 seconds, EOF/ordinary quit without COMMIT aborts.
@@ -31,7 +31,7 @@ Do not infer that the user's reported minute is proven or fixed from this fixtur
 
 ## Preparation moved before quit
 
-The macOS helper freshly authenticates/extracts/syncs `install-payload` before
+The macOS helper freshly authenticates/extracts `install-payload` before
 READY, independently of the earlier download-stage preview. It keeps the exact
 bounded closed-tree digest only in memory, never in a mutable journal. After
 COMMIT and kqueue-confirmed parent exit it still authenticates the signed archive,
@@ -41,10 +41,19 @@ the unchanged atomic exchange and durable relaunch intent. Old bundles/receipt A
 and Unknown/no-repeat behavior are unchanged. Linux keeps its existing extraction
 path; this work does not qualify Linux or change its native lifecycle.
 
-macOS helper readiness allows 120s instead of 30s because full extraction/sync now
+macOS helper readiness allows 120s instead of 30s because full extraction/verification now
 precedes READY. That bound is not a sleep and occurs before quit. No COMMIT receipt,
 parent-exit, reservation or startup safety deadline is shortened or extended.
 An interrupted prepared helper cannot resume by trusting stored digest evidence.
+
+The OS-temporary preview and helper-preparation trees are disposable and are not
+fsynced. Their closed bytes still pass ZIP/CRC, native signature, source and exact
+closure checks. The retained authenticated archive stays durable. The final
+same-volume copy is still fully synced before swap, and both swap parents and
+journal remain durable. Linux and legacy same-volume extraction retain syncing.
+Temporary deletion now follows the relaunch command. An interrupted helper leaves
+the exact ownership record for locked, proven-post-swap recovery cleanup. Cleanup
+does not stand in for an ACK or resolve an Unknown transaction.
 
 ## Isolated native measurement
 
@@ -111,6 +120,48 @@ numbers above to the current layout or claim unchanged restart latency without a
 new measurement. Temporary purges never affect the durable rollback/journal.
 
 ## Remaining evidence for the reported minute
+
+### Disposable extraction, full payload, 2026-10-30
+
+One paired isolated run used the same authenticated 1.97 macOS ZIP as the stage
+investigation: 159.6 MB compressed, 495.2 MB expanded, 24,276 entries including
+20,912 files. Inputs were copied into private OS-temporary fixture storage; the
+source evidence was only read. No installed app, transaction, runtime store or service was modified;
+no app or daemon was launched by this measurement.
+
+Both arms used Rust 1.98.1, dev opt-level 2/debug 0, the same pinned dependencies,
+mbx CPU2/4GiB admission and the same loaded macOS arm64 host. The fixture compiled
+the exact before/after extraction source, authenticated the manifest and archive,
+extracted once, checked native/source/filesystem policy and exact closure, copied
+with `ditto`, checked the copied closure/native seal and synced every final file
+and directory. Compilation and admission waits are excluded below.
+
+| Phase, seconds | Before | After |
+| --- | ---: | ---: |
+| Full extraction | 74.813255 | 5.741418 |
+| Final copy | 6.887666 | 6.443090 |
+| Copied closure verification | 4.914416 | 4.528355 |
+| Final copied-tree sync | 1.867715 | 1.957791 |
+| Temporary deletion | 1.581797 | 2.515645 |
+
+Both extractions and final copies had the exact same closed-tree identity. All
+native/source/filesystem checks passed. The final sync was **not** removed.
+Cleanup itself did not become faster in this pair: its work now follows relaunch,
+and locked recovery can finish an interrupted deletion without replaying install
+or startup ACK. The native lifecycle fixture separately checks success, cancel,
+expired guard, interrupted COMMIT, failed startup, external/managed reconnect and
+post-READY tampering. Unit fixtures cover missing/partial temporary data, final
+sync-boundary failure, cleanup interruption, pending writes, replaced workspace,
+corrupt archive and wrong rollback inode.
+
+This is one warm-cache pair, not a statistical benchmark or additive forecast for
+two production extractions. An earlier measurement attempt completed extraction
+in 75.069848s but failed its copied-closure check because the measurement harness
+used a noncanonical `/var` path; the corrected pair above passed every check.
+The investigation's separate copied-tree sync observation was 38.284s, much higher
+than this pair, so cache/load effects are substantial. These are isolated phase
+durations, not visible GUI blackout, click-to-completion, release qualification or
+production acceptance. No live installation or restart was performed.
 
 ### App-only qualification, 2026-10-29
 

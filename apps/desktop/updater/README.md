@@ -46,7 +46,7 @@ helper. No default points at the Swift application, its feed, credentials or key
   spawning parent. No COMMIT means ordinary quit/EOF cannot install. A timer can abort
   waiting, but never quits/kills the app or permits installation. The helper rechecks
   signed archive bytes and verifies the full bundle before swapping. On macOS it
-  freshly extracts/syncs a second private payload before READY, retains its exact
+  freshly extracts a second disposable private payload before READY, retains its exact
   tree digest only in helper memory, then rehashes the closed tree after OS exit.
   Changed/additional files, modes or links refuse installation, including resources
   outside the native seal. Linux retains post-exit extraction.
@@ -178,6 +178,10 @@ the helper uses that record, not its environment or a GUI-owned auto-deleting gu
 Every use checks canonical path, private ownership/mode/ACLs and inode identity.
 Dropping the GUI worker cannot delete a helper's payload. Temporary storage may be
 purged: a missing/changed payload refuses installation, never authorizes a retry.
+Preview and helper-preparation trees are disposable, so their files and directories
+are not fsynced. Closed writes, ZIP/CRC/path admission and native/closure verification
+still apply. The authenticated retained archive is synced independently. Legacy
+same-volume payloads and Linux extraction retain their durability barriers.
 
 After COMMIT and OS-observed parent exit, the helper copies the prepared tree with
 `ditto` into the private same-volume transaction's `install-payload/bundle`, **without
@@ -199,10 +203,18 @@ indexable `.app` sibling. Legacy transactions/history retain their original
 this change neither moves nor deletes existing backups. No guarantee is made about
 third-party scanners that ignore private/hidden paths or index bundle contents.
 
-Successful exchange removes only the exact temporary workspace; pre-COMMIT helper
-cancel removes only its prepared extraction so the verified preview can be retried.
+After successful relaunch, the helper removes only the exact temporary workspace,
+outside the pre-relaunch critical path. If interrupted, ordinary recovery inspection
+under the target and journal locks can remove that workspace only for a post-swap
+phase with authenticated retained archive and the exact exchanged rollback inode.
+Changed workspace identity, pending writes or unproven exchange retain the evidence.
+The durable receipt, archive, rollback and startup ACK are never removed or replayed
+by this cleanup. No broad temporary-directory or runtime-store scan is added.
+Pre-COMMIT helper cancel removes only its prepared extraction so the verified preview
+can be retried.
 Failed/incomplete downloads and proven inactive Ready cleanup also remove their
-exact workspace. Committed/Unknown transactions are not cleaned or replayed.
+exact workspace. No committed/Unknown transaction is removed or replayed; only the
+positively proven post-swap temporary workspace qualifies above.
 Unreferenced temporary directories after an interrupted initial creation are left
 to OS temporary-storage cleanup, never discovered by a broad deletion scan.
 Linux keeps its previous staging layout. Permanent target lock files are never unlinked.
@@ -258,7 +270,7 @@ Cleanup/explicit rollback with running-process checks remains later recovery int
 
 Cancellation is cooperative between bounded reads; it can take up to the HTTP timeout
 during a blocked read. ZIP/file operations are bounded and off-UI. Helper readiness timeout
-is120s on macOS (includes full pre-quit extraction/sync), 30s on Linux;
+is120s on macOS (includes full pre-quit extraction/verification), 30s on Linux;
 COMMIT wait60s, parent-exit wait120s; expiry aborts, never installs without exit.
 The longer readiness bound does not grant more COMMIT, reservation or exit time.
 Pre-COMMIT cancellation removes only that helper's fresh preparation while the

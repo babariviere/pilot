@@ -15,7 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[3]
 DESKTOP = ROOT / "apps/desktop"
 PUBLIC_KEY = "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE="  # public TEST seed42 only
-PHASES = frozenset("preparation exit_observation_bound blackout_upper_bound blackout_through_ack_upper_bound helper_prepare commit_wait parent_exit_wait exited_target_verify exited_archive_verify exited_extract_sync exited_candidate_verify exited_guard_verify swap_journal_sync relaunch_command prepared_archive_verify prepared_extract_sync prepared_candidate_closure_verify exited_closure_hash".split())
+PHASES = frozenset("preparation exit_observation_bound blackout_upper_bound blackout_through_ack_upper_bound helper_prepare commit_wait parent_exit_wait exited_target_verify exited_archive_verify exited_extract exited_candidate_verify exited_guard_verify swap_journal_sync relaunch_command prepared_archive_verify prepared_extract prepared_candidate_closure_verify exited_closure_hash commit_copy commit_tree_sync temporary_cleanup".split())
 
 
 def phase_timings(output):

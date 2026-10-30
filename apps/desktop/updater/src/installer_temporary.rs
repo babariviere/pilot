@@ -159,13 +159,16 @@ pub(super) fn commit_copy(
     use std::os::fd::FromRawFd;
     // SAFETY: fcntl returned a new owned descriptor, deliberately inherited by ditto.
     let inherited = unsafe { File::from_raw_fd(inherited) };
+    let phase = crate::timing::Phase::start();
     crate::helper::run_command(&mut copy, Duration::from_secs(120))?;
+    phase.finish("commit_copy");
     drop(inherited);
     validate_bundle_tree(&candidate)?;
     if crate::runtime::identity(&candidate)? != identity {
         return Err(Error::Identity);
     }
     platform.verify_candidate(&candidate, trust, staged.verified.manifest())?;
+    let phase = crate::timing::Phase::start();
     crate::runtime::sync_tree(
         &candidate,
         Instant::now() + Duration::from_secs(120),
@@ -173,7 +176,57 @@ pub(super) fn commit_copy(
     )?;
     sync_directory(&directory)?;
     sync_directory(&staged.root)?;
+    phase.finish("commit_tree_sync");
     Ok(candidate)
+}
+
+/// Recover deferred cleanup under the caller's permanent target lock. Only a
+/// proven exchange qualifies; cleanup failures retain evidence, not failed ACKs.
+pub(super) fn discard_completed(target: &Path, trust: &Trust) -> Result<(), Error> {
+    for (count, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
+        .map_err(|_| Error::Filesystem)?
+        .enumerate()
+    {
+        if count >= 4096 {
+            return Err(Error::RecoveryRequired);
+        }
+        let root = entry.map_err(|_| Error::Filesystem)?.path();
+        if !transaction_name(&root) || validate_root(&root, target).is_err() {
+            continue;
+        }
+        let _ = (|| {
+            let record: Workspace = serde_json::from_slice(&read_small(&root.join(RECORD), 8192)?)
+                .map_err(|_| Error::Filesystem)?;
+            if !record.path.try_exists().map_err(|_| Error::Filesystem)? {
+                return Ok(());
+            }
+            let _guard = journal_guard(&root)?;
+            let journal = read_journal(&root)?;
+            if !matches!(
+                journal.phase,
+                Phase::Swapped | Phase::RelaunchRequested | Phase::StartupAcknowledged
+            ) {
+                return Err(Error::RecoveryRequired);
+            }
+            let rollback = rollback_bundle(&root, trust);
+            let old = fs::symlink_metadata(&rollback).map_err(|_| Error::Filesystem)?;
+            if !old.is_dir()
+                || old.file_type().is_symlink()
+                || rollback.canonicalize().map_err(|_| Error::Filesystem)? != rollback
+                || (old.dev(), old.ino()) != (journal.original_device, journal.original_inode)
+            {
+                return Err(Error::RecoveryRequired);
+            }
+            let manifest = signed_manifest(&root, trust)?;
+            verify_archive(
+                &root.join("archive.zip"),
+                &manifest,
+                &Cancellation::default(),
+            )?;
+            discard(&root)
+        })();
+    }
+    Ok(())
 }
 
 /// Called only by the owner of an incomplete/Ready transaction or after a proven

@@ -75,6 +75,9 @@ impl PreparedPayload<'_> {
         }
         fs::remove_dir_all(self.bundle.parent().ok_or(Error::Filesystem)?)
             .map_err(|_| Error::Filesystem)?;
+        if workspace != self.staged.root {
+            return Ok(()); // disposable cleanup needs no durability barrier
+        }
         sync_directory(
             self.bundle
                 .parent()
@@ -505,7 +508,8 @@ pub fn finish_stage(
     if !verified.is_newer(trust)? {
         return Err(Error::Version);
     }
-    let bundle = archive::extract(
+    let bundle = extract_payload(
+        &root,
         &archive,
         &payload_root(&root)?.join("payload"),
         &trust.bundle_name,
@@ -532,6 +536,31 @@ pub fn finish_stage(
         verified,
         lock,
     })
+}
+
+fn extract_payload(
+    root: &Path,
+    archive: &Path,
+    destination: &Path,
+    bundle_name: &str,
+    cancel: &Cancellation,
+) -> Result<PathBuf, Error> {
+    // Only the existing OS-temporary layout is disposable. Linux and legacy
+    // same-volume stages still become the final candidate and must stay durable.
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    if root
+        .join("temporary.json")
+        .try_exists()
+        .map_err(|_| Error::Filesystem)?
+    {
+        let workspace = temporary::workspace(root)?;
+        if !destination.starts_with(workspace) {
+            return Err(Error::Filesystem);
+        }
+        return archive::extract_temporary(archive, destination, bundle_name, cancel);
+    }
+    let _ = root;
+    archive::extract(archive, destination, bundle_name, cancel)
 }
 
 /// Read-only installation filesystem preflight, shared by startup and updates.
@@ -730,7 +759,8 @@ impl Staged {
     }
 
     fn extract_install_payload(&self, trust: &Trust) -> Result<PathBuf, Error> {
-        archive::extract(
+        extract_payload(
+            &self.root,
             &self.root.join("archive.zip"),
             &payload_root(&self.root)?.join("install-payload"),
             &trust.bundle_name,
@@ -758,7 +788,7 @@ impl Staged {
         phase.finish("prepared_archive_verify");
         let phase = crate::timing::Phase::start();
         let bundle = self.extract_install_payload(trust)?;
-        phase.finish("prepared_extract_sync");
+        phase.finish("prepared_extract");
         let phase = crate::timing::Phase::start();
         platform.verify_candidate(&bundle, trust, self.verified.manifest())?;
         validate_target(&bundle, trust)?;
@@ -796,7 +826,7 @@ impl Staged {
             || {
                 let phase = crate::timing::Phase::start();
                 let candidate = self.extract_install_payload(trust)?;
-                phase.finish("exited_extract_sync");
+                phase.finish("exited_extract");
                 #[cfg(all(target_os = "macos", feature = "native-macos"))]
                 if self
                     .root
@@ -890,8 +920,6 @@ impl Staged {
         journal.phase = Phase::RelaunchRequested;
         write_journal(&self.root, &journal)?;
         drop(journal_guard);
-        #[cfg(all(target_os = "macos", feature = "native-macos"))]
-        let _ = temporary::discard(&self.root); // installed + rollback are already durable
         phase.finish("swap_journal_sync");
         let phase = crate::timing::Phase::start();
         // open success is NOT startup acknowledgement or a promise of rollback.
@@ -899,6 +927,14 @@ impl Staged {
             return Err(Error::RecoveryRequired);
         }
         phase.finish("relaunch_command");
+        // Launch first. A helper crash here is recovered by ordinary inspection;
+        // the durable transaction retains the exact workspace ownership record.
+        #[cfg(all(target_os = "macos", feature = "native-macos"))]
+        {
+            let phase = crate::timing::Phase::start();
+            let _ = temporary::discard(&self.root);
+            phase.finish("temporary_cleanup");
+        }
         Ok(())
     }
 
@@ -992,6 +1028,8 @@ pub fn reconcile_recovery(
             write_journal(&root, &journal)?;
         }
     }
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    temporary::discard_completed(target, trust)?;
     recoveries(target, trust)
 }
 

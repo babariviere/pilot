@@ -16,6 +16,33 @@ pub fn extract(
     bundle_name: &str,
     cancel: &Cancellation,
 ) -> Result<PathBuf, Error> {
+    extract_with_sync(archive, destination, bundle_name, cancel, Some(sync_file))
+}
+
+/// Purgeable preview/preparation only. Never a final candidate or rollback entry.
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub(crate) fn extract_temporary(
+    archive: &Path,
+    destination: &Path,
+    bundle_name: &str,
+    cancel: &Cancellation,
+) -> Result<PathBuf, Error> {
+    extract_with_sync(archive, destination, bundle_name, cancel, None)
+}
+
+type SyncFile = fn(&File) -> Result<(), Error>;
+
+fn sync_file(file: &File) -> Result<(), Error> {
+    file.sync_all().map_err(|_| Error::Filesystem)
+}
+
+fn extract_with_sync(
+    archive: &Path,
+    destination: &Path,
+    bundle_name: &str,
+    cancel: &Cancellation,
+    sync: Option<SyncFile>,
+) -> Result<PathBuf, Error> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -101,7 +128,9 @@ pub fn extract(
             return Err(Error::Archive);
         }
         expanded += count;
-        output.sync_all().map_err(|_| Error::Filesystem)?;
+        if let Some(sync) = sync {
+            sync(&output)?;
+        }
     }
     // No symlink can influence extraction writes; links are materialized only afterwards.
     for (path, target) in &links {
@@ -120,7 +149,9 @@ pub fn extract(
             return Err(Error::Archive);
         }
     }
-    sync_directories(destination)?;
+    if let Some(sync) = sync {
+        sync_directories(destination, sync)?;
+    }
     Ok(bundle)
 }
 
@@ -170,14 +201,118 @@ fn real_directories(root: &Path, relative: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn sync_directories(path: &Path) -> Result<(), Error> {
+fn sync_directories(path: &Path, sync: SyncFile) -> Result<(), Error> {
     for entry in fs::read_dir(path).map_err(|_| Error::Filesystem)? {
         let entry = entry.map_err(|_| Error::Filesystem)?;
         if entry.file_type().map_err(|_| Error::Filesystem)?.is_dir() {
-            sync_directories(&entry.path())?;
+            sync_directories(&entry.path(), sync)?;
         }
     }
-    File::open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(|_| Error::Filesystem)
+    sync(&File::open(path).map_err(|_| Error::Filesystem)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::owned_tests::{Temp, archive};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn durable_extraction_syncs_files_and_directories_and_propagates_failure() {
+        static FILES: AtomicUsize = AtomicUsize::new(0);
+        static DIRECTORIES: AtomicUsize = AtomicUsize::new(0);
+        fn observe(file: &File) -> Result<(), Error> {
+            if file.metadata().unwrap().is_dir() {
+                DIRECTORIES.fetch_add(1, Ordering::Relaxed);
+            } else {
+                FILES.fetch_add(1, Ordering::Relaxed);
+            }
+            sync_file(file)
+        }
+        let temp = Temp::new();
+        let input = temp.path().join("archive.zip");
+        fs::write(&input, archive()).unwrap();
+        extract_with_sync(
+            &input,
+            &temp.path().join("durable"),
+            "Pilot Next.app",
+            &Cancellation::default(),
+            Some(observe),
+        )
+        .unwrap();
+        assert_eq!(FILES.load(Ordering::Relaxed), 2);
+        assert_eq!(DIRECTORIES.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            extract_with_sync(
+                &input,
+                &temp.path().join("failed-sync"),
+                "Pilot Next.app",
+                &Cancellation::default(),
+                Some(|_| Err(Error::Filesystem))
+            ),
+            Err(Error::Filesystem)
+        );
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
+    #[test]
+    fn disposable_extraction_preserves_content_validation_cancellation_and_purgeability() {
+        let temp = Temp::new();
+        let input = temp.path().join("archive.zip");
+        fs::write(&input, archive()).unwrap();
+        let durable = extract(
+            &input,
+            &temp.path().join("durable"),
+            "Pilot Next.app",
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let disposable = extract_temporary(
+            &input,
+            &temp.path().join("temporary"),
+            "Pilot Next.app",
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::runtime::identity(&durable).unwrap(),
+            crate::runtime::identity(&disposable).unwrap()
+        );
+        let cancel = Cancellation::default();
+        cancel.cancel();
+        assert_eq!(
+            extract_temporary(
+                &input,
+                &temp.path().join("cancelled"),
+                "Pilot Next.app",
+                &cancel
+            ),
+            Err(Error::Cancelled)
+        );
+        assert_eq!(
+            extract_temporary(
+                &input,
+                &temp.path().join("wrong-root"),
+                "Other.app",
+                &Cancellation::default()
+            ),
+            Err(Error::Archive)
+        );
+        fs::remove_dir_all(disposable.parent().unwrap()).unwrap();
+        assert!(
+            input.is_file(),
+            "purging disposable data never loses the recovery archive"
+        );
+        let regenerated = extract_temporary(
+            &input,
+            &temp.path().join("regenerated"),
+            "Pilot Next.app",
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::runtime::identity(&durable).unwrap(),
+            crate::runtime::identity(&regenerated).unwrap()
+        );
+    }
 }
