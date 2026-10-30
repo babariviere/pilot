@@ -1,5 +1,5 @@
-//! Measured composer slots. The full-size child keeps its layout and editing
-//! state; only its clipped slot eases. Removed children disappear immediately.
+//! Measured slots for the composer, Find and Jump. The full-size child keeps its
+//! layout and editing state; only its clipped slot eases. Removed children disappear immediately.
 use crate::transition::{Transition, ease_out};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Pixels, Size, Styled,
@@ -29,6 +29,34 @@ pub(crate) fn slot<T: 'static>(
     scope: Option<String>,
     child: Option<AnyElement>,
     gap: f32,
+    w: &mut Window,
+    cx: &mut Context<T>,
+) -> AnyElement {
+    aligned_slot(id, state, scope, child, gap, true, w, cx)
+}
+
+/// A result palette grows below its query instead of sliding the query field.
+pub(crate) fn top_slot<T: 'static>(
+    id: &'static str,
+    state: &State,
+    child: AnyElement,
+    w: &mut Window,
+    cx: &mut Context<T>,
+) -> AnyElement {
+    aligned_slot(id, state, None, Some(child), 0., false, w, cx)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared measured slot plus alignment"
+)]
+fn aligned_slot<T: 'static>(
+    id: &'static str,
+    state: &State,
+    scope: Option<String>,
+    child: Option<AnyElement>,
+    gap: f32,
+    bottom: bool,
     w: &mut Window,
     cx: &mut Context<T>,
 ) -> AnyElement {
@@ -72,7 +100,7 @@ pub(crate) fn slot<T: 'static>(
         .v_flex()
         .flex_none()
         .min_w_0()
-        .justify_end()
+        .when(bottom, |d| d.justify_end())
         .overflow_hidden()
         .mb(px(-gap))
         .when(!natural, |d| d.h(px(shown)))

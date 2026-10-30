@@ -5,6 +5,8 @@ use gpui_kit::{
     point, size,
     test::{TestEventExt, TestWindowExt},
 };
+#[path = "find_motion_probe.rs"]
+mod motion;
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..6 {
         cx.run_until_parked();
@@ -30,6 +32,7 @@ fn row(id: u64) -> Message {
     .anchored(crate::model::ReaderKey::model(id, 0, Some(0)))
 }
 pub fn run_transcript_find_probe(cx: &mut HeadlessAppContext) {
+    motion::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_FIND_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();

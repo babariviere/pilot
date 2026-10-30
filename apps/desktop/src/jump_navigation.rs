@@ -145,7 +145,6 @@ impl LocalViewer {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let width = (f32::from(w.viewport_size().width) - 32.).clamp(200., 560.);
-        let height = (f32::from(w.viewport_size().height) - 32.).clamp(160., 480.);
         div()
             .absolute()
             .inset_0()
@@ -171,13 +170,6 @@ impl LocalViewer {
                     .top(px(16.))
                     .left(px((f32::from(w.viewport_size().width) - width) / 2.))
                     .w(px(width))
-                    .h(px(height))
-                    .p_3()
-                    .occlude()
-                    .rounded(px(appearance::Radius::TRAY))
-                    .bg(cx.theme().popover)
-                    .border_1()
-                    .border_color(cx.theme().border)
                     .child(palette),
             )
     }

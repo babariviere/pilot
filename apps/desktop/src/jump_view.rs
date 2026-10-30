@@ -10,7 +10,7 @@ use gpui_kit::{
         ActiveTheme, IndexPath, StyledExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
     },
-    div,
+    div, px,
 };
 use std::sync::Arc;
 
@@ -173,6 +173,8 @@ impl ListDelegate for JumpList {
     }
 }
 pub(crate) struct JumpPalette {
+    height: crate::composer_height::State,
+    list_chrome: gpui_kit::Pixels,
     focus: gpui_kit::FocusHandle,
     pub(crate) list: Entity<ListState<JumpList>>,
     pub(crate) source: Snapshot,
@@ -237,6 +239,8 @@ impl JumpPalette {
             _ => {}
         });
         let mut v = Self {
+            height: Default::default(),
+            list_chrome: px(0.),
             focus: cx.focus_handle().tab_stop(false),
             list,
             source,
@@ -354,9 +358,11 @@ impl JumpPalette {
     }
 }
 impl Render for JumpPalette {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("jump-palette")
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let maximum = (f32::from(w.viewport_size().height) - 32.).clamp(160., 480.);
+        let owner = cx.weak_entity();
+        let list = self.list.clone();
+        let content = div()
             // Keybindings dispatch actions before raw key listeners. Capture
             // Escape before the input clears preedit, not after List::Cancel.
             .capture_action(
@@ -385,27 +391,37 @@ impl Render for JumpPalette {
                     cx.stop_propagation();
                 }),
             )
-            .test_support()
             .v_flex()
             .w_full()
-            .h_full()
             .min_h_0()
             .min_w_0()
+            // The shell's two border points sit outside this measured content.
+            .max_h(px(maximum - 2.))
             .gap_2()
+            .p_3()
             .child(
                 div()
                     .id("jump-results")
                     .test_support()
+                    .v_flex()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
+                    .overflow_hidden()
                     .child(
                         List::new(&self.list)
+                            .min_h_0()
+                            // Kit applies max_h to the result viewport, not
+                            // the whole List (which also owns its query).
+                            .max_h((px(maximum) - self.list_chrome).max(px(0.)))
                             .search_placeholder("Pages, projects, chats, links or PR #…"),
                     ),
             )
             .child(
                 div()
+                    .id("jump-footer")
+                    .test_support()
+                    .flex_none()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(if !self.ready {
@@ -420,6 +436,43 @@ impl Render for JumpPalette {
                         "↑↓ to move · Return to open · Esc to close"
                     }),
             )
-            .focus_trap("jump-palette", &self.focus)
+            .on_children_prepainted(move |bounds, w, cx| {
+                let [results, footer] = bounds.as_slice() else {
+                    return;
+                };
+                let viewport = list.read(cx).scroll_handle().base_handle().bounds();
+                if viewport.size.height <= px(0.) {
+                    return;
+                }
+                let query = viewport.top() - results.top();
+                // Existing p_3 + gap_2, both rem-scaled, and shell borders.
+                let chrome = query + footer.size.height + w.rem_size() * 2. + px(2.);
+                let _ = owner.update(cx, |p, cx| {
+                    if p.list_chrome != chrome {
+                        p.list_chrome = chrome;
+                        cx.notify();
+                    }
+                });
+            })
+            .id("jump-palette")
+            .test_support()
+            .focus_trap("jump-palette", &self.focus);
+        div()
+            .id("jump-shell")
+            .test_support()
+            .w_full()
+            .occlude()
+            .overflow_hidden()
+            .rounded(px(crate::appearance::Radius::TRAY))
+            .bg(cx.theme().popover)
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(crate::composer_height::top_slot(
+                "jump-height-slot",
+                &self.height,
+                content.into_any_element(),
+                w,
+                cx,
+            ))
     }
 }

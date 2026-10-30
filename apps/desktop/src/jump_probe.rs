@@ -34,8 +34,11 @@ fn rows() -> Vec<Message> {
 }
 #[path = "jump_links_probe.rs"]
 mod link_journeys;
+#[path = "jump_motion_probe.rs"]
+mod motion;
 
 pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
+    motion::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_JUMP_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -93,8 +96,8 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
                 let results = w.find("jump-results").bounds();
                 assert_eq!(
                     results.top(),
-                    pane.top(),
-                    "search starts at the palette top"
+                    pane.top() + w.rem_size() * 0.75,
+                    "search starts directly inside the palette padding, without a header"
                 );
                 assert!(
                     pane.origin.x >= px(0.)

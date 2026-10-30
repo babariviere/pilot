@@ -312,6 +312,18 @@ selection/copy/preedit, reset/stream exclusions, resize, removal and idle callba
 at680/1100 light/dark. Native draw and renderer+RGBA readback costs are reported
 separately, not as visible smoothness or production GPU timings.
 
+Find and Jump reuse `composer_height`'s measured/clipped 200ms `Transition` slot.
+Find slides its natural-height tray into view; closing removes the controls at
+once and collapses empty space, restoring the opening control's focus (or the
+retained transcript container, never a virtual text row). Jump fits its results
+up to the existing viewport/480pt cap and eases below its stationary query field.
+Neither replaces the query entity or reflows its full-size child each frame.
+Reversals start from the shown height; viewport/rem resize and reduced motion
+apply natural geometry immediately. `transcript_find` and `jump` check native
+hidden phases, input/preedit, keyboard and focus in light/dark, with separate
+CPU draw and renderer/readback costs. These are not visible smoothness or OS IME
+qualification.
+
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.
 Do not neutralize categorical charts or style user-authored content with chrome

@@ -26,6 +26,8 @@ use std::sync::{
 
 pub(super) struct Find {
     pub(super) focus: FocusHandle,
+    return_focus: Option<FocusHandle>,
+    height: crate::composer_height::State,
     input: Entity<InputState>,
     open: bool,
     reset: bool,
@@ -61,6 +63,8 @@ impl Find {
         });
         Self {
             focus: cx.focus_handle().tab_stop(false),
+            return_focus: None,
+            height: Default::default(),
             input,
             open: false,
             reset: false,
@@ -110,6 +114,15 @@ impl TranscriptView {
         if self.find_marked(w, cx) {
             return;
         }
+        if !self.find.open {
+            // Virtual text rows may unmount during match navigation. Their
+            // retained transcript container is the stable return target.
+            self.find.return_focus = if self.find.focus.contains_focused(w, cx) {
+                Some(self.find.focus.clone())
+            } else {
+                w.focused(cx)
+            };
+        }
         self.find.reset = false;
         self.find.open = true;
         self.find.input.update(cx, |i, cx| i.focus(w, cx));
@@ -141,6 +154,7 @@ impl TranscriptView {
                 self.find.focus.focus(w, cx);
             }
             self.find.open = false;
+            self.find.return_focus = None;
             self.find.reset = false;
             self.find.input.update(cx, |i, cx| i.set_value("", w, cx));
         }
@@ -266,7 +280,11 @@ impl TranscriptView {
         let view = cx.weak_entity();
         w.defer(cx, move |w, cx| {
             let _ = view.update(cx, |v, cx| {
-                v.find.focus.focus(w, cx);
+                v.find
+                    .return_focus
+                    .take()
+                    .unwrap_or_else(|| v.find.focus.clone())
+                    .focus(w, cx);
                 v.invalidate_find(cx);
                 v.finish_find_reset(w, cx);
                 cx.notify();
@@ -355,10 +373,11 @@ impl TranscriptView {
             .into(),
         )
     }
-    pub(super) fn render_find(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if !self.find.open {
-            return None;
-        }
+    pub(super) fn render_find(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
         let count = self.find.results.hits.len();
         let status = if self.find.query_too_long {
             "Query exceeds 1 KiB".into()
@@ -384,7 +403,7 @@ impl TranscriptView {
                 }
             )
         };
-        Some(
+        let bar = self.find.open.then(|| {
             div()
                 .id("transcript-find")
                 .test_support()
@@ -497,7 +516,19 @@ impl TranscriptView {
                                         .child(status),
                                 ),
                         ),
-                ),
-        )
+                )
+                .into_any_element()
+        });
+        // Same measured/clipped Transition slot as the composer. The natural
+        // full-height child slides down; close removes its controls immediately.
+        Some(crate::composer_height::slot(
+            "transcript-find-slot",
+            &self.find.height,
+            Some(self.history_scope.to_string()),
+            bar,
+            0.,
+            w,
+            cx,
+        ))
     }
 }

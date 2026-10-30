@@ -1255,7 +1255,7 @@ impl Render for TranscriptView {
                 .size_full()
                 .min_h_0()
                 .min_w_0()
-                .children(self.render_find(cx))
+                .children(self.render_find(window, cx))
                 .child(
                     viewport.child(self.inline_survey(cx)).child(
                         MessageScroller::new(
@@ -1366,7 +1366,7 @@ impl Render for TranscriptView {
                     .child(Button::new("latest").small().label("Latest")
                         .on_click(cx.listener(|this, _, _, cx| this.scroller.update(cx, |state, cx| state.scroll_to_end(cx)))))
                     .child(div().text_sm().child(if following { "Following tail" } else { "Reading above tail" }))))
-            .children(self.render_find(cx))
+            .children(self.render_find(window, cx))
             .child(viewport.child(self.inline_survey(cx)).child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, window, cx| {
                     weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_readable_row(ix, window, cx, weak.clone(), footer).into_any_element() })
