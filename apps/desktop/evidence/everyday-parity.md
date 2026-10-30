@@ -1,5 +1,9 @@
 # Everyday macOS parity inventory
 
+Historical slice inventory. For current source-backed remaining work and proposed
+ticket supersessions, use the [macOS finish checklist](../docs/finish-checklist.md).
+The Missing/Partial labels below describe the original checkpoint, not today.
+
 Compared with the retained Swift app, from desktop checkpoint fdbc4259. This is
 a scoped feature inventory, not a full-parity/acceptance claim.
 

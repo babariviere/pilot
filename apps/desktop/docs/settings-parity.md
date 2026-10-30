@@ -1,5 +1,9 @@
 # Settings parity and ownership
 
+Historical foundation inventory. Current remaining work and supersession proposals
+are in the [macOS finish checklist](finish-checklist.md); the table below is not a
+current missing-feature list. Its ownership/durability contracts remain useful.
+
 This inventory began with the isolated preferences foundation. Its integration adds a real
 native Appearance Settings window to the Local viewer, **not full Swift Settings parity**.
 Integration verification and exact source/evidence are in `../evidence/settings-screen.md`.
