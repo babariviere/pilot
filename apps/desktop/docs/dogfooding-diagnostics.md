@@ -8,6 +8,11 @@ Nothing is sent to an agent or telemetry service. Sharing the exported file is a
 separate explicit user action. Export errors retain edits; a write failure may
 leave a partial file, which must be removed before sharing.
 
+For the source-checked producer/export path, actionable interpretation limits and
+the separate diagnostic-role reader boundary, see
+[native diagnostic coverage](diagnostic-coverage.md). Next capture is not consumed
+by `diagnostic_logs` source `app`, which currently validates the Swift producer.
+
 ## Audit and implementation boundary
 
 At introduction the desktop crate had Tokio and transitive `tracing`, but no
