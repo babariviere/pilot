@@ -99,13 +99,49 @@ impl DeliveryOwner<'_> {
         if self.store.book.host != options.host() {
             return Err("Local identity changed. Draft retained.");
         }
-        let intent = self
-            .store
-            .prepare(request.key, request.draft, request.follow_up, false)?;
+        let intent =
+            self.store
+                .prepare(request.key, request.draft, request.follow_up, request.stop)?;
         ensure_owned(self.store, options, &intent)?;
         self.prepared("Intent saved. Waiting for Local delivery.");
-        self.reconcile(client, options, &intent.id, true, None, report)
-            .await
+        if request.stop {
+            // Stop has no durable operation/receipt API. Never retry it automatically.
+            // Keep transport failure Unknown; only owner cancellation exits the effect.
+            let result = self
+                .effect(async {
+                    Ok(read_stop_json(
+                        client
+                            .post(format!(
+                                "{}/api/sessions/{}/stop",
+                                options.loopback(),
+                                intent.target
+                            ))
+                            .header("Content-Type", "application/json")
+                            .body("{}"),
+                    )
+                    .await)
+                })
+                .await?;
+            match result {
+                Ok(value)
+                    if value["ok"] == true
+                        && (value["draft"].is_null() || value["draft"].is_string()) =>
+                {
+                    self.store.finish(
+                        &intent.id,
+                        "accepted",
+                        value["draft"].as_str().map(String::from),
+                    )?;
+                    Ok("Stop accepted. Any withdrawn queued text is retained separately.")
+                }
+                _ => Ok(
+                    "Stop outcome is unknown. It was not retried. Inspect the chat before another action.",
+                ),
+            }
+        } else {
+            self.reconcile(client, options, &intent.id, true, None, report)
+                .await
+        }
     }
 
     pub(super) async fn reconcile(

@@ -662,9 +662,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 .is_some_and(|d| d.pending.is_some())
                             {
                                 Ok("Delivery is already pending. Check its receipt.")
-                            } else if !stop
-                                && crate::session_subagents::Target::from_key(&key).is_none()
-                            {
+                            } else if crate::session_subagents::Target::from_key(&key).is_none() {
                                 DeliveryOwner {
                                     store,
                                     status: &mut status,
@@ -1062,6 +1060,17 @@ async fn submit(
     report: &mut Option<DeliveryReport>,
     prepared: impl FnOnce(&Store),
 ) -> Result<&'static str, Failure> {
+    if request.stop {
+        return DeliveryOwner {
+            store,
+            status: &mut WriteState::default(),
+            channels: None,
+            autosave: &mut Autosave::default(),
+            closing: &mut false,
+        }
+        .submit(client, options, request, report)
+        .await;
+    }
     let Submission {
         key,
         draft,
@@ -1135,35 +1144,6 @@ async fn submit(
         diagnostic.acknowledgment = Acknowledgment::Accepted;
         store.finish(&intent.id, "accepted", None)?;
         Ok("")
-    } else if stop {
-        // Stop has no durable operation/receipt API. Never retry it automatically.
-        let result = read_stop_json(
-            client
-                .post(format!(
-                    "{}/api/sessions/{}/stop",
-                    options.loopback(),
-                    intent.target
-                ))
-                .header("Content-Type", "application/json")
-                .body("{}"),
-        )
-        .await;
-        match result {
-            Ok(value)
-                if value["ok"] == true
-                    && (value["draft"].is_null() || value["draft"].is_string()) =>
-            {
-                store.finish(
-                    &intent.id,
-                    "accepted",
-                    value["draft"].as_str().map(String::from),
-                )?;
-                Ok("Stop accepted. Any withdrawn queued text is retained separately.")
-            }
-            _ => Ok(
-                "Stop outcome is unknown. It was not retried. Inspect the chat before another action.",
-            ),
-        }
     } else {
         reconcile(client, options, store, &intent.id, true, None, report).await
     }

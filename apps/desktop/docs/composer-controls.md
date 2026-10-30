@@ -17,6 +17,10 @@ queued text. Next keeps that text in its existing separate recovery, rather than
 merging it into newer typing. No new endpoint, automatic retry or cancellation
 on send is added.
 
+The existing FIFO delivery owner now services ordinary draft autosaves while
+Stop preflight/HTTP waits, without advancing queued commands or settling an
+unconfirmed Stop. See the [held-request regression](stop-autosave.md).
+
 `ChatEditor` remains the retained input/selection/focus owner. It captures the
 delivery mode directly into the existing worker command, which prepares the same
 immutable operation ID, target, payload and hash before transport. Retry never

@@ -54,6 +54,9 @@ mod questions;
 mod recovery;
 #[path = "chat_sending.rs"]
 pub(crate) mod sending;
+#[cfg(feature = "native-probes")]
+#[path = "stop_wait_probe.rs"]
+mod stop_wait_probe;
 
 pub(crate) enum EditorEvent {
     UpdateCheckpoint,

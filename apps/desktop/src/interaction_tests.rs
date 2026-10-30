@@ -77,6 +77,8 @@ mod recovery_waits;
 mod retention;
 #[path = "interaction_send_tests.rs"]
 mod send_waits;
+#[path = "interaction_stop_tests.rs"]
+mod stop_waits;
 
 #[tokio::test]
 async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing_writer() {
@@ -1420,7 +1422,10 @@ impl Daemon {
                                     let id=path.rsplit('/').next().unwrap();
                                     json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else if behavior==Behavior::Diagnostic{Some("diagnostics")}else{None},"diagnosticScope":if behavior==Behavior::Diagnostic{Some("app")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
-                                    seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
+                                    seen.stops+=1;
+                                    if behavior==Behavior::LostStop{lose_response=true;}
+                                    if behavior==Behavior::WrongReceipt{json!({"ok":true,"draft":{}})}
+                                    else {json!({"ok":behavior!=Behavior::Reject,"draft":"synthetic queued input"})}
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {
                                     let id=payload["operationId"].as_str().unwrap().to_string();
                                     assert_eq!(payload["payloadHash"],crate::delivery_store::hash(payload["payload"].as_str().unwrap()));

@@ -55,6 +55,7 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, name: String) {
     }
 }
 pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
+    super::stop_wait_probe::run(cx);
     crate::local_view::composer_motion_probe::run(cx);
     let mut cases = 0;
     for width in [680., 1100.] {

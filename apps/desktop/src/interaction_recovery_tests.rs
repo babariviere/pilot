@@ -36,7 +36,7 @@ fn receipt(intent: &Intent, state: &str) -> Value {
         "destination":op.destination,"targetId":op.target_id,"result":{"sessionId":op.target_id}})
 }
 
-async fn edit_while_held(
+pub(super) async fn edit_while_held(
     client: &Interaction,
     updates: &async_channel::Receiver<WriteState>,
     temp: &Temp,
@@ -49,6 +49,7 @@ async fn edit_while_held(
     // Pending freezes answer and config, but never ordinary text.
     newer.cwd = "/changed".into();
     newer.project_id = Some("project-other".into());
+    newer.model_choice = None;
     newer.answer = Some(
         crate::question::AnswerDraft::capture(
             &question_answer_fixture(),
@@ -83,6 +84,7 @@ async fn edit_while_held(
         assert!(before.drafts["chat:a"].answer == captured.answer);
         assert_eq!(before.drafts["chat:a"].cwd, captured.cwd);
         assert_eq!(before.drafts["chat:a"].project_id, captured.project_id);
+        assert_eq!(before.drafts["chat:a"].model_choice, captured.model_choice);
     } else {
         assert!(before.drafts["chat:a"].answer == newer.answer);
     }
