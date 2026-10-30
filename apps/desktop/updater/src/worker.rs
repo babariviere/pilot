@@ -241,11 +241,12 @@ impl Worker {
                             } else {
                                 let location = runtime.ok_or(Error::RuntimeUnverified)?;
                                 let candidate = installer::preview_bundle(&stage.root, &trust)?;
-                                // App replacement reconnects to this exact retained runtime.
+                                // App replacement needs execution independent of the installed GUI.
                                 // It must never reserve or stop independent agent work.
                                 let guard = crate::coordination::Guard::prepare_ui(
                                     location,
                                     &candidate,
+                                    &stage.target,
                                     &stage.root,
                                     stage.build(),
                                     &trust,

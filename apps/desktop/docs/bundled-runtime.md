@@ -92,15 +92,16 @@ app, then reconnect through the receipt-bound profile/port/identity flow. They
 never pause, prepare, reserve, upgrade or replace that daemon. A changed identity
 or incompatible hello refuses relaunch without starting a replacement. Update
 receipts select this path only when explicitly prepared for an external connection;
-managed retained receipts never silently fall back. Bundled exact-capsule validation
-and all other startup refusals remain unchanged. See [UI iteration](ui-iteration.md).
+managed receipts never silently fall back. macOS managed reconnects prove the live
+daemon identity without requiring its old runtime files. See [UI iteration](ui-iteration.md).
 The separate confirmed daemon-upgrade action has independent native ownership
 checks; see [Explicit daemon upgrade](daemon-upgrades.md).
 
 Settings' **Install and restart…** replaces only the GUI. The separate explicit
 [daemon upgrade](daemon-upgrades.md) supports a narrowly verified macOS Swift
-launch agent, preserving its label, ownership and profile. Startup never upgrades
-a daemon automatically. Other external owners remain externally managed.
+launch agent, preserving its label, ownership and profile. After GUI startup,
+macOS automatically moves an older managed daemon to a verified copy of the bundled runtime
+at a safe work boundary. Other external owners remain externally managed.
 
 Bundled launch uses the existing configured Local home/port. It does not silently
 select a new profile, import Swift state or retarget retained drafts/operations.
@@ -139,18 +140,21 @@ action, credential or general lifecycle-control capability.
 
 ## Service registration and activation
 
-Packaged startup verifies the bundle/retained capsule off the GUI thread and
-connects to the exact compatible live boot. It never launches a detached daemon,
-registers a service or activates a version, including during GUI update relaunch.
+Packaged startup verifies the bundle off the GUI thread and connects to the exact
+compatible live boot. It never launches a detached daemon or registers a service.
+After startup, macOS upgrades an older managed daemon from the installed bundle.
 A fresh/stopped service requires explicit **Register or start service…** consent,
 including login enablement. Existing external/Swift owners can be connected
 without management; switching a proven service is a separate confirmed action.
 See [daemon upgrades](daemon-upgrades.md) for registration, selected-version crash
 restart, exact daemon-safe reservation and Unknown handling.
 
-The service executes normal bootstrap on immutable retained Node/main.ts paths,
-without parent IPC or `--bundled-runtime`. The full closure includes workers,
-imports and PilotPower. GUI close/quit/replacement never stops or switches it.
+The macOS service executes normal bootstrap from one immutable copy of the app's
+Node/main.ts paths, without parent IPC or `--bundled-runtime`; Linux retains its separate runtime.
+The full closure includes workers, imports and PilotPower. GUI close/quit never
+stops the daemon. A GUI swap cannot change that active runtime. On next startup,
+one candidate is staged, the daemon switches at a safe boundary, and obsolete files
+are cleaned up. There is no accumulating update history.
 The old parent-bound launcher remains a daemon-layer fixture/legacy entry, not
 the packaged GUI's product startup path. No daemon distribution/feed/signing
 split, power-setting change, root service or linger policy is introduced.
@@ -206,13 +210,13 @@ stale records, missing resources, relocation, metadata/hash corruption,
 preactivation cleanup, postactivation preservation and bounded diagnostics.
 Portable packaging tests mock signing; they are not native bundle, notarization,
 Gatekeeper, native helper authorization, live service or user acceptance evidence.
-Moving a bundle before launch is supported. Moving/replacing it while its daemon
-is using its runtime is not an authorized update flow. Production signing,
-release/upload, updater activation and coordinated safe replacement remain separate.
+Moving a bundle before launch is supported. Moving it to a different path while
+its daemon is running requires service repair. The verified macOS updater instead
+exchanges the GUI in place, then switches the daemon before disposing of the old app.
+Production signing and release/upload remain separate from synthetic qualification.
 
-The [immutable runtime retention proposal](runtime-retention-design.md) compares
-safe future layouts and required identity/admission receipts. It is design only,
-not an implemented retention, compatibility, cleanup or installation contract.
+The [immutable runtime retention proposal](runtime-retention-design.md) records
+earlier layout options. It is historical design, not the current macOS update contract.
 
 The startup-view probe exercises the real GPUI entity at680/1100pt in both
 appearances, including loading/unconfirmed wrapping and control bounds,

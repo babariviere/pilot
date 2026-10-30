@@ -1,167 +1,133 @@
 # Daemon upgrades
 
-Daemon upgrades are separate from **Install and restart…**, which replaces only
-the GUI. GUI installation does not pause agents, freeze daemon admissions or
-wait for tools. After the new macOS GUI connects, restores its durable state and
-acknowledges any update receipt, it checks the managed daemon's runtime version.
-An older runtime starts one automatic safe handoff in the background. Equal or
-newer runtimes are left alone, including when only the GUI build changed.
+On macOS, GUI installation verifies and swaps the app without pausing agents.
+On the next successful GUI startup, Pilot checks the connected managed daemon
+and publishes its bundled runtime as one immutable candidate before upgrading at
+a safe work boundary. The daemon executes from **one active immutable runtime
+copy**, not the mutable installed app. During handoff there can be one additional
+candidate. It verifies the replacement boot before removing obsolete GUI/runtime
+files. There is no rolling version history or capsule allowlist in this path.
+Cleanup proves the old app is unused by other processes too. A later GUI download
+retries terminal cleanup under its lock, without polling or replaying installation.
 
-Automatic handoff applies only to a verified `PilotNextManaged` launch agent
-for the connected profile in a configured packaged macOS app. Development,
-external connections, custom services and legacy Swift migration stay manual.
-The version check is read-only; only a needed daemon upgrade publishes a capsule.
-Startup checks once, not on every reconnect or Settings open. Pending or failed
-GUI startup acknowledgement, uncertain installation and incomplete handoffs
-prevent automatic replacement.
+Startup attempts this once after restoring durable GUI state and acknowledging
+the GUI update receipt. It does not retry on reconnect or Settings open.
+Incomplete GUI installation or daemon handoff state blocks automatic replacement.
+An exactly matching authenticated runtime tuple stays running, regardless of its
+immutable root. An equal-version runtime upgrades if its full build tuple changes.
+Newer daemon versions are never downgraded.
 
-The GUI remains usable while tools reach a boundary. Automatic preparation waits
-up to ten minutes, with cancellation, then defers rather than interrupting work.
-Active jobs, terminals or uninspectable resources still defer the handoff. A
-quiet sidebar status opens **Settings → Updates** for progress, Cancel or recovery.
-There is no automatic retry or blind replay after a failed or uncertain attempt.
-
-**Settings → Updates → Daemon → Upgrade daemon…** asks for explicit confirmation.
-Agents pause after their current tool calls finish. Chats, queued work and drafts
-are retained. Drained, job-free subagents checkpoint their durable work and exit;
-unfinished inputs recover after replacement, or resume if preparation is cancelled.
-Active jobs, terminals, unknown child processes, transfers or mutations defer the
-upgrade, as does missing or failed resource inspection. Work is not interrupted. Cancel is effective
-before shutdown begins; once shutdown may have begun, the handoff finishes or
-reports an unknown outcome instead of attempting rollback.
+The GUI remains usable while active tools finish. Automatic preparation waits
+up to ten minutes, with cancellation, then defers. Active jobs, terminals,
+unknown child processes, transfers, mutations or failed resource inspection
+block replacement. Drained, job-free subagents checkpoint and exit, then resume
+unfinished inputs after replacement. No completed tools are replayed.
+**Settings → Updates → Daemon → Upgrade daemon…** remains an explicitly confirmed
+manual option. Cancel is effective until shutdown begins.
 
 ## Supported ownership
 
-The initial supported transition is the current user's macOS Swift-managed
-`com.babariviere.pilot.daemon` launch agent, including a prior explicit upgrade of
-that same launch agent to an immutable Next capsule. It retains the original
-launchd label, logs, working directory, environment, and data profile. Only its
-verified runtime paths change; the profile is pinned explicitly and Node is first
-on PATH. Modern Swift runtime assembly snapshots committed runtime inputs and stamps
-`runtime-build.json` before the enclosing app is signed. That gives ordinary
-Swift bootstrap the private boot-bound build/root proof needed for the same
-strict reservation. Older installed/unstamped Swift runtimes still defer; the
-adapter never manufactures a stamp or falls back to tool pause on the live app.
-The profile's `managed` flag is not changed, and the replacement is not
-started with `--bundled-runtime`. This is not enrollment or profile migration.
+The adapter manages only the current user's known
+`com.babariviere.pilot.daemon` launch agent and connected private profile.
+Custom services and external connections do not acquire lifecycle authority.
+Automatic handoff requires `PilotNextManaged=true`; initial adoption of a known
+Swift launch agent remains manual. Its profile's managed/enrollment flag, daemon
+and storage identities, working directory, logs and service label are preserved.
+The replacement runs normal `main.ts`, never `--bundled-runtime`.
+Supported Next roots use the exact private
+`~/Library/Application Support/Pilot Next Service Runtime/<identity>/Pilot Next.app`
+layout. The legacy `Pilot Next Runtimes` layout remains recognized for live
+ownership and migration, without an allowlist or old-file verification.
+Existing direct-installed-app services must migrate to immutable execution before
+GUI swap; the GUI update guard refuses that unsafe arrangement.
 
-Linux uses the known `pilotd.service` user unit with exact retained runtime, profile,
-policy, loaded fragment, MainPID, command line, native executable and separate
-cgroup proof. A reachable systemd user manager/D-Bus is required; there is no
-foreground fallback, sudo or linger change. Custom services, drop-ins, unknown
-definitions and unverified payloads refuse. Linux service lifecycle native
-qualification must be reported separately from source/contract checks. This feature does not acquire a general service-management or
-PID-signaling capability. The existing external Local connection remains usable
-without upgrading its daemon. The Swift app remains installed. A private `.plist.next-owner` claim is persisted
-before stop intent and the replacement plist carries `PilotNextManaged=true`.
-Updated Swift lifecycle/update paths take the same permanent handoff lock and
-refuse writes or signals after that claim, even when its contents are incomplete.
-This source guard cannot patch previously installed Swift binaries. Those older
-binaries must not be used to restart/repair the service during coexistence.
+Old runtime files are not the ownership authority. A live HMAC challenge binds
+the exact private owner record's boot, original build tuple, runtimeRoot, PID,
+daemon and lineage identities. The private launch agent must have the exact
+supported two-argument bundled layout and loaded launchd definition/PID.
+The OS process must belong to this user, and **that same PID** must hold the
+profile's permanent SQLite lease. A native kqueue watch binds its eventual exit.
+No process command line or unrelated held lease substitutes for these checks.
 
+This works when a prior retained capsule has disappeared. Neither
+`proc_pidpath` nor dynamic code-signature lookup reliably works after unlink on
+macOS, so managed ownership does not depend on reopening or verifying obsolete
+files. The **new target** must still be a canonical immutable candidate with the
+compiled release's exact signature/build and valid runtime stamp. Legacy manual
+Swift adoption additionally checks its live executable path. Unstamped runtimes
+cannot gain private updater authority from a `build:null` proof.
+
+A private `.plist.next-owner` claim prevents updated Swift lifecycle paths from
+mutating a service after Next takes ownership. Previously installed Swift
+binaries cannot be patched by that claim and must not be used to repair/restart
+the service during coexistence.
+
+Linux keeps its separately qualified retained-runtime/systemd adapter, exact
+unit/MainPID/profile/cgroup checks, and existing host logout policy. The macOS
+simplification grants no general PID-signaling, sudo or service-management power.
 
 ## Explicit registration and GUI independence
 
-A packaged GUI first verifies/connects without publishing a runtime. The separate
-post-startup check above may then upgrade an older managed macOS daemon. It never
-registers a missing service, migrates Swift ownership or starts a stopped daemon
-automatically. Ordinary GUI reconnects do not consume retained runtime slots. On a fresh/stopped
-profile the startup view offers **Register or start service…**, with a separate
-**Enable and start** confirmation that includes login enablement. Registration
-publishes the complete verified immutable bundled seed and executes normal
-`main.ts`, without `--bundled-runtime` or parent IPC. The profile managed flag is
-preserved (fresh normal service profiles are not auto-enrolled).
+First registration and starting a stopped service remain explicit, not startup
+side effects. **Register or start service… → Enable and start** enables the known
+login launch agent with the verified immutable copy of the installed app runtime.
+An existing stopped Next definition is updated to that runtime; Swift/custom
+definitions require migration instead. No enrollment, parent IPC or GUI lifetime
+lease is required. launchd can restart the immutable runtime after the GUI quits.
 
-macOS uses the established label/logs/Interactive QoS/backoff and Linux renders
-`scripts/linux/service.mjs` with the selected retained runtime, explicit profile,
-port and restrictive policy. Linux's preflight report is outside the immutable
-runtime. Crash restart remains on the selected version, independent of GUI
-close/quit/replacement. A stopped selected version is not replaced by the newest
-GUI seed. Existing Swift definitions are never overwritten by first registration;
-connect externally, then use the separately confirmed safe upgrade instead.
-
-Registration has its own durable `registering` intent in the existing journal.
-Missing startup ACK is Unknown and blocks another start. Inspect first; neither
-startup nor registration replays an incomplete handoff. LaunchAgents are scoped
-to the GUI login session. Linux logout/reboot survival depends on existing host
-policy, not a new linger or power-setting grant. Bundling remains the offline
-seed; no daemon feed, signing or self-update activation is introduced.
+Registration records one `registering` intent. Missing startup acknowledgement
+is Unknown and blocks another start, rather than silently bootstrapping twice.
+LaunchAgents remain scoped to the GUI login session.
 
 ## Stopped legacy service migration
 
-The macOS update helper supports an explicit operator migration for the known
-Swift launch agent after it has been unloaded. This also covers a missing
-`/Applications/Pilot.app`: the old executable is not needed to migrate a stopped
-service. A running daemon still requires the safe live upgrade above.
+The helper can explicitly adopt an unloaded known Swift service, including one
+whose old app is missing, without moving chat data:
 
 ```sh
-# Unload the old definition first. This interrupts agents and terminals.
+# Unloading interrupts agents and terminals; inspect their state first.
 launchctl bootout "gui/$(id -u)/com.babariviere.pilot.daemon"
-# Requires a helper release containing stopped-service migration:
 "/Applications/Pilot Next.app/Contents/Helpers/pilot-desktop-update-helper" \
   --migrate-stopped --app "/Applications/Pilot Next.app" --confirm
 ```
 
-This changes service ownership and executable paths, not the chat data format.
-The existing profile, daemon/storage identities, chats and drafts stay in place;
-the profile's `managed` flag is not changed. No ownership database or lock is
-deleted, and no `--bundled-runtime` enrollment is performed. Normal packaged
-startup can connect to the verified daemon afterward.
+Migration requires the exact private definition, an unloaded service, unused
+listener, released profile lease and no interrupted handoff. It verifies the
+installed target, publishes one immutable candidate, saves the original plist in one private backup slot, records
+intent, replaces the definition and starts once. After verified completion it
+retires that backup. A post-intent failure is Unknown: inspect the backup,
+journal and actual service state. No automatic rollback or replay occurs.
 
-Migration requires the exact supported service definition, an unloaded service,
-an unused listener, a released profile lease and no incomplete handoff. It
-verifies and retains the selected app's runtime using the helper's compiled
-trust, preserves the original definition in a backup, and journals intent
-before changing the service. It starts once, then verifies the new runtime and
-unchanged profile identity. A failed acknowledgement after intent is **Unknown**:
-inspect the backup, journal and actual service state instead of retrying or
-automatically rolling back. Custom launch agents and Linux services are outside
-this migration's scope. Older helpers do not implement this command.
+## Verified handoff and interrupted state
 
-## Verified handoff
+1. Verify/publish the immutable candidate and live ownership above, take the permanent
+   per-profile handoff lock, and attach the native exit watch.
+2. Reach the existing tool-boundary pause and prepare the signed daemon-safe
+   reservation below. Revalidate the unchanged private plist, exact loaded
+   service/PID, OS ownership, same-PID lease and HMAC boot.
+3. Verify the exact reservation receipt before recording `stopping` durably.
+   Stop only that launchd service, then require the watched process exit and
+   released lease before atomically replacing its definition.
+4. Reverify the immutable candidate and bootstrap once. Require a new HMAC boot,
+   unchanged daemon/lineage, exact selected runtime build/root, native executable,
+   exact loaded service and held lease.
+5. Replace interrupted evidence with a small completion marker, then attempt
+   obsolete-file cleanup. Cleanup failure does not undo a successful handoff.
+   An exactly matching, revalidated immutable runtime may also permit GUI cleanup.
 
-1. Exclude a concurrent GUI restart. The GUI stays alive: its composer, marked
-   text, secondary forms, preferences, visuals and retained Unknown deliveries
-   are not checkpoint prerequisites and remain with their existing owners.
-   Close/Quit waits only while the native handoff is actually running. Mutation
-   admission and in-flight daemon work belong to the pause/reservation below,
-   not an all-chat or GUI-idle check.
-2. Verify and publish this GUI's complete current runtime using the existing
-   compiled trust, signature, source and immutable-capsule contract. No downloaded
-   key, source checkout, mutable app runtime or PATH-provided Node is substituted.
-3. Pin the canonical private profile, random boot, daemon/lineage identity, actual
-   Node executable and exact loaded launchd definition. Attach a native kqueue
-   exit watch before any shutdown. A `build:null` HMAC proof establishes live
-   identity only, not retained-runtime proof or private updater authority.
-4. Use the existing tool-boundary pause API and check its exact process response.
-   Prepare the signed daemon-safe reservation described below, then revalidate
-   native ownership. Verify the complete exact receipt immediately before durable
-   stop intent. A local 175-second deadline is measured before prepare and never
-   renewed. Missing backend support is a refusal, not a weaker fallback.
-5. Under a permanent per-profile handoff lock, durably record `stopping` before
-   `launchctl bootout`. Require the watched OS process exit and released permanent
-   profile lease before replacing the definition. Never unlink either lock.
-6. Atomically persist the preserved definition with the verified capsule's Node
-   and daemon entry. Bootstrap that same service once. The daemon's existing
-   exclusive profile/listener admission still runs before service-graph imports.
-7. Require a new live boot, unchanged daemon/lineage, exact runtime build/root,
-   native executable, loaded service definition and held profile lease before
-   reporting completion. A launchctl success alone is not completion.
+GUI exchange never changes the active runtime's lexical module/resource paths.
+Keeping the old GUI rollback alone would preserve executable inodes but could
+redirect lazy JavaScript imports into new files while jobs defer handoff. The
+separate immutable active copy prevents that mixed-version window. Publication
+never overwrites an active root. Uncertain use consumes the bounded candidate
+capacity rather than deleting files speculatively.
 
-## Failure and inspection
-
-Pre-shutdown refusal leaves the daemon unchanged. A failed or lost acknowledgement
-after shutdown may have begun is **Unknown**, not a retry instruction. The GUI
-keeps the uncertain upgrade unavailable, but releases unrelated GUI controls.
-It does not send another stop/start, delete evidence,
-restore the old definition, or infer success from an HTTP response alone.
-
-The private `<profile>/.daemon-upgrade.json` journal retains the phase, identities,
-capsule and previous/next service definitions, without the owner proof secret.
-An incomplete journal blocks another upgrade across GUI restarts. Inspect it and
-the service's actual state before arranging deliberate recovery. Ordinary Local
-startup never replays this journal. There is no automatic rollback or recovery
-installer in this slice.
+There is one overwritten `<profile>/.daemon-upgrade.json`, not an upgrade history.
+Only an interrupted attempt retains its previous/next definitions and receipt,
+never the HMAC secret. An incomplete journal blocks further handoffs.
+Pre-shutdown refusal leaves the daemon running. Any failed/lost acknowledgement
+after shutdown may have begun is **Unknown**, never permission to stop/start
+again, delete evidence or automatically restore an old app.
 
 ## Daemon-safe admission prerequisite (service adapter contract)
 
@@ -251,21 +217,26 @@ definition replacement/bootstrap and verified new boot. It checks unchanged
 `managed=0`, retained service label, two arguments (no enrollment) and a retained
 draft marker. It also checks the actual backend reservation against synthetic
 job/terminal/child/transfer/mutation/Unknown blockers despite `pause.ready`, exact
-cancellation, lost prepare ACK (no stop), prior-Next verification, and selected
-runtime crash restart after removing both GUI seeds.
+cancellation, lost prepare ACK (no stop), and prior-Next crash restart.
+It then removes the entire old capsule and verifies automatic handoff to one
+immutable candidate without an allowlist. Finally it replaces the GUI with a
+same-version changed-source app while the daemon stays on its immutable copy.
+A late runtime-file read still sees the active old version while a job defers
+handoff; the next verified candidate then replaces it. A substituted lease-holder
+PID refuses. Completed state contains no previous definitions.
 
 `native_launchd_registration_offline_seed_and_singleton` covers explicit fresh
-registration, normal bootstrap, offline seed removal, singleton refusal and
-explicit restart of the selected retained version. Both use private definitions
+registration from one immutable runtime copy, singleton refusal and explicit
+restart. Both use private definitions
 and random labels. The registration fixture deliberately skips `launchctl enable`
 so it never changes the user's login-domain override database; production's
 separately confirmed registration enables the established label.
 `native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_once`
 uses a separate random label and temporary profile with a missing old app. It
-checks the exact private plist backup, unchanged identities, profile/lease
-inodes and `managed=0`, one bootstrap and repeat-migration refusal. This is
+checks retirement of the single private plist backup, unchanged identities,
+profile/lease inodes and `managed=0`, one bootstrap and repeat-migration refusal. This is
 isolated native evidence, not a blanket live-user migration qualification.
-Run these fixtures with an explicit Node executable:
+Run these fixtures with an explicit Node 24 executable:
 
 ```sh
 PILOT_DAEMON_UPGRADE_FIXTURE_NODE="$(node -p 'process.execPath')" \

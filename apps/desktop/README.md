@@ -34,10 +34,13 @@ without starting or changing a daemon. Its chat actions are the same as `--local
 not read-only. The session is marked externally managed; daemon changes and app
 installation are unavailable. No automatic fallback weakens bundled proof.
 Packaged startup now verifies/connects only. **Register or start service…** asks
-separately to enable login startup and start the selected immutable runtime.
+separately to enable login startup and start a verified copy of the bundled runtime.
 The service, not the GUI, owns daemon lifetime. **Settings → Updates → Daemon →
 Upgrade daemon…** uses a separate safe handoff, including supported Swift launch
 agent replacement, and defers while independent work remains active.
+macOS updates swap the GUI first, then upgrade the managed daemon on startup.
+There is one active runtime copy, plus one candidate during handoff, with no old
+release allowlists. Completed updates are cleaned up instead of retained as history.
 See [bundled Local runtime](docs/bundled-runtime.md) and
 [daemon upgrades](docs/daemon-upgrades.md) for the exact boundary and native limits.
 

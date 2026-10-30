@@ -31,19 +31,36 @@ mod linux;
 type Failure = &'static str;
 pub(crate) const RETAINED_OWNER_REFUSED: &str = "The running daemon has no exact supported retained runtime. It was left running; startup was refused.";
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-static UPDATE_RECEIPT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static UPDATE_RECEIPT: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> =
+    std::sync::OnceLock::new();
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub fn set_update_receipt(path: PathBuf) -> Result<(), Failure> {
     if !path.is_absolute() {
         return Err("Update startup receipt must be an absolute transaction path.");
     }
     UPDATE_RECEIPT
-        .set(path)
+        .set(std::sync::Mutex::new(Some(path)))
         .map_err(|_| "Update startup receipt was already set.")
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn update_receipt() -> Option<PathBuf> {
-    UPDATE_RECEIPT.get().cloned()
+    UPDATE_RECEIPT.get()?.lock().ok()?.clone()
+}
+
+/// Startup consumed this receipt. Reconnects must not reopen a cleaned transaction.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn acknowledge_update_receipt(path: &Path) {
+    if let Some(receipt) = UPDATE_RECEIPT.get() {
+        consume_update_receipt(receipt, path);
+    }
+}
+
+fn consume_update_receipt(receipt: &std::sync::Mutex<Option<PathBuf>>, path: &Path) {
+    if let Ok(mut receipt) = receipt.lock()
+        && receipt.as_deref() == Some(path)
+    {
+        *receipt = None;
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -465,10 +482,8 @@ fn start_runtime(
     let current = own_capsule(root, &cancel, deadline)?;
     let location = runtime_location()?;
     check(&cancel, deadline)?;
-    // Reconnection is read-only. The installed package supplies compatibility
-    // policy; selected() verifies the daemon's actual retained execution root.
-    // Publishing here made every GUI update consume another runtime slot even
-    // though no service was installed or upgraded.
+    // Reconnect without publishing another runtime. The next startup step moves
+    // an older managed daemon to this installed app after its work drains.
     pilot_desktop_updater::daemon_upgrade::connect(&location, &current, &trust).map_err(|_| {
         if location.home.join(".daemon-owner.json").exists() {
             RETAINED_OWNER_REFUSED
@@ -494,7 +509,11 @@ pub(crate) fn register_service_explicit(
     let trust = pilot_desktop_updater::helper::compiled_trust()
         .map_err(|_| "Service runtime trust is unconfigured.")?;
     #[cfg(target_os = "macos")]
-    let capsule = own_capsule(root, &trust, &cancel, deadline)?.map_err(startup_publish_failure)?;
+    let capsule = {
+        validate(root, &cancel, deadline)?;
+        service_runtime(root, &trust, &cancel, deadline)
+            .map_err(|_| "Service registration was refused. Inspect the configured profile, user manager and existing service; nothing was stopped.")?
+    };
     #[cfg(target_os = "linux")]
     let capsule = own_capsule(root, &cancel, deadline)?;
     let mut location = runtime_location()?;
@@ -574,67 +593,24 @@ fn package_root(executable: &Path) -> Result<&Path, Failure> {
         .ok_or("Cannot locate Linux package.")
 }
 
-/// Startup text for a failed runtime publication. Staging refusals happen before any
-/// stage, start or stop, so they say what to do instead of the generic failure.
-#[cfg(any(target_os = "macos", test))]
-fn startup_publish_failure(error: pilot_desktop_updater::Error) -> Failure {
-    use pilot_desktop_updater::Error;
-    match error {
-        Error::StagingCapacity => {
-            "This app's runtime was not staged: retained runtimes or staging evidence fill ~/Library/Application Support/Pilot Next Runtimes. No daemon was started or stopped. Inspect them before relaunching."
-        }
-        Error::StagingArchiveFailed => {
-            "This app's runtime was not staged: earlier runtime staging evidence could not be archived to make room. It was kept, and no daemon was started or stopped. Relaunch to retry."
-        }
-        _ => {
-            "The immutable runtime capsule could not be verified/published. Existing runtimes were preserved."
-        }
-    }
-}
-
-/// A daemon upgrade's runtime publication failure. It precedes any shutdown, so it
-/// is never Unknown; staging refusals keep their own actionable status.
-#[cfg(any(target_os = "macos", test))]
-fn upgrade_publish_failure(
-    error: pilot_desktop_updater::Error,
-    cancelled: bool,
-) -> pilot_desktop_updater::daemon_upgrade::Failure {
-    use pilot_desktop_updater::{Error, daemon_upgrade::Failure};
-    match error {
-        Error::StagingCapacity => Failure::StagingCapacity,
-        Error::StagingArchiveFailed => Failure::StagingArchiveFailed,
-        _ if cancelled => Failure::Cancelled,
-        _ => Failure::Unverified,
-    }
-}
-
-/// This app's runtime in the retained store, published on first use. The outer error
-/// is a local precondition; the inner one is the publication result.
+/// The daemon's immutable active/candidate copy, independent of GUI replacement.
 #[cfg(target_os = "macos")]
-fn own_capsule(
+fn service_runtime(
     root: &Path,
     trust: &pilot_desktop_updater::manifest::Trust,
     cancel: &AtomicBool,
     deadline: Instant,
-) -> Result<Result<PathBuf, pilot_desktop_updater::Error>, Failure> {
-    let home = PathBuf::from(std::env::var_os("HOME").ok_or("HOME is unavailable.")?);
-    let store = home
+) -> Result<PathBuf, pilot_desktop_updater::Error> {
+    use pilot_desktop_updater::{Error, installer::MacPlatform, runtime};
+    let home = std::env::var_os("HOME").ok_or(Error::Filesystem)?;
+    let store = PathBuf::from(home)
         .join("Library/Application Support")
-        .join(pilot_desktop_updater::runtime::STORE_NAME);
-    let canonical = root
-        .canonicalize()
-        .map_err(|_| "Cannot resolve app bundle.")?;
-    Ok(pilot_desktop_updater::runtime::publish_cancellable(
-        &canonical,
-        &store,
-        trust,
-        &pilot_desktop_updater::installer::MacPlatform,
-        deadline,
-        cancel,
-    ))
+        .join(runtime::SERVICE_STORE_NAME);
+    let source = root.canonicalize().map_err(|_| Error::Filesystem)?;
+    runtime::publish_service(&source, &store, trust, &MacPlatform, deadline, cancel)
 }
 
-/// This app's runtime in the retained store, published on first use.
+/// Linux retains its independently qualified runtime publication.
 #[cfg(target_os = "linux")]
 fn own_capsule(root: &Path, cancel: &AtomicBool, deadline: Instant) -> Result<PathBuf, Failure> {
     let data = std::env::var_os("XDG_DATA_HOME")
@@ -731,15 +707,18 @@ fn upgrade_daemon(
         let trust =
             pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
         #[cfg(target_os = "macos")]
-        let capsule = own_capsule(root, &trust, &cancel, deadline)
-            .map_err(|_| {
-                if cancel.load(Ordering::Acquire) {
-                    Failure::Cancelled
-                } else {
-                    Failure::Unverified
-                }
-            })?
-            .map_err(|error| upgrade_publish_failure(error, cancel.load(Ordering::Acquire)))?;
+        let capsule = service_runtime(root, &trust, &cancel, deadline).map_err(|error| {
+            if cancel.load(Ordering::Acquire) {
+                Failure::Cancelled
+            } else if matches!(
+                error,
+                pilot_desktop_updater::Error::StagingCapacity | pilot_desktop_updater::Error::Busy
+            ) {
+                Failure::Busy
+            } else {
+                Failure::Unverified
+            }
+        })?;
         #[cfg(target_os = "linux")]
         let capsule = own_capsule(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
         #[cfg(target_os = "macos")]
@@ -753,7 +732,26 @@ fn upgrade_daemon(
             let _ = automatic;
             pilot_desktop_updater::daemon_upgrade::upgrade
         };
-        worker(location, &capsule, &trust, &daemon_id, &lineage_id, &cancel)
+        worker(location, &capsule, &trust, &daemon_id, &lineage_id, &cancel)?;
+        #[cfg(target_os = "macos")]
+        {
+            // The switched daemon no longer reads the exchanged GUI or old runtime.
+            // Cleanup cannot undo a successful upgrade when old evidence is busy.
+            let _ = pilot_desktop_updater::installer::cleanup_completed(root, &trust);
+            if let Some(home) = std::env::var_os("HOME") {
+                let support = PathBuf::from(home).join("Library/Application Support");
+                for name in [
+                    pilot_desktop_updater::runtime::SERVICE_STORE_NAME,
+                    pilot_desktop_updater::runtime::STORE_NAME,
+                ] {
+                    let _ = pilot_desktop_updater::runtime::cleanup_obsolete(
+                        &support.join(name),
+                        &trust,
+                    );
+                }
+            }
+        }
+        Ok(())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
@@ -877,6 +875,18 @@ async fn supervise(
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+    #[test]
+    fn acknowledged_receipt_is_consumed_before_transaction_cleanup() {
+        let path = Path::new("/synthetic/current-update");
+        let receipt = std::sync::Mutex::new(Some(path.to_owned()));
+        consume_update_receipt(&receipt, Path::new("/synthetic/other-update"));
+        assert_eq!(receipt.lock().unwrap().as_deref(), Some(path));
+        consume_update_receipt(&receipt, path);
+        assert!(receipt.lock().unwrap().is_none());
+        consume_update_receipt(&receipt, path);
+        assert!(receipt.lock().unwrap().is_none());
+    }
+
     #[test]
     fn runtime_environment_retains_restrictive_and_resource_policy_without_ambient_authority() {
         let values = std::collections::BTreeMap::from([
@@ -1125,50 +1135,6 @@ mod tests {
             .is_err()
         );
         assert!(validate(&fixture.root, &AtomicBool::new(false), Instant::now()).is_err());
-    }
-    #[test]
-    fn runtime_staging_refusals_stay_distinct_from_unverified_or_unknown() {
-        use pilot_desktop_updater::{Error, daemon_upgrade::Failure as Upgrade};
-        for cancelled in [false, true] {
-            assert_eq!(
-                upgrade_publish_failure(Error::StagingCapacity, cancelled),
-                Upgrade::StagingCapacity
-            );
-            assert_eq!(
-                upgrade_publish_failure(Error::StagingArchiveFailed, cancelled),
-                Upgrade::StagingArchiveFailed
-            );
-        }
-        for error in [Error::RecoveryRequired, Error::Filesystem, Error::Exhausted] {
-            assert_eq!(upgrade_publish_failure(error, false), Upgrade::Unverified);
-            assert_eq!(upgrade_publish_failure(error, true), Upgrade::Cancelled);
-        }
-        let generic = startup_publish_failure(Error::RecoveryRequired);
-        for (error, said) in [
-            (Error::StagingCapacity, "Inspect them before relaunching."),
-            (Error::StagingArchiveFailed, "Relaunch to retry."),
-        ] {
-            let text = startup_publish_failure(error);
-            assert_ne!(text, generic);
-            assert!(
-                text.contains("was not staged") && text.contains(said),
-                "{text}"
-            );
-            assert!(
-                text.to_lowercase()
-                    .contains("no daemon was started or stopped"),
-                "{text}"
-            );
-            assert!(
-                !text.contains("unconfirmed") && !text.contains("unknown"),
-                "{text}"
-            );
-        }
-        #[cfg(target_os = "macos")]
-        assert!(
-            startup_publish_failure(Error::StagingCapacity)
-                .contains(pilot_desktop_updater::runtime::STORE_NAME)
-        );
     }
     #[test]
     fn runtime_bundle_shape_never_silently_falls_back_to_fixture() {

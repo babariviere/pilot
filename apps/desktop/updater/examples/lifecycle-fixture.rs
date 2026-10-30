@@ -210,7 +210,14 @@ fn run(args: Vec<String>) -> Result<()> {
         } else {
             let candidate = installer::preview_bundle(&stage, &trust).map_err(err)?;
             let guard = if args[2] == "ui-only" {
-                Guard::prepare_ui(location, &candidate, &stage, staged.build(), &trust)
+                Guard::prepare_ui(
+                    location,
+                    &candidate,
+                    &target,
+                    &stage,
+                    staged.build(),
+                    &trust,
+                )
             } else {
                 Guard::prepare(location, &candidate, &stage, staged.build(), &trust)
             }

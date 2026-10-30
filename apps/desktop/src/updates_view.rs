@@ -883,6 +883,7 @@ impl Updates {
                 .unwrap_or(Err(Error::RecoveryRequired));
             let _ = owner.update(cx, |owner, cx| {
                 if let Ok((receipt, canonical)) = &result {
+                    crate::bundled_runtime::acknowledge_update_receipt(receipt);
                     owner.startup_receipt = Some(receipt.clone());
                     owner.startup_canonical.clone_from(canonical);
                 }

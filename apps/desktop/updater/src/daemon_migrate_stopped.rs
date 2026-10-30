@@ -3,7 +3,7 @@ use super::*;
 use std::net::{Ipv4Addr, TcpListener};
 
 /// Explicitly adopt the stopped, known Swift launch agent without enrolling its profile.
-/// `app` is either the installed signed Next app or its verified immutable capsule.
+/// `app` is the installed signed Next app or a verified immutable candidate.
 /// Trust must come from the caller's compiled release configuration, never CLI input.
 ///
 /// # Errors
@@ -99,21 +99,16 @@ pub(super) fn migrate_at(
     private_regular(&location.home.join(".daemon-owner.sqlite"))?;
     let lease = Lease::acquire(&location.home.join(".daemon-owner.sqlite"))?;
     let app = io(app.canonicalize())?;
-    let current = if app
-        .parent()
-        .and_then(Path::parent)
-        .and_then(Path::file_name)
-        .is_some_and(|n| n == runtime::STORE_NAME)
-    {
+    let current = if prior_capsule(&app, trust, &home) {
         app
     } else {
-        verified(runtime::publish_cancellable(
+        verified(runtime::publish_service(
             &app,
             &home
                 .join("Library/Application Support")
-                .join(runtime::STORE_NAME),
+                .join(runtime::SERVICE_STORE_NAME),
             trust,
-            &installer::NativePlatform,
+            &installer::MacPlatform,
             Instant::now() + Duration::from_secs(45),
             cancel,
         ))?
@@ -146,10 +141,7 @@ pub(super) fn migrate_at(
         return Err(Failure::Cancelled);
     }
     // Back up the exact bytes, not a JSON/plutil reserialization. Sync before intent.
-    let backup = host.location.home.join(format!(
-        ".daemon-upgrade-original-{}.plist",
-        verified(coordination::random_hex())?
-    ));
+    let backup = host.location.home.join(".daemon-upgrade-original.plist");
     verified(installer::write_new(&backup, &original_bytes))?;
     io(io(File::open(&host.location.home))?.sync_all())?;
     host.original_backup = Some(backup);
@@ -199,7 +191,14 @@ pub(super) fn migrate_at(
             }
             Ok(())
         }
-        Step::Complete => host.journal("complete"),
+        Step::Complete => {
+            host.journal("complete")?;
+            if let Some(backup) = &host.original_backup {
+                let _ = fs::remove_file(backup);
+                let _ = File::open(&host.location.home).and_then(|file| file.sync_all());
+            }
+            Ok(())
+        }
     })
 }
 

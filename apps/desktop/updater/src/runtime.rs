@@ -20,6 +20,14 @@ use std::{
 };
 
 pub const STORE_NAME: &str = "Pilot Next Runtimes";
+/// Private immutable execution roots, bounded to active plus candidate.
+pub const SERVICE_STORE_NAME: &str = "Pilot Next Service Runtime";
+#[path = "runtime_cleanup.rs"]
+mod cleanup;
+pub use cleanup::{CleanupSummary, cleanup_obsolete};
+#[path = "runtime_service.rs"]
+mod service;
+pub use service::publish_service;
 const STAGE_PREFIX: &str = ".stage-v1-";
 const HISTORY: &str = ".abandoned-stages";
 const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -222,11 +230,40 @@ fn publish_checked(
 ) -> Result<PathBuf, Error> {
     check(deadline)?;
     cancel()?;
+    if store.file_name().is_none_or(|name| name != STORE_NAME) {
+        return Err(Error::Identity);
+    }
     installer::validate_target(source, trust)?;
     platform.verify(source, trust, &trust.current_build, None)?;
+    let _lock = prepare_store(source, store)?;
+    let id = identity_checked(source, deadline, cancel)?;
+    let destination = store.join(&id).join(&trust.bundle_name);
+    if destination.try_exists().map_err(|_| Error::Filesystem)? {
+        verify_published(&destination, trust, platform, deadline, cancel)?;
+        return Ok(destination);
+    }
+    legacy_admission(store, trust, platform, deadline, cancel)?;
+    let stage = store.join(format!(
+        "{STAGE_PREFIX}{}",
+        crate::transport::hex(&ring_random()?)
+    ));
+    copy_publish(
+        source,
+        &destination,
+        &stage,
+        trust,
+        platform,
+        deadline,
+        cancel,
+    )
+}
+
+fn prepare_store(source: &Path, store: &Path) -> Result<File, Error> {
     if !store.is_absolute()
         || store.starts_with(source)
-        || store.file_name().is_none_or(|n| n != STORE_NAME)
+        || store
+            .file_name()
+            .is_none_or(|n| n != STORE_NAME && n != SERVICE_STORE_NAME)
     {
         return Err(Error::Identity);
     }
@@ -256,16 +293,37 @@ fn publish_checked(
     {
         return Err(Error::Busy);
     }
-    let id = identity_checked(source, deadline, cancel)?;
-    let destination = store.join(&id).join(&trust.bundle_name);
-    if destination.try_exists().map_err(|_| Error::Filesystem)? {
-        installer::validate_target(&destination, trust)?;
-        platform.verify(&destination, trust, &trust.current_build, None)?;
-        if identity_checked(&destination, deadline, cancel)? != id {
-            return Err(Error::Identity);
-        }
-        return Ok(destination);
+    Ok(lock)
+}
+
+fn verify_published(
+    destination: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
+    installer::validate_target(destination, trust)?;
+    platform.verify(destination, trust, &trust.current_build, None)?;
+    if identity_checked(destination, deadline, cancel)?
+        != destination
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|id| id.to_str())
+            .ok_or(Error::Identity)?
+    {
+        return Err(Error::Identity);
     }
+    Ok(())
+}
+
+fn legacy_admission(
+    store: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+) -> Result<(), Error> {
     // Published and legacy/unknown roots retain their original count/byte bounds.
     // Versioned stages were never execution roots: validate_capsule requires a
     // 64-hex parent. Their inherited lease also excludes surviving copy children.
@@ -342,18 +400,32 @@ fn publish_checked(
             return Err(Error::StagingCapacity);
         }
     }
-    let stage = store.join(format!(
-        "{STAGE_PREFIX}{}",
-        crate::transport::hex(&ring_random()?)
-    ));
+    Ok(())
+}
+
+fn copy_publish(
+    source: &Path,
+    destination: &Path,
+    stage: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    deadline: Instant,
+    cancel: &impl Fn() -> Result<(), Error>,
+) -> Result<PathBuf, Error> {
+    let root = destination.parent().ok_or(Error::Identity)?;
+    let store = root.parent().ok_or(Error::Identity)?;
+    let id = root
+        .file_name()
+        .and_then(|id| id.to_str())
+        .ok_or(Error::Identity)?;
     fs::DirBuilder::new()
         .mode(0o700)
-        .create(&stage)
+        .create(stage)
         .map_err(|_| Error::Filesystem)?;
-    installer::acl_policy(&stage, 1)?;
+    installer::acl_policy(stage, 1)?;
     // Admission already succeeded. Failure to lease our new private directory
     // is a filesystem failure, not a claim that retained capacity is exhausted.
-    let stage_lease = stage_lease(&stage).map_err(|_| Error::Filesystem)?;
+    let stage_lease = stage_lease(stage).map_err(|_| Error::Filesystem)?;
     let app = stage.join(&trust.bundle_name);
     let mut copy = Command::new("/usr/bin/ditto");
     copy.args(["--noqtn", "--noacl"]).arg(source).arg(&app);
@@ -375,12 +447,12 @@ fn publish_checked(
         return Err(Error::Identity);
     }
     sync_tree(&app, deadline, cancel)?;
-    File::open(&stage)
+    File::open(stage)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::Filesystem)?;
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let from = CString::new(stage.as_os_str().as_bytes()).map_err(|_| Error::Identity)?;
-    let to = CString::new(store.join(&id).as_os_str().as_bytes()).map_err(|_| Error::Identity)?;
+    let to = CString::new(root.as_os_str().as_bytes()).map_err(|_| Error::Identity)?;
     // SAFETY: bounded owned C strings, exclusive namespace publication. An
     // existing/unknown root is never replaced, even if not using our lock.
     if unsafe { pnu_publish_capsule(from.as_ptr(), to.as_ptr()) } != 0 {
@@ -389,7 +461,7 @@ fn publish_checked(
     File::open(store)
         .and_then(|f| f.sync_all())
         .map_err(|_| Error::RecoveryRequired)?;
-    Ok(destination)
+    Ok(destination.to_owned())
 }
 
 fn hex_id(value: &str, length: usize) -> bool {

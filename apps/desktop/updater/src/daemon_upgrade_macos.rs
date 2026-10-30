@@ -32,7 +32,7 @@ fn io<T>(result: std::io::Result<T>) -> Result<T, Failure> {
 }
 
 /// Upgrade only the verified existing launch agent. Never modifies the profile's managed flag.
-/// `current` must be a fully verified immutable capsule of this app's compiled release.
+/// `current` is the verified immutable runtime candidate for this compiled release.
 pub fn upgrade(
     location: Location,
     current: &Path,
@@ -94,7 +94,7 @@ fn launch_agent<'a>(
     })
 }
 
-/// Read-only comparison. No capsule publication, lock, pause or service write.
+/// Read-only comparison. No lock, pause or service write.
 pub fn needed(
     location: Location,
     current: &Path,
@@ -108,9 +108,8 @@ pub fn needed(
 }
 
 fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
-    use crate::installer::Platform;
     let current = host.current.clone();
-    let (trust, daemon, lineage, cancel) = (host.trust, host.daemon, host.lineage, host.cancel);
+    let (daemon, lineage, cancel) = (host.daemon, host.lineage, host.cancel);
     if cancel.load(Ordering::Acquire) {
         return Err(Failure::Cancelled);
     }
@@ -118,8 +117,7 @@ fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
     // Bind the caller identity and runtime stamp before interpreting its version.
     prove(&host.location, &host.owner, daemon, lineage)?;
     host.check_cancel()?;
-    verified(installer::validate_target(&current, trust))?;
-    verified(installer::MacPlatform.verify(&current, trust, &trust.current_build, None))?;
+    host.verify_target()?;
     host.check_cancel()?;
     verified(installer::validate_parents(
         host.plist.parent().ok_or(Failure::Unverified)?,
@@ -140,24 +138,19 @@ fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
     host.verify_running_payload()?;
     super::native::no_incomplete_handoff(&host.location)?;
     let candidate = super::native::runtime_stamp(&current)?;
-    let needed = super::runtime_upgrade_needed(&host.owner["build"], &candidate)?;
-    if needed {
-        host.revalidate()?;
-    } else {
-        // A newer signed runtime need not be in this older app's allowlist to
-        // leave it alone. This branch grants no handoff or lifecycle authority.
-        let meta = private_regular(&host.plist)?;
-        if Some((meta.dev(), meta.ino())) != host.plist_stamp
-            || plist(&host.plist)? != host.original
-            || host.live_definition()? != host.pid()?
-        {
-            return Err(Failure::Unverified);
-        }
-        host.verify_running_payload()?;
-        prove(&host.location, &host.owner, daemon, lineage)?;
-    }
+    let needed = handoff_needed(&host.owner, &candidate)?;
+    host.revalidate()?;
     if cancel.load(Ordering::Acquire) {
         return Err(Failure::Cancelled);
+    }
+    if !needed
+        && host.owner["build"] == candidate
+        && definition_root(&host.original)
+            .is_ok_and(|root| root != current && prior_capsule(&root, host.trust, &host.home))
+    {
+        // Only an exactly current, revalidated boot permits obsolete GUI cleanup.
+        // Cleanup failure never converts a successful handoff/check into failure.
+        let _ = installer::cleanup_completed(&current, host.trust);
     }
     Ok(needed)
 }
@@ -240,16 +233,15 @@ impl LaunchAgent<'_> {
         Ok(())
     }
     fn verify_target(&self) -> Result<(), Failure> {
-        let id = verified(runtime::identity(&self.current))?;
-        let (_, build) = verified(coordination::validate_capsule(
+        use crate::installer::Platform;
+        verified(installer::validate_target(&self.current, self.trust))?;
+        verified(installer::MacPlatform.verify(
             &self.current,
             self.trust,
-            &[],
-            Some(&id),
+            &self.trust.current_build,
+            None,
         ))?;
-        if build != self.trust.current_build {
-            return Err(Failure::Unverified);
-        }
+        super::runtime_version(&super::native::runtime_stamp(&self.current)?)?;
         Ok(())
     }
     fn pid(&self) -> Result<i32, Failure> {
@@ -269,66 +261,41 @@ impl LaunchAgent<'_> {
                 .ok_or(Failure::Unverified)?,
         )
     }
-    fn verify_old_payload(&self) -> Result<(), Failure> {
-        self.check_cancel()?;
-        let node = Path::new(
-            self.original["ProgramArguments"][0]
-                .as_str()
-                .ok_or(Failure::Unsupported)?,
-        );
-        let app = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
-        if app.file_name().is_some_and(|n| n == "Pilot.app") {
-            // Swift's sole supported bundle layout. Source-checkout/custom services refuse.
-            command(
-                "/usr/bin/codesign",
-                &[
-                    "--verify".as_ref(),
-                    "--strict".as_ref(),
-                    "--deep".as_ref(),
-                    "-R".as_ref(),
-                    "=identifier \"com.babariviere.pilot\"".as_ref(),
-                    app.as_os_str(),
-                ],
-            )?;
-        } else {
-            // A prior explicit handoff may already use a Next capsule, still launchd-owned.
-            let id = verified(runtime::identity(&self.current))?;
-            let (accepted, _) = verified(coordination::policy(&self.current))?;
-            verified(coordination::validate_capsule(
-                app,
-                self.trust,
-                &accepted,
-                Some(&id),
-            ))?;
-        }
-        self.check_cancel()?;
-        self.verify_running_payload()
-    }
     fn verify_running_payload(&self) -> Result<(), Failure> {
         self.check_cancel()?;
-        let node = Path::new(
-            self.original["ProgramArguments"][0]
-                .as_str()
-                .ok_or(Failure::Unsupported)?,
-        );
-        let app = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
-        if super::native::running(&self.location, app)? != self.owner {
-            return Err(Failure::Unverified);
-        }
-        if verified(helper::process_executable(self.pid()?))? != io(node.canonicalize())? {
-            return Err(Failure::Unverified);
-        }
-        let expected = node
-            .parent()
-            .and_then(Path::parent)
-            .and_then(Path::parent)
-            .ok_or(Failure::Unsupported)?
-            .join("packages/daemon/src/main.ts");
-        if self.original["ProgramArguments"][1].as_str() != expected.to_str() {
+        let root = definition_root(&self.original)?;
+        let managed = self.original["PilotNextManaged"] == true;
+        if !managed && root.file_name().is_none_or(|name| name != "Pilot.app") {
             return Err(Failure::Unsupported);
         }
-        self.check_cancel()?;
-        Ok(())
+        if managed
+            && root != self.current
+            && !prior_capsule(&root, self.trust, &self.home)
+            && root.file_name().is_none_or(|name| name != "Pilot.app")
+        {
+            return Err(Failure::Unsupported);
+        }
+        if self.owner["runtimeRoot"].as_str() != root.join(crate::layout::RUNTIME).to_str()
+            || verified(coordination::record(&self.location))? != self.owner
+        {
+            return Err(Failure::Unverified);
+        }
+        super::runtime_version(&self.owner["build"])?;
+        // GUI exchange/deletion changes proc_pidpath without changing the boot.
+        // Bind that boot to launchd's exact PID and the same PID's profile lease.
+        // Never infer executable ownership from argv or any merely held lease.
+        verify_process_owner(self.pid()?, &self.location.home)?;
+        if !managed
+            && verified(helper::process_executable(self.pid()?))?
+                != io(root
+                    .join(crate::layout::RUNTIME)
+                    .join("node/bin/node")
+                    .canonicalize())?
+        {
+            return Err(Failure::Unverified);
+        }
+        prove(&self.location, &self.owner, self.daemon, self.lineage)?;
+        self.check_cancel()
     }
 }
 impl Handoff for LaunchAgent<'_> {
@@ -351,6 +318,9 @@ impl Handoff for LaunchAgent<'_> {
         }
     }
     fn prepare(&mut self) -> Result<(), Failure> {
+        if !prior_capsule(&self.current, self.trust, &self.home) {
+            return Err(Failure::Unsupported);
+        }
         // Canonical private profile and its HMAC owner record, not merely /api/hello.
         self.owner = verified(coordination::record(&self.location))?;
         verified(installer::validate_parents(
@@ -367,7 +337,7 @@ impl Handoff for LaunchAgent<'_> {
         if self.live_definition()? != self.pid()? {
             return Err(Failure::Unverified);
         }
-        self.verify_old_payload()?;
+        self.verify_running_payload()?;
         prove(&self.location, &self.owner, self.daemon, self.lineage)?;
         self.watch = Some(verified(helper::ParentWatch::new(self.pid()?))?);
         // A permanent per-profile inode serializes all explicit handoffs, never unlinked.
@@ -405,7 +375,7 @@ impl Handoff for LaunchAgent<'_> {
         if super::runtime_version(&candidate)? < super::runtime_version(&self.owner["build"])? {
             return Err(Failure::Unverified);
         }
-        if self.automatic && !super::runtime_upgrade_needed(&self.owner["build"], &candidate)? {
+        if self.automatic && !handoff_needed(&self.owner, &candidate)? {
             // The daemon changed after the read-only checker. Never pause or stop it.
             return Err(Failure::Busy);
         }
@@ -421,8 +391,7 @@ impl Handoff for LaunchAgent<'_> {
         let path = self.original["EnvironmentVariables"]["PATH"]
             .as_str()
             .ok_or(Failure::Unverified)?;
-        self.replacement["EnvironmentVariables"]["PATH"] =
-            json!(format!("{}:{path}", runtime.join("node/bin").display()));
+        self.replacement["EnvironmentVariables"]["PATH"] = json!(runtime_path(&runtime, path));
         Ok(())
     }
     fn drained(&mut self) -> Result<bool, Failure> {
@@ -479,7 +448,7 @@ impl Handoff for LaunchAgent<'_> {
         {
             return Err(Failure::Unverified);
         }
-        self.verify_old_payload()?;
+        self.verify_running_payload()?;
         prove(&self.location, &self.owner, self.daemon, self.lineage)?;
         self.check_cancel()?;
         Ok(())
@@ -488,7 +457,11 @@ impl Handoff for LaunchAgent<'_> {
         if phase == "stopping" {
             claim(&self.plist, &self.location)?;
         }
-        let value = json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"capsule":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement,"originalPlistBackup":self.original_backup,"receipt":self.reservation.as_ref().map(|r|&r.receipt)});
+        let value = if phase == "complete" {
+            json!({"schema":1,"phase":phase,"profile":self.location.home,"service":self.service,"runtime":self.current})
+        } else {
+            json!({"schema":1,"phase":phase,"boot":self.owner["boot"],"daemonId":self.daemon,"lineageId":self.lineage,"profile":self.location.home,"service":self.service,"runtime":self.current,"previousDefinition":self.original,"nextDefinition":self.replacement,"originalPlistBackup":self.original_backup,"receipt":self.reservation.as_ref().map(|r|&r.receipt)})
+        };
         let temp = self.location.home.join(format!(
             ".daemon-upgrade-{}.pending",
             verified(coordination::random_hex())?
@@ -621,6 +594,76 @@ impl Handoff for LaunchAgent<'_> {
         }
     }
 }
+// Accept only the established two-argument bundled layout, not arbitrary scripts.
+fn handoff_needed(owner: &Value, candidate: &Value) -> Result<bool, Failure> {
+    let old = super::runtime_version(&owner["build"])?;
+    let new = super::runtime_version(candidate)?;
+    Ok(super::runtime_upgrade_needed(&owner["build"], candidate)?
+        || (old == new && owner["build"] != *candidate))
+}
+fn definition_root(value: &Value) -> Result<PathBuf, Failure> {
+    let node = Path::new(
+        value["ProgramArguments"][0]
+            .as_str()
+            .ok_or(Failure::Unsupported)?,
+    );
+    if !node.is_absolute()
+        || node.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+    {
+        return Err(Failure::Unsupported);
+    }
+    let root = node.ancestors().nth(6).ok_or(Failure::Unsupported)?;
+    let runtime = root.join(crate::layout::RUNTIME);
+    if value["ProgramArguments"]
+        != json!([
+            runtime.join("node/bin/node"),
+            runtime.join("packages/daemon/src/main.ts")
+        ])
+    {
+        return Err(Failure::Unsupported);
+    }
+    Ok(root.to_owned())
+}
+fn prior_capsule(root: &Path, trust: &Trust, home: &Path) -> bool {
+    root.file_name()
+        .is_some_and(|name| name == trust.bundle_name.as_str())
+        && root
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .is_some_and(|id| {
+                id.len() == 64
+                    && id
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+        && root.parent().and_then(Path::parent).is_some_and(|store| {
+            [runtime::STORE_NAME, runtime::SERVICE_STORE_NAME]
+                .iter()
+                .any(|name| store == home.join("Library/Application Support").join(name))
+        })
+}
+fn runtime_path(runtime: &Path, previous: &str) -> String {
+    // Replace prior injected bundle paths, not one PATH entry per app update.
+    let suffix = format!("/{}/node/bin", crate::layout::RUNTIME);
+    let mut entries = vec![runtime.join("node/bin").to_string_lossy().into_owned()];
+    entries.extend(
+        previous
+            .split(':')
+            .filter(|entry| !entry.ends_with(&suffix))
+            .map(str::to_owned),
+    );
+    entries.join(":")
+}
+fn verify_process_owner(pid: i32, profile: &Path) -> Result<(), Failure> {
+    verified(helper::process_owned(pid))?;
+    verified(coordination::lease_owned_by(profile, pid))
+}
 fn drain_timeout(automatic: bool) -> Duration {
     Duration::from_secs(if automatic { 10 * 60 } else { 30 })
 }
@@ -710,7 +753,7 @@ fn claim(path: &Path, location: &Location) -> Result<(), Failure> {
     io(io(File::open(path.parent().ok_or(Failure::Unverified)?))?.sync_all())
 }
 
-/// Explicit first registration, or start the already selected Next runtime.
+/// Explicit first registration, or start the verified immutable candidate.
 /// No existing Swift/custom definition is rewritten here: that requires safe upgrade.
 pub(super) fn register(
     location: Location,
@@ -730,6 +773,9 @@ fn register_at(
     cancel: &AtomicBool,
     enable_login: bool,
 ) -> Result<(), Failure> {
+    if !prior_capsule(current, trust, home) {
+        return Err(Failure::Unsupported);
+    }
     let file = home
         .join("Library/LaunchAgents")
         .join(format!("{label}.plist"));
@@ -738,50 +784,26 @@ fn register_at(
         return Err(Failure::Busy);
     }
     super::native::no_incomplete_handoff(&location)?;
-    let root = if file.try_exists().map_err(|_| Failure::Unverified)? {
-        private_regular(&file)?;
+    let existing = if file.try_exists().map_err(|_| Failure::Unverified)? {
+        let meta = private_regular(&file)?;
         let value = plist(&file)?;
         validate_definition(&value, home, &location, label)?;
         if value["PilotNextManaged"] != true {
             return Err(Failure::Unsupported);
         }
-        let node = value["ProgramArguments"][0]
-            .as_str()
-            .ok_or(Failure::Unverified)?;
-        let root = Path::new(node)
-            .ancestors()
-            .nth(6)
-            .ok_or(Failure::Unverified)?
-            .to_owned();
-        if value["ProgramArguments"]
-            != json!([
-                root.join(crate::layout::RUNTIME).join("node/bin/node"),
-                root.join(crate::layout::RUNTIME)
-                    .join("packages/daemon/src/main.ts")
-            ])
-        {
+        let previous = definition_root(&value)?;
+        if previous != current && !prior_capsule(&previous, trust, home) {
             return Err(Failure::Unsupported);
         }
-        let (accepted, _) = verified(coordination::policy(current))?;
-        let id = verified(runtime::identity(current))?;
-        verified(coordination::validate_capsule(
-            &root,
-            trust,
-            &accepted,
-            Some(&id),
-        ))?;
-        root
+        Some((value, (meta.dev(), meta.ino())))
     } else {
         super::native::fresh_profile(&location)?;
-        let id = verified(runtime::identity(current))?;
-        verified(coordination::validate_capsule(
-            current,
-            trust,
-            &[],
-            Some(&id),
-        ))?;
-        current.to_owned()
+        None
     };
+    use crate::installer::Platform;
+    verified(installer::validate_target(current, trust))?;
+    verified(installer::MacPlatform.verify(current, trust, &trust.current_build, None))?;
+    let root = current.to_owned();
     let service = format!("gui/{}/{label}", unsafe { libc::geteuid() });
     if command("/bin/launchctl", &["print".as_ref(), service.as_ref()]).is_ok() {
         return Err(Failure::Busy);
@@ -814,6 +836,35 @@ fn register_at(
             &["-convert".as_ref(), "xml1".as_ref(), file.as_os_str()],
         )?;
         io(io(File::open(&file))?.sync_all())?;
+    }
+    if let Some((mut value, stamp)) = existing {
+        let runtime = root.join(crate::layout::RUNTIME);
+        value["ProgramArguments"] = json!([
+            runtime.join("node/bin/node"),
+            runtime.join("packages/daemon/src/main.ts")
+        ]);
+        value["EnvironmentVariables"]["PATH"] = json!(runtime_path(
+            &runtime,
+            value["EnvironmentVariables"]["PATH"]
+                .as_str()
+                .ok_or(Failure::Unverified)?
+        ));
+        let temp = file.with_extension("plist.pending");
+        verified(installer::write_new(
+            &temp,
+            &serde_json::to_vec(&value).map_err(|_| Failure::Unverified)?,
+        ))?;
+        command(
+            "/usr/bin/plutil",
+            &["-convert".as_ref(), "xml1".as_ref(), temp.as_os_str()],
+        )?;
+        io(io(File::open(&temp))?.sync_all())?;
+        let meta = private_regular(&file)?;
+        if (meta.dev(), meta.ino()) != stamp || coordination::owner_live(&location.home) {
+            return Err(Failure::Unverified);
+        }
+        io(fs::rename(&temp, &file))?;
+        io(io(File::open(file.parent().ok_or(Failure::Unverified)?))?.sync_all())?;
     }
     claim(&file, &location)?;
     // From here any failed/lost acknowledgement is inspect-only, never re-bootstrap.

@@ -20,6 +20,7 @@ fn target(temp: &Temp) -> PathBuf {
     target
 }
 
+#[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 #[test]
 fn recovery_reconciles_unswapped_commit_without_install_or_replay() {
     let temp = Temp::new();
@@ -137,6 +138,7 @@ fn transaction(target: &Path, id: u8, phase: Phase) -> PathBuf {
     root
 }
 
+#[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 #[test]
 fn repeated_acknowledged_history_does_not_exhaust_staging() {
     let temp = Temp::new();
@@ -208,6 +210,8 @@ fn current_receipt_and_uncertain_phases_are_never_archived() {
         let temp = Temp::new();
         let target = target(&temp);
         let current = transaction(&target, 100, Phase::StartupAcknowledged);
+        let _held =
+            File::open(rollback_bundle(&current, &trust()).join("rollback-resource")).unwrap();
         let uncertain = transaction(&target, 1, phase);
         assert!(
             matches!(
@@ -266,6 +270,7 @@ fn live_target_lock_prevents_any_archive_or_new_stage() {
     assert!(!target.parent().unwrap().join(HISTORY).exists());
 }
 
+#[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 #[test]
 fn archive_failure_never_replaces_existing_history_or_admits_stage() {
     let temp = Temp::new();
@@ -312,6 +317,7 @@ fn archive_sync_failure_keeps_complete_evidence_discoverable() {
     );
 }
 
+#[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 #[test]
 fn archived_lookup_refuses_uncertain_or_redirected_history() {
     let temp = Temp::new();
@@ -330,4 +336,262 @@ fn archived_lookup_refuses_uncertain_or_redirected_history() {
     std::os::unix::fs::symlink(&other, history).unwrap();
     assert_eq!(transaction_path(&root), Err(Error::Filesystem));
     assert!(fresh.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn repeated_gui_updates_keep_one_rollback_until_verified_daemon_handoff() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    for id in 1..=8 {
+        let (stage, lock) = new_stage(&target, &trust(), &FixturePlatform).unwrap();
+        discard_incomplete(&stage, &target).unwrap();
+        let root = transaction(&target, id, Phase::StartupAcknowledged);
+        drop(lock);
+        let held = File::open(rollback_bundle(&root, &trust()).join("rollback-resource")).unwrap();
+        assert!(
+            matches!(
+                new_stage(&target, &trust(), &FixturePlatform),
+                Err(Error::StagingCapacity)
+            ),
+            "GUI ACK must retain an in-use exchanged bundle"
+        );
+        assert!(
+            root.join("install-payload/Pilot Next.app/rollback-resource")
+                .exists()
+        );
+        drop(held);
+        assert_eq!(
+            cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+            1
+        );
+        assert!(!root.exists());
+        assert!(!target.parent().unwrap().join(HISTORY).exists());
+        assert!(
+            target
+                .parent()
+                .unwrap()
+                .join(".pilot-next-updater.lock")
+                .exists()
+        );
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn daemon_handoff_cleanup_preserves_interrupted_update_without_replay() {
+    for phase in [
+        Phase::Ready,
+        Phase::Committed,
+        Phase::Swapped,
+        Phase::RelaunchRequested,
+    ] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 1, phase);
+        let before = fs::read(root.join("journal.json")).unwrap();
+        assert_eq!(
+            cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+            0
+        );
+        assert_eq!(recovery_phase(&root).unwrap(), phase);
+        assert_eq!(fs::read(root.join("journal.json")).unwrap(), before);
+        assert!(matches!(
+            new_stage(&target, &trust(), &FixturePlatform),
+            Err(Error::StagingCapacity)
+        ));
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn legacy_terminal_history_requires_original_completion_proof() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let root = transaction(&target, 1, Phase::StartupAcknowledged);
+    let history = target.parent().unwrap().join(HISTORY);
+    fs::DirBuilder::new().mode(0o700).create(&history).unwrap();
+    let archived = history.join(root.file_name().unwrap());
+    archive_move(&root, &archived, sync_directory).unwrap();
+    fs::write(archived.join("journal.pending"), b"interrupted").unwrap();
+    assert_eq!(
+        cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+        0
+    );
+    assert!(archived.exists());
+    fs::remove_file(archived.join("journal.pending")).unwrap();
+    assert_eq!(
+        cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+        1
+    );
+    assert!(!history.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn daemon_handoff_cleanup_requires_complete_terminal_evidence_and_idle_writers() {
+    for fault in 0..4 {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 100, Phase::StartupAcknowledged);
+        let mut guard = None;
+        match fault {
+            0 => fs::write(root.join("journal.pending"), b"interrupted ACK").unwrap(),
+            1 => {
+                fs::rename(
+                    root.join("install-payload/Pilot Next.app"),
+                    root.join("other-old"),
+                )
+                .unwrap();
+                fs::create_dir(root.join("install-payload/Pilot Next.app")).unwrap();
+            }
+            2 => guard = Some(journal_guard(&root).unwrap()),
+            _ => guard = Some(lock_target(&target).unwrap()),
+        }
+        let result = cleanup::cleanup_with(&target, &trust(), &FixturePlatform);
+        if fault == 3 {
+            assert_eq!(result, Err(Error::Busy));
+        } else {
+            assert_eq!(result.unwrap(), 0);
+        }
+        assert!(
+            root.join("journal.json").exists(),
+            "fault {fault} must retain evidence"
+        );
+        drop(guard);
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn legacy_cleanup_unblocks_the_single_stage() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let mut roots = Vec::new();
+    for id in 1..=3 {
+        roots.push(transaction(&target, id, Phase::StartupAcknowledged));
+    }
+    let history = target.parent().unwrap().join(HISTORY);
+    fs::DirBuilder::new().mode(0o700).create(&history).unwrap();
+    for id in 4..=6 {
+        let root = transaction(&target, id, Phase::StartupAcknowledged);
+        let archived = history.join(root.file_name().unwrap());
+        archive_move(&root, &archived, sync_directory).unwrap();
+        roots.push(archived);
+    }
+    assert_eq!(
+        cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+        6
+    );
+    assert!(roots.iter().all(|root| !root.exists()));
+    assert!(!history.exists());
+    let (stage, _lock) = new_stage(&target, &trust(), &FixturePlatform).unwrap();
+    assert!(stage.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn obsolete_missing_or_corrupt_payloads_do_not_block_future_updates() {
+    for fault in 0..4 {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 100, Phase::StartupAcknowledged);
+        match fault {
+            0 => fs::remove_file(root.join("archive.zip")).unwrap(),
+            1 => fs::write(root.join("archive.zip"), b"corrupt obsolete archive").unwrap(),
+            2 => fs::remove_dir_all(root.join("install-payload/Pilot Next.app")).unwrap(),
+            _ => fs::write(
+                root.join("install-payload/Pilot Next.app/rollback-resource"),
+                b"corrupt obsolete resource",
+            )
+            .unwrap(),
+        }
+        assert_eq!(
+            cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+            1
+        );
+        assert!(!root.exists());
+        let (stage, _lock) = new_stage(&target, &trust(), &FixturePlatform).unwrap();
+        assert!(stage.exists());
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn terminal_cleanup_preserves_rollback_in_use_or_uncertain_across_profiles() {
+    for phase in [Phase::StartupAcknowledged, Phase::Aborted] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 100, phase);
+        let rollback = rollback_bundle(&root, &trust());
+        let held = File::open(rollback.join("rollback-resource")).unwrap();
+        assert_eq!(
+            cleanup::cleanup_checked(&target, &trust(), &FixturePlatform, &cleanup::native_unused)
+                .unwrap(),
+            0
+        );
+        assert!(rollback.join("rollback-resource").exists());
+        drop(held);
+        assert_eq!(
+            cleanup::cleanup_checked(&target, &trust(), &FixturePlatform, &|_, _| false).unwrap(),
+            0,
+            "uncertain census must preserve terminal rollback"
+        );
+        assert_eq!(
+            cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
+            1
+        );
+        assert!(!root.exists());
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn missing_rollback_does_not_require_a_native_process_probe() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let root = transaction(&target, 100, Phase::StartupAcknowledged);
+    fs::remove_dir_all(rollback_bundle(&root, &trust())).unwrap();
+    assert_eq!(
+        cleanup::cleanup_checked(&target, &trust(), &FixturePlatform, &|_, _| {
+            panic!("missing rollback must not scan processes")
+        })
+        .unwrap(),
+        1
+    );
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn staging_retries_terminal_cleanup_after_a_busy_startup_without_polling() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let root = transaction(&target, 100, Phase::StartupAcknowledged);
+    let lock = lock_target(&target).unwrap();
+    assert_eq!(
+        cleanup::cleanup_with(&target, &trust(), &FixturePlatform),
+        Err(Error::Busy)
+    );
+    drop(lock);
+    assert!(matches!(
+        new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false),
+        Err(Error::StagingCapacity)
+    ));
+    assert!(root.exists());
+    let (stage, _lock) =
+        new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| true).unwrap();
+    assert!(!root.exists());
+    assert!(stage.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn unsafe_legacy_history_is_preserved_without_blocking_fresh_staging() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let history = temp.path().join(HISTORY);
+    fs::write(&history, b"unrecognized history evidence").unwrap();
+    let (stage, _lock) = new_stage(&target, &trust(), &FixturePlatform).unwrap();
+    assert!(stage.exists());
+    assert_eq!(fs::read(history).unwrap(), b"unrecognized history evidence");
 }

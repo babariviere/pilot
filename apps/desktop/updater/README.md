@@ -40,7 +40,8 @@ helper. No default points at the Swift application, its feed, credentials or key
 - `src/installer.rs`, `native/platform.m`: whole-bundle identity/version and Security
   framework signature/compiled requirement checks, repeated after parent exit. Same-volume
   native `renameatx_np(RENAME_SWAP)`, durable journal and retained old app. No administrator
-  authorization/escalation, unrelated file replacement or deletion of old bundles.
+  authorization/escalation or unrelated file replacement. The exchanged old app is
+  removed after verified GUI startup and daemon handoff, not kept as update history.
 - `src/helper.rs`, `src/bin/update-helper.rs`: private socket handshake, inherited
   permanent per-target lock, explicit durable COMMIT, then kqueue NOTE_EXIT on the actual
   spawning parent. No COMMIT means ordinary quit/EOF cannot install. A timer can abort
@@ -143,11 +144,9 @@ trust/feed/signing configuration is deliberately absent from development assembl
 5. Explicit Restart intent fences edits/admissions and captures fresh durable receipts
    for drafts, deliveries and Settings. Preserve uncommitted IME/preedit and unsaved text.
    The GUI never pauses agents or freezes daemon admissions for an app swap. The
-   concrete GUI uses `prepare_retained`, not a client assertion of
-   `Runtime::Independent` or `SharedStopped`. Its native worker proves the exact
-   sealed capsule/process/profile through read-only inspection. Legacy/app-root
-   and unproven runtimes refuse. The same retained proof must remain valid after
-   actual parent exit; no daemon is stopped, migrated, replaced or restarted.
+   macOS GUI flow verifies the replacement app independently of the running daemon.
+   The next startup handles any needed managed-daemon upgrade separately. Linux and
+   legacy runtime receipts keep their existing verification behavior.
 6. Call `request_install(safety, now)` only after those acknowledgements. It starts a
    helper that waits for COMMIT; the live app remains unchanged. When `ExitPrepared`
    arrives, capture/revalidate **fresh** exact-revision receipts and fences, then
@@ -198,9 +197,8 @@ supported targets stay where they were. Journals, verified manifest, authenticat
 archive copy, UI/runtime receipts and the exact exchanged old inode stay in the
 durable private transaction beside the target. Rollback must survive temporary
 purges and reboot. New rollback entries use `install-payload/bundle` too, not an
-indexable `.app` sibling. Legacy transactions/history retain their original
-`install-payload/Pilot Next.app` layout and may still appear in third-party indexes;
-this change neither moves nor deletes existing backups. No guarantee is made about
+indexable `.app` sibling. Legacy terminal transactions/history keep their original
+`install-payload/Pilot Next.app` layout until proven cleanup. No guarantee is made about
 third-party scanners that ignore private/hidden paths or index bundle contents.
 
 After successful relaunch, the helper removes only the exact temporary workspace,
@@ -208,8 +206,9 @@ outside the pre-relaunch critical path. If interrupted, ordinary recovery inspec
 under the target and journal locks can remove that workspace only for a post-swap
 phase with authenticated retained archive and the exact exchanged rollback inode.
 Changed workspace identity, pending writes or unproven exchange retain the evidence.
-The durable receipt, archive, rollback and startup ACK are never removed or replayed
-by this cleanup. No broad temporary-directory or runtime-store scan is added.
+This temporary-workspace cleanup does not remove the durable receipt, archive,
+rollback or startup ACK. Terminal transaction disposal requires the separate
+verified-daemon gate below. No broad temporary-directory or runtime-store scan is added.
 Pre-COMMIT helper cancel removes only its prepared extraction so the verified preview
 can be retried.
 Failed/incomplete downloads and proven inactive Ready cleanup also remove their
@@ -236,37 +235,48 @@ held open through final preparation and the target inode rechecked immediately b
 swap; the retained/installed inode identities are checked afterwards too. Journal
 transitions use a separate private nonblocking lock. Relaunch intent is durable before
 launch, so fast startup acknowledgement cannot be overwritten by a later helper write.
-The old app is retained after swap. At most two transactions remain in the active
-install-parent scan. When staging needs room, the updater holds the permanent
-target lock and a transaction journal lock and moves an older acknowledged
-transaction intact into the private sibling `.pilot-next-updater-history/`.
-Known aborted transactions are eligible too, preserving their entire evidence;
-they have no exchanged rollback inode to qualify. An abandoned committed attempt
-can become aborted only while holding the target/journal locks, after verifying
-the signed manifest, native running target and exact original target inode.
-An active helper, changed target or pending journal never qualifies.
-It verifies the signed manifest/archive and exact retained rollback inode first.
-The current build receipt stays at its original path. Pending writes, uncertain
-phases, unreadable evidence and rollback mismatches are never archived. Both
-rename parents are synced before another stage is admitted. Archive collisions
-and failures preserve evidence and refuse staging, never overwrite history.
+On macOS the old app is retained after swap, including after GUI startup ACK:
+the old daemon may still be using that bundle's files. At most one active GUI
+transaction is admitted. Before another download, staging retries terminal cleanup
+under the target lock; incomplete or still-used transactions continue to block it.
+After verifying daemon handoff to the current installed target (or verifying an
+already-current daemon), integration calls `installer::cleanup_completed(target,
+trust)` off-main. GUI ACK alone must never call this API. The permanent target
+lock and each transaction's journal lock exclude active writers. Cleanup requires
+a terminal acknowledged/aborted journal with no pending write and an authenticated
+signed manifest. A bounded native census must prove any remaining rollback app is
+unused, including by other profiles and foreground processes. An acknowledged
+swap's rollback entry, if still present, must match
+the exchanged inode; an already-removed rollback is allowed. Obsolete archives need
+not exist or pass rehashing, and rollback contents are not reverified for deletion.
+Every present terminal rollback also requires a bounded native global no-use probe,
+including foreground daemons under other profiles. A busy or uncertain census
+preserves the transaction; a missing rollback needs no probe. Each probe is capped
+at two seconds and the remaining cleanup deadline.
+New staging retries the same terminal cleanup under its already-held target lock,
+without polling. Cleanup is best effort: unrelated unsafe legacy history is preserved,
+while surviving active/inflight transactions still block admission of another stage.
+Acknowledged builds newer than the current app are retained. Failed proof retains
+active evidence and blocks new staging, never authorizes replay or a second exchange.
+Unsafe or unreadable legacy history is preserved without blocking unrelated staging.
 
-Authenticated archives, rollback bundles and UI/runtime receipts remain
-byte-for-byte retained; reconciliation only advances a proven unapplied commit's
-journal to aborted. `installer::transaction_path` resolves an original receipt
-into completed/aborted history for read-only phase, navigation and guard lookup;
-archived transactions cannot be reopened for installation. History is not part
-of automatic recovery scanning, since only terminal transactions enter it.
-No history purge or automatic rollback is implemented, so retained disk usage can
-grow. Capacity/archive refusals are definite pre-staging failures, distinct from
-an uncertain COMMIT, swap or startup outcome. Fresh failed preparations with
-no ready/pending journal are discarded by their owning worker, never committed evidence.
-Directories are scanned with a4096-entry cap. Retained transactions are never blindly
-retried; `recovery_phase` is read-only. A failed swap leaves the original in place.
-Failed relaunch retains both bundles and reports RecoveryRequired. No automatic rollback
-is claimed. If a crash happens between swap and journal update, target inode mismatch
-refuses a blind second swap. A pending journal write refuses further mutation.
-Cleanup/explicit rollback with running-process checks remains later recovery integration.
+The same gate purges proven legacy terminal entries in the private sibling
+`.pilot-next-updater-history/`, including their archives and backups. Unrecognized,
+uncertain, redirected or mismatched history is preserved. An empty validated history
+directory is removed. No runtime capsule is deleted. The permanent target lock is
+never unlinked. Each directory scan is bounded to4096 entries. Each cleanup call
+starts no further item after ten seconds; an in-progress filesystem operation
+may exceed that budget. Larger legacy
+backlogs drain over later verified startup calls, not an unbounded worker task.
+Linux retains its
+previous two-active-transaction/intact-history archival behavior.
+
+`installer::transaction_path` still resolves surviving legacy history for read-only
+inspection. Completed macOS receipts are intentionally unavailable after verified
+cleanup; callers must consume startup/navigation receipts before daemon handoff
+cleanup. A failed swap/relaunch or pending journal remains inspectable, with no
+automatic rollback or retry. Reconciliation may mark an unapplied stopped commit
+aborted only after proving the unchanged original target inode and signed manifest.
 
 Cancellation is cooperative between bounded reads; it can take up to the HTTP timeout
 during a blocked read. ZIP/file operations are bounded and off-UI. Helper readiness timeout
@@ -299,14 +309,25 @@ Production configuration/qualification is separate from synthetic test success.
 ## Focused checks
 
 On macOS, ordinary packaged startup passes the verified installed app to the
-read-only connection check. It does not publish another runtime capsule. Full
-runtime retention is needed only for service installation or a needed daemon upgrade;
-the four-root publication limit must not become a GUI-update/reconnect limit.
+read-only connection check. It verifies the live profile/boot challenge and daemon
+identity, not an old runtime path, capsule allowlist or deleted files. UI receipts
+pin daemon ID and storage lineage across the swap (not a boot or PID, so normal
+daemon recovery remains possible); an executable moved into rollback remains
+connectable without becoming daemon-management authority. GUI swap guards
+persist the canonical installed target and reject a live runtime rooted inside
+it, both at preparation and every later check. Such a service must explicitly
+migrate to an independent immutable copy before a GUI swap. The replacement GUI
+still requires its exact signed build/source configuration. It does not publish
+another runtime capsule during connection. macOS services keep one active runtime
+copy outside the replaceable GUI, plus one candidate only during handoff. The new
+private service store has no historical archive or old-release allowlist; legacy
+store capacity is not a prerequisite for staging a new service runtime.
 
 After durable GUI startup acknowledgement, the configured macOS app checks its
 verified managed launch agent once. An older runtime uses the separate native
 handoff, with tool-boundary pause and an exact reservation before shutdown.
-Equal/newer runtimes, external connections and custom services are not replaced.
+Newer runtimes, external connections and custom services are not replaced. Equal
+versions also migrate when their authenticated runtime build tuple differs.
 GUI swaps use no reservation; existing legacy receipts keep their original
 reservation verification/release behavior.
 
@@ -320,11 +341,11 @@ cargo clippy --locked --all-targets --features native-macos -- -D warnings
 cargo build --locked --features native-macos --bin pilot-desktop-update-helper
 ```
 
-The opt-in `native_read_only_connect_uses_installed_policy_with_four_retained_roots`
+The opt-in `native_read_only_connect_and_ui_guard_ignore_old_runtime_files`
 test uses signed temporary apps and a private Node child, not launchd. Set
 `PILOT_DAEMON_UPGRADE_FIXTURE_NODE` to an absolute Node 24 executable and run that
-test with `--ignored --test-threads=1 --nocapture` to verify full-store reconnects,
-unchanged daemon boot/root identities, and rejection of unsupported or tampered policy.
+test with `--ignored --test-threads=1 --nocapture` to verify missing-file reconnects,
+GUI guard persistence and stable identity across daemon boots without old runtime policy.
 
 The `native-macos` build compiles Objective-C against installed Foundation/Security,
 not Swift. Tests are unit-registered from `tests/owned.rs` (`autotests=false` prevents

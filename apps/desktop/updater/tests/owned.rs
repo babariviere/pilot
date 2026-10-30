@@ -2234,6 +2234,7 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
     let target = fixture_target(&temp);
     let platform = ExchangePlatform;
     let mut current = trust();
+    #[cfg(target_os = "linux")]
     let mut receipts = Vec::new();
     for build in 101..=106 {
         let next = format!("{build}.1");
@@ -2270,6 +2271,7 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
             fs::read_to_string(target.join("Contents/build")).unwrap(),
             next
         );
+        #[cfg(target_os = "linux")]
         receipts.push((
             root.clone(),
             current.current_build.clone(),
@@ -2277,13 +2279,43 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
             previous.ino(),
             bytes,
         ));
+        #[cfg(target_os = "macos")]
+        {
+            let old = installer::rollback_bundle(&root, &current);
+            let meta = fs::metadata(&old).unwrap();
+            assert_eq!((meta.dev(), meta.ino()), (previous.dev(), previous.ino()));
+            assert_eq!(
+                fs::read_to_string(old.join("Contents/build")).unwrap(),
+                current.current_build
+            );
+            assert_eq!(fs::read(root.join("archive.zip")).unwrap(), bytes);
+        }
         current.current_build = next;
         assert!(
             root.exists(),
             "current startup receipt must remain at original path"
         );
         drop(stage);
+        #[cfg(target_os = "macos")]
+        {
+            let held =
+                File::open(installer::rollback_bundle(&root, &current).join("Contents/build"))
+                    .unwrap();
+            assert!(matches!(
+                installer::new_stage(&target, &current, &platform),
+                Err(Error::StagingCapacity)
+            ));
+            drop(held);
+            // Simulate the separate, verified daemon handoff completion gate.
+            assert_eq!(
+                installer::cleanup_completed_for_test(&target, &current, &platform).unwrap(),
+                1
+            );
+            assert!(!root.exists());
+            assert!(!temp.0.join(".pilot-next-updater-history").exists());
+        }
     }
+    #[cfg(target_os = "linux")]
     for (root, old_build, dev, ino, bytes) in receipts {
         let located = installer::transaction_path(&root).unwrap();
         let old = installer::rollback_bundle(&located, &current);
@@ -2459,6 +2491,11 @@ fn local_signed_source_stages_then_normal_release_verification_still_works() {
         "102.1"
     );
     drop(stage);
+    // Explicitly abandon the Ready local stage before attempting another package.
+    assert_eq!(
+        installer::discard_uncommitted(&target, &trust()).unwrap(),
+        1
+    );
     // Source mismatch refuses before creating any transaction.
     fs::write(
         input.join("iteration.json"),

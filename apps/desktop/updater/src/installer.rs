@@ -1,4 +1,7 @@
 //! Durable installation evidence and atomic replacement. Ordinary quit never installs.
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[path = "installer_cleanup.rs"]
+mod cleanup;
 #[cfg(test)]
 #[path = "installer_retention_tests.rs"]
 mod retention_tests;
@@ -10,6 +13,16 @@ use crate::{
     manifest::{Trust, VerifiedManifest},
     transport::{Cancellation, verify_archive},
 };
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub use cleanup::cleanup_completed;
+#[cfg(all(test, target_os = "macos", feature = "native-macos"))]
+pub(crate) fn cleanup_completed_for_test(
+    target: &std::path::Path,
+    trust: &Trust,
+    platform: &impl Platform,
+) -> Result<usize, Error> {
+    cleanup::cleanup_with(target, trust, platform)
+}
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -226,42 +239,69 @@ pub fn new_stage(
     trust: &Trust,
     platform: &impl Platform,
 ) -> Result<(PathBuf, File), Error> {
+    new_stage_checked(
+        target,
+        trust,
+        platform,
+        #[cfg(all(target_os = "macos", feature = "native-macos"))]
+        &cleanup::native_unused,
+    )
+}
+
+fn new_stage_checked(
+    target: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    #[cfg(all(target_os = "macos", feature = "native-macos"))] unused: &impl Fn(
+        &Path,
+        std::time::Instant,
+    ) -> bool,
+) -> Result<(PathBuf, File), Error> {
     trust.validate()?;
     validate_target(target, trust)?;
     platform.verify(target, trust, &trust.current_build, None)?;
     let lock = lock_target(target)?;
-    // Keep the two-transaction active bound. Completed history is moved intact,
-    // never deleted; uncertain transactions and the current receipt stay put.
-    let mut retained = Vec::new();
-    for (scanned, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
-        .map_err(|_| Error::Filesystem)?
-        .enumerate()
+    #[cfg(all(target_os = "macos", feature = "native-macos"))]
     {
-        if scanned >= 4096 {
+        let _ = cleanup::cleanup_locked(target, trust, unused);
+        cleanup::require_empty(target)?;
+        new_stage_locked(target, lock)
+    }
+    #[cfg(not(all(target_os = "macos", feature = "native-macos")))]
+    {
+        // Keep the two-transaction active bound. Completed history is moved intact,
+        // never deleted; uncertain transactions and the current receipt stay put.
+        let mut retained = Vec::new();
+        for (scanned, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
+            .map_err(|_| Error::Filesystem)?
+            .enumerate()
+        {
+            if scanned >= 4096 {
+                return Err(Error::StagingCapacity);
+            }
+            let entry = entry.map_err(|_| Error::Filesystem)?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(".pilot-next-update-"))
+            {
+                retained.push(entry.path());
+            }
+        }
+        let mut remaining = retained.len();
+        for root in &retained {
+            if remaining < 2 {
+                break;
+            }
+            if archive_acknowledged(root, target, trust)? {
+                remaining -= 1;
+            }
+        }
+        if remaining >= 2 {
             return Err(Error::StagingCapacity);
         }
-        let entry = entry.map_err(|_| Error::Filesystem)?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(".pilot-next-update-"))
-        {
-            retained.push(entry.path());
-        }
+        new_stage_locked(target, lock)
     }
-    let mut remaining = retained.len();
-    for root in &retained {
-        if remaining < 2 {
-            break;
-        }
-        if archive_acknowledged(root, target, trust)? {
-            remaining -= 1;
-        }
-    }
-    if remaining >= 2 {
-        return Err(Error::StagingCapacity);
-    }
-    new_stage_locked(target, lock)
 }
 
 fn new_stage_locked(target: &Path, lock: File) -> Result<(PathBuf, File), Error> {
@@ -366,6 +406,7 @@ fn signed_manifest(root: &Path, trust: &Trust) -> Result<VerifiedManifest, Error
 
 // Caller holds the permanent target lock. Journal locking also excludes a late
 // startup ACK/helper writer. A pending write or incomplete rollback stays active.
+#[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<bool, Error> {
     if validate_root(root, target).is_err() {
         return Ok(false);
@@ -433,6 +474,7 @@ fn archive_acknowledged(root: &Path, target: &Path, trust: &Trust) -> Result<boo
     Ok(true)
 }
 
+#[cfg(any(test, not(all(target_os = "macos", feature = "native-macos"))))]
 fn archive_move(
     root: &Path,
     destination: &Path,

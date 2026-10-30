@@ -4,7 +4,7 @@
     all(target_os = "linux", feature = "native-linux")
 ))]
 #[path = "daemon_native.rs"]
-mod native;
+pub(crate) mod native;
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
@@ -151,7 +151,7 @@ fn runtime_upgrade_needed(
     Ok(runtime_version(running)? < runtime_version(bundled)?)
 }
 
-/// Read-only startup: attest the compatible running capsule, never publish or activate.
+/// Read-only startup: attest the live connection, never publish or activate.
 /// On macOS `current` may be the installed app, not a retained execution root.
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
@@ -169,10 +169,16 @@ pub fn connect(
         crate::installer::MacPlatform
             .verify(current, trust, &trust.current_build, None)
             .map_err(|_| Failure::Unverified)?;
+        crate::coordination::inspect_connection(location)
+            .map(|_| ())
+            .map_err(|_| Failure::Unverified)
     }
-    let root =
-        crate::coordination::selected(location, current, trust).map_err(|_| Failure::Unverified)?;
-    native::running(location, &root).map(|_| ())
+    #[cfg(target_os = "linux")]
+    {
+        let root = crate::coordination::selected(location, current, trust)
+            .map_err(|_| Failure::Unverified)?;
+        native::running(location, &root).map(|_| ())
+    }
 }
 /// Explicit consent includes login enablement. Never called from GUI startup or update ACK.
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

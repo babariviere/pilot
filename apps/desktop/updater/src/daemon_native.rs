@@ -273,7 +273,7 @@ pub(super) fn private_regular(path: &Path) -> Result<fs::Metadata, Failure> {
 }
 // Ordinary runtime attestation binds the live boot/profile/hello, even for build:null.
 // It is NOT retained-runtime proof and does not grant the private updater endpoint.
-pub(super) fn prove(
+pub(crate) fn prove(
     location: &Location,
     expected: &Value,
     daemon: &str,

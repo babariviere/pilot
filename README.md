@@ -229,16 +229,18 @@ Pilot Next's initial packaged connection is read-only. After durable GUI startup
 macOS checks the verified managed daemon and upgrades an older runtime at safe tool
 boundaries, without delaying the GUI app swap. Equal/newer runtimes stay running;
 failures remain visible for recovery. First registration/login enablement is explicit;
-launchd or systemd --user executes the verified immutable retained runtime independently of
-GUI lifetime. Separately confirmed [daemon upgrades](apps/desktop/docs/daemon-upgrades.md)
+launchd executes one verified runtime copy independently of GUI lifetime
+(Linux retains its separate runtime). Separately confirmed [daemon upgrades](apps/desktop/docs/daemon-upgrades.md)
 can replace a proven Swift launch agent while preserving its label, profile and PilotPower.
 Active jobs or failed inspection defer the switch; GUI installation itself never pauses agents.
 Drained, job-free subagents checkpoint and exit before the daemon switch, then resume their
 unfinished work without replaying completed tools. Unknown child processes still block it.
-Production macOS GUI updates admit up to four verified prior same-protocol runtimes,
-so installing a new GUI can leave the existing daemon running. macOS startup reconnects
-without publishing another runtime copy, including when the retained store is full.
-Only service installation or a needed daemon upgrade stages a new runtime.
+macOS updates swap the GUI, then upgrade its managed daemon on the next startup.
+Old runtime files and release allowlists are not prerequisites. The daemon keeps one
+active runtime copy so a GUI swap cannot change files under running jobs. Only one
+candidate is staged during replacement. One interrupted-update record and the exchanged
+app remain until the new GUI and daemon are verified, then obsolete update files are
+cleaned up instead of accumulating history.
 An explicit [stopped legacy service migration](apps/desktop/docs/daemon-upgrades.md#stopped-legacy-service-migration)
 can also select Next's runtime when the old Swift app is gone, without moving chat data.
 To install it on Linux, follow [Install Pilot Next on Linux](apps/desktop/docs/linux-install.md).

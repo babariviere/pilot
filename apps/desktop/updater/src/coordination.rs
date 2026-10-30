@@ -1,5 +1,5 @@
-//! Exact retained-root proof, agent pause and update reservation, using only the configured
-//! private profile record. Not a provider credential lookup or remote-host API.
+//! Boot-bound GUI connections and legacy retained-root reservations, using only the
+//! configured private profile. Not a provider credential lookup or remote-host API.
 #[cfg(target_os = "macos")]
 use crate::runtime;
 use crate::{
@@ -66,16 +66,27 @@ pub struct Guard {
     #[serde(default)]
     ui_only: bool,
     location: Location,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     boot: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    connection: Option<Box<GuiConnection>>,
+    #[serde(default, skip_serializing_if = "empty_path")]
     capsule: PathBuf,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     capsule_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     bundle_build: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     build: Value,
     receipt: Value,
     transaction: PathBuf,
     target_build: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     policy_hash: String,
     configuration: String,
+}
+fn empty_path(path: &Path) -> bool {
+    path.as_os_str().is_empty()
 }
 pub(crate) fn private_json(path: &Path, cap: u64) -> Result<Value, Error> {
     let mut file = fs::OpenOptions::new()
@@ -387,6 +398,75 @@ pub(crate) fn validate_capsule(
     }
     Ok((id.to_owned(), build))
 }
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConnectionIdentity {
+    daemon: String,
+    lineage: String,
+}
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuiConnection {
+    identity: ConnectionIdentity,
+    target: PathBuf,
+}
+/// Prove this same-user live PID, rather than merely some process, owns the profile.
+#[cfg(target_os = "macos")]
+pub(crate) fn lease_owned_by(home: &Path, pid: i32) -> Result<(), Error> {
+    use std::os::fd::AsRawFd;
+    crate::helper::process_owned(pid)?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(home.join(".daemon-owner.sqlite"))
+        .map_err(|_| Error::RuntimeUnverified)?;
+    // SAFETY: zeroed flock is a valid query; F_GETLK never acquires the lease.
+    let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+    lock.l_type = libc::F_WRLCK;
+    lock.l_whence = libc::SEEK_SET as _;
+    // SAFETY: valid fd and flock out-pointer.
+    if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETLK, &mut lock) } != 0
+        || lock.l_type == libc::F_UNLCK
+        || lock.l_pid != pid
+    {
+        return Err(Error::RuntimeUnverified);
+    }
+    Ok(())
+}
+/// Read-only live profile/boot attestation. No runtime files, allowlist, pause or reservation.
+#[cfg(target_os = "macos")]
+pub(crate) fn inspect_connection(
+    location: &Location,
+) -> Result<(Value, ConnectionIdentity), Error> {
+    let expected = record(location)?;
+    let pid = expected["pid"]
+        .as_i64()
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n > 1)
+        .ok_or(Error::RuntimeUnverified)?;
+    lease_owned_by(&location.home, pid)?;
+    let daemon = String::from_utf8(crate::iteration::read(
+        &location.home.join("daemon-id"),
+        4096,
+    )?)
+    .map_err(|_| Error::Identity)?;
+    let lineage = String::from_utf8(crate::iteration::read(
+        &location.home.join("storage-lineage"),
+        4096,
+    )?)
+    .map_err(|_| Error::Identity)?;
+    let identity = ConnectionIdentity {
+        daemon: daemon.trim().into(),
+        lineage: lineage.trim().into(),
+    };
+    if identity.daemon.is_empty() || identity.lineage.is_empty() {
+        return Err(Error::Identity);
+    }
+    crate::daemon_upgrade::native::prove(location, &expected, &identity.daemon, &identity.lineage)
+        .map_err(|_| Error::RuntimeUnverified)?;
+    lease_owned_by(&location.home, pid)?;
+    Ok((expected, identity))
+}
 impl Guard {
     fn read_record(transaction: &Path) -> Result<Self, Error> {
         serde_json::from_value(private_json(
@@ -407,11 +487,43 @@ impl Guard {
     pub fn prepare_ui(
         location: Location,
         candidate: &Path,
+        target: &Path,
         transaction: &Path,
         target_build: &str,
         trust: &Trust,
     ) -> Result<Self, Error> {
-        Self::prepare_mode(location, candidate, transaction, target_build, trust, true)
+        #[cfg(target_os = "macos")]
+        {
+            NativePlatform.verify(candidate, trust, target_build, None)?;
+            installer::validate_target(target, trust)?;
+            let target = target.canonicalize().map_err(|_| Error::Identity)?;
+            let (record, identity) = inspect_connection(&location)?;
+            let guard = Self {
+                ui_only: true,
+                connection: Some(Box::new(GuiConnection {
+                    identity: identity.clone(),
+                    target,
+                })),
+                location,
+                boot: String::new(),
+                build: Value::Null,
+                capsule: PathBuf::new(),
+                capsule_id: String::new(),
+                bundle_build: String::new(),
+                receipt: json!({}),
+                transaction: transaction.to_owned(),
+                target_build: target_build.into(),
+                policy_hash: String::new(),
+                configuration: configuration(trust),
+            };
+            guard.verify_connection_identity(&record, &identity)?;
+            Ok(guard)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = target;
+            Self::prepare_mode(location, candidate, transaction, target_build, trust, true)
+        }
     }
     fn prepare_mode(
         location: Location,
@@ -444,6 +556,7 @@ impl Guard {
         }
         let mut guard = Self {
             ui_only,
+            connection: None,
             location,
             boot: record["boot"].as_str().ok_or(Error::Identity)?.into(),
             capsule,
@@ -492,7 +605,42 @@ impl Guard {
         self.verify_process(&r)?;
         signed_update(&self.location, &r, &self.receipt, action)
     }
+    #[cfg(target_os = "macos")]
+    fn verify_connection_identity(
+        &self,
+        record: &Value,
+        identity: &ConnectionIdentity,
+    ) -> Result<(), Error> {
+        let expected = self.connection.as_ref().ok_or(Error::RuntimeUnverified)?;
+        if identity != &expected.identity {
+            return Err(Error::Identity);
+        }
+        let runtime = Path::new(
+            record["runtimeRoot"]
+                .as_str()
+                .ok_or(Error::RuntimeUnverified)?,
+        );
+        if !runtime.is_absolute()
+            || runtime
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || !expected.target.is_absolute()
+            || runtime.starts_with(&expected.target)
+            || runtime
+                .canonicalize()
+                .is_ok_and(|root| root.starts_with(&expected.target))
+        {
+            // A GUI swap must never replace files used by a live daemon's lazy imports.
+            return Err(Error::RuntimeUnverified);
+        }
+        Ok(())
+    }
     pub fn verify(&self) -> Result<(), Error> {
+        #[cfg(target_os = "macos")]
+        if self.ui_only {
+            let (record, identity) = inspect_connection(&self.location)?;
+            return self.verify_connection_identity(&record, &identity);
+        }
         if self.ui_only {
             return self.request("inspect").map(|_| ());
         }
@@ -517,7 +665,10 @@ impl Guard {
             if previous.transaction != self.transaction
                 || previous.configuration != self.configuration
                 || previous.target_build != self.target_build
-                || previous.policy_hash != self.policy_hash
+                || previous.connection.as_ref().map(|c| &c.target)
+                    != self.connection.as_ref().map(|c| &c.target)
+                || (!(cfg!(target_os = "macos") && previous.ui_only && self.ui_only)
+                    && previous.policy_hash != self.policy_hash)
             {
                 return Err(Error::RecoveryRequired);
             }
@@ -549,6 +700,18 @@ impl Guard {
         reserved: bool,
     ) -> Result<Self, Error> {
         let guard = Self::read_record(transaction)?;
+        #[cfg(target_os = "macos")]
+        if guard.ui_only {
+            if guard.configuration != configuration(trust)
+                || guard.transaction != transaction
+                || guard.target_build != build
+            {
+                return Err(Error::Identity);
+            }
+            NativePlatform.verify(candidate, trust, build, None)?;
+            guard.verify()?;
+            return Ok(guard);
+        }
         let (accepted, hash) = policy(candidate)?;
         #[cfg(feature = "fixture")]
         if crate::fixture::enabled() {
@@ -610,6 +773,13 @@ impl Guard {
     ) -> Result<(PathBuf, Location, bool), Error> {
         NativePlatform.verify(target, trust, &trust.current_build, None)?;
         let guard = Self::load_checked(transaction, target, &trust.current_build, trust, false)?;
+        #[cfg(target_os = "macos")]
+        if guard.ui_only {
+            if guard.connection.as_ref().is_none_or(|c| c.target != target) {
+                return Err(Error::Identity);
+            }
+            return Ok((target.to_owned(), guard.location, true));
+        }
         Ok((guard.capsule, guard.location, guard.ui_only))
     }
 }
@@ -931,6 +1101,19 @@ mod configuration_tests {
             .unwrap();
         assert_eq!(line.trim(), "locked");
         assert!(owner_live(dir.path()));
+        #[cfg(target_os = "macos")]
+        {
+            let location = Location {
+                home: dir.path().to_owned(),
+                port: 1,
+                policy: Default::default(),
+            };
+            assert_eq!(lease_owned_by(&location.home, holder.id() as i32), Ok(()));
+            assert!(
+                lease_owned_by(&location.home, std::process::id() as i32).is_err(),
+                "another same-user PID cannot borrow the daemon's lease"
+            );
+        }
         holder.stdin.take().unwrap().flush().unwrap();
         holder.wait().unwrap();
         assert!(!owner_live(dir.path()));
@@ -941,6 +1124,203 @@ mod configuration_tests {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn ui_connection_receipts_allow_reboot_without_retaining_runtime_files() {
+        let record = json!({"boot":"boot", "pid":42, "build":{"version":"1.2.3"},
+            "runtimeRoot":"/deleted/Pilot Next.app/Contents/Resources/runtime"});
+        let value = json!({"ui_only":true, "location":{"home":"/profile","port":1,"policy":{}},
+            "connection":{"identity":{"daemon":"daemon","lineage":"lineage"},"target":"/installed/Pilot Next.app"}, "receipt":{},
+            "transaction":"/transaction", "target_build":"101.1", "configuration":"configuration"});
+        let guard: Guard = serde_json::from_value(value.clone()).unwrap();
+        let identity = ConnectionIdentity {
+            daemon: "daemon".into(),
+            lineage: "lineage".into(),
+        };
+        assert_eq!(guard.verify_connection_identity(&record, &identity), Ok(()));
+        let saved = serde_json::to_value(&guard).unwrap();
+        for field in ["capsule", "capsule_id", "bundle_build", "policy_hash"] {
+            assert!(saved.get(field).is_none(), "GUI receipt has no {field}");
+        }
+        assert_eq!(saved, value);
+        for (field, substitute) in [
+            ("boot", json!("other")),
+            ("build", json!({})),
+            ("pid", json!(43)),
+            ("runtimeRoot", json!("/other/Contents/Resources/runtime")),
+        ] {
+            let mut changed = record.clone();
+            changed[field] = substitute;
+            assert!(
+                guard
+                    .verify_connection_identity(&changed, &identity)
+                    .is_ok(),
+                "changed {field}"
+            );
+        }
+        for changed in [
+            ConnectionIdentity {
+                daemon: "other".into(),
+                lineage: identity.lineage.clone(),
+            },
+            ConnectionIdentity {
+                daemon: identity.daemon.clone(),
+                lineage: "other".into(),
+            },
+        ] {
+            assert!(guard.verify_connection_identity(&record, &changed).is_err());
+        }
+        for root in [
+            "/installed/Pilot Next.app/Contents/Resources/runtime",
+            "/installed/Pilot Next.app",
+            "/other/../installed/Pilot Next.app/runtime",
+            "relative/runtime",
+        ] {
+            let mut unsafe_owner = record.clone();
+            unsafe_owner["runtimeRoot"] = json!(root);
+            assert!(
+                guard
+                    .verify_connection_identity(&unsafe_owner, &identity)
+                    .is_err(),
+                "unsafe runtime {root}"
+            );
+        }
+        let temp = crate::owned_tests::Temp::new();
+        let target = temp.path().join("Pilot Next.app");
+        let runtime = target.join("Contents/Resources/runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let alias = temp.path().join("runtime-alias");
+        std::os::unix::fs::symlink(&runtime, &alias).unwrap();
+        let mut aliased_guard: Guard = serde_json::from_value(value.clone()).unwrap();
+        aliased_guard.connection.as_mut().unwrap().target = target;
+        let mut aliased_owner = record.clone();
+        aliased_owner["runtimeRoot"] = json!(alias);
+        assert!(
+            aliased_guard
+                .verify_connection_identity(&aliased_owner, &identity)
+                .is_err(),
+            "existing aliases into the replaceable app cannot grant swap authority"
+        );
+        fs::remove_dir_all(runtime).unwrap();
+        assert_eq!(
+            aliased_guard.verify_connection_identity(&aliased_owner, &identity),
+            Ok(()),
+            "unavailable old paths never become a mandatory disk proof"
+        );
+        let mut legacy = value;
+        legacy.as_object_mut().unwrap().remove("connection");
+        legacy["boot"] = record["boot"].clone();
+        legacy["build"] = record["build"].clone();
+        legacy["capsule"] = json!("/deleted/Pilot Next.app");
+        legacy["capsule_id"] = json!("obsolete");
+        legacy["bundle_build"] = json!("100.1");
+        legacy["policy_hash"] = json!("obsolete");
+        let legacy: Guard = serde_json::from_value(legacy).unwrap();
+        assert_eq!(
+            legacy.verify_connection_identity(&record, &identity),
+            Err(Error::RuntimeUnverified)
+        );
+    }
+
+    #[test]
+    fn connection_challenge_is_read_only_and_needs_no_runtime_on_disk() {
+        use ring::hmac;
+        use sha2::{Digest, Sha256};
+        use std::io::{BufRead, BufReader, Write};
+        let temp = crate::owned_tests::Temp::new();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let location = Location {
+            home: temp.path().to_owned(),
+            port: listener.local_addr().unwrap().port(),
+            policy: Default::default(),
+        };
+        let expected = json!({"schema":1,"port":location.port,"boot":"a".repeat(64),
+            "secret":"b".repeat(64), "home":crate::transport::hex(&Sha256::digest(location.home.to_str().unwrap().as_bytes())),
+            "pid":42,"build":{"version":"1.2.3"},"runtimeRoot":temp.path().join("deleted-runtime")});
+        installer::write_new(
+            &location.home.join(".daemon-owner.json"),
+            &serde_json::to_vec(&expected).unwrap(),
+        )
+        .unwrap();
+        let changes = vec![
+            None,
+            Some(("boot", json!("other"))),
+            Some(("pid", json!(43))),
+            Some(("runtimeRoot", json!("/other"))),
+            Some(("build", json!({}))),
+            Some(("home", json!("other"))),
+            Some(("port", json!(1))),
+            Some(("challenge", json!("replayed"))),
+            Some(("ready", json!(false))),
+            Some(("hello", json!({}))),
+            Some(("bad-mac", json!(true))),
+        ];
+        let count = changes.len();
+        let owner = expected.clone();
+        let server = std::thread::spawn(move || {
+            for change in changes {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                assert!(request.starts_with("GET /__pilot_runtime/v1?challenge="));
+                let nonce = request
+                    .split("challenge=")
+                    .nth(1)
+                    .unwrap()
+                    .split(' ')
+                    .next()
+                    .unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                }
+                let mut proof = owner.clone();
+                proof.as_object_mut().unwrap().remove("secret");
+                proof["challenge"] = json!(nonce);
+                proof["ready"] = json!(true);
+                proof["hello"] = json!({"daemonId":"daemon","lineageId":"lineage",
+                    "protocolVersion":1,"minimumClientProtocolVersion":1,
+                    "capabilities":{"independentExecution":true}});
+                let bad_mac = change
+                    .as_ref()
+                    .is_some_and(|(field, _)| *field == "bad-mac");
+                if let Some((field, value)) = change {
+                    proof[field] = value;
+                }
+                let body = serde_json::to_string(&proof).unwrap();
+                let key = hmac::Key::new(hmac::HMAC_SHA256, &[0xbb; 32]);
+                let mac = if bad_mac {
+                    "0".repeat(64)
+                } else {
+                    crate::transport::hex(hmac::sign(&key, body.as_bytes()).as_ref())
+                };
+                let envelope = serde_json::to_string(&json!({"body":body,"mac":mac})).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{envelope}",
+                    envelope.len()
+                )
+                .unwrap();
+            }
+        });
+        assert_eq!(
+            crate::daemon_upgrade::native::prove(&location, &expected, "daemon", "lineage"),
+            Ok(())
+        );
+        for _ in 1..count {
+            assert!(
+                crate::daemon_upgrade::native::prove(&location, &expected, "daemon", "lineage")
+                    .is_err()
+            );
+        }
+        server.join().unwrap();
+        assert!(!Path::new(expected["runtimeRoot"].as_str().unwrap()).exists());
+    }
+
     #[test]
     fn private_json_refuses_read_acl_without_repairing_it() {
         let dir = crate::owned_tests::Temp::new();

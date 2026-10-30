@@ -13,25 +13,7 @@ import gui_release as release
 
 
 class GuiReleaseTests(unittest.TestCase):
-    def test_macos_release_merges_verified_prior_runtimes_with_configured_policy(self):
-        configured = "a" * 64
-        env = {"PILOT_NEXT_ACCEPTED_CAPSULES": json.dumps([configured])}
-        previous = [configured, "b" * 64, "c" * 64, "d" * 64, "e" * 64]
-        self.assertEqual(release.macos_release_capsules(env, 1, previous),
-                         [configured, "b" * 64, "c" * 64, "d" * 64])
-        full = ["a" * 64, "b" * 64, "c" * 64, "d" * 64]
-        # A full explicitly configured policy needs no discovery credentials/network.
-        self.assertEqual(release.macos_release_capsules(
-            {"PILOT_NEXT_ACCEPTED_CAPSULES": json.dumps(full)}, 1), full)
-
-    def test_macos_discovery_uses_release_public_key_protocol_and_api_token(self):
-        env = {"PILOT_NEXT_UPDATER_REPOSITORY": "owner/repo",
-               "PILOT_NEXT_UPDATER_PUBLIC_KEY": "configured-public-key", "GH_TOKEN": "api-only"}
-        with patch("macos_release_capsules.previous_macos_capsules", return_value=["a" * 64]) as discover:
-            self.assertEqual(release.macos_release_capsules(env, 1), ["a" * 64])
-        discover.assert_called_once_with("owner/repo", "configured-public-key", 1, token="api-only")
-
-    def test_macos_assembly_seals_discovered_capsules_for_its_runtime_protocol(self):
+    def test_macos_assembly_needs_no_prior_capsules_or_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "release"
             def snapshot(source, destination, **kwargs):
@@ -45,10 +27,10 @@ class GuiReleaseTests(unittest.TestCase):
                     patch.object(bundle, "assemble", side_effect=assemble) as assembly, \
                     patch.object(bundle, "verify"), patch.object(bundle, "native_closure"), \
                     patch.object(release.subprocess, "run"), patch.object(release, "artifact"), \
-                    patch.object(release, "macos_release_capsules", return_value=["b" * 64]) as policy:
+                    patch("macos_release_capsules.previous_macos_capsules", side_effect=AssertionError("must not discover old releases")) as discover:
                 release.macos("a" * 40, output, config)
-            self.assertEqual(policy.call_args.args[1], 7)
-            self.assertEqual(assembly.call_args.kwargs["accepted_capsules"], ["b" * 64])
+            discover.assert_not_called()
+            self.assertNotIn("accepted_capsules", assembly.call_args.kwargs)
 
     def test_release_trust_is_explicit_and_separate_from_swift(self):
         env = dict(PILOT_NEXT_SIGNING_POLICY="private-adhoc", PILOT_NEXT_UPDATER_PUBLIC_KEY=base64.b64encode(bytes(32)).decode(),

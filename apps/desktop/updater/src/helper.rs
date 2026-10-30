@@ -628,6 +628,33 @@ pub(crate) fn process_executable(pid: libc::pid_t) -> Result<std::path::PathBuf,
         .canonicalize()
         .map_err(|_| Error::Identity)
 }
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub(crate) fn process_owned(pid: libc::pid_t) -> Result<(), Error> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    // SAFETY: correctly sized output buffer, initialized only on complete read.
+    if pid <= 1
+        || unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size as _,
+            )
+        } != size as i32
+    {
+        return Err(Error::Identity);
+    }
+    // SAFETY: proc_pidinfo returned the entire structure.
+    let info = unsafe { info.assume_init() };
+    // SAFETY: current user identity query only.
+    let uid = unsafe { libc::geteuid() };
+    if info.pbi_pid != pid as u32 || info.pbi_uid != uid || info.pbi_ruid != uid {
+        return Err(Error::Identity);
+    }
+    Ok(())
+}
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 pub(crate) fn process_executable(pid: libc::pid_t) -> Result<std::path::PathBuf, Error> {
     std::fs::read_link(format!("/proc/{pid}/exe")).map_err(|_| Error::Identity)

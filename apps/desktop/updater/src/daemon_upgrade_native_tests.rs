@@ -31,7 +31,9 @@ owner.updates(async(action,value)=>{
  return null;
 });
 owner.install((req,res)=>{
-  if(req.url==='/api/update/pause' && req.method==='POST') {
+  if(req.url==='/fixture-runtime-build') {
+    res.writeHead(200,{'Content-Type':'application/json'}).end(readFileSync(stamp));
+  } else if(req.url==='/api/update/pause' && req.method==='POST') {
     const pending=existsSync(process.env.PILOT_HOME+'/tool-pending');
     if(pending){const count=process.env.PILOT_HOME+'/pause-count';writeFileSync(count,String(existsSync(count)?Number(readFileSync(count,'utf8'))+1:1),{mode:0o600});}
     res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:!pending,processId:process.pid}));
@@ -124,7 +126,7 @@ impl Drop for FixtureDaemon {
 
 #[test]
 #[ignore = "explicit Node 24 signed capsule fixture; private child/profile, no launchd service"]
-fn native_read_only_connect_uses_installed_policy_with_four_retained_roots() {
+fn native_read_only_connect_and_ui_guard_ignore_old_runtime_files() {
     let node = PathBuf::from(
         std::env::var_os("PILOT_DAEMON_UPGRADE_FIXTURE_NODE").expect("explicit fixture Node 24"),
     );
@@ -213,7 +215,7 @@ fn native_read_only_connect_uses_installed_policy_with_four_retained_roots() {
     );
     assert!(!location.home.join(".daemon-owner.json").exists());
     let runtime_root = retained.join(crate::layout::RUNTIME);
-    let _daemon = FixtureDaemon(
+    let mut daemon = FixtureDaemon(
         std::process::Command::new(runtime_root.join("node/bin/node"))
             .arg(runtime_root.join("packages/daemon/src/main.ts"))
             .env("PILOT_HOME", &location.home)
@@ -225,8 +227,8 @@ fn native_read_only_connect_uses_installed_policy_with_four_retained_roots() {
     let owner = super::super::native::wait_registered(&location, &retained).unwrap();
     assert_eq!(
         super::super::connect(&location, &installed, &trust),
-        Err(Failure::Unverified),
-        "unlisted owner remains unsupported"
+        Ok(()),
+        "GUI connection does not need an old-capsule allowlist"
     );
     let id = retained
         .parent()
@@ -273,6 +275,73 @@ fn native_read_only_connect_uses_installed_policy_with_four_retained_roots() {
     );
     assert_eq!(snapshot(), before, "no publication, deletion or rename");
     assert!(!store.join(runtime::identity(&installed).unwrap()).exists());
+    // GUI receipts survive the actual source of the old process disappearing.
+    // The new GUI and exact transaction/configuration are still verified independently.
+    let transaction = temp
+        .path()
+        .join(format!(".pilot-next-update-{}", "a".repeat(32)));
+    fs::create_dir(&transaction).unwrap();
+    fs::set_permissions(&transaction, fs::Permissions::from_mode(0o700)).unwrap();
+    installer::write_new(
+        &transaction.join("journal.json"),
+        br#"{"schema":1,"phase":"Ready","original_device":0,"original_inode":0}"#,
+    )
+    .unwrap();
+    let guard = coordination::Guard::prepare_ui(
+        location.clone(),
+        &installed,
+        &installed,
+        &transaction,
+        "101.1",
+        &trust,
+    )
+    .unwrap();
+    guard.save().unwrap();
+    fs::remove_dir_all(&retained).unwrap();
+    assert!(!retained.exists());
+    assert_eq!(guard.verify(), Ok(()));
+    assert_eq!(super::super::connect(&location, &installed, &trust), Ok(()));
+    coordination::Guard::load(&transaction, &installed, "101.1", &trust).unwrap();
+    assert!(coordination::Guard::load(&transaction, &installed, "102.1", &trust).is_err());
+    let mut other_trust = trust.clone();
+    other_trust.repository = "synthetic/other".into();
+    assert!(coordination::Guard::load(&transaction, &installed, "101.1", &other_trust).is_err());
+    let (startup, _, reconnect_only) =
+        coordination::Guard::startup_connection(&transaction, &installed, &trust).unwrap();
+    assert_eq!(startup, installed);
+    assert!(reconnect_only);
+    // Read-only connect is allowed, but GUI swap authority must reject execution
+    // rooted in the replaceable installed app, including a restart after prepare.
+    daemon.0.kill().unwrap();
+    daemon.0.wait().unwrap();
+    let direct_root = installed.join(crate::layout::RUNTIME);
+    let _direct = FixtureDaemon(
+        std::process::Command::new(direct_root.join("node/bin/node"))
+            .arg(direct_root.join("packages/daemon/src/main.ts"))
+            .env("PILOT_HOME", &location.home)
+            .env("PILOT_PORT", location.port.to_string())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    super::super::native::wait_registered(&location, &installed).unwrap();
+    assert_eq!(super::super::connect(&location, &installed, &trust), Ok(()));
+    assert!(
+        guard.verify().is_err(),
+        "restart into replaceable GUI invalidates swap authority"
+    );
+    assert!(
+        coordination::Guard::prepare_ui(
+            location.clone(),
+            &installed,
+            &installed,
+            &transaction,
+            "101.1",
+            &trust
+        )
+        .is_err(),
+        "direct installed execution cannot prepare a GUI swap"
+    );
     fs::write(
         installed.join(crate::layout::POLICY),
         serde_json::to_vec_pretty(&serde_json::json!({"schema":1,"accepted_capsules":[id]}))
@@ -368,14 +437,18 @@ fn native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_o
         current_build: "101.1".into(),
         bundle_name: "Pilot Next.app".into(),
     };
-    let current = runtime::publish(
+    fs::create_dir_all(home.join("Library/Application Support")).unwrap();
+    let current = runtime::publish_service(
         &seed,
-        &temp.path().join(runtime::STORE_NAME),
+        &home
+            .join("Library/Application Support")
+            .join(runtime::SERVICE_STORE_NAME),
         &trust,
         &installer::MacPlatform,
+        Instant::now() + Duration::from_secs(45),
+        &AtomicBool::new(false),
     )
     .unwrap();
-    fs::remove_dir_all(seed).unwrap();
     let label = format!(
         "com.example.pilot-offline-{}",
         coordination::random_hex().unwrap()
@@ -400,7 +473,6 @@ fn native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_o
         &["-convert".as_ref(), "xml1".as_ref(), file.as_os_str()],
     )
     .unwrap();
-    let original_bytes = fs::read(&file).unwrap();
     let location = Location {
         home: profile.clone(),
         port,
@@ -448,10 +520,12 @@ fn native_launchd_offline_migration_missing_swift_preserves_profile_and_starts_o
     assert_eq!(fs::metadata(&profile).unwrap().ino(), profile_inode);
     let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
     assert_eq!(journal["phase"], "complete");
-    let backup = Path::new(journal["originalPlistBackup"].as_str().unwrap());
-    assert_eq!(fs::read(backup).unwrap(), original_bytes);
-    assert_eq!(fs::metadata(backup).unwrap().mode() & 0o777, 0o600);
-    assert_eq!(journal["previousDefinition"], definition);
+    let backup = profile.join(".daemon-upgrade-original.plist");
+    assert!(
+        !backup.exists(),
+        "completed migration removes its single backup"
+    );
+    assert!(journal.get("previousDefinition").is_none());
     assert!(file.with_extension("plist.next-owner").exists());
     assert!(!missing.exists());
     drop(cleanup);
@@ -500,9 +574,18 @@ fn native_launchd_registration_offline_seed_and_singleton() {
         current_build: "101.1".into(),
         bundle_name: "Pilot Next.app".into(),
     };
-    let store = temp.path().join(runtime::STORE_NAME);
-    let current = runtime::publish(&seed, &store, &trust, &installer::MacPlatform).unwrap();
-    fs::remove_dir_all(seed).unwrap();
+    fs::create_dir_all(home.join("Library/Application Support")).unwrap();
+    let current = runtime::publish_service(
+        &seed,
+        &home
+            .join("Library/Application Support")
+            .join(runtime::SERVICE_STORE_NAME),
+        &trust,
+        &installer::MacPlatform,
+        Instant::now() + Duration::from_secs(45),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
     let label = format!(
         "com.example.pilot-next-registration-{}",
         coordination::random_hex().unwrap()
@@ -621,11 +704,16 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         current_build: "101.1".into(),
         bundle_name: "Pilot Next.app".into(),
     };
-    let current = runtime::publish(
+    fs::create_dir_all(home.join("Library/Application Support")).unwrap();
+    let current = runtime::publish_service(
         &new,
-        &temp.path().join(runtime::STORE_NAME),
+        &home
+            .join("Library/Application Support")
+            .join(runtime::SERVICE_STORE_NAME),
         &trust,
         &installer::MacPlatform,
+        Instant::now() + Duration::from_secs(45),
+        &AtomicBool::new(false),
     )
     .unwrap();
     let label = format!(
@@ -867,23 +955,184 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         std::thread::sleep(Duration::from_millis(100));
     }
     assert!(host.plist.with_extension("plist.next-owner").exists());
+    // No allowlist and no reads of obsolete files. Publish one verified candidate
+    // even when the running retained capsule is entirely gone.
+    let replacement = bundle(
+        temp.path(),
+        "Pilot Next.app",
+        &trust.application_id,
+        "101.1",
+        &node,
+        true,
+    );
+    let stamp_path = replacement
+        .join(crate::layout::RUNTIME)
+        .join("runtime-build.json");
+    let mut stamp: Value = serde_json::from_slice(&fs::read(&stamp_path).unwrap()).unwrap();
+    stamp["version"] = json!("0.0.3");
+    fs::write(&stamp_path, serde_json::to_vec(&stamp).unwrap()).unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            replacement.as_os_str(),
+        ],
+    )
+    .unwrap();
+    let next = runtime::publish_service(
+        &replacement,
+        current.parent().unwrap().parent().unwrap(),
+        &trust,
+        &installer::MacPlatform,
+        Instant::now() + Duration::from_secs(45),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    host.current = next.clone();
+    host.automatic = true;
+    host.prepare().unwrap();
+    host.lock.take();
+    let original_build = host.owner["build"].clone();
+    fs::remove_dir_all(current.parent().unwrap()).unwrap();
+    assert_eq!(
+        check_needed(&mut host),
+        Ok(true),
+        "startup accepts the live deleted old runtime"
+    );
+    assert_eq!(
+        host.owner["build"], original_build,
+        "original authenticated tuple retained"
+    );
+    let owner = host.owner.clone();
+    for field in ["build", "runtimeRoot", "pid"] {
+        host.owner[field] = Value::Null;
+        assert!(
+            host.verify_running_payload().is_err(),
+            "substituted {field}"
+        );
+        host.owner = owner.clone();
+    }
+    assert_eq!(
+        verify_process_owner(std::process::id() as i32, &profile),
+        Err(Failure::Unverified),
+        "a different process cannot borrow the daemon lease"
+    );
+    let journal_path = profile.join(JOURNAL);
+    let completed = fs::read(&journal_path).unwrap();
+    fs::write(&journal_path, b"{\"phase\":\"stopped\"}").unwrap();
+    assert_eq!(host.prepare(), Err(Failure::Unknown));
+    fs::write(&journal_path, &completed).unwrap();
+    fs::write(profile.join("blocker"), "job").unwrap();
+    assert_eq!(execute(&mut host, &cancel), Err(Failure::Busy));
+    host.lock.take();
+    assert_eq!(
+        fs::read(&journal_path).unwrap(),
+        completed,
+        "busy missing boot never stops"
+    );
+    fs::remove_file(profile.join("blocker")).unwrap();
+    execute(&mut host, &cancel).expect("automatic missing-capsule handoff to immutable candidate");
+    host.lock.take();
+    assert_ne!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"]
+    );
+    assert_eq!(
+        super::super::native::running(&location, &next).unwrap()["build"],
+        stamp
+    );
+
+    // GUI exchange never changes the running daemon's lexical module namespace.
+    // Late file reads stay on its one active immutable copy while work defers.
+    let rollback = temp.path().join("rollback.app");
+    fs::rename(&replacement, &rollback).unwrap();
+    let swapped = bundle(
+        temp.path(),
+        "Pilot Next.app",
+        &trust.application_id,
+        "101.1",
+        &node,
+        true,
+    );
+    stamp["source"] = json!("cccccccccccccccccccccccccccccccccccccccc");
+    let stamp_path = swapped
+        .join(crate::layout::RUNTIME)
+        .join("runtime-build.json");
+    fs::write(&stamp_path, serde_json::to_vec(&stamp).unwrap()).unwrap();
+    command(
+        "/usr/bin/codesign",
+        &[
+            "--force".as_ref(),
+            "--sign".as_ref(),
+            "-".as_ref(),
+            swapped.as_os_str(),
+        ],
+    )
+    .unwrap();
+    host.current = swapped.clone();
+    assert_eq!(
+        check_needed(&mut host),
+        Ok(true),
+        "same-version changed build after GUI swap"
+    );
+    let old_pid = host.pid().unwrap();
+    assert!(
+        helper::process_executable(old_pid)
+            .unwrap()
+            .starts_with(&next)
+    );
+    let old_stamp: Value = serde_json::from_slice(
+        &reqwest::blocking::get(format!(
+            "http://127.0.0.1:{}/fixture-runtime-build",
+            location.port
+        ))
+        .unwrap()
+        .bytes()
+        .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        old_stamp["source"], stamp["source"],
+        "late reads do not cross into swapped GUI"
+    );
+    host.current = runtime::publish_service(
+        &swapped,
+        next.parent().unwrap().parent().unwrap(),
+        &trust,
+        &installer::MacPlatform,
+        Instant::now() + Duration::from_secs(45),
+        &AtomicBool::new(false),
+    )
+    .unwrap();
+    fs::write(profile.join("blocker"), "job").unwrap();
+    assert_eq!(execute(&mut host, &cancel), Err(Failure::Busy));
+    host.lock.take();
+    assert_eq!(coordination::record(&location).unwrap()["pid"], old_pid);
+    fs::remove_file(profile.join("blocker")).unwrap();
+    execute(&mut host, &cancel).expect("same-version immutable handoff after GUI exchange");
+    host.lock.take();
+    assert_eq!(check_needed(&mut host), Ok(false));
+    fs::remove_dir_all(&rollback).unwrap();
+    assert_eq!(
+        super::super::native::running(&location, &host.current).unwrap()["build"],
+        stamp
+    );
     assert_eq!(
         fs::read_to_string(profile.join("preserved-draft")).unwrap(),
         "still here 🐦"
     );
     let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
     assert_eq!(journal["phase"], "complete");
+    assert_eq!(journal["runtime"], json!(host.current));
+    assert!(journal.get("previousDefinition").is_none());
     assert_eq!(
-        journal["nextDefinition"]["Label"],
-        journal["previousDefinition"]["Label"]
-    );
-    assert_eq!(
-        journal["nextDefinition"]["ProgramArguments"]
+        plist(&host.plist).unwrap()["ProgramArguments"]
             .as_array()
             .unwrap()
             .len(),
-        2,
-        "never enroll via --bundled-runtime"
+        2
     );
     drop(host);
     drop(_cleanup);
