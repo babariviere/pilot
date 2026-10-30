@@ -35,6 +35,9 @@ commit hashes. No runtime tests/builds or live actions were run for this audit.
   schedule creation (#148), MCP roster (#149) and energy status (#153) slices.
   Do not bundle their write/setup/sign-in flows. Add project default-model editing
   as a small residual of #144, not a repeat of General/Workspace Settings.
+  The [default-model audit](project-settings.md#default-model-contract-audit) found
+  a non-atomic GET/PATCH overwrite race; safe editing is blocked on an approved
+  captured-model precondition, not on another catalogue or chat-model picker.
 - [ ] **Content:** leave giant tool-source expansion/scroll performance with
   active #420; do not open a second renderer refactor. #134 still needs table/list/
   code-copy qualification. Narrow #139 to revision selection/following, #140 to
