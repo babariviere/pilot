@@ -322,7 +322,8 @@ Mission discovery uses the cached, read-only `GET /api/mission-catalog` endpoint
 Legacy Control databases remain on disk, but their runtime, tools, APIs and compaction are removed.
 
 Mission coordinators default to bounded summary-tree memory, including safe adoption by existing
-coordinators at normal compaction boundaries. Ordinary chats keep their existing compaction. Internal
+coordinators at normal compaction boundaries. Ordinary chats keep their existing compaction by default,
+with experimental automatic handoff available in **Settings → Chats**. Internal
 summaries use provider-matched Luna 6 or Haiku 5.5 only when authenticated and available; otherwise
 existing compaction remains in place. Originals and `history_recall` are preserved. See
 [coordinator memory](docs/coordinator-memory.md) for model identities, safety and evidence limits.
@@ -468,8 +469,19 @@ Beside the usage warning, **Force work** lets that chat and its subagents contin
 limit, including windows that cross or move later. The override ends once all of the chat's windows reset or
 clear, or when the provider itself rejects a request. **Pause at limit** restores the guard early.
 
-When you message a long chat (context at 40% of the window or 100k tokens, whichever is lower) after
-the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI, longer with
+**Settings → Chats → Automatic handoff (experimental)** replaces automatic compaction in ordinary chats
+with a fresh model context. It is off by default. When on, Pilot prepares a tool-free handoff using the chat's
+current model at the next safe model-request boundary above 100k context tokens or 70% of the model's
+window, whichever is lower (small windows reserve additional room). It saves the handoff before replacing
+processed history. Unconsumed inputs and unseen tool-image rounds keep their original entries. The conversation,
+workspace, full history, artifacts and mission membership stay the same;
+mission coordinators keep their OptChat-inspired memory. A handoff already underway may finish after you turn
+the setting off. An invalid or interrupted handoff preserves the original context and reports a failure instead
+of silently falling back or replaying an uncertain request. See [automatic handoff](docs/auto-handoff.md).
+
+With automatic handoff off, when you message a long chat (context at 40% of the window or 100k tokens,
+whichever is lower) after the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI,
+longer with
 `PI_CACHE_RETENTION=long`), Pilot compacts it first and your message waits behind the summary. Every model
 request in the turn then reads the short summary instead of rereading the whole history at full price.
 A warm cache is never discarded, and automatic messages don't trigger it.

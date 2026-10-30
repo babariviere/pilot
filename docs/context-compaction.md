@@ -1,5 +1,11 @@
 # Ordinary-chat context compaction and history recall
 
+Pilot Next also exposes an off-by-default [automatic handoff](auto-handoff.md) setting.
+When enabled, ordinary chats replace processed model context with a prepared handoff
+at blocking model boundaries, retaining unconsumed inputs and unseen tool-image rounds
+under their original IDs instead of using the automatic policies below. Manual
+compaction and coordinator summary-tree memory keep their existing behavior.
+
 Status: opt-in. Default rollout stays blocked until the digest is validated with real providers. Set
 `PILOT_DETERMINISTIC_COMPACTION=1` in pilotd's environment (kernels inherit it) to enable it; otherwise ordinary
 chats keep pi-durable's default thresholds and model summaries, and `history_recall` is available either way.

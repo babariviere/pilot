@@ -11,6 +11,7 @@ export type {
 	SnapshotEvent,
 	ToolSlot,
 } from "@earendil-works/pi-durable";
+export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";
 export type * from "./diagnostic-context.ts";

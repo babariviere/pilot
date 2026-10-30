@@ -15,6 +15,7 @@ const SUMMARY_SUFFIX: &str = "\n</summary>";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
     Compacted,
+    Handoff,
     Reset,
 }
 
@@ -86,6 +87,7 @@ impl Event {
     /// Some only for compaction and reset entries.
     pub(crate) fn read(entry: &Value) -> Option<Self> {
         let kind = match entry["kind"].as_str()? {
+            COMPACTION if entry["data"]["mode"] == "handoff" => Kind::Handoff,
             COMPACTION => Kind::Compacted,
             RESET => Kind::Reset,
             _ => return None,
@@ -103,10 +105,18 @@ impl Event {
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| {
-                entry["model"]
+                let messages = entry["model"]
                     .as_array()
-                    .into_iter()
-                    .flatten()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                // Carried user messages already appear at their original history entries.
+                let messages = if kind == Kind::Handoff {
+                    &messages[..messages.len().min(1)]
+                } else {
+                    messages
+                };
+                messages
+                    .iter()
                     .map(message_text)
                     .filter(|text| !text.is_empty())
                     .collect::<Vec<_>>()
@@ -125,6 +135,7 @@ impl Event {
     pub(crate) fn heading(&self) -> &'static str {
         match self.kind {
             Kind::Compacted => "Context compacted",
+            Kind::Handoff => "Context handoff",
             Kind::Reset => "Context reset",
         }
     }

@@ -41,6 +41,8 @@ pub(crate) struct SettingsPreferences {
     update_events: Vec<Subscription>,
     pub(crate) restart_locked: bool,
     pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
+    /// Host-global chat settings; None in synthetic windows without daemon authority.
+    pub(crate) chats: Option<Entity<crate::chat_settings_view::ChatSettings>>,
     pub(crate) projects: Option<Entity<crate::project_settings_view::ProjectSettings>>,
     pub(super) state: SettingsState,
     source: Option<Result<PathBuf, SettingsError>>,
@@ -68,6 +70,7 @@ impl SettingsPreferences {
             update_events: Vec::new(),
             restart_locked: false,
             models: None,
+            chats: None,
             projects: None,
             state: SettingsState::default(),
             source,
@@ -85,14 +88,21 @@ impl SettingsPreferences {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if self.updater.is_none() {
             let daemon = self.daemon_upgrade.clone().unwrap_or_else(|| {
-                cx.new(|cx| crate::daemon_upgrade_view::DaemonUpgrade::new(self.daemon_options.clone(), cx))
+                cx.new(|cx| {
+                    crate::daemon_upgrade_view::DaemonUpgrade::new(self.daemon_options.clone(), cx)
+                })
             });
-            self.update_events.push(cx.subscribe(&daemon, |_, _, event, cx| {
-                cx.emit(match event {
-                    crate::daemon_upgrade_view::Event::Request => crate::updates_view::Event::UpgradeDaemon,
-                    crate::daemon_upgrade_view::Event::Changed => crate::updates_view::Event::DaemonChanged,
-                });
-            }));
+            self.update_events
+                .push(cx.subscribe(&daemon, |_, _, event, cx| {
+                    cx.emit(match event {
+                        crate::daemon_upgrade_view::Event::Request => {
+                            crate::updates_view::Event::UpgradeDaemon
+                        }
+                        crate::daemon_upgrade_view::Event::Changed => {
+                            crate::updates_view::Event::DaemonChanged
+                        }
+                    });
+                }));
             self.daemon_upgrade = Some(daemon);
             let location = self.update_location.clone();
             let connection = self.update_connection.clone();
@@ -281,6 +291,7 @@ impl EventEmitter<crate::updates_view::Event> for SettingsPreferences {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Category {
     Appearance,
+    Chats,
     Models,
     Updates,
     Diagnostics,
@@ -288,8 +299,9 @@ pub(super) enum Category {
     Project,
 }
 impl Category {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Appearance,
+        Self::Chats,
         Self::Models,
         Self::Updates,
         Self::Diagnostics,
@@ -297,6 +309,7 @@ impl Category {
     fn title(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Chats => "Chats",
             Self::Models => "Scoped models",
             Self::Updates => "Updates",
             Self::Diagnostics => "Diagnostics",
@@ -306,6 +319,7 @@ impl Category {
     fn id(self) -> &'static str {
         match self {
             Self::Appearance => "settings-appearance",
+            Self::Chats => "settings-chats",
             Self::Models => "settings-models",
             Self::Updates => "settings-updates",
             Self::Diagnostics => "settings-diagnostics",
@@ -472,6 +486,11 @@ impl SettingsView {
                 cx.notify();
             });
         }
+        if category == Category::Chats
+            && let Some(chats) = preferences.read(cx).chats.clone()
+        {
+            chats.update(cx, |c, cx| c.open(cx));
+        }
         let categories = cx.new(|cx| {
             ListState::new(
                 Categories {
@@ -572,6 +591,11 @@ impl SettingsView {
             cx.notify();
         });
         self.confirm_reload = false;
+        if category == Category::Chats
+            && let Some(chats) = self.preferences.read(cx).chats.clone()
+        {
+            chats.update(cx, |c, cx| c.open(cx));
+        }
         if category == Category::Models
             && let Some(models) = self.preferences.read(cx).models.clone()
         {
@@ -849,6 +873,11 @@ impl SettingsView {
         let writable = owner.writable();
         let source = owner.source.is_some();
         let close_notice = owner.close_notice;
+        // Chats has no Save bar: each toggle is its own request with its own status.
+        if owner.category == Category::Chats && !dirty && !saving && !unconfirmed && error.is_none()
+        {
+            return None;
+        }
         if owner.category == Category::Models
             && !dirty
             && !saving
@@ -1005,7 +1034,8 @@ impl Render for SettingsView {
         };
         let detail = match category {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
-            Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
+            Category::Chats => self.preferences.read(cx).chats.clone().map(|c| div().child(c).into_any_element()).unwrap_or_else(|| Notice::new("Chat settings require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
+           Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
             Category::Updates => self.updates(cx).into_any_element(),
             Category::Diagnostics => div().children(self.preferences.read(cx).diagnostics.clone()).into_any_element(),
             Category::Project => self.preferences.read(cx).projects.clone().map(|p| div().child(p).into_any_element()).unwrap_or_else(|| Notice::new("Project settings require the real Local viewer.").into_any_element()),
@@ -1047,7 +1077,7 @@ impl Render for SettingsView {
                     if let Some(models) = view.preferences.read(cx).models.clone() {
                         models.update(cx, |m, cx| m.save(window, cx));
                     }
-                } else {
+                } else if category != Category::Chats {
                     view.preferences.update(cx, |owner, cx| owner.save(cx));
                 }
                 cx.stop_propagation();

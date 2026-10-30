@@ -9,6 +9,7 @@ import { credentialEnvironment } from "@pilot/kernel/credential-client";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import { BackgroundUsage } from "./background-usage.ts";
+import { ChatSettingsService } from "./chat-settings.ts";
 import { loadConfig } from "./config.ts";
 import { migratePilotConfig } from "./config-migration.ts";
 import { ConnectivityService } from "./connectivity.ts";
@@ -67,6 +68,7 @@ const capabilities = await detectPlatformCapabilities();
 const hello = await daemonHello(config.home, capabilities);
 if (!hello.lineageId) throw new Error("Storage lineage is required for sharing");
 const telemetry = await TelemetrySettingsService.open(config.home, hello);
+const chatSettings = await ChatSettingsService.open(config.home);
 configureNodeTelemetry(telemetry.nodeOptions("pilot.daemon"));
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog({ histogram: true });
@@ -172,6 +174,12 @@ const sessions = new SessionManager(
 	},
 );
 let appliedTelemetry = telemetry.settings();
+try {
+	sessions.configureAutoHandoff(chatSettings.settings().autoHandoff);
+} catch {
+	console.warn("pilotd: chat settings unavailable; automatic handoff remains disabled");
+}
+chatSettings.onChange((settings) => sessions.configureAutoHandoff(settings.autoHandoff));
 sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
 	const exportChanged =
@@ -333,6 +341,7 @@ const server = createDaemonServer(
 	environment,
 	runtimeOwner,
 	new SubscriptionRefresh((provider) => models.refreshSubscription(provider)),
+	chatSettings,
 );
 if (runtimeOwner) {
 	runtimeOwner.ready(hello);

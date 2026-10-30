@@ -68,6 +68,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentStore } from "./attachment-store.ts";
 import { boundedSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
+import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { DatabaseSettingsError } from "./databases.ts";
@@ -346,6 +347,7 @@ export function createDaemonServer(
 	environment?: import("./environment.ts").EnvironmentService,
 	bootstrap?: import("./runtime-owner.ts").RuntimeOwner,
 	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
+	chatSettings?: ChatSettingsService,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
@@ -1221,6 +1223,19 @@ export function createDaemonServer(
 			const performance = daemonPerformance();
 			if (!performance) throw new ServiceUnavailable("Performance diagnostics are not running");
 			return json(res, 200, performance);
+		}
+		if (parts[1] === "chat-settings" && parts.length === 2) {
+			if (!chatSettings) throw new ServiceUnavailable("Chat settings are unavailable");
+			if (req.method === "GET") return json(res, 200, chatSettings.settings());
+			if (req.method === "PATCH") {
+				const input = await readJson(req);
+				try {
+					return json(res, 200, await chatSettings.update(input));
+				} catch (error) {
+					if (error instanceof InvalidChatSettings) throw new HttpError(400, error.message);
+					throw error;
+				}
+			}
 		}
 		if (parts[1] === "telemetry" && parts.length === 2) {
 			if (!telemetry) throw new ServiceUnavailable("Telemetry settings are unavailable");

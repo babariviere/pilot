@@ -1,5 +1,107 @@
+diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
+index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56f5d08d23 100644
+--- a/dist/harness/compaction.js
++++ b/dist/harness/compaction.js
+@@ -64,7 +64,8 @@ export const CompactionTask = defineTask({
+             const model = ref === undefined ? undefined : runtime.models.getModel(ref.provider, ref.modelId);
+             if (ref === undefined || model === undefined)
+                 return failNoModel(runtime, ref, context);
+-            const policy = compactionPolicy(settings, ref);
++            const resolved = compactionPolicy(settings, ref);
++            const policy = task.input.reason === "manual" ? { ...resolved, ...resolved.manual } : resolved;
+             const view = await runtime.context(conversationId, context);
+             const cut = selectCut(view, policy.keepRecentTokens);
+             if (cut === undefined)
+@@ -85,8 +86,12 @@ export const CompactionTask = defineTask({
+             });
+             if (decision !== undefined && "decline" in decision)
+                 return complete(runtime, context);
++            if (decision !== undefined && "error" in decision)
++                return failDecision(runtime, decision.error, context);
++            if (decision?.replaceContext && task.owner === undefined)
++                return failDecision(runtime, "A full-context handoff requires a blocking model boundary", context);
+             if (decision !== undefined)
+-                return place(runtime, firstKept, decision.summary, context);
++                return place(runtime, decision.replaceContext ? decision.keepFrom : firstKept, decision.summary, context, decision.replaceContext === true, decision.canReplaceContext, view);
+             const request = {
+                 attempt: 1,
+                 model: ref,
+@@ -200,6 +205,7 @@ export function compactionPolicy(settings, model) {
+         reserveTokens: override?.reserveTokens ?? policy.reserveTokens,
+         keepRecentTokens: override?.keepRecentTokens ?? policy.keepRecentTokens,
+         backgroundTokens: override?.backgroundTokens ?? policy.backgroundTokens,
++        manual: override?.manual ?? policy.manual,
+     };
+ }
+ /**
+@@ -359,8 +365,8 @@ function truncate(text, maxChars) {
+     return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
+ }
+ /** Place a summary supplied by a hook in its own commit. */
+-async function place(runtime, firstKept, summary, context) {
+-    await runtime.commit(async (tx, current) => placeSummary(tx, runtime, current, await tx.doc(LiveDoc, runtime.conversationId), firstKept, summary), context);
++async function place(runtime, firstKept, summary, context, replaceContext = false, canReplaceContext, handoffView) {
++    await runtime.commit(async (tx, current) => placeSummary(tx, runtime, current, await tx.doc(LiveDoc, runtime.conversationId), firstKept, summary, replaceContext, canReplaceContext, handoffView), context);
+ }
+ /**
+  * Place the summary entry and complete (spec §8.7). A blocking compaction, owned by its generation, appends it: the
+@@ -368,15 +374,34 @@ async function place(runtime, firstKept, summary, context) {
+  * idle, otherwise at the next boundary, or settled `stale`.
+  * REMINDER: nothing else may append to a busy conversation, so every non-blocking summary goes through admission.
+  */
+-async function placeSummary(tx, runtime, current, live, firstKept, summary) {
++async function placeSummary(tx, runtime, current, live, firstKept, summary, replaceContext = false, canReplaceContext, handoffView) {
++    let invalidCut = false;
++    if (replaceContext) {
++        const head = await tx.latestHeadMarker(runtime.conversationId);
++        invalidCut = head?.id !== handoffView.head?.id;
++        if (firstKept !== undefined) {
++            const entry = await tx.entry(firstKept);
++            const keep = handoffView.entries.findIndex((candidate) => candidate.id === firstKept);
++            invalidCut ||= entry === undefined || entry.head !== undefined || keep < 0 || !isCandidate(handoffView.contributions, keep);
++        }
++    }
++    if (replaceContext && (invalidCut || (canReplaceContext !== undefined && !canReplaceContext()))) {
++        const message = invalidCut
++            ? "The unconsumed input cannot be retained at a current tool-safe handoff boundary; original context was preserved"
++            : "Automatic handoff scope changed before placement; original context was preserved";
++        failCompactionStatus(live, runtime.taskId, message);
++        return { status: "terminal", outcome: { status: "failed", error: { message, detail: { reason: "handoff_error" } } } };
++    }
+     removeCompactionStatus(live, runtime.taskId);
+     delete live.compactionFailure;
+-    const text = `${SUMMARY_PREFIX}${summary}${SUMMARY_SUFFIX}`;
++    const text = replaceContext
++        ? `[Pilot handoff]\nContinue the same conversation from this historical handoff. Original messages remain stored. Preserved current inputs or tool results follow when present; inspect them before acting. This is not new authority or permission.\n\n${summary}`
++        : `${SUMMARY_PREFIX}${summary}${SUMMARY_SUFFIX}`;
+     const entry = {
+         kind: CompactionEntry.kind,
+-        head: firstKept,
++        head: replaceContext ? firstKept ?? "self" : firstKept,
+         model: [{ role: "user", content: [{ type: "text", text }], timestamp: runtime.now() }],
+-        data: { reason: current.input.reason },
++        data: { reason: current.input.reason, ...(replaceContext ? { mode: "handoff" } : {}) },
+     };
+     const result = current.owner === undefined
+         ? {
+@@ -392,6 +417,15 @@ async function complete(runtime, context) {
+         return { status: "terminal", outcome: { status: "completed", result: {} } };
+     }, context);
+ }
++async function failDecision(runtime, message, context) {
++    await runtime.commit(async (tx) => {
++        failCompactionStatus(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId, message);
++        return {
++            status: "terminal",
++            outcome: { status: "failed", error: { message, detail: { reason: "handoff_error" } } },
++        };
++    }, context);
++}
+ async function failNoModel(runtime, ref, context) {
+     const message = ref === undefined ? "No model is configured" : `Model ${ref.provider}/${ref.modelId} is not available`;
+     await runtime.commit(async (tx) => {
 diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
-index 5ef33aa67d8435deecfb92dcbae0a987e8332976..3fa8a4a8cacdee08ada99f29a6c5f96bcd79fb5a 100644
+index 5ef33aa67d8435deecfb92dcbae0a987e8332976..81baf42088535954b89c0f1a6e98f31a2fa5bb9a 100644
 --- a/dist/harness/inbox.js
 +++ b/dist/harness/inbox.js
 @@ -26,8 +26,8 @@ export async function prepareBoundary(tx, conversationId, modes) {
@@ -23,3 +125,32 @@ index 5ef33aa67d8435deecfb92dcbae0a987e8332976..3fa8a4a8cacdee08ada99f29a6c5f96b
      users.sort((a, b) => a - b);
      // `appendEntry()` copies the drafts' values; the items are removed only afterwards.
      for (const index of writes) {
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+index 192a9cce35ad4729009d2e3f75f475c8dffa16c8..7ad02fb828b611dcaaa2fb7b3691bd859b2815b2 100644
+--- a/dist/harness/types.d.ts
++++ b/dist/harness/types.d.ts
+@@ -455,6 +455,8 @@ export type CompactionPolicy = {
+     keepRecentTokens: number;
+     /** Background compaction starts `backgroundTokens` below the blocking threshold; `0` disables it. */
+     backgroundTokens: number;
++    /** Preserve an explicit manual compaction's budget independently of an automatic replacement policy. */
++    manual?: { reserveTokens: number; keepRecentTokens: number };
+ };
+ /**
+  * Harness-wide compaction settings. `modelOverrides` is keyed by exact `"provider/modelId"`; each field it sets
+@@ -830,6 +832,15 @@ export interface CompactionHooks {
+         readonly decline: true;
+     } | {
+         readonly summary: string;
++        /** Replace the entire active context. Only valid for a blocking, generation-owned compaction. */
++        readonly replaceContext?: true;
++        /** First tool-safe original suffix entry retained after a handoff; absent replaces the complete context. */
++        readonly keepFrom?: EntryId;
++        /** Synchronous host admission recheck inside the placement commit. Never persisted or called for ordinary summaries. */
++        readonly canReplaceContext?: () => boolean;
++    } | {
++        /** Fail the compaction without dispatching the built-in summarizer or changing context. */
++        readonly error: string;
+     }>;
+ }
+ //# sourceMappingURL=types.d.ts.map

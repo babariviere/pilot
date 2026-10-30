@@ -56,6 +56,7 @@ import {
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
+import { AutoHandoff } from "./auto-handoff.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { CoordinatorMemory } from "./coordinator-memory.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
@@ -242,6 +243,8 @@ export class KernelSession {
 	#usageCapture?: UsageCapture;
 	#attempts?: SessionAttempt[];
 	#compactionLog?: PerformanceLog;
+	#autoHandoffSetting = { enabled: false };
+	#autoHandoff?: AutoHandoff;
 
 	readonly harness: Harness;
 	readonly conversation: Conversation;
@@ -254,6 +257,11 @@ export class KernelSession {
 
 	get openTodoCount(): number {
 		return this.#openTodoCount;
+	}
+
+	/** Passive host preference. An admitted handoff may finish; later boundaries read the new value. */
+	configureAutoHandoff(enabled: boolean): void {
+		this.#autoHandoffSetting.enabled = enabled;
 	}
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
@@ -336,6 +344,7 @@ export class KernelSession {
 			(value) => hooks.onJobsChanged?.(value),
 		);
 		let artifactConversation: Conversation | undefined;
+		const handoffSetting = { enabled: spec.autoHandoff === true };
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
@@ -557,6 +566,17 @@ export class KernelSession {
 						recall: historyRecall,
 						...(compactionLog ? { log: compactionLog } : {}),
 					});
+			const autoHandoff = new AutoHandoff({
+				harness: () => harness,
+				enabled: () => handoffSetting.enabled,
+				eligible: (id) => artifactConversation?.id === id && mission.current?.coordinator !== "self",
+				manualPolicy: (window) => {
+					const legacy = digestCompaction?.policy(window, artifactConversation?.id).harness;
+					return legacy
+						? { reserveTokens: legacy.reserveTokens, keepRecentTokens: legacy.keepRecentTokens }
+						: undefined;
+				},
+			});
 			adapter = await NativeAdapter.open({
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
@@ -674,8 +694,9 @@ export class KernelSession {
 					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
 					() => harness,
 				);
+				const handoffs = autoHandoff.extension(events);
 				return toolDrain.prepare(
-					coordinatorMemory.extension(digestCompaction ? digestCompaction.extension(events) : events),
+					coordinatorMemory.extension(digestCompaction ? digestCompaction.extension(handoffs) : handoffs),
 					(context) => adapter!.waitForSubscription(context.abortSignal),
 				);
 			};
@@ -746,6 +767,7 @@ export class KernelSession {
 						enumerable: true,
 						get: () =>
 							coordinatorMemory.policy(window()) ??
+							autoHandoff.policy(window(), artifactConversation?.id) ??
 							digestCompaction?.policy(window(), artifactConversation?.id).harness,
 					}),
 				},
@@ -827,6 +849,8 @@ export class KernelSession {
 				hooks.callMemory,
 			);
 			openedSession = session;
+			session.#autoHandoffSetting = handoffSetting;
+			session.#autoHandoff = autoHandoff;
 			session.todoBridge = todoBridge;
 			session.#openTodoCount = openTodoCount;
 			session.#compactSession = compaction.compactSession;
@@ -1379,6 +1403,10 @@ export class KernelSession {
 	 */
 	private async compactBeforeUserInput(): Promise<void> {
 		try {
+			const model = this.adapter.model;
+			const window = this.adapter.models.getModel(model.provider, model.modelId)?.contextWindow ?? 0;
+			// Automatic handoff runs after input placement at the native model boundary, never as an idle reset.
+			if (this.#autoHandoff?.policy(window, this.conversation.id)) return;
 			// Context usage is refreshed after every run, so most messages stop here without a storage read.
 			const usage = this.adapter.usage.current.context;
 			if (usage?.tokens === undefined || usage.tokens < autoCompactionThreshold(usage.contextWindow)) return;

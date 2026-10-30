@@ -100,3 +100,43 @@ fn reset_reads_its_handoff_text_without_compaction_metrics() {
     assert_eq!((handoff.tokens, handoff.reason), (None, None));
     assert!(Event::read(&json!({"kind": "pi.user"})).is_none());
 }
+
+#[test]
+fn handoff_mode_is_not_a_compaction_summary_or_token_savings() {
+    let event = Event::read(&json!({
+        "kind": "pi.compaction",
+        "data": {"mode":"handoff", "summary":"Continue the task.", "reason":"threshold",
+                 "tokensBefore":100_000,"tokensAfter":1000}
+    }))
+    .unwrap();
+    assert_eq!(event.kind, Kind::Handoff);
+    assert_eq!(event.heading(), "Context handoff");
+    assert_eq!(event.sentence(), "Context handoff");
+    assert_eq!(event.detail(), Some("Continue the task."));
+    assert_eq!(event.tokens, None);
+    assert_eq!(event.reason, None);
+    let mut model = crate::local_model::LiveTranscript::default();
+    model.apply(
+        &json!({"type":"snapshot","entries":[{"id":1,"kind":"pi.compaction",
+        "data":{"mode":"handoff","summary":"Old handoff"}}]}),
+    );
+    assert!(
+        !model.compacting(),
+        "stored markers never imply live activity"
+    );
+}
+
+#[test]
+fn handoff_discloses_only_the_historical_summary_message() {
+    let event = Event::read(&json!({
+        "kind":"pi.compaction", "data":{"mode":"handoff"},
+        "model":[
+            {"role":"user","content":[{"type":"text","text":"Historical summary"}]},
+            {"role":"user","content":[{"type":"text","text":"Latest literal input"},
+                                     {"type":"image","data":"image-bytes"}]}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(event.detail(), Some("Historical summary"));
+    assert_eq!(event.text.as_deref(), Some("Historical summary"));
+}

@@ -270,6 +270,46 @@ pub fn run_compaction_event_probe(cx: &mut HeadlessAppContext) {
         });
         settle(cx, h);
         assert!(!detail_shown(cx, h), "a different marker starts collapsed");
+        let handoff = Event::read(&json!({
+            "kind":"pi.compaction", "data":{"mode":"handoff"},
+            "model":[{"role":"user","content":"Continue from the saved handoff."}]
+        }))
+        .unwrap();
+        cx.update(|cx| t.update(cx, |t, cx| t.replace_readonly(rows(handoff), true, cx)));
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            let toggle = w.find(("compaction-toggle", COMPACT));
+            assert!(toggle.label().unwrap().contains("context handoff"));
+            assert!(!toggle.label().unwrap().contains("compaction summary"));
+            w.click(("compaction-toggle", COMPACT), cx);
+        })
+        .unwrap();
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            assert_eq!(
+                w.find(("compaction-copy", COMPACT)).label(),
+                Some("Copy handoff")
+            );
+            assert_eq!(
+                t.read(cx)
+                    .history_probe_row(COMPACT)
+                    .read(cx)
+                    .rendered_text()
+                    .source(),
+                "Continue from the saved handoff."
+            );
+            assert!(
+                w.find_all("activity-indicator").is_empty(),
+                "historical handoff is not live work"
+            );
+        })
+        .unwrap();
+        if let Some(p) = &captures {
+            cx.capture_screenshot(h)
+                .unwrap()
+                .save(p.join(format!("handoff-{dark}-{width}.png")))
+                .unwrap();
+        }
         cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         cx.run_until_parked();
         live_status(cx, dark, width, captures.as_deref());
@@ -329,7 +369,7 @@ fn live_status(
             );
             assert_eq!(
                 editor.read(cx).activity_label(),
-                model.compacting().then_some("Compacting context…")
+                model.compacting().then_some("Preparing context…")
             );
             if model.compacting() {
                 assert!(w.find("activity-indicator").visible());

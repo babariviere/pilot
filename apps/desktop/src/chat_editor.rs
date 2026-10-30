@@ -457,7 +457,7 @@ impl ChatEditor {
         if self.question_needs_you() {
             Some("Needs you")
         } else if self.compacting {
-            Some("Compacting context…")
+            Some("Preparing context…")
         } else if self.thinking {
             Some("Thinking...")
         } else if self.jobs_only {

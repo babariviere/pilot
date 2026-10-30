@@ -38,6 +38,7 @@ pub(crate) enum Blocker {
     PreferencesLoading,
     Preferences(Hold),
     ScopedModels(Hold),
+    ChatSettings,
     /// Project settings in the Settings window.
     ProjectSettings(Hold),
     Jump,
@@ -76,6 +77,9 @@ impl Blocker {
             Self::Composition => "Finish the text you're composing first. Nothing was discarded.",
             Self::PreferencesFailed => {
                 "Settings couldn't be loaded or saved. Resolve the Settings error, then try again."
+            }
+            Self::ChatSettings => {
+                "Chat settings are still saving. Try again when the request finishes."
             }
             Self::PreferencesLoading => "Settings are still loading. Try again in a moment.",
             Self::Preferences(Unsaved) => {
@@ -144,6 +148,7 @@ impl Blocker {
             Self::PreferencesFailed
             | Self::PreferencesLoading
             | Self::Preferences(_)
+            | Self::ChatSettings
             | Self::ProjectSettings(_)
             | Self::ChatAction => None,
             Self::ScopedModels(_) => Some(Destination::ScopedModels),
@@ -181,6 +186,7 @@ mod tests {
             Blocker::Composition,
             Blocker::PreferencesFailed,
             Blocker::PreferencesLoading,
+            Blocker::ChatSettings,
             Blocker::Preferences(Hold::Unsaved),
             Blocker::Preferences(Hold::Sending),
             Blocker::Preferences(Hold::Unconfirmed),

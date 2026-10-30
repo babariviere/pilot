@@ -44,6 +44,7 @@ for (const existing of [false, true])
 	test(`summary-tree default is wired for ${existing ? "existing" : "new"} coordinators without switching main models`, async (t) => {
 		const f = await fixture(t);
 		t.mock.method(NativeAdapter.prototype, "resolveCoordinatorMemoryModel", async () => f.a.getModel("two"));
+		Object.assign(f.spec, { autoHandoff: true });
 		const mission = {
 			id: "fixture-mission",
 			title: "Offline",
@@ -2661,3 +2662,56 @@ test("queued compaction input survives close and reopen exactly once", { timeout
 	assert.equal(entries.filter((e) => e.kind === "pi.compaction").length, 1);
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
 });
+
+for (const setting of ["startup", "live"] as const) {
+	test(`automatic handoff ${setting} setting reaches the native boundary and skips idle cold-cache compaction`, async (t) => {
+		const f = await fixture(t);
+		if (setting === "startup") Object.assign(f.spec, { autoHandoff: true });
+		const session = await f.open();
+		if (setting === "live") session.configureAutoHandoff(true);
+		const adapter = f.adapters.at(-1)!;
+		adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+		await seedLongConversation(session, Date.now() - 2 * 60 * 60_000);
+		await session.conversation.commit(async (tx) => {
+			const message = fauxAssistantMessage("Recorded old inspection");
+			message.usage.input = 100_001;
+			message.usage.totalTokens = 100_001;
+			await tx.appendEntry(session.conversation.id, { kind: "pi.assistant", model: [message] });
+		}, context);
+		await adapter.refreshUsage(context);
+		f.a.setResponses([
+			(source) => {
+				assert.match(JSON.stringify(source.messages), /Prepare a handoff/);
+				assert.doesNotMatch(JSON.stringify(source.messages), /Latest user direction/);
+				assert.match(JSON.stringify(source.messages), /Old context/);
+				return fauxAssistantMessage(
+					"Continue from this handoff. Latest user direction is to verify the export. No push is authorized.",
+				);
+			},
+			(request) => {
+				assert.match(JSON.stringify(request.messages), /Pilot handoff/);
+				assert.match(JSON.stringify(request.messages), /Latest user direction: verify the export/);
+				assert.doesNotMatch(JSON.stringify(request.messages), /Old context|Recorded old inspection/);
+				return fauxAssistantMessage("Continued from the handoff");
+			},
+		]);
+		await session.submit("handoff-next", "Latest user direction: verify the export.", "followUp");
+		await session.conversation.waitForIdle(context);
+		assert.equal(f.a.state.callCount, 2);
+		assert.equal((await f.completed).outcome, "done");
+		const originals = (await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items;
+		const marker = originals.find((entry) => entry.kind === "pi.compaction")!;
+		assert.equal(marker.head, originals.find((entry) => userText(entry).startsWith("Latest user direction"))!.id);
+		assert.equal((marker.data as { mode: string }).mode, "handoff");
+		assert.ok(
+			originals.findIndex((entry) => userText(entry).startsWith("Latest user direction")) <
+				originals.indexOf(marker),
+			"handoff retains the original new input at the model boundary, not an idle pre-input summary",
+		);
+		assert.ok(
+			originals.some((entry) => userText(entry).includes("Old context")),
+			"full history remains stored",
+		);
+		assert.equal(session.compacting, false);
+	});
+}

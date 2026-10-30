@@ -59,6 +59,13 @@ impl LocalViewer {
                 .map(Blocker::ScopedModels)
                 .or_else(|| {
                     owner
+                        .chats
+                        .as_ref()
+                        .and_then(|c| c.read(cx).update_hold())
+                        .map(|_| Blocker::ChatSettings)
+                })
+                .or_else(|| {
+                    owner
                         .projects
                         .as_ref()
                         .and_then(|p| p.read(cx).update_hold())

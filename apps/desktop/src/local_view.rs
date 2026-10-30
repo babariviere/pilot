@@ -21,6 +21,12 @@ pub(crate) mod chat_model_probe;
 #[path = "chat_rename_probe.rs"]
 pub(crate) mod chat_rename_probe;
 #[cfg(feature = "native-probes")]
+#[path = "chat_settings_probe.rs"]
+pub(crate) mod chat_settings_probe;
+#[cfg(feature = "native-probes")]
+#[path = "composer_motion_probe.rs"]
+pub(crate) mod composer_motion_probe;
+#[cfg(feature = "native-probes")]
 #[path = "context_usage_probe.rs"]
 pub(crate) mod context_usage_probe;
 #[path = "context_usage_view.rs"]
@@ -131,9 +137,6 @@ mod session_subagents_view;
 pub(crate) mod session_todos_probe;
 #[path = "session_todos_tray.rs"]
 mod session_todos_tray;
-#[cfg(feature = "native-probes")]
-#[path = "composer_motion_probe.rs"]
-pub(crate) mod composer_motion_probe;
 #[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
@@ -492,6 +495,10 @@ impl LocalViewer {
             cx.new(|_| crate::project_settings_view::ProjectSettings::new(Some(options.clone())));
         view.settings
             .update(cx, |owner, _| owner.projects = Some(projects));
+        let chats =
+            cx.new(|cx| crate::chat_settings_view::ChatSettings::new(Some(options.clone()), cx));
+        view.settings
+            .update(cx, |owner, _| owner.chats = Some(chats));
         view.connect_model_controls(options.clone(), window, cx);
         view.settings.update(cx, |owner, cx| {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -3195,7 +3202,7 @@ mod refresh_tests {
                 view.accept(state, window, cx);
                 assert_eq!(
                     view.editor.read(cx).activity_label(),
-                    Some("Compacting context…")
+                    Some("Preparing context…")
                 );
                 let mut stale = view.state.clone();
                 stale.generation += 1;
@@ -3203,12 +3210,12 @@ mod refresh_tests {
                 view.accept(stale, window, cx);
                 assert_eq!(
                     view.editor.read(cx).activity_label(),
-                    Some("Compacting context…")
+                    Some("Preparing context…")
                 );
                 view.clear_chat(cx);
                 assert_ne!(
                     view.editor.read(cx).activity_label(),
-                    Some("Compacting context…")
+                    Some("Preparing context…")
                 );
                 assert!(!view.state.compacting);
             });

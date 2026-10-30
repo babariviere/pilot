@@ -518,3 +518,42 @@ shell/workbench and existing editor/reader/lifecycle guards. Freeze exact source
 and hashes before builds; images, logs and build outputs stay ignored. Capture
 680/1100 light/dark bounds/paint and interaction evidence, not a docs-only mock.
 No Linux or visible benchmark gate in this macOS-first slice.
+
+## Chats Settings
+
+The real Local viewer retains one `ChatSettings` entity under
+`SettingsPreferences`, shared with each Settings window. It owns the acknowledged
+value, revision and at most one bounded background request. Closing Settings
+does not cancel a PATCH. Synthetic windows have no daemon authority.
+
+Chats is a peer category after Appearance, using the existing Settings list,
+shared text/notice/action roles and Kit Checkbox. Cmd-comma (or Settings… in the
+app menu) opens Settings; category arrows and Return reach Chats, then
+Tab and Space operate the checkbox. Cmd-S never writes this page. There is no
+extra palette command or parallel navigation.
+
+This is a host-global daemon setting, not a GUI preference. Each Chats opening
+refreshes with read-only GET /api/chat-settings unless a request is already in
+flight. No polling, automatic PATCH or retry. The schema-1 document contains
+exactly `schemaVersion`, `autoHandoff` and `revision`. Each explicit toggle
+PATCHes exactly `autoHandoff` and `expectedRevision`. The acknowledged checkbox
+stays unchanged and disabled while saving. Only a 200 with the exact requested
+value and a new revision earns Saved. A 400 retains the old value; a 409 takes
+one read-back and asks the user to review, never resending. A 503, lost response,
+or malformed acknowledgment is Unknown, never success. Check again is read-only.
+An older daemon is Unavailable, never an unchecked default.
+
+A pending PATCH blocks app-owned restart, including after Settings closes.
+Read-only GET and retained Unknown do not. The timing caption names the lesser
+of 100k context tokens and 70% of the model window, the native tool-safe
+model-request boundary, and that an admitted handoff may finish after disabling.
+
+Transcript `pi.compaction` markers with `data.mode = "handoff"` say Context
+handoff, with handoff disclosure/copy labels rather than compaction-summary
+labels or inferred token savings. Preparing context… covers the shared live
+compaction lifecycle; historical markers never start activity.
+
+Verification: `chat_settings` exercises the actual hidden Settings window with an
+owned faux daemon, keyboard navigation/toggle, exact ACK, conflicts, Unknown,
+older daemons, refresh on reentry, retained requests and restart guards at 680pt
+and 1100pt in light/dark. Transport/state tests live in `chat_settings_tests.rs`.

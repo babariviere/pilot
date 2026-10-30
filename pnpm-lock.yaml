@@ -177,7 +177,7 @@ overrides:
 patchedDependencies:
   '@babariviere/pi-extensions@0.1.0': 93ac376c8cf0474dce8e1e4142c478fe92c3f89d8fea64673a20ecb40f370c1a
   '@earendil-works/pi-coding-agent@1.4.0': e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1
-  '@earendil-works/pi-durable@1.4.0': de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f
+  '@earendil-works/pi-durable@1.4.0': 19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70
 
 importers:
 
@@ -291,7 +291,7 @@ importers:
         version: 1.4.0
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
+        version: 1.4.0(patch_hash=19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -327,7 +327,7 @@ importers:
         version: 1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
+        version: 1.4.0(patch_hash=19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
       '@earendil-works/pi-mcp':
         specifier: 1.4.0
         version: 1.4.0
@@ -354,7 +354,7 @@ importers:
         version: 1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
       '@earendil-works/pi-durable':
         specifier: 1.4.0
-        version: 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
+        version: 1.4.0(patch_hash=19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
 
   packages/telemetry:
     dependencies:
@@ -2147,7 +2147,7 @@ snapshots:
       '@earendil-works/chord': 1.4.0
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
       '@earendil-works/pi-coding-agent': 1.4.0(patch_hash=e9b97d3b4f384ab6678f7b431d372724ea62abdbca8c7eefb43e2607b7e23dc1)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.0)
-      '@earendil-works/pi-durable': 1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
+      '@earendil-works/pi-durable': 1.4.0(patch_hash=19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)
       '@earendil-works/pi-tui': 1.4.0
       defuddle: 0.19.6
       linkedom: 0.18.14
@@ -2330,7 +2330,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.4.0(patch_hash=de6fd370e9cc7c45c6864974dc435136c29b6c05b32b5d818beed3ea8726b35f)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)':
+  '@earendil-works/pi-durable@1.4.0(patch_hash=19e205d9a8d69c8ca5aa26fc8642ad1af6f8b24eb7127045322e459a2188ef70)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)':
     dependencies:
       '@earendil-works/chord': 1.4.0
       '@earendil-works/pi-ai': 1.4.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.0)

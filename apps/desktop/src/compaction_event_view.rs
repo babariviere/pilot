@@ -115,7 +115,7 @@ impl TranscriptView {
             )
             .child(
                 match event.kind {
-                    Kind::Compacted => AppIcon::Compaction,
+                    Kind::Compacted | Kind::Handoff => AppIcon::Compaction,
                     Kind::Reset => AppIcon::Reset,
                 }
                 .inline()
@@ -146,6 +146,7 @@ impl TranscriptView {
                     if open { "Collapse" } else { "Expand" },
                     match event.kind {
                         Kind::Compacted => "compaction summary",
+                        Kind::Handoff => "context handoff",
                         Kind::Reset => "reset handoff",
                     }
                 ))
@@ -192,7 +193,7 @@ impl TranscriptView {
         let copy = event.text.clone().map(|text| {
             let label = match event.kind {
                 Kind::Compacted => "Copy summary",
-                Kind::Reset => "Copy handoff",
+                Kind::Reset | Kind::Handoff => "Copy handoff",
             };
             Button::new(("compaction-copy", id))
                 .ghost()

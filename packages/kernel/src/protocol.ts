@@ -126,6 +126,8 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	/** Experimental automatic context handoff, disabled unless explicitly enabled. */
+	autoHandoff?: boolean;
 	/** Local accounting epoch, never telemetry or provider options. */
 	usageHistory?: import("./usage-capture.ts").UsageCaptureEpoch;
 	usageMission?: NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
@@ -190,6 +192,7 @@ export interface KernelTelemetryConfiguration {
 
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
+	| { type: "autoHandoff.configure"; enabled: boolean }
 	| {
 			type: "input";
 			requestId: string;

@@ -1,29 +1,38 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
-mod image_clipboard;
-mod image_attachments;
 #[cfg(target_os = "macos")]
 pub mod app_menu;
 pub mod bundled_runtime;
 pub mod diagnostics;
+mod diagnostics_view;
+mod image_attachments;
+mod image_clipboard;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod running_identity;
-mod diagnostics_view;
 #[cfg(feature = "native-probes")]
 pub use diagnostics_view::probe::run_diagnostics_probe;
 mod bundled_runtime_view;
-pub mod desktop_entry;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-mod updates_view;
-mod update_hold;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+mod daemon_upgrade_probe;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod daemon_upgrade_view;
-#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
-mod daemon_upgrade_probe;
-#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
-pub use daemon_upgrade_probe::run_daemon_upgrade_probe;
-#[cfg(all(feature = "native-probes", any(target_os = "macos", target_os = "linux")))]
-pub use local_view::daemon_upgrade_lifecycle_probe::run_daemon_upgrade_lifecycle_probe;
+pub mod desktop_entry;
+mod update_hold;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod updates_view;
 pub use bundled_runtime_view::BundledRuntimeView;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub use daemon_upgrade_probe::run_daemon_upgrade_probe;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub use local_view::daemon_upgrade_lifecycle_probe::run_daemon_upgrade_lifecycle_probe;
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_actions;
@@ -51,16 +60,16 @@ mod session_subagents;
 mod session_subagents_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_subagents_probe::run_session_subagents_probe;
-mod session_jobs_log;
 #[cfg(any(test, feature = "native-probes"))]
 mod session_jobs_fixture;
+mod session_jobs_log;
 mod session_todos;
 mod session_todos_view;
 mod subscription_pause;
 #[cfg(feature = "native-probes")]
-pub use local_view::session_todos_probe::run_session_todos_probe;
-#[cfg(feature = "native-probes")]
 pub use local_view::session_jobs_probe::run_session_jobs_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::session_todos_probe::run_session_todos_probe;
 #[cfg(feature = "native-probes")]
 pub use provider_usage_probe::run_provider_usage_probe;
 mod chat_links;
@@ -96,9 +105,9 @@ mod project_settings_fixture;
 mod project_settings_transport;
 mod project_settings_view;
 #[cfg(feature = "native-probes")]
-pub use local_view::project_settings_probe::run_project_settings_probe;
-#[cfg(feature = "native-probes")]
 pub use local_view::chat_rename_probe::run_chat_rename_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::project_settings_probe::run_project_settings_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_actions_fixture;
 #[cfg(any(test, feature = "native-probes"))]
@@ -163,9 +172,9 @@ mod mission_browser;
 mod mission_comments;
 mod mission_decisions;
 #[cfg(feature = "native-probes")]
-pub use mission_browser_view::mission_decisions_view::probe::run_mission_decisions_probe;
-#[cfg(feature = "native-probes")]
 pub use mission_browser_view::mission_comments_view::probe::run_mission_comments_probe;
+#[cfg(feature = "native-probes")]
+pub use mission_browser_view::mission_decisions_view::probe::run_mission_decisions_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_browser_fixture;
 mod mission_browser_view;
@@ -210,6 +219,8 @@ pub use mission_task_create_probe::run_mission_task_create_probe;
 pub use mission_tasks_probe::run_mission_tasks_probe;
 #[cfg(feature = "native-probes")]
 pub use task_status_probe::run_task_status_probe;
+mod compaction_event;
+mod github_event;
 mod mission_transport;
 mod mission_view;
 mod model;
@@ -220,16 +231,18 @@ mod project_registration;
 mod project_registration_fixture;
 mod question;
 mod question_entry;
-mod compaction_event;
-mod github_event;
 #[cfg(feature = "native-probes")]
-pub use transcript_view::question_entry_view::probe::run_question_entry_probe;
+pub use chat_editor::question_probe::run_question_probe;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::compaction_event_view::probe::run_compaction_event_probe;
 #[cfg(feature = "native-probes")]
 pub use transcript_view::github_event_view::probe::run_github_event_probe;
 #[cfg(feature = "native-probes")]
-pub use chat_editor::question_probe::run_question_probe;
+pub use transcript_view::question_entry_view::probe::run_question_entry_probe;
+mod chat_settings;
+#[cfg(any(test, feature = "native-probes"))]
+mod chat_settings_fixture;
+mod chat_settings_view;
 #[cfg(feature = "native-probes")]
 mod fonts_probe;
 mod scoped_models;
@@ -246,6 +259,8 @@ mod settings_worker;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_model_probe::run_chat_model_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::chat_settings_probe::run_chat_settings_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::mission_browser_probe::run_mission_browser_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::mission_inspector_probe::run_mission_inspector_probe;
@@ -259,6 +274,7 @@ pub use local_view::scoped_models_probe::run_scoped_models_probe;
 pub use local_view::settings_probe::run_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
+mod nested_scroll;
 #[cfg(test)]
 mod reader_identity_tests;
 mod tool_presentation;
@@ -274,7 +290,6 @@ mod usage_overview_fixture;
 mod usage_overview_probe;
 mod usage_overview_reader;
 mod usage_overview_view;
-mod nested_scroll;
 mod work_view;
 #[cfg(feature = "native-probes")]
 pub use catalog_probe::run_catalog_probe;
@@ -311,23 +326,23 @@ pub use local_view::navigation_probe::run_navigation_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::shell_probe::run_shell_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::side_panel_probe::run_side_panel_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::sidebar_scroll_native::run as run_native_sidebar_scroll_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::sidebar_scroll_native::run_visible as run_visible_sidebar_scroll_probe;
 #[cfg(feature = "native-probes")]
-pub use local_view::side_panel_probe::run_side_panel_probe;
+pub use local_view::sidebar_sections_probe::run_sidebar_sections_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::style_probe::run_style_probe;
 #[cfg(feature = "native-probes")]
-pub use local_view::sidebar_sections_probe::run_sidebar_sections_probe;
-#[cfg(feature = "native-probes")]
 mod scrollbar_track_probe;
-#[cfg(feature = "native-probes")]
-pub use scrollbar_track_probe::run_scrollbar_track_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::workbench_probe::run_workbench_probe;
 pub use local_view::{LocalViewer, PreviewState};
 pub use model::{fence_fixture, giant_fixture};
+#[cfg(feature = "native-probes")]
+pub use scrollbar_track_probe::run_scrollbar_track_probe;
 pub use transcript_view::TranscriptView;
 mod app_icon;
 mod app_shell;

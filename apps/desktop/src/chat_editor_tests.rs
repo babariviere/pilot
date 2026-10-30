@@ -1057,7 +1057,7 @@ fn compaction_reuses_transient_status_preserves_stop_and_question(cx: &mut TestA
             editor.set_compacting(true, cx);
         });
         window.render_frame(cx);
-        assert_eq!(view.read(cx).activity_label(), Some("Compacting context…"));
+        assert_eq!(view.read(cx).activity_label(), Some("Preparing context…"));
         assert_eq!(window.find_all("activity-indicator").len(), 1);
         assert!(
             window.find_all("local-stop").is_empty(),
