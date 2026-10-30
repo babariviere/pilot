@@ -154,6 +154,8 @@ the daemon report; check, sign-in and setup actions are not included. See the
   revisions, native unified/split diffs and retained source. New eligible mission builders save exact committed
   layers at worker checkpoints, separately from task acceptance. Opening Review never captures live work or
   submits approvals. Existing legacy work isn't enrolled or backfilled. See [native Review](docs/mission-native-review.md).
+  Pilot Next also browses existing mission/task links read-only, with guarded Open, exact Copy and task navigation,
+  without claiming PR binding or current external status. See [reported resources](apps/desktop/docs/mission-resources.md).
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Members may self-claim two additional
   tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not

@@ -290,6 +290,13 @@ read-only overview shows goal, plain-text brief, task context and existing membe
 chats. **Refresh** explicitly updates a snapshot; there is no mission polling or
 automatic mission subscription. The existing active-chat subscription is unchanged.
 
+Overview's **Links → Browse links** lists reported mission and task resources,
+with full details, exact **Copy link**, guarded HTTP/HTTPS **Open link** and
+**Show task** for an exact supplied task ID. Offline/error snapshots remain
+inspectable but cannot open targets until refreshed. These links do not verify
+PR binding, current external status or approval; create/edit/remove stays out of
+scope. [Resource contract and checks](docs/mission-resources.md).
+
 The dedicated reader uses only pinned Local hello, mission-catalog, mission-detail
 and filtered member-session GETs. Foreign homes are explanatory cached rows, not
 remote reads or Local-ID fallbacks. Only an exact available existing Local chat

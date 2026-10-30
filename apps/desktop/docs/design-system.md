@@ -373,6 +373,18 @@ adoption by itself; functional Settings is a separate implementation.
 
 ## Verification
 
+### Reported mission links
+
+Overview's Links line opens a virtualized read-only `ResourceLabel` list, then
+selectable exact URL/details with named Kit Open/Copy/Show task actions. It
+shares the existing page/heading/action/notice tokens and content column with
+mission artifacts, without mixing their readers. Metadata stays disclosed;
+reported relationships never become readiness or verified ownership. Back and
+Escape restore the mission list focus and retain Overview scroll. Offline/error
+snapshots visibly stay retained, with exact Copy but no Open/task action until
+refresh. Hidden native `mission_resources` checks 680/1100 light/dark with a
+faux read-only daemon and injected opener. See [scope](mission-resources.md).
+
 ### Chat attention hint
 
 `chat_attention_hint` uses the selected chat's fresh public attention reason,

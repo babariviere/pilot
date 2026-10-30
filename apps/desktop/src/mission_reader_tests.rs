@@ -9,6 +9,49 @@ fn client() -> reqwest::Client {
         .build()
         .unwrap()
 }
+#[tokio::test]
+async fn detail_read_rechecks_pinned_home_after_a_held_response() {
+    let s = Server::start();
+    let c = client();
+    let mut held = Reply::json(200, f::detail("mission-A"));
+    held.delay_ms = 100;
+    s.reply("/api/missions/mission-A", held);
+    let route = Route::Detail(f::key("mission-A"));
+    let (result, ()) = tokio::join!(fetch(&c, &s.options, &route), async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if s.state
+                    .lock()
+                    .unwrap()
+                    .seen
+                    .iter()
+                    .any(|(_, p)| p == "/api/missions/mission-A")
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        s.reply("/api/hello", Reply::json(200, json!({"daemonId":"replacement","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})));
+    });
+    assert!(
+        result.is_err(),
+        "an old admission cannot certify a replacement daemon's detail"
+    );
+    assert_eq!(
+        s.state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .filter(|(_, p)| p == "/api/hello")
+            .count(),
+        2
+    );
+    assert!(s.all_gets());
+}
 #[test]
 fn worker_exit_closes_coalescing_receiver_even_before_runtime_initialization() {
     let (commands, events) = async_channel::bounded(1);

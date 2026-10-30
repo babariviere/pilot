@@ -171,6 +171,9 @@ pub(crate) async fn fetch(
                 Ok(v) => model::members(&d, &v).map(Arc::new),
                 Err(e) => Err(e),
             };
+            // The mission/member reads may span a daemon replacement at the
+            // same loopback address. Never publish it under the earlier home.
+            crate::local_client::gate(client, options).await?;
             Ok(Data::Detail(d, members))
         }
     }

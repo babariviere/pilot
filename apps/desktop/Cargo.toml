@@ -18,6 +18,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "mission_resources"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "shortcuts"
 harness = false
 required-features = ["native-probes"]

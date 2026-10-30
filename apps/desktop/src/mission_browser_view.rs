@@ -14,6 +14,8 @@ mod mission_lifecycle_browser;
 mod mission_metadata_browser;
 #[path = "mission_overview_view.rs"]
 mod mission_overview_view;
+#[path = "mission_resources_view.rs"]
+pub(crate) mod mission_resources_view;
 #[path = "mission_motion.rs"]
 pub(crate) mod motion;
 #[cfg(test)]
@@ -87,6 +89,8 @@ pub(crate) struct Input {
     pub(crate) loaded: bool,
 }
 pub(crate) struct Browser {
+    resources: mission_resources_view::Resources,
+    resources_current: bool,
     artifacts: mission_artifacts_view::Artifacts,
     motion: std::cell::RefCell<motion::Motion>,
     decisions: mission_decisions_view::Disclosure,
@@ -202,6 +206,8 @@ impl Browser {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
         Self {
+            resources: Default::default(),
+            resources_current: false,
             artifacts: Default::default(),
             motion: Default::default(),
             decisions: Default::default(),
@@ -244,6 +250,8 @@ impl Browser {
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
+        self.resources = Default::default();
+        self.resources_current = false;
         self.artifacts = Default::default();
         self.tasks_detail = None;
         self.tasks_read_generation = None;
@@ -556,6 +564,7 @@ impl Browser {
             || self.online != online
             || self.loaded != loaded;
         if self.online != online || self.loaded != loaded {
+            self.resources_current = false;
             if self.artifacts.reading {
                 self.artifact_back(w, cx);
             }
@@ -590,6 +599,7 @@ impl Browser {
             }
         }
         if self.route != route {
+            self.close_mission_resources(w, cx);
             self.close_mission_artifacts(w, cx);
             if self.decisions.opened && self.focus.contains_focused(w, cx) {
                 self.focus.focus(w, cx);
@@ -780,6 +790,9 @@ impl Browser {
                 self.resolve_jump(cx);
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
+                self.resources_current = self.online
+                    && self.loaded
+                    && self.tasks_read_generation == Some(response.generation);
                 self.tasks_detail = d.task_snapshot.clone().filter(|_| {
                     self.online
                         && self.loaded
@@ -797,6 +810,8 @@ impl Browser {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.close_mission_resources(w, cx);
+        self.resources_current = false;
         self.close_mission_artifacts(w, cx);
         self.tasks_detail = None;
         self.tasks_read_generation = None;
@@ -1139,7 +1154,8 @@ impl Render for Browser {
             && !open
             && !self.activity_open
             && !self.comments.open
-            && !self.artifacts.open;
+            && !self.artifacts.open
+            && !self.resources.open;
         let ids: Vec<_> = self
             .detail
             .as_ref()
@@ -1175,6 +1191,9 @@ impl Render for Browser {
 }
 impl Browser {
     fn render_page(&mut self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        if self.resources.open {
+            return self.mission_resources_page(cx);
+        }
         if self.artifacts.open {
             return self.mission_artifacts_page(cx);
         }
@@ -1502,6 +1521,7 @@ impl Browser {
                 .child(self.decisions_view(cx))
                 .children(self.needs_you_view(d, cx))
                 .children(self.working_view(&d.summary, cx))
+                .child(self.mission_resources_line(d, cx))
                 .child(self.mission_artifacts_line(d, cx));
             content = content.child(ui::heading(
                 "mission-chats-heading",
