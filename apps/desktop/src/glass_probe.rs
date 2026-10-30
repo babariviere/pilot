@@ -82,7 +82,12 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
     if let Some(d) = &captures {
         std::fs::create_dir_all(d).unwrap();
     }
-    let glass = cx.update(|cx| crate::appearance::glass(cx));
+    let glass = cx.update(|cx| {
+        if std::env::var_os("PILOT_NEXT_GLASS_SIMULATE").is_some() {
+            crate::appearance::simulate_glass_for_probe(cx);
+        }
+        crate::appearance::glass(cx)
+    });
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));
@@ -232,7 +237,7 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
             }
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"glass":glass,"opaque_editor":true,"entrance_rise":f32::from(before - after)})
+                json!({"width":width,"mode":mode.name(),"glass":glass,"sidebar_pixel":empty,"opaque_editor":true,"entrance_rise":f32::from(before - after)})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

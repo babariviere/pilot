@@ -132,6 +132,11 @@ fn set_glass(supported: bool, cx: &mut App) -> gpui_kit::WindowBackgroundAppeara
     }
 }
 
+#[cfg(feature = "native-probes")]
+pub(crate) fn simulate_glass_for_probe(cx: &mut App) {
+    set_glass(true, cx);
+}
+
 fn blur_window(window: &mut Window, cx: &mut App) {
     let background = set_glass(window.supports_background_blur(), cx);
     // Never replace a live native material with plain transparency on a private
@@ -267,7 +272,7 @@ fn config(dark: bool, fonts: bool, glass: bool) -> Rc<ThemeConfig> {
     let s = |value: &'static str| Some(SharedString::from(value));
     // Frost: a milky wash over the heavy blur. The page stays mostly solid for reading and
     // the sidebar lets more of the diffused desktop glow through. Opaque without glass.
-    let (page_alpha, sidebar_alpha) = if dark { ("d1", "a3") } else { ("c7", "94") };
+    let (page_alpha, sidebar_alpha) = if dark { ("d9", "ab") } else { ("cf", "9c") };
     let glassy = |hex: &str, alpha: &str| {
         Some(SharedString::from(if glass {
             format!("{hex}{alpha}")
