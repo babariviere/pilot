@@ -42,6 +42,58 @@ curl -s http://127.0.0.1:4319/api/diagnostics/performance | jq '.stalls, .operat
 
 Nothing is written to disk or sent anywhere beyond the existing log line.
 
+## CPU-bound context publication (2026-10-30)
+
+A bounded, identity-pinned read of one running 1.98.0 daemon at 274 seconds uptime reported eight
+stalls: six CPU-busy and two waiting, totaling 18,859 ms of delay. Only one slow section was labeled
+(`missions.sqlite transaction`, 1,410 ms wall / 1,404 ms main-thread CPU). This does **not** attribute
+the unlabeled stalls to SQLite, context publication or any overlapping request. The earlier observation
+of 24 CPU-busy stalls totaling 51,687 ms likewise lacked sufficient attribution.
+
+Source inspection and an isolated in-memory workload reproduced a separate concrete bottleneck:
+every mission change, even a log-only change, rebuilt the complete mission detail once per member
+before checking whether that member's prompt context changed. This repeatedly materialized unrelated
+task bodies, comments, phases and artifact links. `memberContext()` now reads only the member's
+unfinished task metadata, decisions and Linear links. The existing audience, pin, role, phase and
+ticket selection remains authoritative. Each call reads current state, without a cross-change cache;
+synchronous listener changes, publication order, deduplication and passive lifecycle flags are preserved.
+No writes, durability waits, acknowledgements or action admission were changed.
+
+The existing bounded slow-section recorder now times the full synchronous fan-out under the fixed
+`missions.context.publish` label, including listener work. It records only elapsed/main-thread CPU
+numbers using the existing 100 ms threshold, 16 recent sections and 64 aggregate kinds. Nested labels
+can overlap and must not be added together. This is not worker CPU, provider latency or native GUI timing.
+
+Reproduce with one process at a time, without a real profile, provider or disk-load generator:
+
+```sh
+node packages/daemon/src/mission-context.bench.ts
+node --test --test-force-exit --test-concurrency=1 packages/daemon/src/mission-context.test.ts \
+  packages/daemon/src/mission-context.stress.test.ts
+```
+
+The benchmark alternates the previous full-detail reads and the narrow projection on the **same**
+fixture: 480 tasks with 1.92 MB of bodies, 400 members, 60 decisions and 400 artifact links. It discards
+one warmup pair and reports five pairs, checking identical published context content and order.
+One macOS arm64 / Node 24.21.0 run measured these medians per log-only change:
+
+| Projection | Wall | Main-thread CPU |
+| --- | ---: | ---: |
+| Previous full detail per member | 934.82 ms | 929.43 ms |
+| Narrow context inputs | 117.59 ms | 117.28 ms |
+
+In the matching two-write burst regression, substituting the previous reads failed the CPU budget:
+2,063.90 ms main-thread CPU, 2,087.18 ms heartbeat gap, 2,088.21 ms unrelated local HTTP latency,
+one CPU-busy stall. Current reads used 253.99 ms CPU, 257.83 ms heartbeat gap and 261.65 ms HTTP,
+with zero CPU-busy stalls. The heartbeat actually ran; waiting/sleep are reported separately. Structural
+tests also reject full-detail reads and compare exact contexts across ownership, pin, phase and
+coordinator changes. Existing mission durability, lifecycle, planning and service tests remain green.
+
+These measurements prove this synthetic CPU path improved, not that all observed live stalls are fixed.
+The running daemon/app were not installed, restarted, profiled, loaded or mutated by the investigation.
+The current GUI is Rust/GPUI in `apps/desktop`; historical Swift observations below are not current
+native performance evidence. Remaining unlabeled live CPU work still has unknown attribution.
+
 ## Mission store
 
 The mission store (`missions.sqlite`) was the one database pilotd used on its event loop. Every read and commit ran
@@ -129,4 +181,3 @@ kernels. From 2026-10-08 to 2026-10-15:
   can confirm the daemon's share.
 
 No report pointed at a runaway kernel. The heavy ones were test runs and benchmarks inside agent sessions.
-

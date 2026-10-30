@@ -21,6 +21,7 @@ import type {
 } from "@pilot/protocol";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { operations } from "./event-loop-watchdog.ts";
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
 import {
 	type DeliveryObservation,
@@ -355,18 +356,20 @@ export class MissionService {
 		});
 		store.onChange((missionId, passive, preferenceOnly) => {
 			if (preferenceOnly) return;
-			if (!store.get(missionId)) return;
-			if (!passive) {
-				sessions.refreshMissionPullRequests();
-				sessions.requestMainRefresh(store.require(missionId).projectId);
-			}
-			for (const sessionId of store.members(missionId)) {
-				const context = this.context(sessionId);
-				const key = JSON.stringify(context ?? null);
-				if (this.contexts.get(sessionId) === key) continue;
-				this.contexts.set(sessionId, key);
-				sessions.missionChanged(sessionId, context, passive);
-			}
+			operations.time("missions.context.publish", () => {
+				if (!store.get(missionId)) return;
+				if (!passive) {
+					sessions.refreshMissionPullRequests();
+					sessions.requestMainRefresh(store.require(missionId).projectId);
+				}
+				for (const sessionId of store.members(missionId)) {
+					const context = this.context(sessionId);
+					const key = JSON.stringify(context ?? null);
+					if (this.contexts.get(sessionId) === key) continue;
+					this.contexts.set(sessionId, key);
+					sessions.missionChanged(sessionId, context, passive);
+				}
+			});
 		});
 	}
 
@@ -744,10 +747,9 @@ export class MissionService {
 
 	context(sessionId: string): MissionContext | undefined {
 		if (this.sharing?.membership(sessionId)) return this.sharing.context(sessionId);
-		const missionId = this.store.missionOf(sessionId);
-		const mission = missionId ? this.store.get(missionId) : undefined;
-		if (!mission) return undefined;
-		const detail = this.store.detail(mission.id, false);
+		const detail = this.store.memberContext(sessionId);
+		if (!detail) return undefined;
+		const { mission } = detail;
 		const pins = new Set(
 			detail.tasks
 				.filter((task) => task.sessionId === sessionId && isOpen(task))

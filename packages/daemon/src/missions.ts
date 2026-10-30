@@ -2233,6 +2233,33 @@ export class MissionStore {
 		};
 	}
 
+	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
+	memberContext(sessionId: string) {
+		const id = this.missionOf(sessionId);
+		const mission = id ? this.get(id) : undefined;
+		if (!mission) return undefined;
+		return {
+			mission,
+			tasks: this.phaseView(
+				mission.id,
+				this.all(
+					`SELECT id, number, title, status, sort, assignment, decision_ids, phase_id,
+						session_id, created_at, updated_at FROM tasks
+					WHERE mission_id = ? AND session_id = ? AND status NOT IN ('done', 'dropped') ORDER BY sort, number`,
+					mission.id,
+					sessionId,
+				).map(taskFrom),
+			),
+			decisions: this.all("SELECT * FROM decisions WHERE mission_id = ? ORDER BY number", mission.id).map(
+				decisionFrom,
+			),
+			resources: this.all(
+				"SELECT * FROM resources WHERE mission_id = ? AND kind = 'linear.issue' ORDER BY created_at, id",
+				mission.id,
+			).map(resourceFrom),
+		};
+	}
+
 	create(
 		input: {
 			projectId: string;
