@@ -367,8 +367,8 @@ pub(crate) struct Presentation {
     pub(crate) omitted: usize,
     pub(crate) loaded: bool,
     pub(crate) list_loaded: bool,
-    /// Attention may use summaries only after this control connection's list.
-    /// Retained rows and their existing loading/action semantics stay unchanged.
+    /// Summaries confer authority only after this connection's valid full list.
+    /// Retained rows remain readable, but neither hello nor deltas refresh them.
     pub(crate) summary_fresh: bool,
     pub(crate) page_revision: u64,
     /// Invalidates multi-page reader restoration on stream/snapshot replacement.
@@ -386,7 +386,8 @@ impl Presentation {
     /// The same freshness gate serves reply admission and question attention.
     /// Display priority must never change the summary's working/run semantics.
     pub(crate) fn question_fresh(&self, selected: Option<&str>, generation: u64) -> bool {
-        self.generation == generation
+        self.summary_fresh
+            && self.generation == generation
             && self.loaded
             && !self.chat_issue
             && selected.is_some_and(|id| {
@@ -965,6 +966,35 @@ fn socket_task(
 
 const DEPARTED_SETTLE: Duration = Duration::from_millis(250);
 
+/// Validate only the supported list boundary. Individual summaries deliberately
+/// tolerate unknown/optional fields, archived rows and legacy states.
+struct SessionList {
+    chats: Vec<Chat>,
+    metadata: Arc<crate::mission_inspector::Metadata>,
+}
+
+impl SessionList {
+    fn read(wire: &Value) -> Result<Self, &'static str> {
+        let rows = wire["sessions"]
+            .as_array()
+            .ok_or("Local chat list unavailable (1). Reconnect to retry.")?;
+        let mut ids = std::collections::HashSet::with_capacity(rows.len());
+        let mut chats = Vec::with_capacity(rows.len());
+        for row in rows {
+            let chat = local_model::chat(row)
+                .ok_or("Local chat list unavailable (2). Reconnect to retry.")?;
+            if !ids.insert(row["id"].as_str().expect("chat validates ID")) {
+                return Err("Local chat list unavailable (3). Reconnect to retry.");
+            }
+            chats.push(chat);
+        }
+        crate::chat_order::sort(&mut chats);
+        let mut metadata = Arc::default();
+        crate::mission_inspector::Metadata::accept(&mut metadata, wire);
+        Ok(Self { chats, metadata })
+    }
+}
+
 fn publish(
     updates: &async_channel::Sender<Presentation>,
     replace: &async_channel::Receiver<Presentation>,
@@ -1006,6 +1036,8 @@ async fn run(
     let mut snapshot_revision = 0_u64;
     let mut awaiting_snapshot = false;
     let mut selected: Option<String> = None;
+    // A transport hello/delta cannot clear a rejected full-list error.
+    let mut list_error: Option<&'static str> = None;
     let mut model = LiveTranscript::default();
     let mut view = Presentation {
         status: "Connecting to Local…".into(),
@@ -1057,6 +1089,7 @@ async fn run(
                 Ok(Command::Reconnect) => {
                     snapshot_revision += 1;
                     view.summary_fresh=false;
+                    view.status=list_error.unwrap_or("Reconnecting to Local…").into();
                     model.thinking=false; model.stale(); awaiting_snapshot=true;
                     set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
@@ -1094,12 +1127,15 @@ async fn run(
                         if view.chat_issue{snapshot_revision+=1; if let Some(task)=page_task.take(){task.abort();} view.page_busy=false; view.page_revision+=1; view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
                     else {
                         if text != "Connected · Local" { view.summary_fresh=false; set_daemon(ConnectedDaemon::NotConnected); }
-                        view.status = text.into();
+                        view.status = if text == "Connected · Local" && !view.summary_fresh {
+                            list_error.unwrap_or("Loading Local chats…").into()
+                        } else { text.into() };
                     }
                 }
                 Ok((_, Incoming::Daemon(version))) => {
                     view.control_connection_generation += 1;
                     view.summary_fresh=false;
+                    view.status=list_error.unwrap_or("Loading Local chats…").into();
                     set_daemon(ConnectedDaemon::Connected(version));
                 },
                 Ok((_, Incoming::Page { generation,before,revision,result })) => {
@@ -1112,6 +1148,7 @@ async fn run(
                     }
                 }
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
+                    if fenced { continue; }
                     if is_chat {
                         if generation != view.generation || value["sessionId"].as_str()!=selected.as_deref() { continue; }
                         if value["type"] == "chat.stream" {awaiting_snapshot = value["resumed"] != true; snapshot_revision += 1; if let Some(task) = page_task.take() { task.abort(); } view.page_busy=false; view.page_error=false; view.page_revision+=1; view.todos.stream();model.compaction_stream(value["resumed"] == true);}
@@ -1137,12 +1174,21 @@ async fn run(
                             Err(error)=>view.projects_error=Some(error),
                         }
                     } else if value["type"] == "sessions" {
-                        crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
-                        view.list_loaded=true;
-                        view.summary_fresh=true;
-                        let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).collect::<Vec<_>>()).unwrap_or_default();
-                        crate::chat_order::sort(&mut chats);
-                        view.chats = Arc::new(chats);
+                        match SessionList::read(&value) {
+                            Ok(candidate)=>{
+                                view.chats=Arc::new(candidate.chats);
+                                view.mission_metadata=candidate.metadata;
+                                view.list_loaded=true;
+                                view.summary_fresh=true;
+                                list_error=None;
+                                view.status="Connected · Local".into();
+                            },
+                            Err(error)=>{
+                                view.summary_fresh=false;
+                                list_error=Some(error);
+                                view.status=error.into();
+                            },
+                        }
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         crate::chat_order::upsert(Arc::make_mut(&mut view.chats), chat);
@@ -1290,6 +1336,7 @@ mod tests {
         let mut raw = Presentation {
             chats: Arc::new(vec![local_model::chat(&json!({"id":"a","state":"working","working":true,"outcome":"question","outcomeReason":"Old question"})).unwrap()]),
             loaded: true,
+            summary_fresh: true,
             generation: 5,
             question: model.question(),
             question_awaited: model.question_awaited(),
@@ -1326,12 +1373,13 @@ mod tests {
             &raw.chats,
             &raw.for_display(Some("other")).chats
         ));
-        for case in 0..4 {
+        for case in 0..5 {
             let mut stale = raw.clone();
             match case {
                 0 => stale.loaded = false,
                 1 => stale.chat_issue = true,
                 2 => stale.question_awaited = false,
+                3 => stale.summary_fresh = false,
                 _ => stale.question = Projection::Unavailable,
             }
             assert!(Arc::ptr_eq(&raw.chats, &stale.for_display(Some("a")).chats));

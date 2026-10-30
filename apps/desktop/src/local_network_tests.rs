@@ -1,4 +1,6 @@
 //! Synthetic loopback daemon. No production data, credentials or service lifecycle.
+#[path = "session_list_reader_tests.rs"]
+mod session_lists;
 use super::*;
 use futures_util::SinkExt;
 use serde_json::json;
@@ -34,6 +36,8 @@ enum Scenario {
     ListAdmission,
     ListSnapshot,
     AttentionFreshness,
+    SessionList,
+    SessionListLineage,
     MissionTitles,
     LargeFrame,
     LargeFragmentedMessage,
@@ -133,6 +137,7 @@ struct Mock {
     task: JoinHandle<()>,
     step: async_channel::Sender<()>,
     page_step: async_channel::Sender<()>,
+    list_frames: async_channel::Sender<Value>,
 }
 impl Drop for Mock {
     fn drop(&mut self) {
@@ -160,6 +165,7 @@ impl Mock {
         let hellos = Arc::new(AtomicUsize::new(0));
         let (step, steps) = async_channel::bounded::<()>(2);
         let (page_step, page_steps) = async_channel::bounded::<()>(2);
+        let (list_frames, list_values) = async_channel::bounded::<Value>(2);
         let task = tokio::spawn(async move {
             let mut handlers = tokio::task::JoinSet::new();
             loop {
@@ -170,6 +176,7 @@ impl Mock {
                         let hellos=hellos.clone();
                         let steps=steps.clone();
                         let page_steps=page_steps.clone();
+                        let list_values=list_values.clone();
                         handlers.spawn(async move {
                             let mut reader=BufReader::new(stream);
                             let mut headers=String::new();
@@ -191,6 +198,9 @@ impl Mock {
                                     stream.write_all(b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap(); return;
                                 }
                                 let mut body=json!({"daemonId":if matches!(scenario,Scenario::BadIdentity) {"wrong"}else{"synthetic-daemon"},"lineageId":"synthetic-lineage","protocolVersion":1,"minimumClientProtocolVersion":if matches!(scenario,Scenario::Incompatible) {2}else{1},"capabilities":{"independentExecution":true}});
+                                if matches!(scenario,Scenario::SessionListLineage) && hellos.fetch_add(1,Ordering::SeqCst)>0 {
+                                    body["lineageId"]=json!("changed-lineage");
+                                }
                                 if matches!(scenario,Scenario::DaemonVersion) {
                                     body["daemonVersion"]=json!(if hellos.fetch_add(1,Ordering::SeqCst)==0 {"1.91.0"} else {"1.92.0"});
                                 }
@@ -226,6 +236,20 @@ impl Mock {
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
+                                if matches!(scenario, Scenario::SessionList | Scenario::SessionListLineage) {
+                                    loop {
+                                        tokio::select! {
+                                            biased;
+                                            frame=socket.next()=>{
+                                                if !matches!(frame,Some(Ok(Frame::Ping(_) | Frame::Pong(_)))) {return;}
+                                            }
+                                            value=list_values.recv()=>{
+                                                let Ok(value)=value else {return;};
+                                                if socket.send(Frame::Text(value.to_string().into())).await.is_err(){return;}
+                                            }
+                                        }
+                                    }
+                                }
                                 if matches!(scenario, Scenario::ProviderUsageReconnect) {
                                     provider_usage_reader_tests::serve(&mut socket, &steps, attempts.fetch_add(1, Ordering::SeqCst)).await;
                                     return;
@@ -383,6 +407,7 @@ impl Mock {
             task,
             step,
             page_step,
+            list_frames,
         }
     }
 }
@@ -902,7 +927,7 @@ async fn websocket_fragmented_message_above_eight_mib_preserves_source_and_conti
 async fn attention_waits_for_new_control_snapshot_after_reconnect() {
     let mock = Mock::start(Scenario::AttentionFreshness).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
-    let admitted = until(&rx, |v| v.status == "Connected · Local").await;
+    let admitted = until(&rx, |v| v.status == "Loading Local chats…").await;
     assert!(
         !admitted.summary_fresh,
         "Hello is not fresh reason evidence"
