@@ -312,6 +312,7 @@ mod usage_overview_fixture;
 #[cfg(feature = "native-probes")]
 mod usage_overview_probe;
 mod usage_overview_reader;
+mod usage_overview_records;
 mod usage_overview_view;
 mod work_view;
 #[cfg(feature = "native-probes")]

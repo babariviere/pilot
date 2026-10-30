@@ -44,6 +44,31 @@ fn reveal(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, id: &'stati
     .unwrap();
     settle(cx, h);
 }
+fn records_until(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, v: &Entity<Usage>) {
+    let end = Instant::now() + Duration::from_secs(8);
+    while cx.update(|cx| v.read(cx).records.busy) {
+        assert!(Instant::now() < end, "bounded records read");
+        settle(cx, h);
+        std::thread::yield_now();
+    }
+    settle(cx, h);
+}
+fn keyboard(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, id: &str) {
+    for _ in 0..70 {
+        let focused = cx
+            .update_window(h, |_, w, _| w.find(id.to_owned()).focused() == Some(true))
+            .unwrap();
+        if focused {
+            cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                .unwrap();
+            settle(cx, h);
+            return;
+        }
+        cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+        settle(cx, h);
+    }
+    panic!("keyboard reaches {id}");
+}
 pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
@@ -158,6 +183,162 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("usage-{width}-{mode:?}.png")))
                     .unwrap();
             }
+            // Retained records use the production reader, real keyboard actions
+            // and clipboard. No page is requested until explicit disclosure.
+            assert!(
+                !s.state
+                    .lock()
+                    .unwrap()
+                    .seen
+                    .iter()
+                    .any(|(_, p)| p.starts_with("/api/usage-history/page"))
+            );
+            let first_request = f::records_request(range);
+            let first_page = f::records(range, 0, 25, true);
+            let first_path = f::records_path(&s.options, &first_request);
+            let mut delayed = f::Reply::json(200, first_page.clone());
+            delayed.delay_ms = 240;
+            s.reply(&first_path, delayed);
+            reveal(cx, h, "usage-records-toggle");
+            cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.focus(w, cx)))
+                .unwrap();
+            keyboard(cx, h, "usage-records-toggle");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("usage-records-loading").is_some())
+            })
+            .unwrap();
+            records_until(cx, h, &v);
+            reveal(cx, h, "usage-records");
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(
+                        std::path::PathBuf::from(dir)
+                            .join(format!("usage-record-page-{width}-{mode:?}.png")),
+                    )
+                    .unwrap();
+            }
+            let row_id = cx.update(|cx| v.read(cx).records.page.as_ref().unwrap().rows[0].id());
+            let details_id = format!("usage-record-details-{row_id}");
+            keyboard(cx, h, &details_id);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("usage-record-detail").is_some());
+                let b = w.find("usage-record-detail").bounds();
+                assert!(b.left() >= px(0.) && b.right() <= px(width));
+            })
+            .unwrap();
+            keyboard(cx, h, "usage-record-copy");
+            cx.update(|cx| {
+                let view = v.read(cx);
+                assert_eq!(
+                    view.state.snapshot.as_ref().unwrap().summary.total.records,
+                    2,
+                    "authoritative total never rebuilt from 25 displayed rows"
+                );
+                let exact = view.records.page.as_ref().unwrap().rows[0].json();
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), exact);
+            });
+            reveal(cx, h, "usage-record-detail");
+            cx.update_window(h, |_, w, cx| {
+                let b = w.find("usage-record-data").bounds();
+                let a = point(b.left() + px(1.), b.top() + px(7.));
+                w.drag(a, a + point(px(140.), px(0.)), cx);
+                let selected = gpui_kit::base::TextSelection::selected_text(w, cx);
+                assert!(!selected.trim().is_empty());
+                assert!(
+                    v.read(cx).records.page.as_ref().unwrap().rows[0]
+                        .json()
+                        .contains(selected.trim())
+                );
+                w.press("secondary-c", cx);
+                assert!(!cx.read_from_clipboard().unwrap().text().unwrap().is_empty());
+            })
+            .unwrap();
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(
+                        std::path::PathBuf::from(dir)
+                            .join(format!("usage-records-{width}-{mode:?}.png")),
+                    )
+                    .unwrap();
+            }
+            let mut next_request = first_request.clone();
+            cx.update(|cx| {
+                let page = v.read(cx).records.page.as_ref().unwrap();
+                next_request.after = page.next.clone();
+                next_request.boundary = page.rows.last().map(|r| r.key.clone());
+            });
+            let next_path = f::records_path(&s.options, &next_request);
+            s.reply(&next_path, f::Reply::json(503, serde_json::json!({})));
+            reveal(cx, h, "usage-records-next");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-next", cx))
+                .unwrap();
+            records_until(cx, h, &v);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("usage-records-error").is_some());
+                assert_eq!(v.read(cx).records.page.as_ref().unwrap().rows.len(), 25);
+            })
+            .unwrap();
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_USAGE_DIR") {
+                reveal(cx, h, "usage-records-error");
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(
+                        std::path::PathBuf::from(dir)
+                            .join(format!("usage-record-error-{width}-{mode:?}.png")),
+                    )
+                    .unwrap();
+            }
+            s.reply(
+                &next_path,
+                f::Reply::json(200, f::records(range, 25, 1, false)),
+            );
+            reveal(cx, h, "usage-records-next");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-next", cx))
+                .unwrap();
+            records_until(cx, h, &v);
+            cx.update(|cx| {
+                let page = v.read(cx).records.page.as_ref().unwrap();
+                assert_eq!(page.rows.len(), 1);
+                assert!(page.next.is_none());
+                assert!(page.rows[0].counts().contains("Unknown"));
+            });
+            let unknown_id = cx.update(|cx| {
+                format!(
+                    "usage-record-details-{}",
+                    v.read(cx).records.page.as_ref().unwrap().rows[0].id()
+                )
+            });
+            cx.update_window(h, |_, w, cx| w.click(unknown_id, cx))
+                .unwrap();
+            settle(cx, h);
+            keyboard(cx, h, "usage-record-copy");
+            cx.update(|cx| {
+                assert!(
+                    cx.read_from_clipboard()
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .contains("request-0025")
+                )
+            });
+            // Cursor refusal may mean erased history; clear everything rather
+            // than retain a pre-erasure summary, then require explicit refresh.
+            s.reply(&first_path, f::Reply::json(400, serde_json::json!({})));
+            reveal(cx, h, "usage-records-first");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-first", cx))
+                .unwrap();
+            records_until(cx, h, &v);
+            cx.update(|cx| {
+                assert!(v.read(cx).state.snapshot.is_none());
+                assert!(v.read(cx).records.page.is_none());
+            });
+            cx.update_window(h, |_, w, _| assert!(w.try_find("usage-error").is_some()))
+                .unwrap();
+            cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.request(range, w, cx)))
+                .unwrap();
+            until(cx, h, &v);
             // The real Kit selector, keyboard navigation, cancelled Unicode
             // search and focus restoration. No query changes before Confirm.
             let project = Filter::Project(f::PROJECT.into());
@@ -244,8 +425,18 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 &f::path(&s.options, range, false),
                 f::Reply::json(200, f::report(range, false)),
             );
-            // Escape restores trigger focus. Reopen and navigate to the project.
-            cx.update_window(h, |_, w, cx| w.press("space", cx))
+            // Escape restored trigger focus above. A delayed record page must
+            // not survive an actual keyboard project selection.
+            let mut pending_records = f::Reply::json(200, f::records(range, 0, 1, false));
+            pending_records.delay_ms = 600;
+            s.reply(&first_path, pending_records);
+            reveal(cx, h, "usage-records-toggle");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-toggle", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| v.read(cx).records.busy));
+            reveal(cx, h, "usage-title");
+            cx.update_window(h, |_, w, cx| w.click("usage-project-filter", cx))
                 .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| w.press("down", cx)).unwrap();
@@ -257,6 +448,8 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| {
                 assert_eq!(v.read(cx).state.filter, project);
                 assert_eq!(v.read(cx).state.snapshot.as_ref().unwrap().range, range);
+                assert!(!v.read(cx).records.open);
+                assert!(v.read(cx).records.page.is_none());
             });
             cx.update_window(h, |_, w, _| assert!(w.try_find("usage-empty").is_some()))
                 .unwrap();
@@ -356,6 +549,17 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 }
             }
             // Real range control cancels/replaces reads and clears old-range values.
+            let current = cx.update(|cx| v.read(cx).state.range.unwrap());
+            let pending_records = f::records_request(current);
+            let mut pending_page = f::Reply::json(200, f::records(current, 0, 1, false));
+            pending_page.delay_ms = 600;
+            s.reply(&f::records_path(&s.options, &pending_records), pending_page);
+            reveal(cx, h, "usage-records-toggle");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-toggle", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| v.read(cx).records.busy));
+            reveal(cx, h, "usage-title");
             cx.update_window(h, |_, w, cx| w.click("usage-range-30", cx))
                 .unwrap();
             settle(cx, h);
@@ -366,6 +570,8 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 let r = state.range.unwrap();
                 assert!(r.to - r.from > 29 * DAY && r.to - r.from <= 30 * DAY);
                 assert!(state.error.is_some());
+                assert!(v.read(cx).records.page.is_none());
+                assert!(!v.read(cx).records.open);
             });
             // Explicit retry installs a known faux response. Empty is not unknown=0.
             let empty = Range::preset(30, range.to - 1).unwrap();
@@ -387,6 +593,19 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| assert!(w.try_find("usage-empty").is_some()))
                 .unwrap();
             // Failed same-range refresh retains its dated summary, visibly stale.
+            let records_request = f::records_request(empty);
+            s.reply(
+                &f::records_path(&s.options, &records_request),
+                f::Reply::json(200, f::records(empty, 0, 0, false)),
+            );
+            reveal(cx, h, "usage-records-toggle");
+            cx.update_window(h, |_, w, cx| w.click("usage-records-toggle", cx))
+                .unwrap();
+            records_until(cx, h, &v);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("usage-records-empty").is_some())
+            })
+            .unwrap();
             s.reply(
                 &f::path(&s.options, empty, false),
                 f::Reply::json(503, serde_json::json!({})),

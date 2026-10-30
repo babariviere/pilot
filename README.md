@@ -1409,7 +1409,9 @@ or application. Capture and dashboard projections remain partial; neither establ
 or waives the dashboard performance/release gates. Pilot Next’s passive
 [Local Usage overview](apps/desktop/docs/usage-overview.md) filters historical totals
 and daily trends by exact ledger project or Unattributed records, with a bounded
-project list. Subscription limits remain global and independent of those filters.
+project list. On-demand retained request pages expose exact selectable/copyable
+records without deriving totals from pages. Subscription limits remain global
+and independent of those filters.
 [Native and devbox setup diagnostics](docs/native-diagnostics.md) use Apple's delayed MetricKit delivery for crash
 and hang observations and a closed app-owned timeline for setup stages through verified remote handshake. They
 retain only bounded content-free metadata locally. Pilot does not ingest stacks or report bodies into those

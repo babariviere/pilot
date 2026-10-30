@@ -118,3 +118,40 @@ pub(crate) fn install_filter(s: &Server, range: Range, filter: &Filter) {
         Reply::json(200, projects(range)),
     );
 }
+pub(crate) fn records_request(range: Range) -> crate::usage_overview_records::Request {
+    crate::usage_overview_records::Request {
+        serial: 1,
+        range,
+        filter: Filter::All,
+        generation: "synthetic-generation".into(),
+        after: None,
+        boundary: None,
+    }
+}
+pub(crate) fn records(range: Range, start: usize, count: usize, next: bool) -> Value {
+    let mut status = report(range, false)["status"].clone();
+    status["retainedRows"] = 300.into();
+    let mut page = json!({"status":status,"rows":(start..start+count).map(|i| {
+        let mut row = json!({"schemaVersion":1,"generation":"synthetic-generation","sourceId":PROJECT,
+            "operationId":format!("request-{i:04}"),"revision":2,"kind":"request","scope":"direct",
+            "completedAt":range.from + 1000 + i as u64 * 1000,"observedAt":range.from + 2000 + i as u64 * 1000,
+            "coverage":"partial","purpose":"agent",
+            "cost":{"estimateStatus":"unavailable","billedStatus":"unavailable","subscriptionCoverage":"unknown"}});
+        if i.is_multiple_of(2) {
+            row["physicalModel"] = json!({"provider":"synthetic","model":"研究 👩‍💻 é long serving model"});
+            row["tokens"] = json!({"input":0,"output":12000,"cacheRead":8000,"cacheWrite":0,"reasoningStatus":"unavailable"});
+        }
+        row
+    }).collect::<Vec<_>>()});
+    if next {
+        page["next"] = format!("opaque-next-{}", start + count).into();
+    }
+    page
+}
+pub(crate) fn records_path(
+    options: &LocalOptions,
+    request: &crate::usage_overview_records::Request,
+) -> String {
+    let u = crate::usage_overview_records::url(options, request);
+    format!("{}?{}", u.path(), u.query().unwrap())
+}

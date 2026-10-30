@@ -4,6 +4,7 @@ use crate::{
     ui::{self, Action, Notice, Space, Text, Tone},
     usage_overview::{self as model, Day, Filter, Range, State},
     usage_overview_reader::{Reader, Request, Response},
+    usage_overview_records as records,
 };
 use gpui_kit::{
     App, AppContext, Context, DismissEvent, Entity, FocusHandle, Focusable, InteractiveElement,
@@ -39,6 +40,9 @@ pub(crate) struct Usage {
     options: Option<LocalOptions>,
     reader: Option<Reader>,
     updates: Option<Task<()>>,
+    pub(crate) records: records::State,
+    records_reader: Option<records::Reader>,
+    records_updates: Option<Task<()>>,
     days: u64,
     details: bool,
     focus: FocusHandle,
@@ -54,6 +58,9 @@ impl Usage {
             options,
             reader: None,
             updates: None,
+            records: records::State::default(),
+            records_reader: None,
+            records_updates: None,
             days: 7,
             details: false,
             focus: cx.focus_handle(),
@@ -67,6 +74,7 @@ impl Usage {
         self.focus.focus(w, cx);
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
+        self.clear_records();
         self.reader = None;
         self.updates = None;
         self.state.serial += 1;
@@ -90,6 +98,7 @@ impl Usage {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.clear_records();
         self.init_picker(w, cx);
         let previous_generation = self
             .state
@@ -230,6 +239,262 @@ impl Usage {
             self.sync_picker(w, cx);
             cx.notify();
         }
+    }
+    fn clear_records(&mut self) {
+        self.records_reader = None;
+        self.records_updates = None;
+        self.records.clear();
+    }
+    fn read_records(&mut self, next: bool, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.busy || self.state.error.is_some() || self.records.busy {
+            return;
+        }
+        let Some(snapshot) = &self.state.snapshot else {
+            return;
+        };
+        let after = if next {
+            self.records.page.as_ref().and_then(|p| p.next.clone())
+        } else {
+            None
+        };
+        if next && after.is_none() {
+            return;
+        }
+        let boundary = if next {
+            self.records
+                .page
+                .as_ref()
+                .and_then(|p| p.rows.last().map(|r| r.key.clone()))
+        } else {
+            None
+        };
+        let request = records::Request {
+            range: snapshot.range,
+            filter: snapshot.filter.clone(),
+            generation: snapshot.summary.status.generation.clone(),
+            serial: self.records.begin(),
+            after,
+            boundary,
+        };
+        self.records.open = true;
+        if self.records_reader.is_none() {
+            match self
+                .options
+                .clone()
+                .ok_or("Local records unavailable.")
+                .and_then(records::Reader::start)
+            {
+                Ok((reader, output)) => {
+                    self.records_reader = Some(reader);
+                    self.records_updates = Some(cx.spawn_in(w, async move |view, cx| {
+                        while let Ok(response) = output.recv().await {
+                            if view.update_in(cx, |v, w, cx| v.accept_records(response, w, cx)).is_err() { return; }
+                        }
+                        let _ = view.update(cx, |v, cx| {
+                            v.records_reader = None;
+                            if v.records.busy { v.records.busy = false; v.records.error = Some("Records reader stopped. Reopen records to retry; any page below is a previous observation."); }
+                            cx.notify();
+                        });
+                    }));
+                }
+                Err(error) => {
+                    self.records.accept(request.serial, Err(error));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        if !self
+            .records_reader
+            .as_ref()
+            .is_some_and(|r| r.request(request.clone()))
+        {
+            self.records.accept(
+                request.serial,
+                Err("Records read could not be queued. Reopen records to retry."),
+            );
+        }
+        cx.notify();
+    }
+    fn accept_records(
+        &mut self,
+        response: records::Response,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let request = response.request;
+        if self.state.busy
+            || self.state.range != Some(request.range)
+            || self.state.filter != request.filter
+            || !self
+                .state
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.summary.status.generation == request.generation)
+        {
+            return;
+        }
+        let reset = matches!(response.result, Err(model::ERASED | records::RESET));
+        if self.records.accept(request.serial, response.result) {
+            if reset {
+                self.state.snapshot = None;
+                self.state.catalogue = None;
+                self.state.error = self.records.error;
+                self.sync_picker(w, cx);
+            }
+            cx.notify();
+        }
+    }
+    fn records_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut section = div()
+            .id("usage-records")
+            .test_support()
+            .v_flex()
+            .min_w_0()
+            .w_full()
+            .gap(px(Space::CONTROL))
+            .child(
+                ui::action(
+                    "usage-records-toggle",
+                    if self.records.open {
+                        "Hide records"
+                    } else {
+                        "Retained request records"
+                    },
+                    Action::Quiet,
+                )
+                .self_start()
+                .disabled(self.state.busy || self.state.error.is_some())
+                .on_click(cx.listener(|v, _, w, cx| {
+                    if v.records.open {
+                        v.clear_records();
+                        cx.notify();
+                    } else {
+                        v.read_records(false, w, cx);
+                    }
+                })),
+            );
+        if !self.records.open {
+            return section;
+        }
+        section = section.child(ui::text(Text::Caption, "25 records per page, oldest first. Pages replace, never add to totals. Independent observations, not a complete or frozen history. Checkpoints excluded."));
+        if self.records.busy {
+            section = section.child(
+                div().id("usage-records-loading").test_support().child(
+                    Notice::new("Reading records… Any page below is a previous observation.")
+                        .tone(Tone::Quiet),
+                ),
+            );
+        }
+        if let Some(error) = self.records.error {
+            section = section.child(div().id("usage-records-error").test_support().child(Notice::new(error).detail("Any retained page below is a previous observation. First page starts again; Next reads from the retained page’s cursor.").tone(Tone::Error)));
+        }
+        if let Some(page) = &self.records.page {
+            section = section.child(ui::text(Text::Caption, format!("{} rows displayed, not the matching total. Page received {} (client time).", page.rows.len(), model::stamp(page.received_at))))
+                .child(ui::text(Text::Caption, format!("Partial coverage. Capture floor {}. Retention floor {}.", model::stamp(page.status.capture_floor), model::stamp(page.status.retention_floor))));
+            if page.rows.is_empty() {
+                section = section.child(
+                    div().id("usage-records-empty").test_support().child(
+                        Notice::new("No retained request records on this page.")
+                            .detail("This does not prove no usage occurred."),
+                    ),
+                );
+            }
+            for row in &page.rows {
+                let id = row.id();
+                let expanded = self.records.expanded.as_ref() == Some(&id);
+                let serial = self.records.serial;
+                let clicked_id = id.clone();
+                let physical = &row.value["physicalModel"];
+                let serving = match (physical["provider"].as_str(), physical["model"].as_str()) {
+                    (Some(p), Some(m)) => format!("{p}/{m}"),
+                    _ => "Physical model unknown".into(),
+                };
+                let mut item = div()
+                    .id(SharedString::from(format!("usage-record-{id}")))
+                    .test_support()
+                    .v_flex()
+                    .min_w_0()
+                    .w_full()
+                    .gap(px(Space::META))
+                    .child(ui::text(
+                        Text::Body,
+                        format!(
+                            "{} · request · {}",
+                            model::stamp(row.key.0),
+                            row.value["purpose"].as_str().unwrap_or("unknown")
+                        ),
+                    ))
+                    .child(ui::text(
+                        Text::Caption,
+                        format!(
+                            "{serving} · {}",
+                            row.value["coverage"].as_str().unwrap_or("unknown")
+                        ),
+                    ))
+                    .child(
+                        ui::action(
+                            SharedString::from(format!("usage-record-details-{id}")),
+                            if expanded {
+                                "Hide record details"
+                            } else {
+                                "Record details"
+                            },
+                            Action::Quiet,
+                        )
+                        .self_start()
+                        .accessibility_label(SharedString::from(format!(
+                            "Record details: {} / {}",
+                            row.key.1, row.key.2
+                        )))
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.records.serial == serial {
+                                v.records.expanded = if expanded {
+                                    None
+                                } else {
+                                    Some(clicked_id.clone())
+                                };
+                                cx.notify();
+                            }
+                        })),
+                    );
+                if expanded {
+                    let json = row.json();
+                    item = item.child(div().id("usage-record-detail").test_support().v_flex().min_w_0().w_full().gap(px(Space::CONTROL))
+                        .child(ui::text(Text::Body, row.counts()))
+                        .child(ui::text(Text::Body, row.costs()))
+                        .child(ui::text(Text::Caption, "Exact recorded fields. Missing fields are unknown; IDs are plain text."))
+                        .child(ui::action("usage-record-copy", "Copy record JSON", Action::Quiet).self_start()
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if v.records.serial == serial && v.records.expanded.as_ref() == Some(&id) { cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(json.clone())); }
+                            })))
+                        .child(div().id("usage-record-data").test_support().w_full().min_w_0().font_family(crate::appearance::CODE_FONT).text_size(px(Text::Caption.size())).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("usage-record-json-{}", row.id())), SharedString::from(row.json())))));
+                }
+                section = section.child(item);
+            }
+            section = section.child(
+                div()
+                    .h_flex()
+                    .gap(px(Space::CONTROL))
+                    .child(
+                        ui::action("usage-records-first", "First page", Action::Quiet)
+                            .disabled(self.records.busy)
+                            .on_click(cx.listener(|v, _, w, cx| v.read_records(false, w, cx))),
+                    )
+                    .child(
+                        ui::action("usage-records-next", "Next records", Action::Quiet)
+                            .disabled(self.records.busy || page.next.is_none())
+                            .on_click(cx.listener(|v, _, w, cx| v.read_records(true, w, cx))),
+                    ),
+            );
+        } else if !self.records.busy {
+            section = section.child(
+                ui::action("usage-records-retry", "Read first page", Action::Quiet)
+                    .self_start()
+                    .on_click(cx.listener(|v, _, w, cx| v.read_records(false, w, cx))),
+            );
+        }
+        section
     }
 }
 impl Render for Usage {
@@ -401,7 +666,10 @@ impl Render for Usage {
                         ),
                 );
             }
-            page = page.child(summaries).child(ui::rule(w, cx));
+            page = page
+                .child(summaries)
+                .child(self.records_section(cx))
+                .child(ui::rule(w, cx));
             let mut trend = div()
                 .id("usage-trend")
                 .test_support()

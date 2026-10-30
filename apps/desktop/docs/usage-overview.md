@@ -86,7 +86,7 @@ All history remains explicitly partial, with collection start and observation
 time visible. Old data retained after a failed same-window refresh is clearly
 marked as a previous observation. A different scope/range clears old-range values.
 Longer ranges do not override retention or imply complete history. Other group filters,
-records, reconciliation and informational budgets remain outside this overview.
+reconciliation and informational budgets remain outside this overview.
 
 ## Project filtering
 
@@ -137,7 +137,71 @@ An erasure not yet observed by an explicit read is not a live-clear notification
 Subscription limits remain global and visibly separate, with their own original
 `fetchedAt`/failure ordering. History selection never refreshes providers or
 project-scopes subscription limits. No polling, account reads or mutations added.
-Records/reconciliation/budgets remain separate residual work.
+Reconciliation/budgets remain separate residual work.
+
+## Retained request records
+
+**Retained request records** explicitly reads one page of25 dated request
+observations under the currently captured UTC range and exact project filter.
+Nothing prefetches records. **Next records** follows the API's opaque cursor;
+**First page** rereads from the beginning. Successful pages replace the prior
+page rather than accumulating a history or reconstructing any total. The
+authoritative summary remains a separate dated query, even if its request count
+differs from the number of displayed rows. The page API has no matching-count
+or server observation-time field. Displayed-row count is not a total;
+the displayed page receipt time is explicitly client time. `retainedRows` is a
+global ledger count, not a matching count, and is not relabelled as one.
+
+Audit: `UsageHistoryQuery`/`UsageHistoryPage` and `UsageObservation` in
+`packages/protocol/src/usage-history.ts`; `server.ts` GET
+`/api/usage-history/page`; `UsageHistoryService.page/readQuery`;
+`usage-history-worker.ts` page dispatch; `UsageHistoryDisk.page` and
+`usage-history-validation.ts`; historical Swift `UsageDashboardModel.show`
+and `UsageDashboardPage.records`/`UsageRequestRow`. The existing GET validates
+Local daemon/lineage, uses two-query worker admission and a keyset SQL page
+ordered by `(completed,source,operation)`. The cursor binds erasure generation,
+kind, range, last key and exact filter. The SQL range is half-open and also
+applies capture/retention constraints. This path does not start sessions,
+refresh providers, record/erase usage or expire rows. Lazy worker/database
+initialization is still possible, so passive is not filesystem-pure.
+
+Only `kind: request` is queried here. The contract's checkpoints deliberately
+ignore the selected dates and can overlap requests, so undated reconciliation
+is not presented as dated records. Each row preserves the returned kind,
+source/operation IDs and revision. **Record details** reveals known versus
+unknown token counts, catalog estimate status (never billed), and selectable
+exact API data. **Copy record JSON** copies those fields without creating a
+new detail or identity. Missing serving model/provider, attribution, amounts
+and counts remain unknown. The current canonical ledger always has billed
+cost unavailable; unsupported billed evidence is refused. No account identity
+is supplied. Chat/project/attempt/mission IDs, when present, remain inspectable
+plain data. This separate passive window does not add navigation callbacks,
+activate chats, send inputs or infer a session ID from source/operation IDs.
+
+The existing no-proxy/no-redirect/no-retry Local transport, hello capability and
+identity fences,5-second timeout and512KiB response cap apply. The page reader
+has bounded one-slot command/output lanes and retains only one page. Hiding,
+history refresh, range/project replacement and closure drop the reader,
+cancelling the in-flight future. Request serial/range/filter/generation fences
+reject late successes and errors. Within-page identities and increasing keys
+are checked, including the previous page's boundary; repeated/malformed cursors
+and excess/short continuation pages refuse rather than mix rows.
+
+Ordinary failed page reads retain the previous page visibly labelled as a
+previous observation, with explicit retry. A changed generation or cursor
+refusal clears both records and overview/catalogue, requiring visible history
+refresh. HTTP400 does not distinguish stale cursor from other query refusal,
+so the client conservatively resets without claiming erasure was proven.
+There is no automatic cursor replay/reset or erasure subscription. Independent
+same-generation pages can observe updates, corrections and retention between
+reads; the last page is not proof of complete accounting. Global subscription
+limits, credential ownership, freshness and privacy epochs are unchanged.
+
+Design: retain the existing left-aligned token hierarchy, project selector,
+authoritative totals and global limits. Subtract eager detail and nested cards;
+reveal bounded unboxed rows and one selectable record at a time through native
+Kit buttons (Tab then Enter/Space), with a keyboard-reachable exact copy action.
+No new colors, motion clocks, polling or hot-path caches.
 
 ## Verification scope
 
@@ -153,7 +217,14 @@ checks exercise native selector keyboard selection, Unicode search cancellation 
 Escape focus restoration, exact project/missing/All scope, filtered empty and
 retained-error states, plus bounded catalogue/error notices. Unit/faux-transport checks cover exact identity/query URLs,
 filter-only cancellation/races, catalogue truncation/errors, authoritative totals
-versus independent days, date replacement and observed erasure fencing. Set
+versus independent days, date replacement and observed erasure fencing.
+Record checks additionally exercise native keyboard disclosure/copy, literal
+selection with keyboard copy,25-row replacement, unknown counts, retained page
+errors/retry, empty pages, range/project cancellation and visible cursor refusal.
+Unit/faux transport covers boundary duplicates, opaque/repeated cursors,
+wrong kind/range/filter/generation, pricing evidence, late success/error after
+clear and cancelled in-flight reads. The matching default-feature plain build
+is run separately and serially after this scoped gate. Set
 `PILOT_NEXT_USAGE_DIR` to save the captures. Captures are offscreen synthetic GPUI, not
 the user's app or real usage. No new animation/timer or scrolling hot path is
 introduced. No OS IME, live-daemon, Linux/Wayland, GPU performance or user acceptance

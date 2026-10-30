@@ -113,7 +113,10 @@ daily trend over 7, 30 or 90 UTC days. Coverage remains explicitly partial and
 dated, costs are catalog estimates rather than billed charges, and missing
 evidence is never shown as zero. Refresh is manual. No remote hosts, resets,
 reconciliation writes or budget enforcement. The separate native page preserves
-the mounted conversation and draft. See [usage-overview.md](docs/usage-overview.md).
+the mounted conversation and draft. Historical project filtering and on-demand
+25-row retained request pages use existing passive ledger GETs. Record details
+are selectable/copyable; page rows never replace authoritative totals.
+See [usage-overview.md](docs/usage-overview.md).
 
 Home shows compact Claude/Codex subscription rows below its summary, using the
 newest cached snapshots forwarded with loaded Local chat summaries. Each row

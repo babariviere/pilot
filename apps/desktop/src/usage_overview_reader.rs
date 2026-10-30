@@ -95,7 +95,11 @@ fn changed(value: &Value, generation: &str) -> bool {
         .as_str()
         .is_some_and(|s| s != generation)
 }
-async fn get(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, &'static str> {
+pub(super) async fn get(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+) -> Result<Value, &'static str> {
+    let page = url.path().ends_with("/page");
     let mut response = client
         .get(url)
         .send()
@@ -103,6 +107,7 @@ async fn get(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, &'sta
         .map_err(|_| "Local usage read failed. Refresh to retry.")?;
     match response.status().as_u16() {
         200 => {}
+        400 if page => return Err(crate::usage_overview_records::RESET),
         409 => return Err("Local identity changed. No fallback was attempted."),
         429 => return Err("Local usage query capacity reached. Retry later."),
         404 | 405 | 503 => return Err("Local usage queries are unavailable or unsupported."),
