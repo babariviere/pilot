@@ -729,6 +729,57 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
     .unwrap();
 }
 #[gpui_kit::test]
+fn tool_source_is_literal_and_keeps_its_parser_on_output_updates(cx: &mut TestAppContext) {
+    let source = format!(
+        "\n\r\n{}",
+        "// 日本語 👩‍💻 e\u{301} <>& **literal**\r\n".repeat(500)
+    );
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"snapshot","entries":[{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"literal","name":"codemode","arguments":{"code":source}}]}]}]}));
+    let rows = model.rows();
+    let group = rows[0].id();
+    let (handle, view) = super::readonly_tests::setup(cx, rows);
+    cx.update_window(handle, |_, window, cx| {
+        window.click(SharedString::from(format!("work-toggle-{group}")), cx);
+    })
+    .unwrap();
+    settle_disclosure(cx, handle);
+    cx.update_window(handle, |_, window, cx| {
+        window.click("step-toggle-call:literal", cx)
+    })
+    .unwrap();
+    settle_disclosure(cx, handle);
+    let text = cx.update(|cx| view.read(cx).work_ui.body_state("literal", "Code", cx));
+    text.update(cx, |text, cx| {
+        // Literal source must bypass HTML normalization/escaping and retain
+        // source-position mapping for selection, even past the old viewer cap.
+        let rendered = text.rendered_text();
+        assert_eq!(rendered.source(), source);
+        assert!(rendered.as_str().starts_with(&source));
+        let start = source.find("👩‍💻").unwrap();
+        let range = rendered
+            .range_for_source(start..start + "👩‍💻".len())
+            .unwrap();
+        assert_eq!(&rendered.as_str()[range], "👩‍💻");
+        text.select_all(cx);
+        assert_eq!(text.selected_source_range(), Some(0..source.len()));
+    });
+    model.apply(&json!({"type":"tool_execution_update","toolCallId":"literal","output":{"set":"output only"}}));
+    cx.update(|cx| view.update(cx, |v, cx| v.replace_readonly(model.rows(), false, cx)));
+    settle_disclosure(cx, handle);
+    cx.update_window(handle, |_, window, cx| {
+        assert_eq!(
+            view.read(cx).work_ui.body_state("literal", "Code", cx),
+            text
+        );
+        assert_eq!(text.read(cx).selected_source_range(), Some(0..source.len()));
+        window.click("copy-call:literal-Code", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), source);
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn tool_output_selection_and_expansion_survive_real_unmount_and_prepend_regroup(
     cx: &mut TestAppContext,
 ) {

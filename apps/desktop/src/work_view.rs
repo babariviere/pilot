@@ -339,7 +339,7 @@ impl WorkUi {
     pub(crate) fn step_pulse(&self, id: &str, cx: &gpui_kit::App) -> bool {
         self.steps[&format!("call:{id}")].read(cx).pulse.running()
     }
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn body_state(
         &self,
         id: &str,
@@ -351,7 +351,7 @@ impl WorkUi {
             .clone()
     }
     /// A section's inner scroll offset, negative once scrolled down.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn body_offset(
         &self,
         id: &str,
@@ -900,7 +900,7 @@ struct Block<'a> {
     source: Arc<String>,
     /// Shown instead of the source, such as output without its header.
     shown: Option<&'a str>,
-    /// Monospace panel text (HTML pre) rather than Markdown prose.
+    /// Monospace panel text rather than Markdown prose.
     plain: bool,
     detail: Option<String>,
     /// Outcome beside the label, and whether it is a failure.
@@ -1050,10 +1050,14 @@ impl StepView {
             status,
             errors,
         } = block;
+        // Tool source is already literal text. Keep the existing parser and
+        // selection owner, without an HTML escape/minify/parse round trip.
+        // Output retains its existing failure-line wash and header handling.
+        let literal = plain && matches!(label, "Code" | "Command" | "Arguments");
         let id = step_id(&self.step);
         let (state, scroll) = {
             let shown = shown.unwrap_or(source.as_str()).to_owned();
-            let parsed = if plain {
+            let parsed = if plain && !literal {
                 // Failing lines get a quiet danger wash; the text is unchanged.
                 let wash = errors.then(|| hex(cx.theme().danger.opacity(0.16)));
                 code_html(&shown, wash.as_deref())
@@ -1069,7 +1073,9 @@ impl StepView {
                 }
             } else {
                 let state = cx.new(|cx| {
-                    (if plain {
+                    (if literal {
+                        TextViewState::plain(&parsed, cx)
+                    } else if plain {
                         TextViewState::html(&parsed, cx)
                     } else {
                         TextViewState::markdown(&parsed, cx)

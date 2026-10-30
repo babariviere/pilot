@@ -295,6 +295,11 @@
       "path": "src/text/state.rs",
       "old": "        self.selection_adapter.painted_selection_points(cx)",
       "new": "        self.selection_adapter.painted_selection_points(self.bounds.origin + self.scroll_offset(), cx)"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "            for row_end in row_ends {\n                let mut width = layout.x_for_index(row_end) - layout.x_for_index(row_start);",
+      "new": "            for row_end in row_ends {\n                // These rows produce no hit box after clipping. In a long\n                // wrapped source line, each x_for_index scans its glyphs from\n                // the start; do not pay that cost for invisible rows.\n                if y + line_height <= mask_bounds.top() || y >= mask_bounds.bottom() {\n                    row_ix += 1;\n                    y += line_height;\n                    row_start = row_end;\n                    continue;\n                }\n                let mut width = layout.x_for_index(row_end) - layout.x_for_index(row_start);"
     }
   ]
 }

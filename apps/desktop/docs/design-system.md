@@ -228,6 +228,12 @@ slot (`transition::Pulse`, frame-driven only while painted); they hold still
 under reduced motion and give way to the kind or error glyph when the call ends,
 fails or its run goes stale.
 
+Code, Command and Arguments use the existing literal text state, keeping full
+source and selection without an HTML round trip. Selection hit-box widths are
+not computed for rows already outside the paint mask; source and layout remain
+complete. See [large tool source measurements](tool-source-performance.md) for
+controlled native CPU/RSS observations and unqualified interactions.
+
 Kit owns existing word fade. These components add neither durations nor clocks.
 Keep shared lifecycle checks separate from static catalog screenshots. Native
 phase checks are not visible smoothness/FPS/CPU/RSS proof.

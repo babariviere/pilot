@@ -8,6 +8,11 @@ mapping and cannot use range highlights. Markdown and HTML defaults stay
 unchanged. Plain updates and reparses share the existing source/revision
 tracking; no alternate selection or paint layer is added.
 
+Tool source uses that same literal state. The selectable inline row walk skips
+glyph-width lookups for rows entirely outside the current paint mask, since
+their hit boxes already clipped to empty. No text, wrapping or copy is removed.
+See [large tool source measurements](../docs/tool-source-performance.md).
+
 These are isolated desktop-prototype edits to published, pinned sources, not registry/cache
 edits, an upstream fork or a framework upgrade. The application still imports
 GPUI exclusively through Kit 0.8.1 re-exports, with baseline GPUI 0.3.10.

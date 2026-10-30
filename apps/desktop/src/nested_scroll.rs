@@ -94,7 +94,7 @@ impl Default for NestedScroll {
 }
 
 impl NestedScroll {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn offset(&self) -> Pixels {
         self.handle.offset().y
     }

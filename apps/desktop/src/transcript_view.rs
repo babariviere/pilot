@@ -794,6 +794,18 @@ impl TranscriptView {
         self.work_ui.step_info(id, cx)
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn disclosure_probe_body(
+        &self,
+        id: &str,
+        label: &str,
+        cx: &App,
+    ) -> (Entity<TextViewState>, gpui_kit::Pixels) {
+        (
+            self.work_ui.body_state(id, label, cx),
+            self.work_ui.body_offset(id, label, cx),
+        )
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn disclosure_probe_shape(
         &self,
         id: u64,
