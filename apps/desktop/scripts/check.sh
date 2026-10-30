@@ -71,6 +71,9 @@ bash scripts/cargo.sh test --locked --features native-probes --test project_crea
 bash scripts/cargo.sh test --locked --features native-probes --test subscription_limits
 # Read-only global mission discovery and existing-chat navigation, owned faux HTTP only.
 bash scripts/cargo.sh test --locked --features native-probes --test missions
+# Mission-scoped retained comparisons and actual Kit Diff, owned faux HTTP only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test native_review -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test native_review
 bash scripts/cargo.sh test --locked --features native-probes --test project_add
 # Explicit Local global model scope, owned faux HTTP/native capability only.
 bash scripts/cargo.sh test --locked --features native-probes --test scoped_models

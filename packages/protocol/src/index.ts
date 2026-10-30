@@ -21,6 +21,7 @@ export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
+export type * from "./native-review.ts";
 export type * from "./refresh-health.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */

@@ -29,6 +29,7 @@ if (db.prepare("SELECT version FROM ownership_meta").get()?.version !== 1)
 db.exec(`
  CREATE TABLE IF NOT EXISTS bindings(repository TEXT NOT NULL, workspace TEXT NOT NULL, binding TEXT NOT NULL,
  cursor TEXT NOT NULL, problem TEXT, coverage TEXT NOT NULL, PRIMARY KEY(repository,workspace));
+ CREATE INDEX IF NOT EXISTS bindings_by_session ON bindings(workspace,json_extract(binding,'$.sessionId'),json_extract(binding,'$.missionId'),json_extract(binding,'$.repositoryPath'));
  CREATE TABLE IF NOT EXISTS claims(repository TEXT NOT NULL, change_id TEXT NOT NULL, workspace TEXT NOT NULL,
  operation TEXT NOT NULL, proof TEXT NOT NULL, PRIMARY KEY(repository,change_id,workspace,operation));
  CREATE INDEX IF NOT EXISTS claims_by_workspace ON claims(repository,workspace,change_id);
@@ -156,6 +157,19 @@ function dispatch(method: string, input: unknown): unknown {
 	if (method === "binding") {
 		exact(input, ["repositoryId", "workspace"]);
 		return binding(input.repositoryId, input.workspace);
+	}
+	if (method === "sessionBinding") {
+		exact(input, ["sessionId", "missionId", "repositoryPath", "workspace"]);
+		for (const id of [input.sessionId, input.missionId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+		identifier(input.workspace, /^pilot-[a-zA-Z0-9_-]+-[a-f0-9]{16}$/);
+		if (typeof input.repositoryPath !== "string") throw new Error("Invalid repository binding");
+		const rows = db
+			.prepare(`SELECT repository,workspace FROM bindings
+		 WHERE workspace=? AND json_extract(binding,'$.sessionId')=? AND json_extract(binding,'$.missionId')=?
+		 AND json_extract(binding,'$.repositoryPath')=? LIMIT 2`)
+			.all(input.workspace, input.sessionId as string, input.missionId as string, input.repositoryPath);
+		if (rows.length > 1) throw new Error("Ambiguous retained repository custody");
+		return rows[0] ? binding(rows[0].repository, rows[0].workspace)?.binding : undefined;
 	}
 	if (method === "get") {
 		exact(input, ["repositoryId", "changeId"]);

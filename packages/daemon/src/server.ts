@@ -1091,6 +1091,78 @@ export function createDaemonServer(
 				task,
 			});
 		}
+		if (missions && parts[1] === "missions" && parts[3] === "review") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET" || parts.length < 4 || parts.length > 7)
+				throw new HttpError(405, "Review is read-only");
+			const missionId = parts[2]!,
+				workerId = parts[4],
+				snapshotId = parts[5],
+				section = parts[6];
+			const authorize = () => {
+				const mission = missions.store.require(missionId);
+				projects.require(mission.projectId);
+				if (workerId) {
+					const member = missions.store.membership(workerId),
+						session = sessions.get(workerId);
+					if (!member || member.missionId !== missionId || !session || session.projectId !== mission.projectId)
+						throw new HttpError(403, "Retained Review unavailable in this scope");
+				}
+				return mission;
+			};
+			const mission = authorize();
+			await missions.store.durable();
+			authorize();
+			if (!workerId) {
+				const members = missions.store.nativeReviewMembers(missionId);
+				const workers = members.slice(0, 100).flatMap((id) => {
+					const m = missions.store.membership(id),
+						s = sessions.get(id);
+					return m && !m.coordinator && s?.projectId === mission.projectId ? [{ id, title: s.title }] : [];
+				});
+				return json(res, 200, { missionId, projectId: mission.projectId, workers, more: members.length > 100 });
+			}
+			try {
+				const reader = sessions.nativeReviewReader(workerId, missionId, mission.projectId, authorize);
+				if (!snapshotId) {
+					const after = url.searchParams.get("after") ?? "0";
+					if (!/^\d{1,15}$/.test(after)) throw new Error("Invalid cursor");
+					return json(res, 200, await reader.list(Number(after)));
+				}
+				if (!section) return json(res, 200, await reader.get(snapshotId));
+				if (section === "patch") return json(res, 200, { snapshotId, patch: await reader.diff(snapshotId) });
+				if (section === "source") {
+					const source = await reader.source(snapshotId, {
+						snapshotId,
+						side: url.searchParams.get("side") as "before" | "after",
+						path: url.searchParams.get("path")!,
+						sha256: url.searchParams.get("sha256")!,
+					});
+					return json(res, 200, { snapshotId, text: source });
+				}
+				if (section === "records") {
+					const snapshot = await reader.get(snapshotId);
+					let records;
+					try {
+						records = missions.store.nativeReviewRecords(missionId, workerId, snapshotId, snapshot);
+					} catch {
+						return json(res, 422, {
+							error: "Related records unavailable: malformed, partial or unsupported exact assessment scope.",
+						});
+					}
+					authorize();
+					return json(res, 200, records);
+				}
+				throw new Error("Unsupported Review read");
+			} catch (error) {
+				if (error instanceof HttpError) throw error;
+				// No paths, manifest fragments or cross-scope existence information in errors.
+				throw new HttpError(
+					403,
+					"Retained Review unavailable: missing, unsupported, corrupt or unauthorized records. No live fallback was attempted.",
+				);
+			}
+		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "projects" && parts[3] === "databases" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");

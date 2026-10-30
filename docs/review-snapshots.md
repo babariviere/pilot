@@ -1,7 +1,9 @@
 # Retained comparison snapshots (internal)
 
-`packages/daemon/src/review-snapshots.ts` is a dormant, host-only backend API.
-Nothing starts captures automatically or exposes it over HTTP, IPC or agent tools.
+`packages/daemon/src/review-snapshots.ts` retains a dormant, host-only capture API.
+Nothing starts captures automatically or exposes capture over HTTP, IPC or agent tools.
+The [native Review read slice](mission-native-review.md) exposes only admitted, bounded reads,
+with current mission/project/worker custody, strict required manifests and exact retained references.
 The host must authorize the exact comparison **before** calling `capture`. Ownership
 is evidence about the creator, not authorization from an agent's payload. A future
 transport needs its own authorization and read-access checks.

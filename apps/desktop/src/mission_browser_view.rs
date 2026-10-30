@@ -47,6 +47,7 @@ pub(crate) enum Tab {
     #[default]
     Overview,
     Tasks,
+    Review,
 }
 
 #[derive(Clone)]
@@ -117,6 +118,7 @@ pub(crate) struct Browser {
     catalog_scroll: gpui_kit::ScrollHandle,
     detail_scroll: gpui_kit::ScrollHandle,
     pub(crate) tasks_browser: gpui_kit::Entity<crate::mission_tasks_view::Pane>,
+    pub(crate) review: Option<gpui_kit::Entity<crate::native_review_view::Pane>>,
     /// Overview or Tasks; a different mission opens on Overview.
     pub(crate) tab: Tab,
     pub(crate) activity_browser: Option<gpui_kit::Entity<crate::mission_activity_view::Activity>>,
@@ -201,6 +203,7 @@ impl Browser {
             decisions: Default::default(),
             comments: Default::default(),
             tasks_browser,
+            review: None,
             tab: Tab::Overview,
             generation: 0,
             route: None,
@@ -250,6 +253,15 @@ impl Browser {
     /// Point the task pane at a mission (or none), reopening its list when the
     /// Tasks tab is showing.
     pub(crate) fn sync_tasks(&mut self, key: Option<Key>, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(review) = &self.review {
+            let visible = self.tab == Tab::Review
+                && self.online
+                && self.route == key.clone().map(Route::Detail);
+            review.update(cx, |p, cx| {
+                p.sync(key.clone(), self.options.clone(), visible, w, cx);
+                p.observe_scope(&self.chats, cx);
+            });
+        }
         let options = self.options.clone();
         let show = self.tab == Tab::Tasks;
         self.tasks_browser.update(cx, |p, cx| {
@@ -275,6 +287,34 @@ impl Browser {
             self.focus.focus(w, cx);
         }
         self.tab = tab;
+        if tab == Tab::Review {
+            if self.review.is_none() {
+                let review = cx.new(|cx| crate::native_review_view::Pane::new(w, cx));
+                cx.subscribe_in(
+                    &review,
+                    w,
+                    |p, _, _: &crate::native_review_view::Close, w, cx| {
+                        p.focus.focus(w, cx);
+                        p.choose_tab(Tab::Overview, false, w, cx);
+                    },
+                )
+                .detach();
+                self.review = Some(review);
+            }
+        } else if let Some(review) = &self.review {
+            if review.read(cx).owns_focus(w, cx) {
+                self.focus.focus(w, cx);
+            }
+            let key = self.tasks_browser.read(cx).state.key.clone();
+            review.update(cx, |p, cx| p.sync(key, self.options.clone(), false, w, cx));
+        }
+        if tab == Tab::Review {
+            let key = self.tasks_browser.read(cx).state.key.clone();
+            self.sync_tasks(key, w, cx);
+            if focus && let Some(review) = &self.review {
+                review.update(cx, |p, cx| p.focus(w, cx));
+            }
+        }
         if tab == Tab::Tasks {
             let loaded = self.tasks_detail.take().filter(|s| {
                 self.online
@@ -1238,7 +1278,7 @@ impl Browser {
                         ),
                     )
                     .when(!is_list, |d| d.children(self.coordinator_action(cx)))
-                    .when(is_list || self.tab != Tab::Tasks, |d| {
+                    .when(is_list || self.tab == Tab::Overview, |d| {
                         d.child(
                             ui::icon_action(
                                 "missions-refresh",
@@ -1295,7 +1335,7 @@ impl Browser {
                     .child(Notice::new(error).tone(Tone::Error)),
             );
         }
-        if !is_list && self.tab == Tab::Tasks {
+        if !is_list && matches!(self.tab, Tab::Tasks | Tab::Review) {
             // The header keeps its reading column so the tabs stay put; the
             // task list and details below take the page's full width and height.
             return div()
@@ -1319,7 +1359,12 @@ impl Browser {
                         .min_w_0()
                         .px(px(Space::HOME))
                         .pb(px(Space::HOME))
-                        .child(self.tasks_browser.clone()),
+                        .children((self.tab == Tab::Tasks).then(|| self.tasks_browser.clone()))
+                        .children(
+                            (self.tab == Tab::Review)
+                                .then(|| self.review.clone())
+                                .flatten(),
+                        ),
                 )
                 .into_any_element();
         }
@@ -1624,6 +1669,12 @@ impl Browser {
                 .selected(self.tab == Tab::Tasks)
                 .disabled(!available && self.tab != Tab::Tasks)
                 .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Tasks, false, w, cx))),
+            )
+            .child(
+                ui::action("mission-tab-review", "Review", Action::Quiet)
+                    .selected(self.tab == Tab::Review)
+                    .disabled(!available && self.tab != Tab::Review)
+                    .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Review, true, w, cx))),
             )
     }
 }

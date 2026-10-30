@@ -108,6 +108,7 @@ import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
+import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -124,6 +125,7 @@ import {
 	workspaceChangeIds,
 } from "./pull-requests.ts";
 import { RecoveryStops } from "./recovery-stops.ts";
+import { ReviewSnapshotStore } from "./review-snapshots.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
@@ -1433,6 +1435,7 @@ export class SessionManager {
 	private readonly credentials?: CredentialBroker;
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
+	private readonly reviewSnapshots: import("./review-snapshots.ts").ReviewSnapshotStore;
 	private readonly mainViews: MainViewStore;
 	private readonly roleTransitions = new Map<string, Promise<void>>();
 	private readonly coordinatorUnbindings = new Map<string, Promise<void>>();
@@ -1551,6 +1554,10 @@ export class SessionManager {
 		this.credentials = options.credentials;
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
+		this.reviewSnapshots = new ReviewSnapshotStore(
+			join(home, "review-snapshots.sqlite"),
+			this.sharedWorkspaces.ownership,
+		);
 		this.mainViews = new MainViewStore(home);
 		this.onMainMoved((event) => this.refreshMainViews(event));
 		if (!factories.worker) this.pool = new WorkerPool();
@@ -3879,6 +3886,35 @@ export class SessionManager {
 	}
 	executionEvidence(id: string): import("@pilot/kernel").ExecutionEvidence | undefined {
 		return this.metas.get(id)?.executionEvidence;
+	}
+
+	/** Native retained reads derive custody only from durable host metadata, never a request path. */
+	nativeReviewReader(id: string, missionId: string, projectId: string, authorize: () => void) {
+		return new NativeReviewReader(this.reviewSnapshots, this.sharedWorkspaces.ownership, async () => {
+			const scope = () => {
+				authorize();
+				const meta = this.metas.get(id);
+				if (this.closing || !meta || meta.projectId !== projectId)
+					throw new Error("Retained workspace custody unavailable");
+				if (!meta.workspace?.shared || meta.coordinatorView)
+					throw new NoRetainedBinding("No retained worker enrollment");
+				if (this.projects.require(projectId).path !== meta.workspace.source)
+					throw new Error("Retained repository is outside the current project source");
+				this.assertOwnedWorkspace(meta);
+				return { ...meta.workspace.shared, path: meta.cwd };
+			};
+			const before = scope();
+			const binding = await this.sharedWorkspaces.ownership.sessionBinding(
+				id,
+				missionId,
+				before.repository,
+				before.name,
+			);
+			if (JSON.stringify(scope()) !== JSON.stringify(before)) throw new Error("Retained workspace custody changed");
+			if (!binding) throw new NoRetainedBinding("No retained worker enrollment");
+			if (binding.path !== before.path) throw new Error("Retained workspace custody unavailable or changed");
+			return binding;
+		});
 	}
 
 	/** Task starts use the same agent directory/catalog as other session model operations. */
@@ -7316,6 +7352,7 @@ export class SessionManager {
 		await this.modelCatalog.closeBackgroundUsage?.();
 		await this.usageHistory.close();
 		await this.lifecycle.close();
+		await this.reviewSnapshots.close();
 		await this.sharedWorkspaces.close();
 	}
 

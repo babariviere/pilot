@@ -2,8 +2,10 @@
 
 This is a **dormant host-only record/configuration foundation** in
 `packages/daemon/src/mission-review-contract.ts`, `MissionStore` and
-`MissionService`. It installs no transport, tool, reviewer execution, model call,
+`MissionService`. It installs no write transport, tool, reviewer execution, model call,
 scheduler, routing, active gate, acceptance, completion, merge or cleanup behavior.
+The bounded native Review reader can display selected-comparison record summaries; see
+[native Review](mission-native-review.md). It does not execute reviews or grant current-review authority.
 It changes no Ask capabilities, roles, runtime configuration or live missions.
 
 ## Profiles

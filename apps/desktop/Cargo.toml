@@ -108,6 +108,12 @@ gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.10" }
 gpui-base = { path = ".patched/gpui-base-0.8.1" }
 gpui-component = { path = ".patched/gpui-component-0.8.1" }
 
+[[test]]
+name = "native_review"
+path = "tests/native_review.rs"
+harness = false
+required-features = ["native-probes"]
+
 [dependencies]
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std"] }

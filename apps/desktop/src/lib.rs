@@ -194,6 +194,13 @@ mod mission_inspector;
 mod mission_inspector_view;
 mod mission_phases;
 mod mission_reader;
+mod native_review;
+#[cfg(feature = "native-probes")]
+mod native_review_probe;
+mod native_review_reader;
+mod native_review_view;
+#[cfg(feature = "native-probes")]
+pub use native_review_probe::run_native_review_probe;
 mod mission_task_create;
 #[cfg(any(test, feature = "native-probes"))]
 mod mission_task_create_fixture;
@@ -206,6 +213,10 @@ mod mission_tasks;
 mod mission_tasks_probe;
 mod mission_tasks_reader;
 mod mission_tasks_view;
+#[cfg(any(test, feature = "native-probes"))]
+mod native_review_fixture;
+#[cfg(test)]
+mod native_review_tests;
 mod task_status;
 #[cfg(any(test, feature = "native-probes"))]
 mod task_status_fixture;

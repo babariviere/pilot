@@ -138,6 +138,9 @@ unchanged; outstanding accounting memory and release verification is documented 
   responsibilities. Explorers reuse Ask's read-only source/search/web and session-local artifact tools;
   they report findings and propose planning changes, never write product code. Reviewer is metadata only.
   Existing missions are unchanged and are not adopted automatically. See [role admission](docs/mission-roles.md).
+  Pilot Next's mission **Review** tab can browse already retained worker comparisons with exact layer/stack
+  revisions, native unified/split diffs and retained source. It never captures live work or submits approvals;
+  empty stores stay empty. See [native Review](docs/mission-native-review.md) for read admission and limits.
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Members may self-claim two additional
   tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not

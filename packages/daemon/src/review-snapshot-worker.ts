@@ -13,6 +13,7 @@ import {
 	type ReviewSnapshotManifest,
 	type ReviewSourceRef,
 	reviewPath,
+	snapshotManifest,
 } from "./review-snapshot-contract.ts";
 
 const directory = dirname(workerData.file);
@@ -37,6 +38,7 @@ if (db.prepare("SELECT version FROM review_snapshot_meta").get()?.version !== 1)
 db.exec(`CREATE TABLE IF NOT EXISTS captures(
  request_id TEXT PRIMARY KEY, request TEXT NOT NULL, provenance TEXT NOT NULL, snapshot_id TEXT);
  CREATE TABLE IF NOT EXISTS snapshots(id TEXT PRIMARY KEY, manifest TEXT NOT NULL);
+ CREATE INDEX IF NOT EXISTS snapshots_by_custody ON snapshots(json_extract(manifest,'$.request.repositoryId'),json_extract(manifest,'$.provenance.ledger.ownership.binding.sessionId'),json_extract(manifest,'$.provenance.ledger.ownership.binding.missionId'));
  CREATE TABLE IF NOT EXISTS snapshot_bytes(snapshot_id TEXT NOT NULL, sha256 TEXT NOT NULL, bytes BLOB NOT NULL,
  PRIMARY KEY(snapshot_id,sha256));`);
 // The first ACK also needs the newly created database's directory entry durable.
@@ -63,13 +65,14 @@ function transact<T>(action: () => T): T {
 }
 function get(id: unknown): ReviewSnapshot {
 	identifier(id, repositoryIdPattern);
+	const size = db.prepare("SELECT length(CAST(manifest AS BLOB)) AS bytes FROM snapshots WHERE id=?").get(id);
+	if (!size || Number(size.bytes) > 8 * 1024 * 1024) throw new Error("Missing or oversized review manifest");
 	const row = db.prepare("SELECT manifest FROM snapshots WHERE id=?").get(id);
 	if (!row) throw new Error("Unknown review snapshot");
 	const json = String(row.manifest);
 	if (snapshotHash(json) !== id) throw new Error("Corrupt review manifest");
-	const manifest = JSON.parse(json) as ReviewSnapshotManifest;
-	if (manifest.version !== 1) throw new Error("Unsupported review manifest");
-	captureRequest(manifest.request);
+	const manifest: unknown = JSON.parse(json);
+	snapshotManifest(manifest);
 	return { snapshotId: id, manifest };
 }
 function lookup(request: ReviewCaptureRequest) {
@@ -80,8 +83,13 @@ function lookup(request: ReviewCaptureRequest) {
 		? { status: "done" as const, snapshot: get(row.snapshot_id) }
 		: { status: "interrupted" as const };
 }
-function bytes(snapshotId: string, sha256: string): Uint8Array {
+function bytes(snapshotId: string, sha256: string, expected: number): Uint8Array {
 	identifier(sha256, repositoryIdPattern);
+	const size = db
+		.prepare("SELECT length(bytes) AS size FROM snapshot_bytes WHERE snapshot_id=? AND sha256=?")
+		.get(snapshotId, sha256);
+	if (!size || size.size !== expected || expected > REVIEW_SNAPSHOT_LIMITS.diffBytes)
+		throw new Error("Missing or corrupt retained size");
 	const row = db.prepare("SELECT bytes FROM snapshot_bytes WHERE snapshot_id=? AND sha256=?").get(snapshotId, sha256);
 	if (!row || !(row.bytes instanceof Uint8Array) || snapshotHash(row.bytes) !== sha256)
 		throw new Error("Missing or corrupt retained source");
@@ -92,6 +100,36 @@ let capturing = false;
 const controllers = new Map<number, AbortController>();
 async function dispatch(id: number, method: string, args: Record<string, unknown>): Promise<unknown> {
 	if (method === "get") return get(args.snapshotId);
+	if (method === "list") {
+		exact(args, ["binding", "after"]);
+		bindingRecord(args.binding);
+		if (!Number.isSafeInteger(args.after) || Number(args.after) < 0) throw new Error("Invalid comparison cursor");
+		const b = args.binding;
+		const rows = db
+			.prepare(`SELECT rowid,id FROM snapshots WHERE rowid>?
+		 AND json_extract(manifest,'$.request.repositoryId')=?
+		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.sessionId')=?
+		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.missionId')=? ORDER BY rowid LIMIT 21`)
+			.all(Number(args.after), b.repositoryId, b.sessionId, b.missionId);
+		const comparisons = rows.slice(0, 20).map((row) => {
+			const s = get(row.id),
+				m = s.manifest;
+			if (
+				JSON.stringify(
+					m.provenance.ledger.ownership.status === "owned" && m.provenance.ledger.ownership.binding,
+				) !== JSON.stringify(b)
+			)
+				throw new Error("Snapshot custody changed");
+			return {
+				snapshotId: s.snapshotId,
+				sequence: Number(row.rowid),
+				capturedAt: m.provenance.capturedAt,
+				request: m.request,
+				status: m.status,
+			};
+		});
+		return { comparisons, next: rows.length > 20 ? comparisons.at(-1)!.sequence : null };
+	}
 	if (method === "lookup") return lookup(captureRequest(args.request));
 	if (method === "read") {
 		const snapshot = get(args.snapshotId),
@@ -103,12 +141,12 @@ async function dispatch(id: number, method: string, args: Record<string, unknown
 		const entry = snapshot.manifest[ref.side].find((e) => e.path === ref.path);
 		if (!entry?.sha256 || entry.sha256 !== ref.sha256 || entry.state === "unavailable")
 			throw new Error("Invalid or unavailable review source reference");
-		return bytes(snapshot.snapshotId, ref.sha256);
+		return bytes(snapshot.snapshotId, ref.sha256, entry.bytes!);
 	}
 	if (method === "diff") {
 		const snapshot = get(args.snapshotId);
 		if (!snapshot.manifest.diff) throw new Error("Review diff unavailable");
-		return bytes(snapshot.snapshotId, snapshot.manifest.diff.sha256);
+		return bytes(snapshot.snapshotId, snapshot.manifest.diff.sha256, snapshot.manifest.diff.bytes);
 	}
 	if (method === "capture") {
 		if (capturing) throw new Error("Snapshot capture busy");

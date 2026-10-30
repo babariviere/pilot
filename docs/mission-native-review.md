@@ -1,9 +1,91 @@
 # Proposed native Review and durable diff annotations
 
-**Docs-only design proposal for apps/desktop (Pilot Next GPUI), not an approved decision, active
-transport or production UI.** The coordinator owns planning and adoption. Nothing here starts
+**The read-only slice described below is implemented for apps/desktop (D33). The remaining
+review/annotation/request contracts are design proposals, not active behavior.** The coordinator owns planning and adoption. Nothing here starts
 captures, creates Inbox attention, records reviews, consumes gates, merges, cleans up or migrates
-missions. Swift is out of scope (D2). UI implementation still requires Opus (D24).
+missions. Swift is out of scope (D2). D33 authorizes the bounded Sol/Terra read-only implementation;
+later Opus refinement remains separate.
+
+## Implemented read-only slice
+
+Mission detail has **Overview / Tasks / Review**. Review is mission-scoped browsing, not a required
+queue or an Inbox attention source. Choose a current worker, then one exact retained comparison.
+The choice includes the full jj subject, immutable head/base revisions and `layer` versus `stack`;
+Exact revision details exposes repository, snapshot, operation and creation IDs. A refresh keeps the
+chosen comparison, including when a newer comparison is listed. Switching worker, mission or host
+clears previously admitted content and fences/cancels obsolete reads. Escape returns from
+retained source to the diff, then to Overview. Source's Back control returns to the diff; existing
+navigation history is unchanged. Native Selects retain their keyboard and query focus;
+Kit Diff owns selection/copy/navigation, with Option-Up/Down for previous/next change.
+
+The summary distinguishes proven worker creation, enrollment task scope and historical task purpose
+(Unknown). Optional agent dimensions and reported evidence load only on explicit disclosure, after
+raw diff. Their exact profiles and task intent are displayed separately, never as an overall score.
+The default view is intentionally only worker, selected comparison and diff controls. Provenance,
+full IDs, analysis limits, evidence and source inspection are disclosed in **Details**, not persistent
+status prose. Actual partial/unavailable/error warnings remain visible. Comparison choices use
+human-readable layer/stack and capture labels; exact base/head identities remain in Details.
+Recorded outcomes remain **Unavailable** for current applicability unless structurally **Outdated**:
+this reader does not re-resolve arbitrary context, attest producing agents, or prove independence,
+checks, acceptance or live-source freshness. A selected allocation is assessment scope only, not final
+acceptance or original task purpose. No human rating, annotation, approval or submit control exists.
+Changed paths explicitly remains Unavailable until retained-input analysis exists.
+
+The diff is the existing virtualized Kit 0.8.1 `Diff`, not the live Changes renderer. Unified/Split,
+file navigation and Before/After source all refer to the same retained comparison. Source previews
+are capped at64 KiB with an explicit incomplete-preview notice; source reads remain bounded to2 MiB.
+Binary/unsupported sides are not decoded as text. Missing patches, partial manifests, unsafe paths,
+hash/length failures, unsupported/conflicted/truncated Kit input and patch/inventory disagreements
+are explicit, never clean or Pass. Kit cannot reconstruct absent context; full source never comes
+from the workspace, HEAD, another layer or the top of the stack. An empty store explains that no
+capture/enrollment/migration has occurred. No synthetic fixture data enters production reads.
+
+### Local transport and admission
+
+`GET /api/missions/:missionId/review` lists up to100 current same-project non-coordinator members.
+`.../review/:workerId?after=<sequence>` returns a keyset page of up to20 retained comparisons and
+an explicit continuation. The scope is derived from the mission's current project, current durable
+membership, session metadata, the exact managed workspace binding and the ownership ledger.
+The user supplies IDs, never filesystem grants or repository roots. Binding lookup works after
+workspace/repository loss without statting or reading those source trees. Unknown/colliding/currently
+changed custody denies retained content. Frozen ownership is creator provenance, not revision authorship.
+Legacy missions may browse already retained records with valid custody; reading never adopts them.
+
+`.../:workerId/:snapshotId` returns the validated, path-sanitized manifest projection. Its `patch`,
+`source?side=&path=&sha256=` and `records` subresources are read-only. Snapshot/subject/repository/
+worker/manifest identities must agree; source keys and hashes must occur on that exact retained side.
+Admission is repeated after asynchronous reads. Errors contain no retained content or host paths.
+Raw source/patch storage and SHA-256 checks run in the existing snapshot worker. Before hydration,
+SQLite checks manifest length (8 MiB), exact blob length (2 MiB source,4 MiB patch); desktop limits
+wire JSON to24 MiB before decoding (including JSON escaping), validates required records and parses
+patches off the UI thread. The store's existing eight-RPC bound remains. Discovery is scoped SQL,
+not global snapshot/store enumeration, and an absent database is not created by discovery/reads.
+
+Optional related reads select only exact snapshot references, at most8 records of each kind, each
+at most256 KiB before hydration. This first reader supports single-comparison results/submissions/
+allocations. Multi-source or additional context/preference custody is explicitly Unavailable rather
+than inferred; it does not block initial diff loading. Results have no current-review/gate authority.
+The underlying `review-snapshots.sqlite` and `jj-ownership.sqlite` live in daemon home, outside workspaces.
+Capture and record-write APIs remain host-only/dormant, with no new trigger or agent tool.
+
+These endpoints use existing daemon loopback and browser-origin admission. They do **not** authenticate
+an OS user or a particular agent session. Same-UID processes and agents with unrestricted shell/REST
+access are not isolated adversaries; this change is not a new authentication architecture. Membership
+revocation is rechecked at finite read boundaries, not atomic hostile-process revocation.
+
+### Verification boundary
+
+`native-review*.test.ts` covers admitted HTTP reads, denied writes/origins/cross-scope references,
+required-record rejection, revocation during reads and exact source after workspace/repository loss.
+`native_review_tests.rs` covers wire identity, malformed/truncated/partial/binary input, pre-hydration
+byte caps and cancelled obsolete reads. The hidden `native_review` target mounts the production
+LocalViewer and real Kit controls at680/1100 light/dark, testing mission entry, exact layer/stack,
+new-revision pinning, source/back, keyboard, resize and empty/refused states against owned faux HTTP.
+These probes are not OS IME, performance, screen-reader or accessibility acceptance, and install
+nothing. Human review writes, capture policy, attention, active gates, cleanup and Opus refinement
+remain separate work.
+
+## Remaining design proposal
 
 Binding inputs: D14 (dedicated Review, per-worker jj changes, native annotations), D15 (Inbox
 integration), D29 (summary → changed static call paths → exact pinned diff), D31 (later coordinator
@@ -14,9 +96,10 @@ OFF, checks never waived) and D32 (this design start). Foundations reused: [jj o
 (#22), the [authority/review policy proposal](mission-authority-review-policy.md) (#5), the
 [escalation/handoff proposal](mission-escalation-handoff.md) and [durable operations](durable-operations.md).
 
-## Verified starting point
+## Design starting point (before the read-only slice)
 
-Checked in the current tree, not taken from earlier reuse notes.
+These observations motivated the design. The implemented read-only slice above supersedes the
+absence of reads/Kit Diff noted here; proposed write/request contracts below remain inactive.
 
 | Surface | What it actually does today | Consequence for Review |
 | --- | --- | --- |
@@ -30,7 +113,7 @@ Checked in the current tree, not taken from earlier reuse notes.
 | `src/inbox.rs`, `src/attention.rs` | Read-only loaded-summary Inbox with Needs you and Ready to merge, project filter, exact-ID chat activation. Opening does not mark reviewed | Add Needs review as a data-backed source; keep "opening is not acknowledgement" |
 | #13, #20, #18, #17, #22 | Dormant host-only Store/Service APIs. No HTTP/IPC/tool transport | Every Review read and write below needs new admitted transport |
 
-No apps/desktop code uses Kit `Diff` yet. The earlier concept artifact said Kit 0.8.0; the pinned
+Before the slice, no apps/desktop code used Kit `Diff`. The earlier concept artifact said Kit 0.8.0; the pinned
 version is 0.8.1 and both versions have the same annotation shape.
 
 ## Vocabulary and authority layers

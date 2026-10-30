@@ -1,7 +1,8 @@
 # Internal jj attribution ledger
 
 This is attribution metadata, not retained review content, review approval, delivery evidence or
-completion acceptance. No UI or agent/HTTP write API is added.
+completion acceptance. No agent/HTTP write API is added. Native mission Review now consumes
+bounded, admitted ledger reads; see [native Review](mission-native-review.md).
 
 ## Enrollment and identity
 

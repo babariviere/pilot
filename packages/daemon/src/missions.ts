@@ -90,6 +90,7 @@ import {
 	reviewReferences,
 	reviewResultWrite,
 } from "./mission-review-contract.ts";
+import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import type { PullRequestBinding } from "./sessions.ts";
@@ -3634,6 +3635,183 @@ export class MissionStore {
 	}
 
 	/** Dormant host-only review history. No legacy receipt promotion or active gate consumer. */
+	nativeReviewRecords(
+		id: string,
+		workerId: string,
+		snapshotId: string,
+		snapshot?: import("@pilot/protocol").NativeReviewSnapshot,
+	): import("@pilot/protocol").NativeReviewRecords {
+		this.require(id);
+		const result: import("@pilot/protocol").NativeReviewRecords = {
+			assessments: [],
+			reported: [],
+			allocations: [],
+			more: false,
+		};
+		// Exact selected references only. Length is checked in SQL before record hydration.
+		const queries = [
+			[
+				"review",
+				`SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result'
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.content')) WHERE json_extract(value,'$.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+			[
+				"submission",
+				`SELECT record FROM task_delivery_evidence WHERE mission_id=? AND record_type='submission'
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.evidence')) WHERE json_extract(value,'$.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+			[
+				"allocation",
+				`SELECT record FROM task_contribution_allocations WHERE mission_id=?
+			 AND EXISTS(SELECT 1 FROM json_each(json_extract(record,'$.request.sources')) WHERE json_extract(value,'$.reference.snapshotId')=?) ORDER BY sequence DESC`,
+			],
+		] as const;
+		for (const [kind, query] of queries) {
+			const rows = this.all(
+				`SELECT CASE WHEN length(CAST(record AS BLOB))<=262144 THEN record END AS record FROM (${query}) LIMIT 9`,
+				id,
+				snapshotId,
+			);
+			result.more ||= rows.length > 8;
+			for (const row of rows.slice(0, 8)) {
+				if (!row.record) throw new Error("Oversized related Review record");
+				const r = JSON.parse(str(row.record!));
+				nativeReviewRecord(kind, r, id, workerId, snapshotId);
+				if (
+					r.version !== 1 ||
+					r.missionId !== id ||
+					typeof r.id !== "string" ||
+					typeof r.taskId !== "string" ||
+					!Number.isSafeInteger(r.createdAt)
+				)
+					throw new Error("Malformed related Review record");
+				const task = this.task(id, r.taskId);
+				if (task.sessionId !== workerId || this.missionOf(workerId) !== id)
+					throw new Error("Related record worker custody unavailable");
+				if (kind === "review") {
+					const request = reviewResultWrite(r.request);
+					if (deliveryDigest(r.contextFence) !== deliveryDigest(request.expectedContextFence))
+						throw new Error("Review context identity mismatch");
+					reviewProducer(r.producer);
+					if (
+						r.type !== "result" ||
+						r.ownerSessionId !== workerId ||
+						r.independence !== "unavailable" ||
+						r.humanAuthorship !== "unavailable" ||
+						!Array.isArray(r.observations)
+					)
+						throw new Error("Malformed result custody");
+					// Other context/citation authorization is not inferred by this bounded reader.
+					const exact =
+						request.content.length === 1 &&
+						request.content[0]?.kind === "snapshot" &&
+						request.content[0].snapshotId === snapshotId;
+					if (
+						!exact ||
+						request.context.length > 0 ||
+						"references" in request.preferences ||
+						request.findings.some((f) => f.evidence.some((e) => e.kind !== "code" || e.snapshotId !== snapshotId))
+					)
+						throw new Error("Unsupported related assessment scope");
+					const profile = this.reviewProfile(id, request.profileId, request.profileRevision);
+					if (
+						!profile ||
+						profile.version !== 1 ||
+						profile.missionId !== id ||
+						profile.revision !== request.profileRevision
+					)
+						throw new Error("Missing exact review profile");
+					reviewProfileWrite(profile.request);
+					nativeReviewProfile(profile, id, request.profileId, request.profileRevision);
+					let outdated = false;
+					try {
+						assertDeliveryAssignment(task, request.assignment);
+					} catch {
+						outdated = true;
+					}
+					outdated ||=
+						this.sharedDefinitionRevision(task.id) !== request.definitionRevision ||
+						this.latestReviewResult(id, task.id, request.profileId)?.id !== r.id ||
+						this.reviewProfile(id, request.profileId)?.revision !== request.profileRevision ||
+						deliveryDigest(this.reviewContextFence(id)) !== deliveryDigest(request.expectedContextFence);
+					result.assessments.push({
+						id: r.id,
+						taskId: task.id,
+						profile: profile.request.definition.purpose,
+						profileRevision: request.profileRevision,
+						intent: request.assignment.intent,
+						applicability: outdated ? "outdated" : "unavailable",
+						state: request.output.state,
+						outcome: request.output.state === "completed" ? request.output.outcome : null,
+						reason: request.output.reason,
+						limitations: request.limitations,
+						findings: request.findings.map((f) => ({
+							title: f.title,
+							trigger: f.trigger,
+							cost: f.cost,
+							severity: f.severity,
+							evidence: f.evidence.map((e) => {
+								if (e.kind !== "code" || !snapshot || snapshot.snapshotId !== snapshotId)
+									throw new Error("Citation comparison unavailable");
+								const entry = snapshot[e.side].find((s) => s.path === e.path);
+								if (
+									entry?.state !== "text" ||
+									entry.sha256 !== e.sha256 ||
+									entry.bytes === null ||
+									e.end > entry.bytes
+								)
+									throw new Error("Citation manifest reference unavailable");
+								return { path: e.path, side: e.side, sha256: e.sha256, start: e.start, end: e.end };
+							}),
+						})),
+					});
+				} else if (kind === "submission") {
+					const request = deliverySubmissionWrite(r.request);
+					if (
+						request.evidence.length !== 1 ||
+						request.evidence[0]?.kind !== "snapshot" ||
+						request.evidence[0].snapshotId !== snapshotId
+					)
+						throw new Error("Unsupported submission assessment scope");
+					if (r.type !== "submission" || r.ownerSessionId !== workerId || !Array.isArray(r.observations))
+						throw new Error("Invalid submission custody");
+					result.reported.push({
+						id: r.id,
+						taskId: task.id,
+						intent: request.assignment.intent,
+						claim: request.claim,
+						limitations: request.limitations,
+					});
+				} else {
+					const request = allocationWrite(r.request);
+					if (
+						request.action === "allocate" &&
+						(request.sources.length !== 1 ||
+							request.sources[0]?.reference.kind !== "snapshot" ||
+							request.sources[0].reference.snapshotId !== snapshotId ||
+							request.sources[0].sourceOwnerSessionId !== workerId ||
+							request.sources[0].sha256 !== snapshotId)
+					)
+						throw new Error("Unsupported selected allocation scope");
+					if (
+						request.action !== "allocate" ||
+						request.ownerSessionId !== workerId ||
+						r.historicalTaskAttribution !== "unknown" ||
+						r.scopeCoverage !== "selected-only"
+					)
+						throw new Error("Invalid allocation scope");
+					result.allocations.push({
+						id: r.id,
+						taskId: task.id,
+						intent: request.assignment.intent,
+						reason: request.reason,
+					});
+				}
+			}
+		}
+		return result;
+	}
+
 	reviewProfile(id: string, profileId: string, revision?: number): MissionReviewProfile | undefined {
 		this.require(id);
 		const row = this.one(
@@ -5630,6 +5808,14 @@ export class MissionStore {
 		return this.all("SELECT session_id FROM members WHERE mission_id = ? ORDER BY joined_at", id).map((row) =>
 			str(row.session_id!),
 		);
+	}
+	/** Bounded native Review discovery; current membership is still checked per returned ID. */
+	nativeReviewMembers(id: string): string[] {
+		this.require(id);
+		return this.all(
+			"SELECT session_id FROM members WHERE mission_id=? ORDER BY joined_at,session_id LIMIT 101",
+			id,
+		).map((row) => str(row.session_id!));
 	}
 
 	private assertMember(id: string, sessionId: unknown): void {

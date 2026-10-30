@@ -337,6 +337,22 @@ adoption by itself; functional Settings is a separate implementation.
 
 ## Verification
 
+### Retained Review
+
+Mission detail's Review tab (`native_review_view`/`native_review_render`) composes the existing
+page/header, Kit Selects and Kit0.8.1 Diff. It adds no sidebar destination or Inbox attention.
+The summary has one bounded scroll owner, with exact IDs and optional reported evidence in
+disclosures; the virtualized diff fills the remaining viewport. Unified/Split, file choice,
+selection/copy and Before/After retained source share the immutable comparison. Escape/Back
+leaves source, then returns to Overview; Option-Up/Down moves between changes in Diff.
+No add-annotation callback, draft entity or submission/approval handler is installed.
+All data/cancellation/admission and exact selection belong to the pane/reader, never render.
+No live Changes/Open file capability is reused. Empty, partial, unsupported and refused inputs
+remain explicit. See [native Review](../../../docs/mission-native-review.md) for scope and limits.
+The `native_review` hidden production-root target checks680/1100 light/dark, native controls,
+exact layer/stack identity, newer-revision pinning, source/back, resize, empty and denied reads.
+It is synthetic native interaction evidence, not OS IME/AX/performance qualification.
+
 ### Sidebar presentation
 
 `workbench_view::sidebar` keeps compose beside Home, matching Swift's

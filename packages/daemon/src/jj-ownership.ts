@@ -113,6 +113,17 @@ export class JjOwnershipStore {
 		);
 	}
 
+	/** Exact durable host binding lookup, including after workspace loss. No filesystem grant. */
+	async sessionBinding(sessionId: string, missionId: string, repositoryPath: string, workspace: string) {
+		if (!(await this.available())) return undefined;
+		return this.rpc<import("./jj-ownership-contract.ts").JjOwnershipBinding | undefined>("sessionBinding", {
+			sessionId,
+			missionId,
+			repositoryPath,
+			workspace,
+		});
+	}
+
 	async get(repositoryId: string, changeId: string): Promise<JjOwnedChange> {
 		return this.rpc("get", { repositoryId, changeId });
 	}

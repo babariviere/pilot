@@ -1,5 +1,7 @@
+import { stat } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
+import type { JjOwnershipBinding } from "./jj-ownership-contract.ts";
 import {
 	captureRequest,
 	type ReviewCaptureRequest,
@@ -102,16 +104,49 @@ export class ReviewSnapshotStore {
 		}
 	}
 
-	get(snapshotId: string): Promise<ReviewSnapshot> {
+	private async exists(): Promise<boolean> {
+		return (
+			this.worker !== undefined ||
+			stat(this.file).then(
+				() => true,
+				(e: NodeJS.ErrnoException) => {
+					if (e.code !== "ENOENT") throw e;
+					return false;
+				},
+			)
+		);
+	}
+	async get(snapshotId: string): Promise<ReviewSnapshot> {
 		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("get", { snapshotId });
 	}
-	read(snapshotId: string, ref: ReviewSourceRef): Promise<Uint8Array> {
+	/** Read-only discovery never creates a store or captures a comparison. */
+	async list(
+		binding: JjOwnershipBinding,
+		after = 0,
+	): Promise<{
+		comparisons: {
+			snapshotId: string;
+			sequence: number;
+			capturedAt: number;
+			request: ReviewCaptureRequest;
+			status: ReviewSnapshot["manifest"]["status"];
+		}[];
+		next: number | null;
+	}> {
 		this.open();
+		if (!(await this.exists())) return { comparisons: [], next: null };
+		return this.rpc("list", { binding, after });
+	}
+	async read(snapshotId: string, ref: ReviewSourceRef): Promise<Uint8Array> {
+		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("read", { snapshotId, ref });
 	}
-	diff(snapshotId: string): Promise<Uint8Array> {
+	async diff(snapshotId: string): Promise<Uint8Array> {
 		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("diff", { snapshotId });
 	}
 	/** Exact-operation recovery, not a freshness check or permission to retry a different comparison. */
