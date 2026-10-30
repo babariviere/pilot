@@ -1335,6 +1335,7 @@ export function createDaemonServer(
 			return json(res, 200, { accepted: true });
 		}
 		if (parts[1] === "diagnostics" && parts.length === 2 && req.method === "DELETE") {
+			await telemetry?.clearNextDiagnostics();
 			await sessions.clearDiagnostics();
 			await telemetry?.featureUsage.clear();
 			await tracking?.clearDiagnosticEvidence?.();
@@ -2144,6 +2145,24 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	const nextControl = (): Extract<ServerMessage, { type: "diagnostics.next-control" }> | undefined => {
+		if (!hello?.lineageId || !telemetry) return;
+		const settings = telemetry.settings();
+		if (!settings.nextDiagnostics) return;
+		return {
+			type: "diagnostics.next-control",
+			control: {
+				schemaVersion: 1,
+				host: { hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
+				localDiagnostics: settings.localDiagnostics,
+				epoch: settings.nextDiagnostics!.epoch,
+			},
+		};
+	};
+	const stopNextControl = telemetry?.onChange(() => {
+		const message = nextControl();
+		if (message) broadcast(message);
+	});
 	const stopDiagnosticReads = sessions.diagnosticReadBroker?.onRead((dispatch) => {
 		broadcast({ type: "diagnostics.read", dispatch });
 	});
@@ -2168,6 +2187,7 @@ export function createDaemonServer(
 	});
 	server.on("close", () => {
 		stopDiagnosticReads?.();
+		stopNextControl?.();
 		stopMissionCatalog?.();
 		clearTimeout(missionCatalogTimer);
 	});
@@ -2325,6 +2345,8 @@ export function createDaemonServer(
 
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
+		const control = nextControl();
+		if (control) send(ws, control);
 		if (power) send(ws, { type: "power", power: power.status() });
 		if (mcp) send(ws, { type: "mcp", mcp: mcp.status() });
 		send(ws, { type: "projects", projects: projects.list() });

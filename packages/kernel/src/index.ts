@@ -21,6 +21,7 @@ export type {
 	KernelSubagent,
 	KernelTelemetryConfiguration,
 	KernelUsage,
+	NextAppLogOmissions,
 } from "./protocol.ts";
 export type { EarlierEntriesRead, PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
 export { subagentStorageSignature } from "./subagent-watch.ts";

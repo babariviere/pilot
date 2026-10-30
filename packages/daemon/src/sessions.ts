@@ -6518,6 +6518,13 @@ export class SessionManager {
 		if (specialist.role !== "diagnostics" && !repair)
 			throw new Conflict("Only a diagnostics specialist or a confirmed repair may read Pilot logs");
 		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
+		if (specialist.role === "diagnostics") this.diagnosticExecutionHost(specialist);
+		const pinned = specialist.diagnosticScope === "app" ? specialist.diagnosticHost : specialist.diagnosticTarget?.host;
+		const nextAllowed =
+			specialist.role === "diagnostics" &&
+			!!pinned &&
+			pinned.daemonId === this.diagnosticHost.daemonId &&
+			pinned.lineageId === this.diagnosticHost.lineageId;
 		if (repair?.kind === "app" || specialist.diagnosticScope === "app") {
 			return this.diagnosticLogs.call(
 				repair?.host ?? this.diagnosticHost,
@@ -6525,6 +6532,7 @@ export class SessionManager {
 				this.telemetry?.localDiagnostics ?? true,
 				request,
 				signal,
+				nextAllowed,
 			);
 		}
 		const reference = repair?.kind === "chat" ? repair : this.diagnosticReference(specialist);
@@ -6541,6 +6549,7 @@ export class SessionManager {
 			this.telemetry?.localDiagnostics ?? true,
 			request,
 			signal,
+			nextAllowed,
 		);
 	}
 

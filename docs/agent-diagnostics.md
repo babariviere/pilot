@@ -117,7 +117,8 @@ falling back to any chat:
 
 | Source ID | Scope and coverage |
 | --- | --- |
-| `app` | Private native app lifecycle, host transport and repair event/error codes on this Mac. Only closed categories and allowlisted error domains/numeric codes, never error descriptions, userInfo, console interception or payloads. Retained history is not current app liveness or comprehensive crash capture. |
+| `app` | Private Swift app lifecycle, host transport and repair event/error codes on this Mac. Only closed categories and allowlisted error domains/numeric codes, never error descriptions, userInfo, console interception or payloads. Retained history is not current app liveness or comprehensive crash capture. |
+| `next_app` | macOS Rust/GPUI Next completed JSON transport observations only, not receipt/delivery acceptance or UI frames. Exact current daemon/lineage, persisted specialist role and known enabled Local diagnostics control required. Three fixed private slots; v1/unbound/foreign/invalid/expired/future/cleared rows omitted with bounded-window counts. Manual exports and Swift logs remain separate. No linked forwarding or new repair-grant access. |
 | `daemon` | The current and one rotated `pilotd.log` on macOS. Verified owned Linux user services expose bounded retained Pilot-only journal history. Unsupported/unowned/permission-denied hosts fall back to the redacted current-process ring, explicitly not historical worker coverage. |
 | `kernel_worker` | Kernel/worker stdout and stderr inherited by the persistent daemon log. Records can be interleaved and cannot be reliably attributed to one process. The daemon ring alone is not presented as worker coverage. |
 | `native_report` | Existing Pilot-named crash, hang, spin and diagnostic reports in the current macOS user's `DiagnosticReports` directory. System-wide and ambiguous Node reports are excluded. Empty coverage does not prove no crash or hang. |
@@ -135,6 +136,15 @@ daemon/lineage identity, age, size, ownership, permissions and no-follow files b
 Disabled local diagnostics hides this source; **Clear local diagnostics** drains/invalidate pending app
 writes and deletes both app segments. No app event is uploaded or mirrored to a remote host. App-absent
 or pre-upgrade hosts report missing/not-recorded rather than pretending retained logs exist.
+
+Next uses `~/Library/Application Support/Pilot Next/diagnostics/events-{0,1,2}.jsonl`,
+three 64 KiB private slots and a 256-command queue. Its version 2 closed numeric schema and Local
+settings-control bridge are documented in [native diagnostic coverage](../apps/desktop/docs/diagnostic-coverage.md).
+Disable/clear persists a new numeric privacy epoch; only the native writer invalidates/drains queued bound
+writes and selectively clears old-epoch bound rows in its slots. The daemon never unlinks an active writer's files, and
+its clear response does not acknowledge native physical clearing. Independent manual unbound
+capture/export and legacy bytes are preserved. Unknown controls prohibit new integrated
+collection/disclosure. The separate `diagnostic_context` linked-log routing does not gain this source.
 
 Other current producers are `~/Library/Logs/Pilot/pilotd.log` and its `.1` file for the macOS launch agent;
 `<PILOT_HOME>/sessions/<target>/lifecycle.jsonl`, `durable/performance.jsonl` and

@@ -164,6 +164,13 @@ const sessions = new SessionManager(
 				? {
 						daemonLog: join(homedir(), "Library", "Logs", "Pilot", "pilotd.log"),
 						appLog: join(homedir(), "Library", "Logs", "Pilot", "App", "app.jsonl"),
+						nextAppRoot: join(homedir(), "Library", "Application Support", "Pilot Next", "diagnostics"),
+						nextAppControl: () => {
+							const settings = telemetry.settings();
+							return settings.nextDiagnostics
+								? { localDiagnostics: settings.localDiagnostics, epoch: settings.nextDiagnostics.epoch }
+								: undefined;
+						},
 						diagnosticReports: join(homedir(), "Library", "Logs", "DiagnosticReports"),
 					}
 				: {}),

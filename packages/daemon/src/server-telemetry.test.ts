@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { DaemonHello, TelemetrySettings } from "@pilot/protocol";
+import { WebSocket } from "ws";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -66,6 +67,24 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 		await rm(home, { recursive: true, force: true });
 	});
 
+	const socket = new WebSocket(`${origin.replace("http:", "ws:")}/api/ws`);
+	const controls: unknown[] = [];
+	socket.on("message", (raw) => {
+		const message = JSON.parse(String(raw));
+		if (message.type === "diagnostics.next-control") controls.push(message.control);
+	});
+	t.after(() => socket.terminate());
+	await once(socket, "open");
+	const waitControl = async (count: number) => {
+		while (controls.length < count) await once(socket, "message", { signal: AbortSignal.timeout(2000) });
+		return controls.at(-1) as { host: unknown; localDiagnostics: boolean; epoch: number };
+	};
+	assert.deepEqual((await waitControl(1)).host, {
+		hostId: "daemon",
+		daemonId: hello.daemonId,
+		lineageId: hello.lineageId,
+	});
+	assert.equal((await waitControl(1)).localDiagnostics, true);
 	const initial = await fetch(`${origin}/api/telemetry`);
 	assert.equal(initial.status, 200);
 	assert.equal(((await initial.json()) as TelemetrySettings).remoteOperational, false);
@@ -110,6 +129,8 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 		}),
 	});
 	assert.equal(configured.status, 200);
+	assert.equal((await waitControl(2)).localDiagnostics, false);
+	assert.ok((await waitControl(2)).epoch > 0);
 	const configuredSettings = (await configured.json()) as TelemetrySettings;
 	assert.equal(configuredSettings.endpoint, "http://127.0.0.1:4318/v1/traces");
 	assert.equal(configuredSettings.aiUsageBudget?.limitUsdMicros, 1_000_000);
@@ -134,6 +155,8 @@ test("telemetry API keeps controls host-scoped, validates mutations and clears w
 	await unsafe.arrayBuffer();
 	const cleared = await fetch(`${origin}/api/diagnostics`, { method: "DELETE" });
 	assert.equal(cleared.status, 200);
+	assert.ok((await waitControl(3)).epoch > 0);
+	socket.terminate();
 	assert.deepEqual(await cleared.json(), { cleared: true });
 	await assert.rejects(stat(join(home, "native-diagnostics.json")));
 	assert.equal(

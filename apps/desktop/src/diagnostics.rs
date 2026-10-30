@@ -10,9 +10,8 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::{
-        Arc, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
-        mpsc,
     },
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -52,7 +51,12 @@ impl Build {
         &self.version
     }
     fn valid(&self) -> bool {
-        !self.version.is_empty()
+        let components: Vec<_> = self.version.split('.').collect();
+        components.len() == 3
+            && components
+                .iter()
+                .all(|s| !s.is_empty() && s.len() <= 9 && (*s == "0" || !s.starts_with('0')))
+            && !self.version.is_empty()
             && self.version.len() < 64
             && self
                 .version
@@ -62,7 +66,7 @@ impl Build {
             && self
                 .desktop_source_sha256
                 .bytes()
-                .all(|c| c.is_ascii_hexdigit())
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -71,9 +75,73 @@ enum Operation {
     Startup,
     DeliveryRequest,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Host {
+    host_id: String,
+    daemon_id: String,
+    lineage_id: String,
+}
+impl Host {
+    fn from_options(options: &crate::local_client::LocalOptions) -> Self {
+        let host = options.host();
+        Self {
+            host_id: "daemon".into(),
+            daemon_id: host.daemon_id,
+            lineage_id: host.lineage_id,
+        }
+    }
+    fn valid(&self) -> bool {
+        self.host_id == "daemon"
+            && [&self.daemon_id, &self.lineage_id]
+                .iter()
+                .all(|s| uuid::Uuid::parse_str(s).is_ok_and(|u| u.to_string() == **s))
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Loss {
+    dropped: u64,
+    storage_errors: u64,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Control {
+    schema_version: u8,
+    host: Host,
+    local_diagnostics: bool,
+    epoch: u64,
+}
+impl Control {
+    fn parse(
+        options: &crate::local_client::LocalOptions,
+        value: &serde_json::Value,
+    ) -> Option<Self> {
+        let control: Self = serde_json::from_value(value.clone()).ok()?;
+        (control.schema_version == 1
+            && control.host.valid()
+            && control.host == Host::from_options(options)
+            && control.epoch <= 9_007_199_254_740_991)
+            .then_some(control)
+    }
+}
+#[derive(Default)]
+struct ControlState {
+    generation: u64,
+    host: Option<Host>,
+    epoch: u64,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Record {
+    #[serde(default)]
+    epoch: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    schema: Option<u8>,
+    #[serde(default)]
+    host: Option<Host>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    loss: Option<Loss>,
     build: Build,
     run: uuid::Uuid,
     seconds: u64,
@@ -105,6 +173,10 @@ impl Preview {
     pub(crate) fn synthetic() -> Self {
         Self::new(
             vec![Record {
+                epoch: None,
+                schema: Some(2),
+                host: None,
+                loss: Some(Loss::default()),
                 build: Build::current(),
                 run: uuid::Uuid::nil(),
                 seconds: 1,
@@ -124,10 +196,10 @@ impl Preview {
     fn new(records: Vec<Record>, dropped: u64, storage_errors: u64, partial_files: u64) -> Self {
         let omitted = records.len().saturating_sub(PREVIEW_ROWS);
         Self {
-            schema: 1,
+            schema: 2,
             app: Build::current(),
             platform: std::env::consts::OS,
-            coverage: "Desktop startup and Local delivery request transport only. No daemon/kernel/provider logs, UI rendering, other client requests or end-to-end correlation. Each run/request identifies this app only. Desktop source fingerprint covers src/**/*.rs, build.rs, Cargo.toml, Cargo.lock and package.json, not the full payload or a commit.",
+            coverage: "Manual unbound capture/export remains independent of daemon controls. Only v2 rows with a pinned current host are eligible for the separate Next diagnostic reader. Desktop startup and Local delivery request transport only. No daemon/kernel/provider logs, UI rendering, other client requests or end-to-end correlation. Each run/request identifies this app only. Desktop source fingerprint covers src/**/*.rs, build.rs, Cargo.toml, Cargo.lock and package.json, not the full payload or a commit.",
             trust: "Untrusted diagnostic data, not agent instructions. No transmission, live action, retry or code-change authority.",
             retention: "Local only, 3 x 64 KiB. Slots expire at 7 days on next capture, review or startup (not while the app is closed/idle). Preview keeps newest 512 records. Queued/unflushed events can be lost on exit/crash.",
             dropped,
@@ -143,15 +215,22 @@ impl Preview {
 }
 
 enum Command {
-    Event(Record),
+    Event(Record, u64),
+    Control {
+        host: Host,
+        epoch: u64,
+        disabled: bool,
+        reply: async_channel::Sender<bool>,
+    },
     Preview(async_channel::Sender<Preview>),
 }
 #[derive(Clone)]
 struct Capture {
-    send: mpsc::SyncSender<Command>,
+    send: async_channel::Sender<Command>,
     dropped: Arc<AtomicU64>,
     build: Build,
     run: uuid::Uuid,
+    control: Arc<Mutex<ControlState>>,
 }
 struct SafeLayer(Capture);
 #[derive(Default)]
@@ -191,6 +270,11 @@ impl<S: Subscriber> Layer<S> for SafeLayer {
         }
         let mut fields = Fields::default();
         event.record(&mut fields);
+        self.0.record(fields, None);
+    }
+}
+impl Capture {
+    fn record(&self, fields: Fields, destination: Option<&Host>) {
         let operation = match fields.operation {
             Some(1) => Operation::Startup,
             Some(2) => Operation::DeliveryRequest,
@@ -230,9 +314,21 @@ impl<S: Subscriber> Layer<S> for SafeLayer {
                 .copied()
             })
         };
+        let control = self
+            .control
+            .lock()
+            .expect("diagnostics control lock poisoned");
         let record = Record {
-            build: self.0.build.clone(),
-            run: self.0.run,
+            epoch: destination
+                .filter(|host| control.host.as_ref() == Some(*host))
+                .map(|_| control.epoch),
+            schema: Some(2),
+            host: destination
+                .filter(|host| control.host.as_ref() == Some(*host))
+                .cloned(),
+            loss: Some(Loss::default()),
+            build: self.build.clone(),
+            run: self.run,
             seconds: now(),
             operation,
             request: fields.request,
@@ -245,11 +341,16 @@ impl<S: Subscriber> Layer<S> for SafeLayer {
                 .map(|s| s as u16),
             elapsed_ms: fields.elapsed_ms,
         };
-        if self.0.send.try_send(Command::Event(record)).is_err() {
-            self.0.dropped.fetch_add(1, Ordering::Relaxed);
+        if self
+            .send
+            .try_send(Command::Event(record, control.generation))
+            .is_err()
+        {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -274,9 +375,10 @@ pub fn start() {
         return;
     }
     let dropped = capture.dropped.clone();
+    let control = capture.control.clone();
     if std::thread::Builder::new()
         .name("desktop-tracing".into())
-        .spawn(move || run(root, input, dropped))
+        .spawn(move || run(root, input, dropped, control))
         .is_err()
     {
         return;
@@ -284,14 +386,15 @@ pub fn start() {
     let _ = CAPTURE.set(capture);
     tracing::info!(target: "pilot::diagnostics", operation = 1u64);
 }
-fn channel() -> (Capture, mpsc::Receiver<Command>) {
-    let (send, input) = mpsc::sync_channel(256);
+fn channel() -> (Capture, async_channel::Receiver<Command>) {
+    let (send, input) = async_channel::bounded(256);
     (
         Capture {
             send,
             dropped: Arc::new(AtomicU64::new(0)),
             build: Build::current(),
             run: uuid::Uuid::new_v4(),
+            control: Default::default(),
         },
         input,
     )
@@ -310,6 +413,7 @@ pub(crate) fn preview() -> Result<async_channel::Receiver<Preview>, &'static str
 pub(crate) fn request_id() -> u64 {
     REQUEST.fetch_add(1, Ordering::Relaxed)
 }
+#[cfg(test)]
 pub(crate) fn delivery(
     request: u64,
     diagnostic: &crate::delivery_store::diagnostic::Diagnostic,
@@ -318,6 +422,91 @@ pub(crate) fn delivery(
 ) {
     tracing::info!(target: "pilot::diagnostics", operation = 2u64, request, stage = diagnostic.stage as u64,
         outcome = diagnostic.category as u64, status = diagnostic.status.unwrap_or(0) as u64, elapsed_ms, response_received);
+}
+
+/// The destination is the pinned Local option, not a receipt or acceptance claim.
+pub(crate) fn delivery_to(
+    options: &crate::local_client::LocalOptions,
+    request: u64,
+    diagnostic: &crate::delivery_store::diagnostic::Diagnostic,
+    elapsed_ms: u64,
+    response_received: bool,
+) {
+    if let Some(capture) = CAPTURE.get() {
+        capture.record(
+            Fields {
+                operation: Some(2),
+                request: Some(request.min(9_007_199_254_740_991)),
+                stage: Some(diagnostic.stage as u64),
+                outcome: Some(diagnostic.category as u64),
+                status: diagnostic.status.map(u64::from),
+                elapsed_ms: Some(elapsed_ms.min(9_007_199_254_740_991)),
+                response_received: Some(response_received),
+            },
+            Some(&Host::from_options(options)),
+        );
+    }
+}
+/// Unknown/disconnected controls only stop integrated collection. Manual capture is independent.
+pub(crate) fn disconnect() {
+    if let Some(capture) = CAPTURE.get() {
+        capture.invalidate();
+    }
+}
+impl Capture {
+    fn invalidate(&self) -> u64 {
+        let mut control = self
+            .control
+            .lock()
+            .expect("diagnostics control lock poisoned");
+        control.generation += 1;
+        control.host = None;
+        control.generation
+    }
+    async fn configure(&self, control: Control) {
+        let generation = self.invalidate();
+        let (reply, receive) = async_channel::bounded(1);
+        if self
+            .send
+            .send(Command::Control {
+                host: control.host.clone(),
+                epoch: control.epoch,
+                disabled: !control.local_diagnostics,
+                reply,
+            })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        if receive.recv().await != Ok(true) {
+            return;
+        }
+        let mut state = self
+            .control
+            .lock()
+            .expect("diagnostics control lock poisoned");
+        if state.generation == generation && control.local_diagnostics {
+            state.host = Some(control.host);
+            state.epoch = control.epoch;
+        }
+    }
+}
+pub(crate) async fn control_from_local(
+    options: &crate::local_client::LocalOptions,
+    value: &serde_json::Value,
+) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    if let Some(capture) = CAPTURE.get() {
+        match Control::parse(options, value) {
+            Some(control) => capture.configure(control).await,
+            None => {
+                capture.invalidate();
+            }
+        }
+    }
 }
 
 struct Retention {
@@ -346,10 +535,19 @@ fn private_file(path: &Path) -> std::io::Result<File> {
 }
 impl Retention {
     fn open(root: PathBuf) -> std::io::Result<Self> {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&root)?;
+        let mut ancestor = PathBuf::new();
+        for part in root.components() {
+            ancestor.push(part);
+            if fs::symlink_metadata(&ancestor)
+                .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                fs::DirBuilder::new().mode(0o700).create(&ancestor)?;
+            }
+            let meta = fs::symlink_metadata(&ancestor)?;
+            if !meta.is_dir() || meta.file_type().is_symlink() {
+                return Err(std::io::ErrorKind::PermissionDenied.into());
+            }
+        }
         let meta = fs::symlink_metadata(&root)?;
         if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
             return Err(std::io::ErrorKind::PermissionDenied.into());
@@ -365,7 +563,9 @@ impl Retention {
         };
         // Validate exact owned slots before rotations. Never crawl arbitrary logs.
         for ix in 0..FILES {
-            private_file(&storage.path(ix))?;
+            if private_file(&storage.path(ix))?.metadata()?.len() > FILE_BYTES {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
         }
         storage.bytes = fs::metadata(storage.path(0))?.len();
         storage.expire()?;
@@ -408,6 +608,33 @@ impl Retention {
         self.bytes += bytes.len() as u64;
         Ok(())
     }
+    fn clear_bound(&mut self, host: &Host, epoch: u64, disabled: bool) -> std::io::Result<()> {
+        for ix in 0..FILES {
+            let mut file = private_file(&self.path(ix))?;
+            if file.metadata()?.len() > FILE_BYTES {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            let mut text = String::new();
+            (&file).take(FILE_BYTES + 1).read_to_string(&mut text)?;
+            let retained: String = text
+                .lines()
+                .filter(|line| {
+                    !serde_json::from_str::<Record>(line).is_ok_and(|r| {
+                        r.host.as_ref() == Some(host) && (disabled || r.epoch != Some(epoch))
+                    })
+                })
+                .map(|line| format!("{line}\n"))
+                .collect();
+            if retained != text {
+                use std::io::{Seek, SeekFrom};
+                file.seek(SeekFrom::Start(0))?;
+                file.write_all(retained.as_bytes())?;
+                file.set_len(retained.len() as u64)?;
+                file.sync_data()?;
+            }
+        }
+        Ok(())
+    }
     fn read(&mut self) -> (Vec<Record>, u64) {
         let mut records = Vec::new();
         let mut partial = 0;
@@ -425,8 +652,17 @@ impl Retention {
                 for line in text.lines() {
                     match serde_json::from_str::<Record>(line) {
                         Ok(r)
-                            if r.build.valid()
+                            if r.schema.is_none_or(|schema| schema == 2)
+                                && r.host.as_ref().is_none_or(Host::valid)
+                                && r.loss.as_ref().is_none_or(|l| {
+                                    l.dropped <= 9_007_199_254_740_991
+                                        && l.storage_errors <= 9_007_199_254_740_991
+                                })
+                                && r.request.is_none_or(|n| n <= 9_007_199_254_740_991)
+                                && r.elapsed_ms.is_none_or(|n| n <= 9_007_199_254_740_991)
+                                && r.build.valid()
                                 && r.status.is_none_or(|s| (100..=599).contains(&s))
+                                && r.seconds <= now()
                                 && now().saturating_sub(r.seconds) <= MAX_AGE =>
                         {
                             records.push(r)
@@ -443,17 +679,50 @@ impl Retention {
         (records, partial)
     }
 }
-fn run(root: Option<PathBuf>, input: mpsc::Receiver<Command>, dropped: Arc<AtomicU64>) {
+fn run(
+    root: Option<PathBuf>,
+    input: async_channel::Receiver<Command>,
+    dropped: Arc<AtomicU64>,
+    control: Arc<Mutex<ControlState>>,
+) {
     let mut storage = root.and_then(|p| Retention::open(p).ok());
     let mut errors = u64::from(storage.is_none());
-    while let Ok(command) = input.recv() {
+    while let Ok(command) = input.recv_blocking() {
         match command {
-            Command::Event(record) => {
+            Command::Event(mut record, generation) => {
+                if record.host.is_some()
+                    && control
+                        .lock()
+                        .expect("diagnostics control lock poisoned")
+                        .generation
+                        != generation
+                {
+                    dropped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                record.loss = record.schema.map(|_| Loss {
+                    dropped: dropped.load(Ordering::Relaxed).min(9_007_199_254_740_991),
+                    storage_errors: errors.min(9_007_199_254_740_991),
+                });
                 if let Some(storage) = &mut storage
                     && storage.append(&record).is_err()
                 {
                     errors += 1;
                 }
+            }
+            Command::Control {
+                host,
+                epoch,
+                disabled,
+                reply,
+            } => {
+                let cleared = storage
+                    .as_mut()
+                    .is_some_and(|s| s.clear_bound(&host, epoch, disabled).is_ok());
+                if !cleared {
+                    errors += 1;
+                }
+                let _ = reply.try_send(cleared);
             }
             Command::Preview(reply) => {
                 let (records, partial) = storage.as_mut().map(|s| s.read()).unwrap_or_default();
@@ -504,6 +773,8 @@ mod tests {
     impl Private {
         fn new() -> Self {
             let path = std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
                 .join(format!("diagnostics-synthetic-{}", uuid::Uuid::new_v4()));
             fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
             Self(path)
@@ -516,6 +787,10 @@ mod tests {
     }
     fn record() -> Record {
         Record {
+            epoch: None,
+            schema: Some(2),
+            host: None,
+            loss: Some(Loss::default()),
             build: Build::current(),
             run: uuid::Uuid::new_v4(),
             seconds: now(),
@@ -536,6 +811,227 @@ mod tests {
     }
 
     #[test]
+    fn diagnostics_v2_producer_slots_catalogue_search_excerpt_and_settings() {
+        let temp = Private::new();
+        let host = Host {
+            host_id: "daemon".into(),
+            daemon_id: uuid::Uuid::new_v4().to_string(),
+            lineage_id: uuid::Uuid::new_v4().to_string(),
+        };
+        fs::write(temp.0.join("daemon-id"), &host.daemon_id).unwrap();
+        fs::write(temp.0.join("storage-lineage"), &host.lineage_id).unwrap();
+        let options = crate::local_client::LocalOptions::discover_at(
+            pilot_desktop_updater::coordination::Location {
+                home: temp.0.clone(),
+                port: 1,
+                policy: Default::default(),
+            },
+        )
+        .unwrap();
+        let value =
+            serde_json::json!({"schemaVersion":1,"host":host,"localDiagnostics":true,"epoch":0});
+        let control = Control::parse(&options, &value).expect("exact current control");
+        for key in ["body", "remoteOperational", "sessionId"] {
+            let mut injected = value.clone();
+            injected[key] = serde_json::json!("secret-canary");
+            assert!(Control::parse(&options, &injected).is_none());
+        }
+        let mut foreign = value.clone();
+        foreign["host"]["lineageId"] = serde_json::json!(uuid::Uuid::new_v4().to_string());
+        assert!(Control::parse(&options, &foreign).is_none());
+        let mut future = value.clone();
+        future["epoch"] = serde_json::json!(u64::MAX);
+        assert!(Control::parse(&options, &future).is_none());
+        let root = temp.0.join("diagnostics");
+        let mut storage = Retention::open(root.clone()).unwrap();
+        let legacy = serde_json::json!({"build":Build::current(), "run":uuid::Uuid::new_v4(), "seconds":now(), "operation":"startup", "request":null, "stage":null, "outcome":null, "response_received":null, "status":null, "elapsed_ms":null});
+        let legacy_bytes = format!("{legacy}\n");
+        fs::write(storage.path(0), &legacy_bytes).unwrap();
+        storage.append(&record()).unwrap();
+        drop(storage);
+        let (capture, input) = channel();
+        let dropped = capture.dropped.clone();
+        dropped.store(7, Ordering::Relaxed);
+        let state = capture.control.clone();
+        let worker_root = root.clone();
+        let worker = std::thread::spawn(move || run(Some(worker_root), input, dropped, state));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(capture.configure(control));
+        let fields = |response_received| Fields {
+            operation: Some(2),
+            request: Some(2),
+            stage: Some(3),
+            outcome: Some(2),
+            status: Some(if response_received { 200 } else { 503 }),
+            elapsed_ms: Some(120),
+            response_received: Some(response_received),
+        };
+        capture.record(fields(false), Some(&host));
+        capture.record(fields(true), Some(&host));
+        let (reply, receive) = async_channel::bounded(1);
+        capture.send.send_blocking(Command::Preview(reply)).unwrap();
+        let preview = receive.recv_blocking().unwrap();
+        assert_eq!(preview.records.len(), 4);
+        assert_eq!(
+            preview.records.iter().filter(|r| r.host.is_some()).count(),
+            2
+        );
+        assert_eq!(
+            preview.records.last().unwrap().outcome,
+            None,
+            "JSON success is not acceptance"
+        );
+        assert_eq!(
+            preview
+                .records
+                .last()
+                .unwrap()
+                .loss
+                .as_ref()
+                .unwrap()
+                .dropped,
+            7
+        );
+        if let Some(node) = std::env::var_os("PILOT_NEXT_DIAGNOSTIC_READER_NODE") {
+            let result = std::process::Command::new(node)
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../packages/daemon/src/next-app-log.fixture.ts"
+                ))
+                .arg(&root)
+                .arg(&host.daemon_id)
+                .arg(&host.lineage_id)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "synthetic reader: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&result.stdout).trim(),
+                "next-producer-reader-ok"
+            );
+        }
+        let mut future_row = record();
+        future_row.host = Some(host.clone());
+        future_row.epoch = Some(0);
+        future_row.seconds = now() + 3600;
+        fs::write(
+            root.join("events-1.jsonl"),
+            format!("{}\n", serde_json::to_string(&future_row).unwrap()),
+        )
+        .unwrap();
+        runtime.block_on(capture.configure(Control {
+            schema_version: 1,
+            host: host.clone(),
+            local_diagnostics: true,
+            epoch: 1,
+        }));
+        assert_eq!(
+            fs::metadata(root.join("events-1.jsonl")).unwrap().len(),
+            0,
+            "old-epoch future timestamps cannot survive clear"
+        );
+        let (reply, receive) = async_channel::bounded(1);
+        capture.send.send_blocking(Command::Preview(reply)).unwrap();
+        let preview = receive.recv_blocking().unwrap();
+        assert_eq!(
+            preview.records.len(),
+            2,
+            "manual rows survive integrated clear"
+        );
+        assert!(
+            fs::read_to_string(root.join("events-0.jsonl"))
+                .unwrap()
+                .starts_with(&legacy_bytes),
+            "legacy bytes remain exact, never migrated"
+        );
+        assert_eq!(capture.control.lock().unwrap().host.as_ref(), Some(&host));
+        drop(capture);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn diagnostics_v2_control_invalidates_queued_bound_writes_and_preserves_manual_capture() {
+        let temp = Private::new();
+        let (capture, input) = channel();
+        let host = Host {
+            host_id: "daemon".into(),
+            daemon_id: uuid::Uuid::new_v4().to_string(),
+            lineage_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let mut manual = record();
+        manual.schema = None; // Existing v1 data is never rebound or migrated.
+        let mut storage = Retention::open(temp.0.clone()).unwrap();
+        storage.append(&manual).unwrap();
+        let mut bound = record();
+        bound.host = Some(host.clone());
+        bound.epoch = Some(0);
+        storage.append(&bound).unwrap();
+        drop(storage);
+        capture.invalidate();
+        capture
+            .send
+            .send_blocking(Command::Event(bound, 0))
+            .unwrap();
+        let (reply, receive) = async_channel::bounded(1);
+        capture
+            .send
+            .send_blocking(Command::Control {
+                host,
+                epoch: now(),
+                disabled: true,
+                reply,
+            })
+            .unwrap();
+        let dropped = capture.dropped.clone();
+        let control = capture.control.clone();
+        let worker = std::thread::spawn(move || {
+            let _temp = temp;
+            run(Some(_temp.0.clone()), input, dropped, control)
+        });
+        assert!(receive.recv_blocking().unwrap());
+        let (reply, receive) = async_channel::bounded(1);
+        capture.send.send_blocking(Command::Preview(reply)).unwrap();
+        let preview = receive.recv_blocking().unwrap();
+        assert_eq!(preview.records.len(), 1);
+        assert!(preview.records[0].host.is_none());
+        assert!(preview.records[0].schema.is_none());
+        assert_eq!(
+            preview.dropped, 1,
+            "invalidated queued writes are disclosed"
+        );
+        drop(capture);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn diagnostics_v2_control_requires_closed_current_identity_and_safe_numbers() {
+        let options = crate::local_client::LocalOptions::synthetic(1);
+        let control = serde_json::json!({"schemaVersion":1,"host":{"hostId":"daemon","daemonId":"test-daemon","lineageId":"test-lineage"},"localDiagnostics":true,"epoch":0});
+        assert!(
+            Control::parse(&options, &control).is_none(),
+            "synthetic non-UUID identity is not integrated evidence"
+        );
+        let host = Host {
+            host_id: "daemon".into(),
+            daemon_id: uuid::Uuid::new_v4().to_string(),
+            lineage_id: uuid::Uuid::new_v4().to_string(),
+        };
+        assert!(host.valid());
+        let mut row = record();
+        row.seconds = now() + 1;
+        let temp = Private::new();
+        let mut storage = Retention::open(temp.0.clone()).unwrap();
+        storage.append(&row).unwrap();
+        assert!(storage.read().0.is_empty(), "future records are withheld");
+    }
+
+    #[test]
     fn diagnostics_tracing_excludes_secrets_content_paths_urls_and_debug_without_formatting() {
         let (capture, input) = channel();
         let subscriber = tracing_subscriber::registry().with(SafeLayer(capture));
@@ -551,7 +1047,7 @@ mod tests {
             tracing::info!(target:"pilot::diagnostics", operation=2u64, request=7u64, stage=3u64, outcome=2u64, status=503u64, elapsed_ms=12u64,
                 token="sk-SYNTHETIC-secret", content="private chat draft tool", path="/Users/synthetic/private", url="https://private.invalid/token?secret=yes", body="raw HTTP body", error=?NeverDebug, "arbitrary message");
         });
-        let Command::Event(record) = input.try_recv().unwrap() else {
+        let Command::Event(record, _) = input.try_recv().unwrap() else {
             panic!("event")
         };
         assert!(input.try_recv().is_err());
@@ -600,7 +1096,7 @@ mod tests {
             start.elapsed().as_secs() < 5,
             "capture must not wait for I/O or a consumer"
         );
-        assert_eq!(input.try_iter().count(), 256);
+        assert_eq!(std::iter::from_fn(|| input.try_recv().ok()).count(), 256);
         assert_eq!(dropped.load(Ordering::Relaxed), 8000 - 256);
     }
     #[test]
@@ -610,7 +1106,8 @@ mod tests {
         let (capture, input) = channel();
         let root = temp.0.clone();
         let dropped = capture.dropped.clone();
-        let worker = std::thread::spawn(move || run(Some(root), input, dropped));
+        let control = capture.control.clone();
+        let worker = std::thread::spawn(move || run(Some(root), input, dropped, control));
         let dispatcher =
             tracing::Dispatch::new(tracing_subscriber::registry().with(SafeLayer(capture.clone())));
         let stages = [
@@ -649,7 +1146,7 @@ mod tests {
             }
         });
         let (reply, receive) = async_channel::bounded(1);
-        capture.send.send(Command::Preview(reply)).unwrap();
+        capture.send.send_blocking(Command::Preview(reply)).unwrap();
         let preview = receive.recv_blocking().unwrap();
         assert_eq!(preview.records.len(), categories.len());
         assert_eq!(preview.storage_errors, 0);
@@ -720,7 +1217,7 @@ mod tests {
         let (reply, receive) = async_channel::bounded(1);
         capture.send.try_send(Command::Preview(reply)).unwrap();
         drop(capture.send);
-        run(None, input, capture.dropped);
+        run(None, input, capture.dropped, capture.control);
         let preview = receive.recv_blocking().unwrap();
         assert_eq!(preview.storage_errors, 1);
         assert!(preview.records.is_empty());

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -22,6 +22,25 @@ const hello: DaemonHello = {
 		independentExecution: true,
 	},
 };
+
+test("Next privacy epoch persists, disable advances it, and remote consent does not enable collection", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "next-control-"));
+	t.after(() => import("node:fs/promises").then(({ rm }) => rm(home, { recursive: true, force: true })));
+	const service = await TelemetrySettingsService.open(home, hello);
+	const initial = service.settings().nextDiagnostics!.epoch;
+	assert.ok(Number.isSafeInteger(initial));
+	await service.clearNextDiagnostics();
+	const cleared = service.settings().nextDiagnostics!.epoch;
+	assert.notEqual(cleared, initial);
+	await service.update({ localDiagnostics: false, remoteOperational: false, productAnalytics: false });
+	assert.notEqual(service.settings().nextDiagnostics!.epoch, cleared);
+	const reopened = await TelemetrySettingsService.open(home, hello);
+	assert.deepEqual(reopened.settings().nextDiagnostics, service.settings().nextDiagnostics);
+	assert.equal(reopened.settings().localDiagnostics, false);
+	await writeFile(join(home, "telemetry.json"), "{invalid");
+	const unknown = await TelemetrySettingsService.open(home, hello);
+	assert.equal(unknown.settings().nextDiagnostics, undefined, "unreadable settings cannot enable Next integration");
+});
 
 test("telemetry settings default off, persist privately and expose only pseudonymous identity", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-telemetry-settings-"));

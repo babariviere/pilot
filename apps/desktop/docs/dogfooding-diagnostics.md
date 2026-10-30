@@ -4,14 +4,18 @@ Settings → Diagnostics → Review capture freezes a JSON preview. Edit or remo
 records/fields in the native editor, then choose Export reviewed… and a **new**
 filename. Only those reviewed bytes are exported. Clear preview discards the
 preview, not capture files. Closing Settings retains the preview in this process.
-Nothing is sent to an agent or telemetry service. Sharing the exported file is a
+Review/export itself sends nothing to an agent or telemetry service. Sharing the exported file is a
 separate explicit user action. Export errors retain edits; a write failure may
 leave a partial file, which must be removed before sharing.
 
 For the source-checked producer/export path, actionable interpretation limits and
 the separate diagnostic-role reader boundary, see
 [native diagnostic coverage](diagnostic-coverage.md). Next capture is not consumed
-by `diagnostic_logs` source `app`, which currently validates the Swift producer.
+by `diagnostic_logs` source `app`, which validates the Swift producer. The separate
+macOS `next_app` source now admits only enabled, current-host-pinned v2 rows to
+persisted diagnostic specialists. Unbound/v1 rows remain manual-only, and daemon
+disable/clear preserves independent manual capture/export. See the coverage
+document for writer-drain and selective-clear ordering.
 
 ## Audit and implementation boundary
 
@@ -19,11 +23,13 @@ At introduction the desktop crate had Tokio and transitive `tracing`, but no
 app-owned subscriber, spans or Settings diagnostic export. The existing typed
 delivery diagnostic (`delivery_diagnostic.rs`) already classifies request stages,
 HTTP status and transport failures without retaining bodies or rejection text.
-The daemon has its own diagnostic APIs and policy; this feature does not call or
-extend them. It does not crawl daemon, OS or other app logs.
+The original manual-export slice did not extend daemon diagnostic APIs. The
+subsequent D120 integration is the separate bounded reader/control contract above. It does not crawl daemon, OS or other app logs.
 
 The executable installs one `tracing_subscriber` registry and a privacy-filtered
-Layer, not a parallel logger. It observes only `pilot::diagnostics` events. The
+Layer, not a parallel logger. Startup tracing observes only `pilot::diagnostics`
+events; completed transport observations use the same closed numeric capture
+path with an explicit pinned Local destination. The
 numeric field schema is allowlisted; messages, arbitrary strings, Debug values
 and span contents are never formatted or serialized. Unrelated tracing from
 Tokio, HTTP libraries and the renderer is not persisted. No fmt/log bridge is
@@ -59,8 +65,8 @@ while the app is closed or idle. Explicit preview keeps the newest 512 rows;
 older omitted rows, queue drops, storage failures and unreadable/partial records
 are reported in the manifest. Invalid records are not copied into the preview.
 
-The tracing callback uses a bounded 256-entry `try_send`, never filesystem I/O or
-a waiting lock. One named background thread owns capture, rotation and snapshot
+Capture uses a bounded 256-entry `try_send` and a short in-memory identity lock,
+never filesystem I/O on the caller. One named background thread owns capture, rotation and snapshot
 reads. Export also runs off the UI thread. A full queue drops events and counts
 the loss rather than delaying app work. Exit/crash may lose queued events; no
 crash/panic Debug dump is collected. No profile/database dump, raw HTTP body,

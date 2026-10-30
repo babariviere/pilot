@@ -11,11 +11,13 @@ import type {
 	DiagnosticLogResult,
 	DiagnosticLogSourceId,
 	DiagnosticLogSourceInventory,
+	NextAppLogOmissions,
 } from "@pilot/kernel";
 import type { OperationHost } from "@pilot/protocol";
 import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { nativeAppLogLine } from "./native-app-log.ts";
+import { nextAppLogLine } from "./next-app-log.ts";
 
 export const DIAGNOSTIC_LOG_SCAN_BYTES = 128 * 1024;
 export const DIAGNOSTIC_LOG_OUTPUT_BYTES = 64 * 1024;
@@ -29,6 +31,7 @@ const MAX_REPORT_DIRECTORY_ENTRIES = 256;
 const MAX_REPORT_FILES = 32;
 const SOURCE_IDS = new Set<DiagnosticLogSourceId>([
 	"app",
+	"next_app",
 	"daemon",
 	"kernel_worker",
 	"native_report",
@@ -47,6 +50,7 @@ interface FileCandidate {
 	rotated: boolean;
 	fallbackAt?: string;
 	privateApp?: boolean;
+	nextApp?: boolean;
 }
 
 interface InspectedCandidate extends FileCandidate {
@@ -59,6 +63,7 @@ interface InspectedCandidate extends FileCandidate {
 interface SourceDescriptor extends DiagnosticLogSourceInventory {
 	files: InspectedCandidate[];
 	line?: (raw: string) => string | undefined;
+	omissions?: NextAppLogOmissions;
 }
 
 interface CursorPayload {
@@ -75,6 +80,7 @@ interface RefPayload {
 	x: string;
 	o: number;
 	l: number;
+	c?: string;
 }
 
 export interface DiagnosticLogReaderOptions {
@@ -82,6 +88,9 @@ export interface DiagnosticLogReaderOptions {
 	daemonLog?: string;
 	/** Host-owned fixed native producer path, never a diagnostic tool argument. */
 	appLog?: string;
+	/** Fixed Next slots only, never a model argument or export path. */
+	nextAppRoot?: string;
+	nextAppControl?: () => { localDiagnostics: boolean; epoch: number } | undefined;
 	/** Fixed host-owned service reader. No selector, command or arguments come from tool input. */
 	serviceJournal?: (signal?: AbortSignal) => Promise<{
 		available: boolean;
@@ -192,7 +201,7 @@ function timedRedaction(text: string): string {
 }
 
 function inventory(descriptor: SourceDescriptor): DiagnosticLogSourceInventory {
-	const { files: _files, line: _line, ...result } = descriptor;
+	const { files: _files, line: _line, omissions: _omissions, ...result } = descriptor;
 	return result;
 }
 
@@ -234,6 +243,7 @@ export class DiagnosticLogReader {
 		localDiagnostics: boolean,
 		request: DiagnosticLogRequest,
 		signal?: AbortSignal,
+		nextAppAllowed = false,
 	): Promise<DiagnosticLogResult> {
 		if (signal?.aborted) throw new Error("Diagnostic read cancelled");
 		if (this.pending >= MAX_PENDING)
@@ -251,13 +261,32 @@ export class DiagnosticLogReader {
 				action: parsed.action,
 			};
 			if (parsed.action === "inventory") {
-				const sources = await this.sources(host, target, localDiagnostics, SOURCE_IDS, signal);
+				const sources = await this.sources(host, target, localDiagnostics, SOURCE_IDS, signal, nextAppAllowed);
 				return { ...base, sources: [...sources.values()].map(inventory) };
 			}
 			if (parsed.action === "search") {
-				const sources = await this.sources(host, target, localDiagnostics, new Set([parsed.source]), signal);
+				const sources = await this.sources(
+					host,
+					target,
+					localDiagnostics,
+					new Set([parsed.source]),
+					signal,
+					nextAppAllowed,
+				);
 				const descriptor = sources.get(parsed.source)!;
-				return { ...base, page: await this.search(descriptor, parsed) };
+				const control = parsed.source === "next_app" ? this.options.nextAppControl?.() : undefined;
+				const page = await this.search(descriptor, parsed);
+				if (parsed.source === "next_app" && !this.sameNextControl(control)) {
+					return {
+						...base,
+						page: {
+							...unavailablePage(parsed.source, descriptor, this.maxScanBytes),
+							status: this.options.nextAppControl?.()?.localDiagnostics === false ? "disabled" : "unavailable",
+							reason: "Next diagnostics controls changed during the read; run a fresh search",
+						},
+					};
+				}
+				return { ...base, page };
 			}
 			const ref = parseOpaque<RefPayload>(REF_PREFIX, parsed.ref, this.opaqueSecret);
 			const sources = await this.sources(
@@ -266,11 +295,33 @@ export class DiagnosticLogReader {
 				localDiagnostics,
 				new Set(ref && SOURCE_IDS.has(ref.s) ? [ref.s] : []),
 				signal,
+				nextAppAllowed,
 			);
-			return { ...base, excerpt: await this.excerpt(sources, parsed) };
+			const control = ref?.s === "next_app" ? this.options.nextAppControl?.() : undefined;
+			const excerpt = await this.excerpt(sources, parsed);
+			if (ref?.s === "next_app" && !this.sameNextControl(control))
+				return {
+					...base,
+					excerpt: {
+						source: "next_app",
+						status: "unavailable",
+						before: [],
+						after: [],
+						scannedBytes: excerpt.scannedBytes,
+						maxScanBytes: this.maxScanBytes,
+						truncated: true,
+						reason: "Next diagnostics controls changed during the read; run a fresh search",
+					},
+				};
+			return { ...base, excerpt };
 		} finally {
 			this.pending--;
 		}
+	}
+
+	private sameNextControl(previous: { localDiagnostics: boolean; epoch: number } | undefined): boolean {
+		const current = this.options.nextAppControl?.();
+		return current?.localDiagnostics === previous?.localDiagnostics && current?.epoch === previous?.epoch;
 	}
 
 	private request(value: DiagnosticLogRequest): DiagnosticLogRequest {
@@ -321,6 +372,7 @@ export class DiagnosticLogReader {
 		localDiagnostics: boolean,
 		selected: ReadonlySet<DiagnosticLogSourceId> = SOURCE_IDS,
 		signal?: AbortSignal,
+		nextAppAllowed = false,
 	): Promise<Map<DiagnosticLogSourceId, SourceDescriptor>> {
 		const result = new Map<DiagnosticLogSourceId, SourceDescriptor>();
 		if (selected.has("app")) {
@@ -346,6 +398,52 @@ export class DiagnosticLogReader {
 				reason: !localDiagnostics ? "disabled" : files.reason,
 				files: files.files,
 				line: (raw) => nativeAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime()),
+			});
+		}
+
+		if (selected.has("next_app")) {
+			const control = this.options.nextAppControl?.();
+			const enabled = localDiagnostics && control?.localDiagnostics === true;
+			const supported =
+				nextAppAllowed && (this.options.platform ?? process.platform) === "darwin" && !!this.options.nextAppRoot;
+			const files =
+				supported && enabled
+					? await this.fixedFiles(
+							[0, 1, 2].map((n) => ({
+								token: `next-${n}`,
+								path: join(this.options.nextAppRoot!, `events-${n}.jsonl`),
+								rotated: n > 0,
+								privateApp: true,
+								nextApp: true,
+							})),
+						)
+					: { files: [], reason: "not_recorded" as const };
+			const omissions: NextAppLogOmissions = {};
+			result.set("next_app", {
+				id: "next_app",
+				scope: "host",
+				availability:
+					!localDiagnostics || control?.localDiagnostics === false
+						? "disabled"
+						: files.files.length
+							? "available"
+							: "unavailable",
+				coverage:
+					"Next completed JSON transport observations only, not delivery acceptance, receipts, UI frames or current app liveness. v1/unbound/foreign/invalid/expired/future/cleared rows omitted. Loss counters are producing-process observations, not lifetime totals; cancellation/crash/rotation losses are unknown. Manual reviewed exports and Swift app logs are separate. Unknown controls prevent integrated reads.",
+				retention: "bounded_local",
+				availableFiles: files.files.length,
+				rotatedFiles: files.files.filter((f) => f.rotated).length,
+				catalogTruncated: false,
+				reason: !localDiagnostics || control?.localDiagnostics === false ? "disabled" : files.reason,
+				files: files.files,
+				omissions,
+				line: (raw) => {
+					const current = this.options.nextAppControl?.();
+					if (!current?.localDiagnostics) return undefined;
+					const parsed = nextAppLogLine(raw, host, (this.options.now?.() ?? new Date()).getTime(), current.epoch);
+					if (parsed.omission) omissions[parsed.omission] = (omissions[parsed.omission] ?? 0) + 1;
+					return parsed.text;
+				},
 			});
 		}
 
@@ -657,7 +755,10 @@ export class DiagnosticLogReader {
 			if (!stat.isFile() || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) return { reason: "unsafe_source" };
 			if (
 				candidate.privateApp &&
-				(stat.uid !== BigInt(process.getuid?.() ?? -1) || (stat.mode & 0o077n) !== 0n || stat.size > 256n * 1024n)
+				(stat.uid !== BigInt(process.getuid?.() ?? -1) ||
+					(stat.mode & 0o077n) !== 0n ||
+					stat.size > (candidate.nextApp ? 64n : 256n) * 1024n ||
+					(candidate.nextApp === true && stat.nlink !== 1n))
 			)
 				return { reason: "unsafe_source" };
 			return {
@@ -693,12 +794,28 @@ export class DiagnosticLogReader {
 		}
 		let handle: FileHandle | undefined;
 		try {
+			if (candidate.nextApp) {
+				const parent = dirname(candidate.path!);
+				const stat = await lstat(parent);
+				if (
+					!stat.isDirectory() ||
+					stat.uid !== process.getuid?.() ||
+					(stat.mode & 0o077) !== 0 ||
+					(await realpath(parent)) !== parent
+				)
+					return { buffer: Buffer.alloc(0), changed: true };
+			}
 			handle = await open(candidate.path!, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 			const before = await handle.stat({ bigint: true });
 			if (
 				String(before.dev) !== candidate.dev ||
 				String(before.ino) !== candidate.ino ||
-				Number(before.size) < start + length
+				Number(before.size) < start + length ||
+				(candidate.nextApp === true &&
+					(before.uid !== BigInt(process.getuid?.() ?? -1) ||
+						(before.mode & 0o077n) !== 0n ||
+						before.nlink !== 1n ||
+						before.size > 65536n))
 			)
 				return { buffer: Buffer.alloc(0), changed: true };
 			const buffer = Buffer.alloc(length);
@@ -710,7 +827,12 @@ export class DiagnosticLogReader {
 					bytesRead !== length ||
 					String(after.dev) !== candidate.dev ||
 					String(after.ino) !== candidate.ino ||
-					Number(after.size) < start + bytesRead,
+					Number(after.size) < start + bytesRead ||
+					(candidate.nextApp === true &&
+						(after.uid !== before.uid ||
+							after.mode !== before.mode ||
+							after.nlink !== 1n ||
+							after.size > 65536n)),
 			};
 		} catch {
 			return { buffer: Buffer.alloc(0), changed: true };
@@ -727,10 +849,23 @@ export class DiagnosticLogReader {
 		);
 	}
 
-	private ref(source: DiagnosticLogSourceId, file: InspectedCandidate, offset: number, length: number): string {
+	private ref(
+		source: DiagnosticLogSourceId,
+		file: InspectedCandidate,
+		offset: number,
+		length: number,
+		raw?: string,
+	): string {
 		return opaque(
 			REF_PREFIX,
-			{ s: source, f: file.token, x: this.identity(file), o: offset, l: length },
+			{
+				s: source,
+				f: file.token,
+				x: this.identity(file),
+				o: offset,
+				l: length,
+				...(file.nextApp && raw !== undefined ? { c: createHash("sha256").update(raw).digest("hex") } : {}),
+			},
 			this.opaqueSecret,
 		);
 	}
@@ -835,6 +970,7 @@ export class DiagnosticLogReader {
 			for (const range of ranges) {
 				const rawLength = range.end - range.start;
 				const absolute = start + range.start;
+				if (descriptor.id === "next_app") resume = absolute;
 				if (rawLength > MAX_RAW_RECORD_BYTES) {
 					oversizedRecords++;
 					continue;
@@ -853,7 +989,7 @@ export class DiagnosticLogReader {
 					break;
 				}
 				records.push({
-					ref: this.ref(descriptor.id, file, absolute, rawLength),
+					ref: this.ref(descriptor.id, file, absolute, rawLength, raw),
 					...(at ? { at } : {}),
 					text: excerpt.text,
 					truncated: excerpt.truncated,
@@ -871,6 +1007,7 @@ export class DiagnosticLogReader {
 		const page: DiagnosticLogPage = {
 			source: descriptor.id,
 			status: "ok",
+			...(descriptor.omissions ? { omissions: descriptor.omissions } : {}),
 			records,
 			scannedBytes,
 			maxScanBytes: this.maxScanBytes,
@@ -879,12 +1016,13 @@ export class DiagnosticLogReader {
 			oversizedRecords,
 			truncated:
 				descriptor.catalogTruncated ||
+				Object.values(descriptor.omissions ?? {}).some((n) => n > 0) ||
 				outputTruncated ||
 				oversizedRecords > 0 ||
 				!!nextCursor ||
 				records.some((row) => row.truncated),
 			...(nextCursor ? { nextCursor } : {}),
-			...(descriptor.reason ? { reason: descriptor.coverage } : {}),
+			...(descriptor.reason || descriptor.id === "next_app" ? { reason: descriptor.coverage } : {}),
 		};
 		page.encodedBytes = Buffer.byteLength(JSON.stringify(page));
 		while (page.encodedBytes > Math.max(1_024, this.maxOutputBytes - 1_024) && page.records.length) {
@@ -935,7 +1073,8 @@ export class DiagnosticLogReader {
 		const ref = parseOpaque<RefPayload>(REF_PREFIX, request.ref, this.opaqueSecret);
 		if (
 			!ref ||
-			Object.keys(ref).sort().join(",") !== "f,l,o,s,x" ||
+			Object.keys(ref).sort().join(",") !== (ref.s === "next_app" ? "c,f,l,o,s,x" : "f,l,o,s,x") ||
+			(ref.s === "next_app" && (typeof ref.c !== "string" || !/^[a-f0-9]{64}$/.test(ref.c))) ||
 			!SOURCE_IDS.has(ref.s) ||
 			!Number.isSafeInteger(ref.o) ||
 			ref.o < 0 ||
@@ -973,6 +1112,8 @@ export class DiagnosticLogReader {
 		if (targetRead.changed) return this.changedExcerpt(ref.s, ref.l);
 		let scannedBytes = ref.l;
 		const raw = targetRead.buffer.toString("utf8");
+		if (descriptor.id === "next_app" && ref.c !== createHash("sha256").update(raw).digest("hex"))
+			return this.changedExcerpt(ref.s, scannedBytes);
 		const safe = descriptor.line ? descriptor.line(raw) : sanitizeDiagnosticLogLine(raw);
 		if (safe === undefined)
 			return {
@@ -1035,9 +1176,11 @@ export class DiagnosticLogReader {
 			record,
 			before,
 			after,
+			...(descriptor.omissions ? { omissions: descriptor.omissions, reason: descriptor.coverage } : {}),
 			scannedBytes,
 			maxScanBytes: this.maxScanBytes,
 			truncated:
+				Object.values(descriptor.omissions ?? {}).some((n) => n > 0) ||
 				targetSafe.truncated ||
 				(beforeRead.buffer.length > 0 && beforeStart > 0) ||
 				(afterRead.buffer.length > 0 && afterRead.buffer[afterRead.buffer.length - 1] !== 0x0a) ||
@@ -1076,7 +1219,7 @@ export class DiagnosticLogReader {
 			return [
 				{
 					record: {
-						ref: this.ref(source, file, offset, length),
+						ref: this.ref(source, file, offset, length, raw),
 						...(at ? { at } : {}),
 						text: safe.text,
 						truncated: safe.truncated,

@@ -1,6 +1,6 @@
 # Diagnostics and telemetry contract
 
-**Contract version:** 3
+**Contract version:** 4
 
 **Status:** implementation baseline
 
@@ -49,6 +49,24 @@ The three controls are independent. Turning one on never turns on another.
 Local collection has no network side effects. Remote export is an explicit per-host setting so enabling a local Mac
 does not silently enable a devbox. A remote host reports its own effective settings. A disconnected host is
 `unavailable`, never assumed to share the Mac's setting.
+
+### Local Next capture integration (v4)
+
+The macOS Rust/GPUI Next fixed `next_app` reader admits only closed version 2 numeric transport
+capture rows with exact current daemon/lineage and persisted diagnostic-specialist role. The
+separate Swift `app` schema, confirmed-repair grants and linked-host forwarding are unchanged.
+No new exported resource/event fields are authorized. See the full
+[native coverage/schema/control contract](../apps/desktop/docs/diagnostic-coverage.md).
+
+Verified Local settings controls gate bound collection/disclosure; unknown or disabled controls
+cannot enable it. Disable/clear persists a fresh numeric privacy epoch, also captured in bound v2 rows. Native control application
+invalidates/drains queued bound writes before selectively clearing current-host old-epoch bound rows (all bound rows on disable);
+only the native writer touches its slots. Daemon clear is not an acknowledgment of native
+physical clearing. Unbound startup/v1 and independent manual reviewed export remain manual-only,
+without migration/backfill or silent deletion. Three 64 KiB slots/seven-day opportunistic expiry,
+queue 256, preview 512 and existing bounded read/output limits remain. Numeric loss/omission evidence
+is partial, not receipt/delivery/frame proof. No uploader, spool, arbitrary paths, payloads,
+provider access or remote consent changes are introduced.
 
 ### Retention
 

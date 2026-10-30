@@ -1,262 +1,150 @@
-# Native diagnostic evidence: what can actually be inspected
+# Native diagnostic evidence
 
-Source audit, 2026-10-30. This describes Rust/GPUI Next, not Swift UI or Swift
-telemetry. No live app, daemon, history, settings or provider was inspected.
+Rust/GPUI Next, not Swift. D120 adds a **macOS-only**, read-only `next_app`
+source for persisted diagnostic specialists on the current daemon/lineage.
+No live app, daemon, settings, history or provider was inspected or changed.
 
-**Finding:** Next's bounded numeric capture has a working local review/export
-path. It is **not a source for the diagnostic-role reader**. No production
-recording/export defect was demonstrated in this audit, so this change adds no
-instrumentation or access. The integration below is a proposal, not approval.
+## What evidence means
 
-## Current paths and useful questions
-
-| Evidence owner | Available evidence | Actual reader and limit |
+| Observation | Supported interpretation | Not proof of |
 | --- | --- | --- |
-| Next `diagnostics.rs` | Startup presence; completed Local delivery JSON-request phase, transport result, status and elapsed time | Settings → Diagnostics → Review capture → editable JSON → Export reviewed. No automatic agent access. |
-| Next private delivery Book | Latest retained operation's typed phase/category and acknowledgment, including receipt/private adoption failures | Existing composer delivery caption/recovery. Not ingested by `diagnostic_logs`; not a permanent operation history. |
-| Daemon diagnostic tools | Existing host/session, lifecycle, request timing, tool activity, retained sanitized history/context, watchdog performance | Persisted diagnostics role and exact admitted host/lineage; bounded reads. Does not ingest Next's capture. |
-| `diagnostic_logs` source `app` | Swift producer's closed lifecycle/transport/repair codes, when present and enabled | macOS `~/Library/Logs/Pilot/App/app.jsonl` and `.1` only. Not “whichever desktop app is running.” |
+| Unbound `startup` | Manual capture started in that app run | Bootstrap, connection, first frame or usable editor |
+| `deliveryRequest`, `response_received=true`, status 200 | A completed HTTP200 reply parsed as JSON | Correct hello, receipt validation, durable/accepted send, model result or private adoption |
+| `refused`, status 503 | Nonaccepted HTTP status | Rejected durable receipt, or that the daemon did not act |
+| `malformed`, status 200 | Reply was not JSON | Receipt identity mismatch, which is checked later |
+| `interrupted`, no status | Transport failed before a status was retained | Whether a mutation was admitted remotely |
+| `elapsed_ms` | Monotonic time in the JSON request boundary | Provider time, frame latency, or a causal CPU diagnosis |
+| Loss/omission counters | Evidence is incomplete | A complete timeline, even when counters are zero |
 
-For a report of “Send is stuck,” the current Next export can establish **a
-completed transport observation**: which phase, HTTP status if received, elapsed
-milliseconds and typed failure. It cannot establish the durable operation result,
-associate the request with a chat, or explain missing paint/streaming. Use the
-existing exact-operation caption/receipt for acknowledgment, and separately
-available daemon evidence for server work. Absence of a capture row is not proof
-that a request never ran.
+Vocabulary is not production coverage. Stages are identity, target, lookup,
+execute and adoption. The existing outcome enum includes later receipt/private
+categories, but the production emitter still records only completed JSON
+transport boundaries **before** hello/receipt/adoption validation. Cancellation
+before completion emits no row. No new receipt, delivery or frame claim is added.
 
-| Observation | Supported interpretation | Not supported |
-| --- | --- | --- |
-| `startup` row | Capture started in that app run | Successful runtime bootstrap, first frame, connection or usable editor |
-| `deliveryRequest`, `response_received=true` | HTTP 200 reply parsed as JSON | Correct hello identity, valid receipt, accepted/durable send, model success |
-| `response_received=false`, `refused`, `status=503` | That HTTP request returned a nonaccepted status | Rejected durable receipt, or proof the daemon did not act |
-| `malformed` with `status=200` | Reply was not parseable JSON | Receipt identity mismatch; that check happens later |
-| `interrupted`, no status | Request transport failed before a status was retained | Whether a mutation was admitted remotely |
-| Large `elapsed_ms` | Time inside that JSON request boundary | Provider thinking, frame latency, private adoption cost, or a causal CPU diagnosis |
-| Nonzero loss/partial counters | Evidence is incomplete | A complete timeline reconstructed from remaining rows |
+## Producer → fixed slots → specialist
 
-## Exact producer → disk → review → export trace
+1. `main.rs` starts `diagnostics::start` after argument/Local setup. Failures
+   before that point have no capture. The safe tracing layer accepts only its
+   numeric schema; it never formats Debug, messages, spans, bodies or raw errors.
+2. `interaction::observe` calls `diagnostics::delivery_to` with pinned Local
+   options and a completed numeric observation. A host is attached only if that
+   destination exactly matches the enabled current control. It is an intended
+   destination, not a server-acceptance assertion. Startup and unknown/disabled
+   destinations remain unbound, manual-only capture.
+3. The sole background capture owner uses its existing 256-command bounded queue,
+   three 64 KiB slots and private writer lock. Only `events-0.jsonl`,
+   `events-1.jsonl`, `events-2.jsonl` under
+   `~/Library/Application Support/Pilot Next/diagnostics` are reader sources.
+   The daemon never reads the parent state/Book/attachments, `capture.lock`,
+   edited exports, arbitrary filenames or Swift logs through this source.
+4. `SessionManager::diagnosticLogsCall` rechecks persisted role and exact current
+   execution host on every call. Ordinary roles and confirmed repair grants gain
+   no Next authority. The standalone specialist `diagnostic_logs` catalogue,
+   literal search and opaque excerpt interfaces add `next_app`. The separate
+   `diagnostic_context`/linked courier paths do not gain Next access or forwarding.
+5. `nextAppLogLine` validates before formatting, with no raw fallback. Reader
+   files must be regular, private, owned, single-link, no-follow, at most 64 KiB;
+   the exact private root must have no symlink alias. Permissions/ownership/size
+   are checked again on reads. Fixed path checks are not authentication or a
+   claim of protection against every transient ancestor-replacement race.
 
-Source anchors are symbols as well as line references so they remain searchable.
+### Closed v2 record
 
-1. [`main.rs:96`](../src/main.rs#L96) calls `diagnostics::start` after argument
-   handling and Local/runtime setup. Help/read-only checks return earlier. A
-   failure before `start` has no capture. `start` installs the sole safe tracing
-   layer, starts the worker, and emits numeric `operation=1` (startup).
-2. [`interaction.rs:1134`](../src/interaction.rs#L1134), `observe`, allocates an
-   app-local `request_id`, starts `Instant`, and awaits `read_delivery_json`.
-   [`read_json_with:800`](../src/interaction.rs#L800) retains no body/error text:
-   transport failure → interrupted; non-200 → refused; size over 4 MiB → tooLarge;
-   chunk failure → responseInterrupted; invalid JSON → malformed. On completion,
-   `diagnostics::delivery` emits operation=2 plus numeric stage/category/status,
-   elapsed milliseconds and a boolean. Cancellation before completion emits no
-   completion row. Successful JSON is emitted **before** hello/receipt validation.
-3. [`diagnostics.rs:189`](../src/diagnostics.rs#L189), `SafeLayer::on_event`,
-   accepts only `pilot::diagnostics`, numeric operation 1/2, five known stages,
-   fifteen known categories, boolean `response_received`, status 100–599, and
-   optional numeric request/elapsed time. Unknown operations are ignored; unknown
-   stage/category values become null. Successful JSON suppresses `outcome` rather
-   than exporting the transient `inFlight` category as a semantic result. Strings,
-   messages, spans and Debug values are not formatted. The layer stamps build,
-   app-run UUID and current wall-clock seconds.
-4. `channel`/`run` use a nonblocking 256-command queue and one background writer.
-   `Retention::{open,append,read}` owns exactly `events-0.jsonl` through
-   `events-2.jsonl` under `Store::default_path()/diagnostics`, with a single
-   `capture.lock`. macOS root is
-   `~/Library/Application Support/Pilot Next/diagnostics`; Linux source chooses
-   `${XDG_STATE_HOME:-$HOME/.local/state}/pilot-next/diagnostics`. No Linux native
-   qualification is implied. Slots are private, owned, regular, single-link files
-   opened no-follow, at most 64 KiB each; directory is 0700, files 0600.
-5. [`diagnostics_view.rs:54`](../src/diagnostics_view.rs#L54), `Diagnostics::review`,
-   requests a worker preview, serializes it off-thread, and freezes an editable
-   snapshot. Review does not silently replace edits. `Preview::new` keeps the
-   newest 512 retained rows. `Diagnostics::export` captures those exact edited
-   bytes, asks for a new destination, and calls `diagnostics::export` off-thread.
-   Export accepts valid JSON within 512 KiB, creates a new 0600 file, writes and
-   syncs it. It does not reload records, send them, open a chat, or overwrite an
-   existing file. A partial write is reported as failure and edits remain.
+Exactly `schema=2`, optional nullable `host`, nullable numeric `epoch`, `build`, `run`, `seconds`,
+`operation`, `request`, `stage`, `outcome`, `response_received`, `status`,
+`elapsed_ms`, `loss`. Nullable observation fields preserve the original schema.
+`host` is exactly `{hostId:"daemon",daemonId,lineageId}` with canonical UUIDs.
+`build` contains canonical numeric release version and lowercase 64-hex
+`desktop_source_sha256`, not a commit or signed payload/runtime identity.
+`run` is an app-run UUID; `request` is an app-local HTTP sequence, not a session
+or durable operation identifier. `epoch` is the persisted local privacy-control token, not a request/session ID.
+`loss={dropped,storage_errors}` snapshots
+producing-process counters at write time, not lifetime totals. Safe integers,
+canonical numeric spellings, UUIDs, enums, keys, field combinations and HTTP
+status 100–599 are checked before existing credential redaction. Unknown fields,
+text, malformed records and edited exports are not admitted.
 
-### Concrete synthetic record
+`seconds` is wall-clock capture time, not request start or causal ordering.
+Reader excludes future and older-than-seven-day rows, foreign identity,
+unbound/v1 and records from another privacy epoch. Omissions are
+reported by category for the **bounded scanned window**, not an exact inventory
+of all retained files. No migration, backfill or inferred host identity.
 
-The existing
-`diagnostics_existing_delivery_vocabulary_roundtrips_through_tracing_and_worker`
-fixture emits `delivery(2, diagnostic, 120, false)` with stage Lookup, category
-Refused, status 503 and acknowledgment Unknown. Its path is the same safe layer,
-queue, private writer and preview parser above. The resulting record has this
-shape (build/run/time placeholders below are explanatory, not literal exports):
+Search retains 128 KiB scan/64 KiB output, 1–40 returned rows and existing opaque
+cursor/ref limits. Next refs also pin the exact raw-record digest so in-place
+clear/rewrite cannot substitute another observation. Rotation/shrink/replacement
+or expiry yields stale/changed/unavailable evidence, never silent fallback.
+Available files do not establish readable rows, app liveness or complete history.
 
-```json
-{
-  "build": { "version": "1.99.0", "desktop_source_sha256": "<64 hex digits>" },
-  "run": "<app-run UUID>",
-  "seconds": 1793361600,
-  "operation": "deliveryRequest",
-  "request": 2,
-  "stage": "lookup",
-  "outcome": "refused",
-  "response_received": false,
-  "status": 503,
-  "elapsed_ms": 120
-}
-```
+## Controls and manual export stay distinct
 
-The acknowledgment is deliberately **not** a capture field. Unedited review
-places this row under manifest `records`; export writes that reviewed JSON, not
-the Book or any raw response. This is a source trace with independently exercised
-capture/storage and export legs, not a live delivery or end-to-end daemon trace.
-Passing this Next record to the production `nativeAppLogLine` validator returns
-`undefined`: it lacks Swift's `schemaVersion/at/host/event` and has different,
-forbidden fields. A whole Next export is rejected too. Copying or renaming the
-file cannot make the schema compatible.
+The existing verified Local global connection carries a small closed
+`diagnostics.next-control` snapshot, derived from telemetry settings, with
+`schemaVersion=1`, exact host, `localDiagnostics` and numeric `epoch`.
+`GET /api/telemetry` also exposes the optional versioned Next privacy epoch;
+older/missing controls leave integration unknown. No new reader polling, upload,
+retention store, credential access or remote-consent behavior is added.
 
-### Fields, identity, time and loss
+Disable and explicit daemon diagnostic clear persist a fresh 48-bit numeric privacy epoch before
+notifying the native writer. The reader independently requires an exact epoch match, including
+while the app is disconnected. The daemon **never unlinks writer files** and its
+clear response does not prove native physical clearing has completed. Native
+control handling immediately invalidates queued bound writes, drains the owned
+queue, selectively clears that host's old-epoch bound rows (all bound rows when disabled), then enables a matching new
+control only after writer completion. Failure stays unbound. Disconnect or
+malformed/replaced controls invalidate integrated collection. The epoch prevents pre-clear future-clock rows from reappearing when time
+catches up, without suppressing legitimate same-second post-clear observations.
+Future/expired timestamps are independently excluded.
 
-- Record fields are exactly `build`, `run`, `seconds`, `operation`, `request`,
-  `stage`, `outcome`, `response_received`, `status`, `elapsed_ms`. Optional values
-  serialize as null. Operation/stage/category use camelCase enum values, while
-  `response_received` and `elapsed_ms` retain snake_case.
-- Stages: identity, target, lookup, execute, adoption. Categories: inFlight,
-  interrupted, refused, responseInterrupted, tooLarge, malformed, identity,
-  receiptMismatch, unknown, pending, accepted, rejected, privateWrite,
-  privateCapacity, privateState. **Vocabulary is not coverage:** production emits
-  only the HTTP observations from `observe`, not later receipt/adoption results.
-- `build` contains product version and desktop-source SHA-256. It is not a landed
-  commit, signed payload/runtime identity or daemon version. Each retained row
-  keeps its producing build; manifest `app` describes the reviewing executable.
-- `run` is random per process; `request` is an app-local sequence per HTTP request,
-  not per delivery. There is no host/daemon/lineage, session, operation ID,
-  payload hash, draft revision, stream revision, traceparent or receipt identity.
-  Equal timestamps or adjacent request numbers do not supply those missing joins.
-- `seconds` is wall-clock Unix seconds at event capture, not request start or
-  subsecond ordering. `elapsed_ms` is monotonic request elapsed time. Queue/storage
-  time is not included. File order is capture/retention order, not global causal
-  order; clock changes can distort wall time. Reader rejects rows older than seven
-  days, but does not separately reject future timestamps.
-- Manifest fields: `schema=1`, current `app`, `platform`, `coverage`, `trust`,
-  `retention`, `dropped`, `storage_errors`, `partial_files`, `preview_omitted`,
-  `records`. Loss/storage counters are process-local, not durable lifetime totals.
-  `partial_files` also counts invalid **rows**, not just files. Old rotation losses,
-  cancelled requests and unflushed crash/exit events have no exact count. Zero
-  counters do not prove completeness.
-- Slots expire as a whole when the first row parses and is over seven days
-  old, on startup/write/review, not while idle/closed. This can remove newer rows
-  too. Preview also filters old/invalid records. Bounds and omissions remain
-  visible; no synthetic empty success substitutes for unavailable capture.
+Independent unbound manual capture and legacy bytes are preserved, not silently
+erased by daemon controls. Settings → Diagnostics → Review capture still creates
+a 512-row editable local JSON preview; Clear preview clears only that editor.
+Export reviewed writes exactly the reviewed JSON into a new 0600 file, at most
+512 KiB, and syncs it. Export never reloads logs, sends data, starts a chat or
+confers permission. Edited exports are untrusted/manual-only. No remote setting
+implicitly enables collection/disclosure or uploads Next events.
 
-## Actual diagnostic-role access and privacy boundary
+The existing seven-day slot expiry is opportunistic on startup/capture/review,
+not while idle/closed. Expiring the oldest row's slot can also discard newer rows.
+Crash/exit, cancelled requests and rotation losses are not all counted. Preview
+reports current dropped/storage/partial/omitted counts; missing storage is not an
+empty-success promise. Swift `app` remains its separate closed v1 reader at
+`~/Library/Logs/Pilot/App/app.jsonl` and `.1`.
 
-[`session.ts`](../../../packages/kernel/src/session.ts) installs specialist tools
-from the trusted diagnostics role; ordinary Ask/Build cannot acquire them through
-input text. [`SessionManager::diagnosticLogsCall`](../../../packages/daemon/src/sessions.ts#L6511)
-checks persisted role (or the separately confirmed existing repair scope), current
-daemon/lineage and admitted subject. It passes the existing local-diagnostics
-setting to the fixed catalogue, without waking/subscribing to the subject.
+## Synthetic verification
 
-[`daemon.ts:159`](../../../packages/daemon/src/daemon.ts#L159) configures the Swift
-app path, not Next's state root. [`DiagnosticLogReader::sources`](../../../packages/daemon/src/diagnostic-logs.ts#L326)
-catalogues only that path and `.1` for `app`, checks private files, hides this source
-when local diagnostics is disabled, and calls
-[`nativeAppLogLine`](../../../packages/daemon/src/native-app-log.ts). That validator
-admits only schemaVersion 1, canonical ISO `at` within seven days and not future,
-matching `host={hostId:"daemon",daemonId,lineageId}`, six fixed Swift events, and
-optional closed error domain/numeric code. Unknown keys or Next records are
-discarded, never treated as generic app text. Inventory file availability is not
-proof that any Next rows are readable or that the app is alive.
-
-The separate `diagnostic_context` performance selector reads the existing current
-daemon watchdog through sanitization. It does not reach Next or fill missing
-request/frame attribution. Existing logs/context/history sanitization, bounded
-pagination, untrusted-data treatment and repair-proposal restrictions still apply.
-See [agent diagnostics](../../../docs/agent-diagnostics.md) and the
-[telemetry contract](../../../docs/telemetry-contract.md).
-
-Next private capture currently starts independently of the daemon's local
-operational/remote-export settings; it has no collection toggle or retained-file
-clear action here. **Clear preview** clears only the editor snapshot. Do not claim
-that disabling/clearing daemon diagnostics disables/clears Next capture, or that
-reviewing/exporting enables daemon or remote telemetry. No setting is changed by
-this audit. Edited JSON can contain user-introduced text, so an export is untrusted
-data, not an automatically safe schema or permission for an agent to act.
-
-## Minimal integration proposal, requires explicit user approval
-
-Goal: a diagnostics specialist can answer “which native transport phase failed
-recently?” without arbitrary filesystem access or silently admitting unbound old
-captures. This does **not** solve frame/render diagnostics or end-to-end delivery
-correlation. Keep manual reviewed export available independently.
-
-1. **Paths/platform:** macOS only initially. Add one separate fixed source ID,
-   `next_app`, reading only the three slots under the macOS Next diagnostics root
-   above. Never accept a model path, scan the parent state/Book/attachments, follow
-   links, read `capture.lock`, reuse Swift `app`, or enable a Linux/linked-host
-   fallback. This is new daemon root/catalogue authority and needs approval.
-2. **Schema/identity:** define a closed version-2 Next record, preserving the
-   existing numeric/enumerated fields, adding `schema=2` and optional pinned
-   destination `host={hostId:"daemon",daemonId,lineageId}` supplied from existing
-   verified Local options, never text/tool arguments. This identifies the intended
-   connection, not proof the server accepted/verified a request. Reader discloses
-   only records with an exact current daemon/lineage match. Unbound startup and
-   legacy v1 records stay manual-export-only; report the omission, never infer a
-   host from filesystem ownership, UUID, source hash or timestamps. No automatic
-   backfill, migration or new session/operation identifiers.
-3. **Admission/controls:** retain persisted-role/current-host checks on every call;
-   no linked courier forwarding and no new repair authority. Gate disclosure on
-   existing `localDiagnostics`. Before enabling the integration, bridge that
-   setting to the client writer through the existing verified Local settings
-   path: unknown/disabled means no new integrated collection. A disable/clear
-   transition must invalidate/drain queued writes before the existing client
-   writer clears its slots; the daemon must not unlink an active writer's files.
-   Remote-export consent never grants this access and remains unchanged. This
-   control wiring and source semantics need review, not an assumption that today's
-   independent capture already obeys daemon settings.
-4. **Sanitization/retention:** parse and validate before formatting, with unknown
-   keys/enums rejected; canonical bounded version/hash/UUID/status/numeric values;
-   no raw line fallback. Permit only the named fields, reject future/expired rows,
-   then use existing credential redaction and output bounds. Never copy arbitrary
-   edited exports. Preserve three 64 KiB slots, seven-day opportunistic expiry,
-   256-command queue, 512-row manual preview, 128 KiB scan/64 KiB reader output,
-   1–40 returned rows and existing opaque ref/cursor limits. Report byte/record
-   bounds, unbound/invalid/expired omissions, disabled, missing, partial and stale
-   refs explicitly. No new background reader, uploader, spool or retention store.
-5. **Synthetic acceptance:** exact versioned producer→private slots→catalogue
-   search/excerpt fixture; existing v1/Swift schema isolation; true JSON response
-   is not acceptance; foreign/missing/replaced daemon/lineage and ordinary-role
-   refusals; settings unknown/disabled, disable/clear racing queued writes;
-   symlink/hardlink/owner/mode/oversize refusal; rotation/expiry/future clock and
-   stale refs; loss/write/unavailable counters; unknown fields/enums and injected
-   content/paths/secrets withheld; zero linked forwarding/network/provider calls
-   or worker wake/mutation. Only synthetic temporary directories/settings/hosts.
-
-Implementing this proposal would change the daemon catalogue, reader schema,
-client identity/control wiring and the reviewed diagnostics/telemetry contracts.
-None is implemented or authorized by this audit. Until approved, describe Next
-capture as **manual local export only**, not “all app telemetry accessible.”
-
-## Reproduction and verification
-
-The source-only audit uses the existing focused fixtures, not a real application
-launch. From the repository root:
+No visible app launch or live state is required:
 
 ```sh
-python3 apps/desktop/scripts/check-scoped.py --unit diagnostics
+PILOT_NEXT_DIAGNOSTIC_READER_NODE="$(command -v node)" \
+  python3 apps/desktop/scripts/check-scoped.py --unit diagnostics --lint
+python3 apps/desktop/scripts/check-scoped.py --unit local_client::
+python3 apps/desktop/scripts/check-scoped.py --unit interaction::
 node --test --test-force-exit --test-concurrency=2 \
-  packages/daemon/src/native-app-log.test.ts \
-  packages/daemon/src/diagnostic-logs.test.ts
+  packages/daemon/src/next-app-log.test.ts \
+  packages/daemon/src/native-app-log.test.ts
 ```
 
-The Rust fixtures cover safe numeric capture, typed delivery roundtrip through
-the writer/preview, overflow, retention/restart, unsafe files, explicit unavailable
-storage and exact edited-byte/partial-failure export. The daemon fixtures cover
-the existing **Swift** schema/catalogue, identity, disabled reads, sanitized
-bounded search/excerpt and unsafe sources; they do not establish Next integration.
-No production source or UI changes require an app build/native visual check here.
+The explicit Node environment opt-in makes the Rust fixture run the actual
+producer → private slots → TypeScript catalogue/search/excerpt bridge. Without
+it the Rust test still exercises producer/control/storage but does **not** claim
+that cross-language leg. Other focused suites cover persisted-role/current-host
+admission, telemetry control broadcasts/privacy-epoch persistence, existing reader
+bounds, unknown/disabled settings, queued invalidation/clear, unsafe sources,
+rotation/expiry/stale refs, loss counters and content rejection. All fixtures use
+temporary roots/settings/hosts and no provider, linked forwarding, target wake,
+repair or live mutation. This is not end-to-end delivery, native frame, OS input,
+performance or Linux acceptance.
 
-Audit replay passed: nine tests selected by the Rust `diagnostics` filter
-(including the six capture/export tests and simulated native picker/menu cases),
-and thirteen daemon schema/catalogue tests. A direct synthetic check also rejected
-both the example-shaped Next row and a Next manifest with `nativeAppLogLine`,
-while admitting a matching Swift control. Exact field inventories, the sole
-production delivery emitter, fixed reader path, document links and whitespace
-were checked. This does not qualify OS input, native performance or live operation
-outcomes. No production lint/typecheck/full-suite sweep was needed for two
-documentation-only files.
+See [agent diagnostics](../../../docs/agent-diagnostics.md),
+[telemetry contract](../../../docs/telemetry-contract.md),
+[manual dogfooding diagnostics](dogfooding-diagnostics.md) and
+[scoped checks](scoped-checks.md).
+
+Observed scoped checks: 12 Rust diagnostics cases (including the actual Rust→Node bridge),
+37 Local reader cases and 47 interaction cases passed; one pre-existing explicit autosave
+disk-replay test remains ignored. The focused TypeScript schema/catalogue/control suites
+and persisted-role/current-host cases, typecheck, scoped Clippy and plain desktop build
+were exercised. Existing repository-wide Biome server findings are not fixed by this
+change; matching changed-file lint and baseline comparison are reported separately.

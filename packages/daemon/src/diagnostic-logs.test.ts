@@ -79,7 +79,7 @@ test("inventory exposes only the closed path-free Pilot catalogue and explicit g
 	assert.equal(result.targetSessionId, id);
 	assert.deepEqual(
 		result.sources?.map((source) => source.id),
-		["app", "daemon", "kernel_worker", "native_report", "lifecycle", "request_timing", "tool_activity"],
+		["app", "next_app", "daemon", "kernel_worker", "native_report", "lifecycle", "request_timing", "tool_activity"],
 	);
 	assert.equal(result.sources?.find((source) => source.id === "app")?.availability, "unavailable");
 	assert.equal(result.sources?.find((source) => source.id === "app")?.reason, "not_recorded");

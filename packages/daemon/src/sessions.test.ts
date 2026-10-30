@@ -1440,6 +1440,70 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 	assert.ok(denied?.result, denied?.error);
 });
 
+test("Next logs require persisted specialist and current app-scope identity on every read", async (t) => {
+	const f = await fixture(t);
+	const host = {
+		hostId: "daemon",
+		daemonId: "01234567-89ab-4cde-8fab-0123456789ab",
+		lineageId: "abcdef01-2345-4678-9abc-0123456789ab",
+	};
+	const root = join(await realpath(f.home), "next-diagnostics");
+	await mkdir(root, { mode: 0o700 });
+	const row = {
+		schema: 2,
+		epoch: 0,
+		host,
+		build: { version: "1.99.0", desktop_source_sha256: "a".repeat(64) },
+		run: "12345678-1234-4678-9abc-123456789abc",
+		seconds: Math.floor(Date.now() / 1000),
+		operation: "deliveryRequest",
+		request: 1,
+		stage: "execute",
+		outcome: "interrupted",
+		response_received: false,
+		status: null,
+		elapsed_ms: 10,
+		loss: { dropped: 0, storage_errors: 0 },
+	};
+	await writeFile(join(root, "events-0.jsonl"), `${JSON.stringify(row)}\n`, { mode: 0o600 });
+	let control: { localDiagnostics: boolean; epoch: number } | undefined = {
+		localDiagnostics: true,
+		epoch: 0,
+	};
+	const sessions = await f.manager(
+		{},
+		{
+			diagnosticHost: host,
+			diagnosticLogs: { platform: "darwin", nextAppRoot: root, nextAppControl: () => control },
+		},
+	);
+	const chat = await sessions.spawn({
+		role: "diagnostics",
+		diagnosticScope: "app",
+		diagnosticHost: host,
+		message: "Inspect transport",
+	});
+	await sessions["starting"].get(chat.id);
+	const meta = sessions["metas"].get(chat.id)!;
+	const count = f.workers.length;
+	const read = () => sessions["diagnosticLogsCall"](meta, { action: "search", source: "next_app" });
+	assert.equal((await read()).page?.records.length, 1);
+	control = undefined;
+	assert.equal((await read()).page?.status, "unavailable");
+	control = { localDiagnostics: false, epoch: 0 };
+	assert.equal((await read()).page?.status, "disabled");
+	control = { localDiagnostics: true, epoch: 0 };
+	meta.diagnosticHost = undefined;
+	assert.equal((await read()).page?.status, "unavailable", "legacy unpinned app scope gains no Next access");
+	meta.diagnosticHost = { ...host, lineageId: host.daemonId };
+	await assert.rejects(read, /identity changed/);
+	meta.diagnosticHost = host;
+	meta.role = undefined;
+	await assert.rejects(read, /diagnostics specialist/);
+	assert.equal(f.workers.length, count, "read never starts or wakes another worker");
+	assert.equal(await readFile(join(root, "events-0.jsonl"), "utf8"), `${JSON.stringify(row)}\n`);
+});
+
 test("diagnostic log IPC stays fixed to the persisted host and parked target", async (t) => {
 	const f = await fixture(t);
 	const daemonLog = join(f.home, "logs", "pilotd.log");

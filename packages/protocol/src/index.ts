@@ -1961,6 +1961,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
+	| { type: "diagnostics.next-control"; control: import("./telemetry.ts").NextDiagnosticsControl }
 	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
 	| { type: "mission-catalog.changed" }
 	| { type: "shared-contexts.changed" }

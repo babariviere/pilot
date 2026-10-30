@@ -12,6 +12,7 @@ const SCHEMA = 1;
 interface StoredTelemetrySettings {
 	schemaVersion: 1;
 	localDiagnostics: boolean;
+	nextDiagnosticsEpoch?: number;
 	localFeatureUsage?: boolean;
 	remoteOperational: boolean;
 	productAnalytics: boolean;
@@ -40,10 +41,15 @@ function randomIdentifier(): string {
 	return randomBytes(16).toString("base64url").toLowerCase();
 }
 
+function nextEpoch(): number {
+	return randomBytes(6).readUIntBE(0, 6);
+}
+
 function defaults(): StoredTelemetrySettings {
 	return {
 		schemaVersion: SCHEMA,
 		localDiagnostics: true,
+		nextDiagnosticsEpoch: nextEpoch(),
 		remoteOperational: false,
 		productAnalytics: false,
 		hostKey: randomBytes(32).toString("base64url"),
@@ -75,6 +81,10 @@ function stored(value: unknown): StoredTelemetrySettings | undefined {
 	if (
 		input.schemaVersion !== SCHEMA ||
 		(input.localFeatureUsage !== undefined && typeof input.localFeatureUsage !== "boolean") ||
+		(input.nextDiagnosticsEpoch !== undefined &&
+			(!Number.isSafeInteger(input.nextDiagnosticsEpoch) ||
+				(input.nextDiagnosticsEpoch as number) < 0 ||
+				(input.nextDiagnosticsEpoch as number) > 281474976710655)) ||
 		typeof input.localDiagnostics !== "boolean" ||
 		typeof input.remoteOperational !== "boolean" ||
 		typeof input.productAnalytics !== "boolean" ||
@@ -101,6 +111,7 @@ function stored(value: unknown): StoredTelemetrySettings | undefined {
 	return {
 		schemaVersion: SCHEMA,
 		localDiagnostics: input.localDiagnostics,
+		nextDiagnosticsEpoch: (input.nextDiagnosticsEpoch as number | undefined) ?? 0,
 		localFeatureUsage: input.localFeatureUsage === true,
 		remoteOperational: input.remoteOperational,
 		productAnalytics: input.productAnalytics,
@@ -160,6 +171,7 @@ export class TelemetrySettingsService {
 	private readonly hello: DaemonHello;
 	private readonly listeners = new Set<(settings: TelemetrySettings) => void>();
 	private saving = Promise.resolve();
+	private nextControlKnown = true;
 
 	private constructor(home: string, hello: DaemonHello, value: StoredTelemetrySettings) {
 		this.featureUsage = new FeatureUsageStore(home);
@@ -171,10 +183,14 @@ export class TelemetrySettingsService {
 
 	static async open(home: string, hello: DaemonHello): Promise<TelemetrySettingsService> {
 		let value: StoredTelemetrySettings | undefined;
+		let missing = false;
 		try {
 			value = stored(JSON.parse(await readFile(join(home, FILE), "utf8")));
-		} catch {}
+		} catch (error) {
+			missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+		}
 		const service = new TelemetrySettingsService(home, hello, value ?? defaults());
+		service.nextControlKnown = !!value || missing;
 		if (!value) await service.persist();
 		else await chmod(service.file, 0o600);
 		await service.featureUsage.load(value?.localFeatureUsage === true);
@@ -187,6 +203,9 @@ export class TelemetrySettingsService {
 			hostKind: this.hostKind,
 			hostId: this.hostId(),
 			localDiagnostics: this.value.localDiagnostics,
+			...(this.nextControlKnown
+				? { nextDiagnostics: { schemaVersion: 1 as const, epoch: this.value.nextDiagnosticsEpoch ?? 0 } }
+				: {}),
 			localFeatureUsage: this.value.localFeatureUsage === true,
 			...(this.featureUsage.collectionEpoch ? { featureUsageEpoch: this.featureUsage.collectionEpoch } : {}),
 			remoteOperational: this.value.remoteOperational,
@@ -207,12 +226,14 @@ export class TelemetrySettingsService {
 		this.value = {
 			...this.value,
 			...next,
+			...(!next.localDiagnostics || !this.nextControlKnown ? { nextDiagnosticsEpoch: nextEpoch() } : {}),
 			endpoint: next.endpoint,
 			aiUsageBudget,
 			updatedAt: new Date().toISOString(),
 			...(revokedAnalytics ? { analyticsId: randomIdentifier() } : {}),
 		};
 		await this.persist();
+		this.nextControlKnown = true;
 		await this.featureUsage.configure(this.value.localFeatureUsage === true);
 		const settings = this.settings();
 		for (const listener of this.listeners) {
@@ -221,6 +242,13 @@ export class TelemetrySettingsService {
 			} catch {}
 		}
 		return settings;
+	}
+
+	/** Persist a privacy epoch; only the native writer drains and clears its own slots. */
+	async clearNextDiagnostics(): Promise<void> {
+		this.value = { ...this.value, nextDiagnosticsEpoch: nextEpoch() };
+		await this.persist();
+		for (const listener of this.listeners) listener(this.settings());
 	}
 
 	onChange(listener: (settings: TelemetrySettings) => void): () => void {

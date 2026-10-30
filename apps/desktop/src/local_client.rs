@@ -762,6 +762,15 @@ fn socket_task(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let is_chat = id.is_some();
+        struct CaptureConnection(bool);
+        impl Drop for CaptureConnection {
+            fn drop(&mut self) {
+                if self.0 {
+                    crate::diagnostics::disconnect();
+                }
+            }
+        }
+        let _capture_connection = CaptureConnection(!is_chat);
         let mut resume: Option<Resume> = None;
         let mut failures = 0;
         loop {
@@ -770,6 +779,9 @@ fn socket_task(
                 chat: is_chat,
                 text,
             };
+            if !is_chat {
+                crate::diagnostics::disconnect();
+            }
             let admitted = hello(&client, &options).await;
             if let Err(error) = admitted {
                 if error.contains("identity") || error.contains("incompatible") {
@@ -841,6 +853,14 @@ fn socket_task(
                                     return;
                                 };
                                 failures = 0;
+                                if !is_chat && value["type"] == "diagnostics.next-control" {
+                                    crate::diagnostics::control_from_local(
+                                        &options,
+                                        &value["control"],
+                                    )
+                                    .await;
+                                    continue;
+                                }
                                 if is_chat {
                                     if value["sessionId"].as_str() != id.as_deref() {
                                         continue;
@@ -919,6 +939,9 @@ fn socket_task(
                         }
                     }
                 }
+            }
+            if !is_chat {
+                crate::diagnostics::disconnect();
             }
             failures += 1;
             if failures >= 8 {
@@ -1040,6 +1063,7 @@ async fn run(
                     inbox.epoch+=1; fenced=false;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
                     control.abort();
+                    let _ = (&mut control).await;
                     control = socket_task(options.clone(),client.clone(),None,0,inbox.clone());
                     if let Some(id) = selected.clone() {
                         if let Some(task) = chat_socket.take() { task.abort(); }

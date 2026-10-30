@@ -33,6 +33,7 @@ export interface ExecutionEvidence {
 
 export type DiagnosticLogSourceId =
 	| "app"
+	| "next_app"
 	| "daemon"
 	| "kernel_worker"
 	| "native_report"
@@ -78,6 +79,10 @@ export interface DiagnosticLogRecord {
 	truncated: boolean;
 }
 
+export type NextAppLogOmissions = Partial<
+	Record<"legacy" | "unbound" | "identity" | "expired" | "future" | "invalid" | "cleared", number>
+>;
+
 export interface DiagnosticLogPage {
 	source: DiagnosticLogSourceId;
 	status: "ok" | "unavailable" | "disabled" | "stale_cursor" | "source_changed";
@@ -87,12 +92,14 @@ export interface DiagnosticLogPage {
 	encodedBytes: number;
 	maxBytes: number;
 	oversizedRecords: number;
+	omissions?: NextAppLogOmissions;
 	truncated: boolean;
 	nextCursor?: string;
 	reason?: string;
 }
 
 export interface DiagnosticLogExcerpt {
+	omissions?: NextAppLogOmissions;
 	source: DiagnosticLogSourceId;
 	status: "ok" | "unavailable" | "stale_ref" | "source_changed";
 	record?: DiagnosticLogRecord;

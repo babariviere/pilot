@@ -1116,6 +1116,7 @@ async fn operation(
         "/api/operations"
     };
     observe(
+        options,
         diagnostic,
         if lookup {
             Stage::Lookup
@@ -1132,6 +1133,7 @@ async fn operation(
 
 /// One request of a retained operation, keeping its stage and transport outcome.
 async fn observe(
+    options: &LocalOptions,
     diagnostic: &mut Diagnostic,
     stage: Stage,
     request: reqwest::RequestBuilder,
@@ -1152,7 +1154,8 @@ async fn observe(
             Err(error.message())
         }
     };
-    crate::diagnostics::delivery(
+    crate::diagnostics::delivery_to(
+        options,
         request_id,
         diagnostic,
         started.elapsed().as_millis().min(u64::MAX as u128) as u64,
@@ -1168,6 +1171,7 @@ async fn verify_local(
     diagnostic: &mut Diagnostic,
 ) -> Result<(), Failure> {
     let hello = observe(
+        options,
         diagnostic,
         Stage::Identity,
         client.get(format!("{}/api/hello", options.loopback())),
@@ -1226,6 +1230,7 @@ async fn reconcile(
                 return Err("Invalid Local chat target");
             }
             let summary = observe(
+                options,
                 diagnostic,
                 Stage::Target,
                 client.get(format!(

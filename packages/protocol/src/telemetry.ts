@@ -26,6 +26,8 @@ export interface TelemetrySettings {
 	/** Pseudonymous host correlation. This is never a raw HostRef field. */
 	hostId: string;
 	localDiagnostics: boolean;
+	/** Local-only Next capture privacy epoch; older hosts leave integrated collection unknown. */
+	nextDiagnostics?: { schemaVersion: 1; epoch: number };
 	/** Independent local-only aggregate collection, off by default. */
 	localFeatureUsage?: boolean;
 	/** Fences pending native snapshots after clear/revocation; never exported. */
@@ -54,4 +56,12 @@ export interface TelemetrySettingsPatch {
 
 export interface TelemetryClearResponse {
 	cleared: true;
+}
+
+/** Private Local control, never remote telemetry or delivery evidence. */
+export interface NextDiagnosticsControl {
+	schemaVersion: 1;
+	host: import("./index.ts").OperationHost;
+	localDiagnostics: boolean;
+	epoch: number;
 }
