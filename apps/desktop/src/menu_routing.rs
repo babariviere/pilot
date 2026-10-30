@@ -134,7 +134,7 @@ impl LocalViewer {
                 .update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
     }
 
-    /// Jump stays a toggle: while the palette is open, Cmd-K and Go > Jump to…
+    /// Jump stays a toggle: while the palette is open, Cmd-K and Go > Command Palette
     /// close it unless its query is mid-composition.
     pub(super) fn menu_jump_ready(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         match self.jump.clone() {
@@ -457,7 +457,7 @@ mod tests {
         cx.update_window(h, |_, w, cx| {
             assert!(v.read(cx).jump.is_some());
             w.draw(cx).clear(cx);
-            // Palette open: page navigation waits, but Jump to… still closes it.
+            // Palette open: page navigation waits, but Command Palette still closes it.
             assert!(!w.is_action_available(&GoHome, cx));
             assert!(!w.is_action_available(&NewChat, cx));
             assert!(w.is_action_available(&ToggleJump, cx));

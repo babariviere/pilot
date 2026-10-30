@@ -102,7 +102,7 @@ impl Blocker {
             Self::ProjectSettings(_) => {
                 "Save or revert your project settings changes first. Nothing was discarded."
             }
-            Self::Jump => "Close the Jump palette first.",
+            Self::Jump => "Close the Command Palette first.",
             Self::Conversion(Sending) => {
                 "Converting the chat to a mission is still in progress. Try again when it finishes."
             }

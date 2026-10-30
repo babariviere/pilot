@@ -334,12 +334,12 @@ impl LocalViewer {
                         });
                         view.open_settings(window,cx);
                     })))))
-            // One footer row: Jump to… plus quiet history, Usage and Settings icon actions.
+            // One footer row: Command Palette plus quiet history, Usage and Settings icon actions.
             .child(div().id("sidebar-footer").test_support().h_flex().items_center().min_w_0().px(px(Space::SIDEBAR)).pb_2().pt_1().flex_shrink_0()
                 // With history arrows the footer has no room for the words at either
                 // sidebar width: keep the glyph rather than truncating the label.
-                .child(sidebar_row("sidebar-jump",if self.navigation.can_move(false)||self.navigation.can_move(true){""}else{"Jump to…"},AppIcon::Search)
-                    .flex_1().accessibility_label("Jump to…").tooltip("Jump to a page, project or chat (⌘K)")
+                .child(sidebar_row("sidebar-jump",if self.navigation.can_move(false)||self.navigation.can_move(true){""}else{"Command Palette"},AppIcon::Search)
+                    .flex_1().accessibility_label("Command Palette").tooltip("Command Palette (⌘K)")
                     .on_click(cx.listener(|v,_,w,cx|v.toggle_jump(w,cx))))
                 .when(self.navigation.can_move(false)||self.navigation.can_move(true),|this|this.child(div().h_flex().flex_shrink_0()
                     .capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}}))

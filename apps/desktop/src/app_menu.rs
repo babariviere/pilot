@@ -105,7 +105,7 @@ fn menus() -> Vec<Menu> {
             MenuItem::action("Chats", ShowAllChats),
             MenuItem::action("Missions", ShowMissions),
             MenuItem::separator(),
-            MenuItem::action("Jump to…", ToggleJump),
+            MenuItem::action("Command Palette", ToggleJump),
         ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),

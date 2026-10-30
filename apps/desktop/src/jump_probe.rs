@@ -90,6 +90,12 @@ pub fn run_jump_probe(cx: &mut HeadlessAppContext) {
             }
             cx.update_window(h, |_, w, cx| {
                 let pane = w.find("jump-palette").bounds();
+                let results = w.find("jump-results").bounds();
+                assert_eq!(
+                    results.top(),
+                    pane.top(),
+                    "search starts at the palette top"
+                );
                 assert!(
                     pane.origin.x >= px(0.)
                         && pane.right() <= px(width)

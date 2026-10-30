@@ -632,7 +632,7 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
         assert_eq!(bounds.size, size(w.rem_size() * 2., w.rem_size() * 2.));
     }
     assert_eq!(menu.size.width, w.rem_size() * 2.);
-    // Usage and Settings are footer icon actions in Jump to…'s row.
+    // Usage and Settings are footer icon actions in the Command Palette row.
     let footer = w.find("sidebar-footer").bounds();
     for id in ["open-usage", "open-settings"] {
         let b = w.find(id).bounds();

@@ -392,10 +392,18 @@ impl Render for JumpPalette {
             .min_h_0()
             .min_w_0()
             .gap_2()
-            .child(div().font_semibold().child("Jump to…"))
-            .child(div().flex_1().min_h_0().min_w_0().child(
-                List::new(&self.list).search_placeholder("Pages, projects, chats, links or PR #…"),
-            ))
+            .child(
+                div()
+                    .id("jump-results")
+                    .test_support()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .child(
+                        List::new(&self.list)
+                            .search_placeholder("Pages, projects, chats, links or PR #…"),
+                    ),
+            )
             .child(
                 div()
                     .text_xs()
