@@ -230,7 +230,8 @@ export function coordinatorMutation(arguments_: unknown, codemode = false): bool
 		);
 		if (
 			/\b(?:jj|git)\b/.test(command) &&
-			/\b(?:commit|ci|describe|desc|new|bookmark|bookmarks|branch|branches|push|fetch|checkout|switch|reset|rebase|merge|squash|restore|undo|abandon|tag|update-ref|config|clean|add|rm|apply|cherry-pick)\b/.test(
+			// A hyphen is a word boundary too: merge-base is inspection, not merge.
+			/\b(?:commit|ci|describe|desc|new|bookmark|bookmarks|branch|branches|push|fetch|checkout|switch|reset|rebase|merge(?!-base\b)|squash|restore|undo|abandon|tag|update-ref|config|clean|add|rm|apply|cherry-pick)\b/.test(
 				command,
 			)
 		)

@@ -600,6 +600,50 @@ test("coordinator command policy blocks writes with global flags and nested call
 	assert.equal(await check("write", { path: "/source/new.ts", content: "code" }), undefined);
 });
 
+test("coordinator admission distinguishes merge-base inspection from merge mutations in mixed codemode batches", async () => {
+	const extension = withPilotPolicy(
+		{ name: "test" },
+		{ coordinatorView: { path: "/owned/main/source", scratch: "/owned/scratch", protectedPaths: ["/owned/main"] } },
+	);
+	const before = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
+	const check = (name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["arguments"]) =>
+		before({ type: "toolCall", id: "inspect", name, arguments: args }, undefined as never, undefined as never);
+	const head = "5eefb0fb5c2f19a81ae3076b04444032a4539b1c";
+	const show = `/usr/bin/git -C '/owned/main/source' show --stat --oneline --no-renames ${head}`;
+	const ancestor = `/usr/bin/git -C '/owned/main/source' merge-base --is-ancestor ${head} HEAD`;
+	const command = `${show}; ${ancestor}; printf 'main_view_ancestor_exit=%s\\n' "$?"`;
+	const batch = (shell: string) => `
+for(const [i,r] of (await Promise.allSettled([
+  tools.mission({action:"get",id:"2"}),
+  tools.bash({command:${JSON.stringify(shell)}}),
+  tools.read({path:"/owned/main/source/docs/delivery-evidence.md"})
+])).entries())text({i,result:r});`;
+	// Exercise the actual durable admission hook that rejected the entire reported batch.
+	for (const shell of [show, ancestor, command, "git merge-base HEAD HEAD~1", "git merge-base --fork-point HEAD"]) {
+		assert.equal(await check("bash", { command: shell }), undefined, shell);
+		assert.equal(await check("codemode", { code: batch(shell) }), undefined, shell);
+		assert.equal(await check("jobs", { action: "start", command: shell }), undefined, shell);
+	}
+	for (const mutation of [
+		"git merge HEAD~1",
+		"git -C /owned/main/source merge --no-commit HEAD~1",
+		"git 'merge' HEAD~1",
+		"jj merge HEAD~1",
+		"git reset --hard HEAD~1",
+		"git push origin HEAD",
+		"git config user.name changed",
+		"pnpm test",
+	]) {
+		for (const shell of [mutation, `${ancestor}; ${mutation}`, `${mutation} && ${ancestor}`]) {
+			assert.ok((await check("bash", { command: shell }))?.block, shell);
+			assert.ok((await check("codemode", { code: batch(shell) }))?.block, shell);
+			assert.ok((await check("jobs", { action: "start", command: shell }))?.block, shell);
+		}
+	}
+	assert.ok((await check("write", { path: "/owned/main/source/new.txt", content: "changed" }))?.block);
+	assert.equal(await check("write", { path: "/owned/scratch/notes.txt", content: "scratch" }), undefined);
+});
+
 test("coordinators can create and update Linear issues and other non-shell content through codemode", async () => {
 	const extension = withPilotPolicy(
 		{ name: "test" },
