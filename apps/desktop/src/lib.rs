@@ -323,6 +323,8 @@ pub use artifact_view::gallery::probe::run_artifact_gallery_probe;
 #[cfg(feature = "native-probes")]
 pub use artifact_view::image_probe::run_artifact_image_probe;
 #[cfg(feature = "native-probes")]
+pub use artifact_view::link_probe::run_visual_links_probe;
+#[cfg(feature = "native-probes")]
 pub use artifact_view::mermaid_probe::run_native_mermaid_probe;
 #[cfg(feature = "native-probes")]
 pub use artifact_view::slider_probe::run_slider_probe;

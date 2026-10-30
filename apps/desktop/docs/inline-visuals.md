@@ -149,6 +149,37 @@ whole inline cache. Unsupported stored sources remain accessible without a
 fallback execution path. The full revision picker/latest-follow/export work,
 additional renderer/control corpus, Mermaid, shaders and 3D are not this slice.
 
+## Resource links
+
+API-1 `link` nodes carry a label and an HTTP(S) `href`, not an executable
+handler. `visual_scene.rs` retains exact source targets by node path.
+`artifact_link.rs` uses Kit Base Link's pointer, Tab and Enter/Space activation
+with theme link styling and selectable labels. The legacy styled Kit Link is
+not used: it opens its `href` directly and has no keyboard focus contract.
+
+Only explicit activation calls `external_links::route` / `external_links::open`,
+the same route and opener used by message links. Existing web validation and
+desktop Slack/Linear conversion/fallback remain authoritative. Render, hover,
+selection, scene updates and reader hydration never navigate. API-1 does not
+admit Pilot/app/file/artifact schemes; this slice does not expand that schema.
+Web-looking targets refused by the shared router remain selectable plain text
+beside its refusal explanation, not enabled link-shaped stubs.
+
+Activation rechecks the reader generation, presentation, state version, exact
+revision and scene identity, then reads the current source-owned target by path.
+A callback from a replaced scene, revision, owner or retired reader cannot open
+anything. Kit link identity also includes that scene lifetime, preventing a held
+gesture from transferring to a replacement at the same path after a redraw.
+Pointer activation during a text selection is suppressed; explicit keyboard
+activation remains available. There are no agent sends or worker dispatches from link activation;
+source/provenance remain inert. Zoom, pan, toolbar and reader state are unchanged.
+
+The `visual_links` hidden native probe uses an injected opener only, synthetic
+scenes and 680/1100 light/dark inline/expanded readers. It covers keyboard and
+pointer activation, selection without opening, refused targets, draft retention
+and scene replacement between pointer down/up. Routing and desktop conversion
+tests stay separate pure checks, never real app/browser launches.
+
 ## Verification
 
 Measured dense-conversation scrolling causes, fixes and remaining limits are in

@@ -515,6 +515,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "visual_links"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "chat_links"
 path = "tests/chat_links.rs"
 harness = false

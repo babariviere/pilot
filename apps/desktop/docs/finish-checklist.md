@@ -44,7 +44,7 @@ commit hashes. No runtime tests/builds or live actions were run for this audit.
 - [ ] **Content:** leave giant tool-source expansion/scroll performance with
   active #420; do not open a second renderer refactor. #134 still needs table/list/
   code-copy qualification. Narrow #139 to revision selection/following, #140 to
-  export and inert visual links, #141 to project enumeration contract review.
+  export, #141 to project enumeration contract review.
 - [ ] **Settings/integrations:** prioritize truthful missing controls over new
   dashboards. #146 records/filters/reconciliation are distinct from the delivered
   overview. #151 telemetry/clear/repair binding is distinct from local reviewed
@@ -98,7 +98,7 @@ a test/probe file is only a reproducible check until its recorded result is cite
 | #135 PR actions/merge | **P.** Confirmed PR links and current-chat palette opening exist. Attachment/move/detach and merge-confirmation UI remain absent. No agent merge authority. | [Destination::OpenLink/pull_requests](../src/jump.rs), [GitHub events](../src/github_event_view.rs); #377, #424. |
 | #136 native visuals | **P.** Controls, chart geometry/readouts, animated canvas/pointer and inline zoom/pan exist. Keep only supported-corpus omissions or measured regressions; not full Swift/browser equivalence. | [ArtifactPane::event/draw_pointer](../src/artifact_view.rs), [chart evidence](../evidence/chart-parity.md); #218, #222, #266–275, #289–291, #367. |
 | #139 previews/revisions | **P.** Gallery and inline image/native previews delivered. Previous revision and exact source exist; full revision picker/latest-follow and durable reader state remain. | [gallery Key/Metadata](../src/artifact_gallery.rs), [ArtifactPane::open/render](../src/artifact_view.rs); #99, #218, #222, #248, #250. |
-| #140 artifact sharing/links | **P.** Exact source and native image clipboard copy delivered. File export/share/screenshot still missing; visual `link` nodes remain explicitly inert despite ordinary Markdown links opening. | [copy_image/render link arm](../src/artifact_view.rs); #451, not #400 for visual links. |
+| #140 artifact sharing/links | **P.** Exact source/native image clipboard copy and explicit safe native visual links delivered. File export/share/screenshot still missing. Visual links reuse message routing, never execute artifact source. | [copy_image](../src/artifact_view.rs), [fenced visual links](../src/artifact_link.rs), [contract](inline-visuals.md#resource-links); #451, #494. |
 | #141 project artifacts | **M/B.** Current-chat gallery is not project/global enumeration. Audit existing bounded API before any UI; new backend enumeration requires approval. | [Metadata::accept(owner)](../src/artifact_gallery.rs); #99 is not project browsing. |
 
 ### Settings and integrations

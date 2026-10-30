@@ -11,6 +11,11 @@ pub(crate) mod gallery;
 pub(crate) mod image_probe;
 #[path = "inline_visual.rs"]
 pub(crate) mod inline_visual;
+#[path = "artifact_link.rs"]
+mod link;
+#[cfg(feature = "native-probes")]
+#[path = "artifact_link_probe.rs"]
+pub(crate) mod link_probe;
 #[cfg(feature = "native-probes")]
 #[path = "native_mermaid_probe.rs"]
 pub(crate) mod mermaid_probe;
@@ -1273,16 +1278,7 @@ impl ArtifactPane {
             "space" => div()
                 .h(px(value["size"].as_f64().unwrap_or(12.) as f32))
                 .into_any_element(),
-            "link" => div()
-                .v_flex()
-                .child(self.text(path.into(), value["label"].as_str().unwrap_or("").into()))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Link is inert; no external fetch."),
-                )
-                .into_any_element(),
+            "link" => self.link(value, path, cx),
             "button" => Button::new(SharedString::from(path.to_owned()))
                 .small()
                 .label(SharedString::from(

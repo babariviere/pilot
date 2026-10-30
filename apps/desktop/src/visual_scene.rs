@@ -31,6 +31,7 @@ impl Control {
 #[derive(Clone, Debug)]
 pub(crate) struct Scene {
     pub(crate) root: Arc<Value>,
+    pub(crate) links: BTreeMap<String, String>,
     pub(crate) controls: BTreeMap<String, Control>,
     pub(crate) sliders: BTreeMap<String, (crate::visual_slider::Spec, f64)>,
     pub(crate) canvases: Vec<(String, f64)>,
@@ -39,6 +40,7 @@ pub(crate) struct Scene {
     pub(crate) mermaids: BTreeMap<String, Arc<crate::native_mermaid::Prepared>>,
 }
 struct Check {
+    links: BTreeMap<String, String>,
     controls: BTreeMap<String, Control>,
     sliders: BTreeMap<String, (crate::visual_slider::Spec, f64)>,
     canvases: Vec<(String, f64)>,
@@ -121,6 +123,7 @@ impl Scene {
             return Err("Unsupported visual API");
         }
         let mut c = Check {
+            links: BTreeMap::new(),
             controls: BTreeMap::new(),
             sliders: BTreeMap::new(),
             canvases: Vec::new(),
@@ -132,6 +135,7 @@ impl Scene {
         };
         c.node(&value["root"], "0", 0)?;
         Ok(Self {
+            links: c.links,
             root: Arc::new(value["root"].clone()),
             controls: c.controls,
             sliders: c.sliders,
@@ -328,9 +332,13 @@ impl Check {
             "link" => {
                 self.text(&v["label"], 500)?;
                 let href = string(&v["href"], 2048)?;
-                if !href.starts_with("https://") && !href.starts_with("http://") {
+                if !["https://", "http://"].iter().any(|prefix| {
+                    href.get(..prefix.len())
+                        .is_some_and(|s| s.eq_ignore_ascii_case(prefix))
+                }) {
                     return Err("Invalid visual link");
                 }
+                self.links.insert(path.into(), href.into());
             }
             "tabs" => {
                 let mut options = Vec::new();
