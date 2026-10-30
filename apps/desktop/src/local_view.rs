@@ -1,4 +1,9 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
+#[path = "archive_navigation.rs"]
+mod archive_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "archive_probe.rs"]
+pub(crate) mod archive_probe;
 #[path = "archived_composer.rs"]
 mod archived_composer;
 #[cfg(feature = "native-probes")]
@@ -304,6 +309,7 @@ pub struct LocalViewer {
     projects: Entity<ListState<ProjectList>>,
     overview: Entity<Overview>,
     inbox: Entity<crate::inbox::Inbox>,
+    archive: Entity<crate::archive_view::Archive>,
     missions: Entity<crate::mission_browser_view::Browser>,
     mission_context: Entity<crate::mission_inspector_view::Pane>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
@@ -399,6 +405,7 @@ impl LocalViewer {
     }
     pub fn bind_keys(cx: &mut App) {
         let bindings = [
+            KeyBinding::new("escape", archive_navigation::Back, Some("ArchivePage")),
             crate::ui::shortcut(
                 "secondary-enter",
                 crate::project_add_view::ConfirmProject,
@@ -1032,6 +1039,33 @@ impl LocalViewer {
             cx.new(|cx| ListState::new(ProjectList::new(), window, cx).searchable(false));
         let overview = cx.new(|_| Overview::new());
         let inbox = cx.new(|cx| crate::inbox::Inbox::new(window, cx));
+        let archive = cx.new(|cx| crate::archive_view::Archive::new(window, cx));
+        let archive_events = cx.subscribe_in(
+            &archive,
+            window,
+            |v, _, event: &crate::archive_view::Event, w, cx| {
+                if v.page != Page::Archive {
+                    return;
+                }
+                match event {
+                    crate::archive_view::Event::Chat(id) => {
+                        if let Some(chat) = v
+                            .state
+                            .chats
+                            .iter()
+                            .find(|c| &c.id == id && c.archived)
+                            .cloned()
+                            && v.open(chat, w, cx)
+                        {
+                            // No composer is mounted for an archived chat. Keep
+                            // keyboard/Find in the retained reader's focus scope.
+                            v.transcript.update(cx, |t, cx| t.focus_reader(w, cx));
+                        }
+                    }
+                    crate::archive_view::Event::Refresh => v.refresh_archive(w, cx),
+                }
+            },
+        );
         let inbox_events = cx.subscribe_in(
             &inbox,
             window,
@@ -1482,6 +1516,7 @@ impl LocalViewer {
             projects,
             overview,
             inbox,
+            archive,
             missions,
             mission_context,
             queue_forms: Vec::new(),
@@ -1543,6 +1578,7 @@ impl LocalViewer {
                 project_events,
                 shell_events,
                 inbox_events,
+                archive_events,
                 focus_lost,
             ],
             updates: None,
@@ -1645,9 +1681,16 @@ impl LocalViewer {
         }
         let generation = self.generation + 1;
         if !self.client.as_ref().is_some_and(|client| {
-            client.command(Command::Open {
-                id: chat.id.clone(),
-                generation,
+            client.command(if chat.archived {
+                Command::OpenArchive {
+                    id: chat.id.clone(),
+                    generation,
+                }
+            } else {
+                Command::Open {
+                    id: chat.id.clone(),
+                    generation,
+                }
             })
         }) {
             self.nav_error = Some(if self.client.is_some() {
@@ -1718,6 +1761,8 @@ impl LocalViewer {
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
+        self.state.inventory_refreshing = state.inventory_refreshing;
+        self.state.inventory_error = state.inventory_error;
         if state.control_connection_generation > self.model_connection_generation {
             self.model_connection_generation = state.control_connection_generation;
             self.editor
@@ -2091,6 +2136,10 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page == Page::Archive {
+            self.archive
+                .update(cx, |v, cx| v.sync(&self.state, window, cx));
+        }
         self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
         self.sync_mission_context(cx);
@@ -2442,6 +2491,7 @@ impl Render for LocalViewer {
         }
         let page_key = match &self.page {
             Page::Home => "home".to_owned(),
+            Page::Archive => "archive".to_owned(),
             Page::Missions | Page::Mission(_) => "missions".to_owned(),
             Page::Inbox(_) => "inbox".to_owned(),
             Page::Project(id) => format!("project:{id}"),
@@ -2539,7 +2589,11 @@ impl Render for LocalViewer {
                 // Paint-only entrance: a short fade and 6pt rise, no layout change.
                 .child(div().relative().top(px(6.*(1.-entrance))).opacity(0.4+0.6*entrance)
                     .h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full().child(
-                if matches!(self.page,Page::Missions|Page::Mission(_)) {
+                if self.page==Page::Archive {
+                    div().id("archive").test_support().key_context("ArchivePage").v_flex().flex_1().min_w_0().min_h_0().h_full()
+                        .on_action(cx.listener(|v,_:&archive_navigation::Back,w,cx|v.archive_back(w,cx)))
+                        .child(self.archive.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else if matches!(self.page,Page::Missions|Page::Mission(_)) {
                     div().id("missions").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full().child(self.missions.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else if matches!(self.page,Page::Inbox(_)) {
                     div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()

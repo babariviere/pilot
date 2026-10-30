@@ -5,6 +5,7 @@ pub(crate) const SCOPE_CAP: usize = 64;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
     Home,
+    Archive,
     Missions,
     Mission(crate::mission_browser::Key),
     Inbox(Option<String>),

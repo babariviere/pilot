@@ -489,6 +489,7 @@ pub(crate) struct LiveTranscript {
     pub(crate) cursor: Option<u64>,
     /// Immutable conversation/range admitted by an opt-in recent snapshot.
     pub(crate) history_context: Option<Value>,
+    passive_history: bool,
     projecting_history: bool,
     pub(crate) prefix_pending: bool,
     pub(crate) loaded: bool,
@@ -679,7 +680,9 @@ impl LiveTranscript {
     }
 
     pub(crate) fn has_capacity(&self) -> bool {
-        self.history_context.is_some() || (self.entries.len() < ENTRY_CAP && !self.limited)
+        self.history_context.is_some()
+            || self.passive_history
+            || (self.entries.len() < ENTRY_CAP && !self.limited)
     }
     fn register_calls(&mut self, value: &Value, historical: bool) {
         if let Some(blocks) = value["content"].as_array() {
@@ -1031,7 +1034,7 @@ impl LiveTranscript {
     /// tail by dropping its oldest entries for a newer one. While the reader
     /// holds an older position, the newer entry is omitted and recorded.
     fn admit(&mut self, id: u64, rows: usize) -> bool {
-        if self.history_context.is_some() {
+        if self.history_context.is_some() || self.passive_history {
             return true;
         }
         let newer = rows <= ROW_CAP - 33
@@ -1114,7 +1117,8 @@ impl LiveTranscript {
                 self.history_context = event["history"]["context"]
                     .is_object()
                     .then(|| event["history"]["context"].clone());
-                self.tools.paged_history(self.history_context.is_some());
+                self.tools
+                    .paged_history(self.history_context.is_some() || self.passive_history);
                 self.compactions_stale = false;
                 self.compactions = event["compactions"]
                     .as_array()
@@ -1149,7 +1153,7 @@ impl LiveTranscript {
                 } else {
                     active.len().saturating_sub(ENTRY_CAP)
                 };
-                self.projecting_history = self.history_context.is_some();
+                self.projecting_history = self.history_context.is_some() || self.passive_history;
                 for entry in active[start..].iter().rev() {
                     self.entry(entry, None, true);
                 }
@@ -1459,6 +1463,19 @@ impl LiveTranscript {
         *live = slim_message(live);
     }
 
+    pub(crate) fn archive_snapshot(&mut self, page: &Value) {
+        self.passive_history = true;
+        self.apply(&serde_json::json!({"type":"snapshot", "entries":page["entries"]}));
+        self.cursor = (page["more"] == true)
+            .then(|| {
+                page["entries"]
+                    .as_array()
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row["id"].as_u64())
+            })
+            .flatten();
+    }
+
     pub(crate) fn page(&mut self, before: u64, value: &Value) -> bool {
         self.presentation_dirty = true;
         if self.prefix_pending || self.cursor != Some(before) {
@@ -1487,7 +1504,7 @@ impl LiveTranscript {
             }
         }
         let mut oldest = before;
-        self.projecting_history = self.history_context.is_some();
+        self.projecting_history = self.history_context.is_some() || self.passive_history;
         if let Some(entries) = value["entries"].as_array() {
             for entry in entries.iter() {
                 if let Some(id) = entry["id"].as_u64().filter(|id| *id < before) {

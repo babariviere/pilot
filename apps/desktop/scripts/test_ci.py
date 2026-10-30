@@ -345,7 +345,7 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(len(calls), 1 + len(compiled) // 2)
         for target in ["project_memory", "session_todos", "context_usage", "task_model", "task_edit", "conversation_links", "mission_lifecycle",
                        "usage_overview", "provider_usage", "workspace_changes", "conversation_images", "queued_message", "chat_links",
-                       "question_entry", "github_events", "native_glass"]:
+                       "question_entry", "github_events", "native_glass", "archive"]:
             with self.subTest(target=target):
                 self.assertIn(["test", "--locked", "--features", "native-probes", "--test", target], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "project_creation"], calls)

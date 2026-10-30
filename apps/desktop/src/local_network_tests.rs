@@ -1,4 +1,6 @@
 //! Synthetic loopback daemon. No production data, credentials or service lifecycle.
+#[path = "archive_reader_tests.rs"]
+mod archive_reads;
 #[path = "session_list_reader_tests.rs"]
 mod session_lists;
 use super::*;
@@ -19,6 +21,7 @@ use tokio_tungstenite::tungstenite::{
 
 #[derive(Clone, Copy)]
 enum Scenario {
+    Archive,
     Normal,
     Paged,
     Incompatible,
@@ -214,7 +217,24 @@ impl Mock {
                                 let response=format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
                                 stream.write_all(response.as_bytes()).await.unwrap(); return;
                             }
+                            if matches!(scenario,Scenario::Archive) && path=="/api/sessions?archived=all" {
+                                if page_steps.recv().await.is_err(){return;}
+                                let body=json!([{"id":"a","title":"Refreshed archive","state":"parked","archivedAt":1},{"id":"b","title":"Same title","state":"parked","archivedAt":2}]).to_string();
+                                let _=stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
+                                return;
+                            }
                             if path.contains("/history?") {
+                                if matches!(scenario,Scenario::Archive) {
+                                    let url=reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+                                    let pairs:std::collections::HashMap<_,_>=url.query_pairs().into_owned().collect();
+                                    assert_eq!(pairs.len(),2);assert_eq!(pairs["limit"],"24");
+                                    let before=pairs["before"].parse::<u64>().unwrap();
+                                    let id=if path.contains("/a/"){ "a" }else{ "b" };
+                                    if page_steps.recv().await.is_err(){return;}
+                                    let body=if before==HISTORY_END {json!({"entries":[entry(30,&format!("{id} retained")),entry(31,"tail")],"more":true})}else{assert_eq!(before,30);json!({"entries":[entry(1,"oldest"),entry(2,"Find in older history")],"more":false})}.to_string();
+                                    let _=stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
+                                    return;
+                                }
                                 if matches!(scenario,Scenario::Paged) {
                                     let url=reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
                                     let query:std::collections::HashMap<_,_>=url.query_pairs().into_owned().collect();
@@ -242,7 +262,7 @@ impl Mock {
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
-                                if matches!(scenario, Scenario::SessionList | Scenario::SessionListLineage) {
+                                if matches!(scenario, Scenario::Archive | Scenario::SessionList | Scenario::SessionListLineage) {
                                     loop {
                                         tokio::select! {
                                             biased;

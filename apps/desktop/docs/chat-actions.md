@@ -86,6 +86,11 @@ after a known ACK, never converts an observation into a mutation receipt.
 
 ## Archived chat composer
 
+The dedicated [Archive inventory](archive.md) reuses the shared full summaries
+and existing guarded Restore. Archived opening uses passive history GETs, never
+the ordinary interactive chat subscription. Its exact inventory, offline and
+multi-page history coverage are documented separately.
+
 When the chat list shows the selected chat archived, its composer slot shows
 *This chat is archived* with a **Restore** button instead of the editor, as in
 Swift's `ArchivedComposer`. The transcript stays mounted and readable. The

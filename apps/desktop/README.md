@@ -73,6 +73,12 @@ archive/restore acknowledgments are never automatically retried or settled by
 later list visibility. See [chat-actions.md](docs/chat-actions.md) for the exact
 contract, existing cleanup side effects, bounds and synthetic checks.
 
+The project selector's **Archive** opens a dedicated read-only inventory of all
+registered archived summaries, with literal search and exact project/mission
+filters. Offline rows are labelled as last reported. Opening a chat reads
+committed history through passive GETs, never subscribes or starts work; existing
+Restore remains explicit. See [coverage and transcript limits](docs/archive.md).
+
 Rename opens a focused title dialog for the clicked canonical Local chat without
 selecting it. Cancel leaves its title, conversation and drafts unchanged. Titles
 are limited to 200 UTF-16 units and normalized like the existing daemon endpoint.

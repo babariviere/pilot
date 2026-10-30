@@ -55,6 +55,11 @@ The read-only **MCP connections** Settings page uses this same column, Kit
 Refresh/Details controls and literal selectable observations. It never exposes
 connection/auth/setup actions. See [Local MCP observations](mcp-status.md).
 
+**Archive** uses this column, the shared Archive glyph, native Kit List/search
+and project/mission filter menus. It keeps the shared full registered inventory
+and passive history admission separate from writable chat actions. See
+[Archive coverage](archive.md).
+
 The read-only **Scheduled messages** Settings page uses the same column, a native
 Kit List and literal selectable Details. Refresh only reads the bounded Local
 roster. It exposes no management/send actions. See [Scheduled messages](scheduled-messages.md).

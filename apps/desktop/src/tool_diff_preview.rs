@@ -247,7 +247,7 @@ impl Preview {
             cx.defer(move |cx| {
                 let _ = cx.update_window(window, |_, w, cx| {
                     if panel.contains_focused(w, cx) {
-                        let _ = owner.update(cx, |v, cx| v.tool_preview_focus(w, cx));
+                        let _ = owner.update(cx, |v, cx| v.focus_reader(w, cx));
                     }
                 });
             });

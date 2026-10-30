@@ -62,6 +62,7 @@ impl LocalViewer {
             return;
         }
         if self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
+            || (self.page == Page::Archive && !self.archive.update(cx, |v, cx| v.ready(w, cx)))
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
             || self.queue_marked(w, cx)
             || (matches!(self.page, Page::Inbox(_))

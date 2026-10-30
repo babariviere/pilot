@@ -317,6 +317,7 @@ impl LocalViewer {
             return false;
         }
         if self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
+            || (self.page == Page::Archive && !self.archive.update(cx, |v, cx| v.ready(w, cx)))
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
             || self.queue_marked(w, cx)
             || (matches!(self.page, Page::Inbox(_))
@@ -410,6 +411,9 @@ impl LocalViewer {
                             v.chats.update(cx,|l,cx|l.focus(w,cx));
                             v.open_add_project(w,cx);
                         })))
+                    .child(div().capture_any_mouse_down(cx.listener(|v,_,w,cx|{if !v.project_choices_ready(w,cx){cx.stop_propagation();}})).child(sidebar_row("nav-archive","Archive",AppIcon::Archive)
+                        .selected(self.page==Page::Archive)
+                        .on_click(cx.listener(|v,_,w,cx|{v.show_archive(w,cx);})) ))
                     // Folders are yours, on this machine: group projects, then choose one above.
                     .child(sidebar_row("edit-folders","Edit folders…",AppIcon::Projects)
                         .tooltip("Group your projects into folders")

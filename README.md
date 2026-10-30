@@ -680,6 +680,10 @@ The mission icon in any mission chat's toolbar opens the mission's Overview.
 Going the other way, the compass button beside a mission's title opens its coordinator chat.
 Coordinators can link to member chats in their replies. Click a chat's name to open it inside Pilot,
 including archived chats, without starting or restoring them.
+Pilot Next's project selector also opens **Archive**, with all registered archived
+summaries, project/mission filters and passive history reading. Offline rows are
+labelled as last reported; deleted/unregistered data is not enumerated. See
+[Archive coverage and limits](apps/desktop/docs/archive.md).
 Archiving a mission also archives its coordinator chat. If the coordinator is still working, it finishes
 first, including running children and background-job follow-ups. Other member chats are left unchanged.
 Chat inspector panes open at a compact width, leaving the conversation most of the space. Drag the

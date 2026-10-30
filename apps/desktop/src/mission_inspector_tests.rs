@@ -4,6 +4,32 @@ fn full(rows: Value) -> Value {
     json!({"type":"sessions", "sessions":rows})
 }
 #[test]
+fn archive_projectless_is_reported_absence_not_malformed_or_unobserved_metadata() {
+    let mut m = Arc::new(Metadata::default());
+    assert!(!m.projectless("A"));
+    Metadata::accept(
+        &mut m,
+        &full(json!([{"id":"A","projectId":false},{"id":"B"}])),
+    );
+    assert!(!m.projectless("A"));
+    assert!(m.projectless("B"));
+    Metadata::accept(
+        &mut m,
+        &json!({"type":"session","session":{"id":"A","projectId":null}}),
+    );
+    assert!(m.projectless("A"));
+    Metadata::accept(
+        &mut m,
+        &json!({"type":"session","session":{"id":"A","projectId":"P"}}),
+    );
+    assert!(!m.projectless("A"));
+    Metadata::accept(&mut m, &full(json!([{"id":"B"},{"id":"B"}])));
+    assert!(
+        !m.projectless("B"),
+        "malformed snapshots cannot retain scope authority"
+    );
+}
+#[test]
 fn metadata_is_atomic_and_not_guessed_from_titles() {
     let mut m = Arc::new(Metadata::default());
     assert_eq!(m.link("A"), &Link::Unknown);

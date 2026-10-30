@@ -504,3 +504,6 @@ mod scheduled_messages_tests;
 mod scheduled_messages_view;
 #[cfg(feature = "native-probes")]
 pub use scheduled_messages_probe::run_scheduled_messages_probe;
+mod archive_view;
+#[cfg(feature = "native-probes")]
+pub use local_view::archive_probe::run_archive_probe;

@@ -31,6 +31,10 @@ PURE_FILTERS = {"local_view::shortcuts_view::tests", "local_view::menu_routing::
 PURE_NATIVE = {"scheduled_messages", "shortcuts", "mcp_status", "project_memory", "daemon_upgrade", "native_menus", "provider_usage", "dogfooding_diagnostics", "path_completion", "new_chat_view", "message_fold", "session_todos", "session_file_view", "queued_message", "conversation_images", "session_failure", "workspace_changes", "conversation_links", "task_model", "usage_overview", "mission_lifecycle", "context_usage", "task_edit", "mission_metadata", "task_status", "chat_rename", "chat_actions", "controls", "project_creation", "mission_tasks", "mission_activity", "mission_update", "mission_task_create", "mission_create"}
 
 
+PURE_MODULES.add("archive")
+PURE_NATIVE.add("archive")
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--unit", help="one nonempty library test filter (including transport suites)")

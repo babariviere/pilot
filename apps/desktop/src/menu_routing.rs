@@ -127,6 +127,7 @@ impl LocalViewer {
             && !w.has_active_sheet(cx)
             && !self.editor.update(cx, |e, cx| e.marked(w, cx))
             && !self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
+            && (self.page != Page::Archive || self.archive.update(cx, |v, cx| v.ready(w, cx)))
             && !self
                 .chats
                 .read(cx)

@@ -585,7 +585,7 @@ impl TranscriptView {
                 .update(cx, |i, cx| i.marked_text_range(w, cx).is_some())
             && self.history_guard.as_ref().is_none_or(|guard| guard(w, cx))
     }
-    pub(crate) fn tool_preview_focus(&self, w: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_reader(&self, w: &mut Window, cx: &mut Context<Self>) {
         self.find.focus.focus(w, cx);
     }
     #[cfg(test)]

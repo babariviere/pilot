@@ -248,6 +248,7 @@ fn identity_file(path: PathBuf) -> Result<String, Failure> {
 
 enum ReadRoute {
     Hello,
+    Sessions,
     Session {
         id: String,
     },
@@ -269,9 +270,11 @@ enum ReadRoute {
 impl ReadRoute {
     fn budget(&self) -> Option<(usize, &'static str)> {
         match self {
-            Self::Hello | Self::History { .. } | Self::Session { .. } | Self::Subagent { .. } => {
-                None
-            }
+            Self::Hello
+            | Self::Sessions
+            | Self::History { .. }
+            | Self::Session { .. }
+            | Self::Subagent { .. } => None,
             // Pins may not carry a kind. Their revision can still be an image.
             Self::Artifact { .. } => Some((
                 crate::artifact_image::HTTP_CAP,
@@ -282,6 +285,7 @@ impl ReadRoute {
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
+            Self::Sessions => "/api/sessions?archived=all".into(),
             Self::Subagent { id, name } => {
                 let mut url = reqwest::Url::parse("http://localhost/").expect("static URL");
                 url.path_segments_mut().expect("HTTP URL").extend([
@@ -329,6 +333,8 @@ struct Resume {
 pub(crate) enum Command {
     Clear { generation: u64 },
     Open { id: String, generation: u64 },
+    OpenArchive { id: String, generation: u64 },
+    RefreshSummaries,
     Earlier { before: u64, generation: u64 },
     Reconnect,
     StopThinking { generation: u64 },
@@ -336,6 +342,9 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) inventory_refreshing: bool,
+    pub(crate) inventory_error: Option<&'static str>,
+    pub(crate) passive_history: bool,
     pub(crate) control_connection_generation: u64,
     pub(crate) failure_run_serial: u64,
     pub(crate) todos: crate::session_todos::Feed,
@@ -598,6 +607,7 @@ enum ChatState {
     Closed,
     Loading,
     Connected,
+    Passive,
     Unavailable(Failure),
 }
 
@@ -643,6 +653,7 @@ impl ReaderState {
             ChatState::Closed => "",
             ChatState::Loading => "Loading chat…",
             ChatState::Connected => "Connected · Local",
+            ChatState::Passive => "Read-only history · Local",
             ChatState::Unavailable(failure) => failure,
         }
         .into();
@@ -650,6 +661,14 @@ impl ReaderState {
 }
 
 enum Incoming {
+    Inventory {
+        revision: u64,
+        result: Result<SessionList, Failure>,
+    },
+    Archive {
+        generation: u64,
+        result: Result<Value, Failure>,
+    },
     Fatal(Failure),
     Wire {
         generation: u64,
@@ -802,6 +821,60 @@ async fn history(
     .await?;
     gate(client, options).await?;
     Ok(value)
+}
+// Legacy history GET reads entries below this safe upper boundary. No watch,
+// provider work or interactive session admission is involved.
+const HISTORY_END: u64 = (1_u64 << 53) - 1;
+async fn archive_snapshot(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    id: String,
+) -> Result<Value, Failure> {
+    let page = history(client, options, id, HISTORY_END, None).await?;
+    validate_archive_page(&page, HISTORY_END)?;
+    Ok(page)
+}
+fn validate_archive_page(page: &Value, before: u64) -> Result<(), Failure> {
+    let rows = page["entries"]
+        .as_array()
+        .ok_or("Invalid archived history page")?;
+    let mut last = 0;
+    for row in rows {
+        let id = row["id"]
+            .as_u64()
+            .filter(|id| *id > last && *id < before)
+            .ok_or("Invalid archived history identity")?;
+        if !row["kind"].is_string() {
+            return Err("Invalid archived history entry");
+        }
+        last = id;
+    }
+    if !page["more"].is_boolean() || (page["more"] == true && rows.is_empty()) {
+        return Err("Invalid archived history cursor");
+    }
+    Ok(())
+}
+async fn inventory(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+) -> Result<SessionList, Failure> {
+    gate(client, options).await?;
+    let rows = get(client, options, ReadRoute::Sessions).await?;
+    let list = SessionList::read(&serde_json::json!({"type":"sessions", "sessions":rows}))?;
+    gate(client, options).await?;
+    Ok(list)
+}
+fn archive_task(
+    options: LocalOptions,
+    client: reqwest::Client,
+    id: String,
+    generation: u64,
+    inbox: Inbox,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let result = archive_snapshot(&client, &options, id).await;
+        let _ = inbox.send(Incoming::Archive { generation, result }).await;
+    })
 }
 pub(crate) async fn hello(
     client: &reqwest::Client,
@@ -1135,6 +1208,8 @@ async fn run(
     let mut control = socket_task(options.clone(), client.clone(), None, 0, inbox.clone());
     let mut chat_socket: Option<JoinHandle<()>> = None;
     let mut page_task: Option<JoinHandle<()>> = None;
+    let mut inventory_task: Option<JoinHandle<()>> = None;
+    let mut list_revision = 0_u64;
     let mut snapshot_revision = 0_u64;
     let mut awaiting_snapshot = false;
     let mut selected: Option<String> = None;
@@ -1157,11 +1232,31 @@ async fn run(
                     if let Some(task)=page_task.take(){task.abort();}
                     view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.page_error=false;reader.chat=ChatState::Closed;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
-                Ok(Command::Open { id, generation }) => {
+                Ok(Command::RefreshSummaries) => {
+                    if reader.fenced() {
+                        view.inventory_refreshing = false;
+                        view.inventory_error = Some("Local identity is unavailable. Reconnect before refreshing Archive.");
+                    } else if !view.inventory_refreshing {
+                        view.inventory_refreshing = true;
+                        view.inventory_error = None;
+                        let (options, client, inbox, revision) = (options.clone(), client.clone(), inbox.clone(), list_revision);
+                        inventory_task = Some(tokio::spawn(async move {
+                            let result = inventory(&client, &options).await;
+                            let _ = inbox.send(Incoming::Inventory {revision, result}).await;
+                        }));
+                    }
+                }
+                Ok(command @ (Command::Open { .. } | Command::OpenArchive { .. })) => {
+                    let passive = matches!(command, Command::OpenArchive { .. });
+                    let (id, generation) = match command {
+                        Command::Open {id, generation} | Command::OpenArchive {id, generation} => (id, generation),
+                        _ => unreachable!(),
+                    };
                     if reader.fenced() || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
                     awaiting_snapshot = true;
+                    view.passive_history = passive;
                     view.todos = crate::session_todos::Feed::new(crate::session_todos::Source::new(options.clone(), id.clone(), generation));
                     selected = Some(id.clone());
                     view.artifacts=Arc::new(Vec::new());
@@ -1170,7 +1265,11 @@ async fn run(
                     model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
                     view.generation = generation; view.page_busy = false; view.page_error=false; reader.chat=ChatState::Loading; view.batches=0;view.queued=0;view.user_queue=Arc::default();
-                    chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
+                    chat_socket = Some(if passive {
+                        archive_task(options.clone(),client.clone(),id,generation,inbox.clone())
+                    } else {
+                        socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone())
+                    });
                 }
                 Ok(Command::Earlier { before, generation }) => {
                     if reader.fenced() || generation != view.generation || view.page_busy || model.cursor != Some(before) || model.prefix_pending || !model.has_capacity() { continue; }
@@ -1179,12 +1278,15 @@ async fn run(
                     view.page_busy = true; view.page_error=false;
                     let revision = snapshot_revision;
                     let context = model.history_context.clone();
+                    let passive = view.passive_history;
                     page_task = Some(tokio::spawn(async move {
                         let result = history(&client,&options,id,before,context).await;
+                        let result = if passive { result.and_then(|v| {validate_archive_page(&v, before)?; Ok(v)}) } else {result};
                         let _ = inbox.send(Incoming::Page { generation,before,revision,result }).await;
                     }));
                 }
                 Ok(Command::Reconnect) => {
+                    if let Some(task)=inventory_task.take(){task.abort();} view.inventory_refreshing=false;
                     snapshot_revision += 1;
                     reader.baseline.stale();
                     reader.control=ControlState::Reconnecting;
@@ -1197,7 +1299,11 @@ async fn run(
                     control = socket_task(options.clone(),client.clone(),None,0,inbox.clone());
                     if let Some(id) = selected.clone() {
                         if let Some(task) = chat_socket.take() { task.abort(); }
-                        chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),view.generation,inbox.clone()));
+                        chat_socket = Some(if view.passive_history {
+                            archive_task(options.clone(),client.clone(),id,view.generation,inbox.clone())
+                        } else {
+                            socket_task(options.clone(),client.clone(),Some(id),view.generation,inbox.clone())
+                        });
                     }
                 }
                 Ok(Command::StopThinking { generation }) => {
@@ -1212,6 +1318,7 @@ async fn run(
                     model.stop_thinking(); model.stale();
                     view.todos.stale();
                     reader.control=ControlState::Fenced(text); control.abort();
+                    if let Some(task)=inventory_task.take(){task.abort();} view.inventory_refreshing=false;
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
                     reader.baseline.stale();
@@ -1241,6 +1348,32 @@ async fn run(
                             }
                             SocketEvent::Unavailable(failure) => ControlState::Unavailable(failure),
                         };
+                    }
+                }
+                Ok((_, Incoming::Inventory {revision, result})) => {
+                    view.inventory_refreshing = false;
+                    match result {
+                        Ok(candidate) if revision == list_revision => {
+                            view.chats = Arc::new(candidate.chats);
+                            view.mission_metadata = candidate.metadata;
+                            reader.baseline = BaselineState::Fresh;
+                            view.inventory_error = None;
+                        },
+                        Ok(_) => {}, // Newer streamed summaries already won.
+                        Err(error) => view.inventory_error = Some(error),
+                    }
+                }
+                Ok((_, Incoming::Archive {generation, result})) => {
+                    if generation != view.generation || !view.passive_history {continue;}
+                    awaiting_snapshot = false;
+                    snapshot_revision += 1;
+                    view.page_revision += 1;
+                    match result {
+                        Ok(page) => {
+                            model.archive_snapshot(&page);
+                            reader.chat = ChatState::Passive;
+                        },
+                        Err(error) => reader.chat = ChatState::Unavailable(error),
                     }
                 }
                 Ok((_, Incoming::Page { generation,before,revision,result })) => {
@@ -1278,6 +1411,7 @@ async fn run(
                             Err(error)=>view.projects_error=Some(error),
                         }
                     } else if value["type"] == "sessions" {
+                        list_revision += 1;
                         match SessionList::read(&value) {
                             Ok(candidate)=>{
                                 view.chats=Arc::new(candidate.chats);
@@ -1289,6 +1423,7 @@ async fn run(
                             },
                         }
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
+                        list_revision += 1;
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         crate::chat_order::upsert(Arc::make_mut(&mut view.chats), chat);
                     } else if value["type"] == "missions" && let Some(titles) = local_model::mission_titles(&value["missions"]) {
@@ -1342,6 +1477,9 @@ async fn run(
         publish(&updates, &replace, view.for_display(selected.as_deref()));
     }
     control.abort();
+    if let Some(task) = inventory_task {
+        task.abort();
+    }
     if let Some(task) = chat_socket {
         task.abort();
     }

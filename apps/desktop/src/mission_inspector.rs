@@ -1,4 +1,4 @@
-//! Content-private membership metadata from the existing, pinned Local stream.
+//! Content-private relationship metadata from the existing, pinned Local stream.
 //! No requests, persistence, navigation or inferred/title-based membership.
 #[cfg(test)]
 #[path = "mission_inspector_tests.rs"]
@@ -8,7 +8,10 @@ use crate::{
     mission_browser::{Home, Key},
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Link {
@@ -24,9 +27,14 @@ pub(crate) enum Link {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Metadata {
     rows: BTreeMap<String, Link>,
+    projectless: BTreeSet<String>,
     fallback: Link,
 }
 impl Metadata {
+    /// Missing/null project is different from a malformed or unobserved project.
+    pub(crate) fn projectless(&self, id: &str) -> bool {
+        self.projectless.contains(id)
+    }
     pub(crate) fn link(&self, id: &str) -> &Link {
         self.rows.get(id).unwrap_or(&self.fallback)
     }
@@ -49,13 +57,19 @@ impl Metadata {
                     for row in raw {
                         let Some(id) = id(&row["id"]) else {
                             next.rows.clear();
+                            next.projectless.clear();
                             next.fallback = Link::Malformed;
                             break;
                         };
                         if next.rows.insert(id, link(row)).is_some() {
                             next.rows.clear();
+                            next.projectless.clear();
                             next.fallback = Link::Malformed;
                             break;
+                        }
+                        if row["projectId"].is_null() {
+                            next.projectless
+                                .insert(row["id"].as_str().expect("validated ID").into());
                         }
                     }
                 } else {
@@ -69,10 +83,18 @@ impl Metadata {
                     return;
                 };
                 let value = link(row);
-                if current.rows.get(&id) == Some(&value) {
+                let projectless = row["projectId"].is_null();
+                if current.rows.get(&id) == Some(&value)
+                    && current.projectless.contains(&id) == projectless
+                {
                     return;
                 }
                 let mut next = (**current).clone();
+                if projectless {
+                    next.projectless.insert(id.clone());
+                } else {
+                    next.projectless.remove(&id);
+                }
                 next.rows.insert(id, value);
                 next
             }
