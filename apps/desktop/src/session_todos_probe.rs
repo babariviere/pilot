@@ -75,6 +75,8 @@ fn assert_no_tasks(w: &mut Window) {
     assert_eq!(w.find("composer-input").bounds().size.height, px(34.));
 }
 pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
+    // Endpoint/interaction checks; composer_controls owns motion phases.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let captures = std::env::var_os("PILOT_NEXT_TODOS_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();

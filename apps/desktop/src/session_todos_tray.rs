@@ -7,6 +7,7 @@ use crate::{
 use std::collections::VecDeque;
 
 pub(super) struct Entry {
+    height: crate::composer_height::State,
     viewer: gpui_kit::WeakEntity<LocalViewer>,
     // Bounded, window-local intent, keyed by exact Local identity/port and chat,
     // not by title or connection generation. Never auto-open/close on progress.
@@ -17,6 +18,7 @@ pub(super) struct Entry {
 pub(super) fn entry(window: &mut Window, cx: &mut Context<LocalViewer>) -> Entity<Entry> {
     let viewer = cx.entity();
     cx.new(|cx: &mut Context<Entry>| Entry {
+        height: Default::default(),
         viewer: viewer.downgrade(),
         expanded: VecDeque::new(),
         focus: cx.focus_handle(),
@@ -54,9 +56,21 @@ impl Entry {
     }
 }
 impl Render for Entry {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let scope = self
+            .viewer
+            .upgrade()
+            .and_then(|v| v.read(cx).selected.clone());
         let Some((key, feed)) = self.selected(cx) else {
-            return div().hidden().into_any_element();
+            return crate::composer_height::slot(
+                "session-todos-slot",
+                &self.height,
+                scope,
+                None,
+                f32::from(w.rem_size()) * 0.25,
+                w,
+                cx,
+            );
         };
         let expanded = self
             .expanded
@@ -111,6 +125,14 @@ impl Render for Entry {
                 );
             }
         }
-        content.into_any_element()
+        crate::composer_height::slot(
+            "session-todos-slot",
+            &self.height,
+            scope,
+            Some(content.into_any_element()),
+            f32::from(w.rem_size()) * 0.25,
+            w,
+            cx,
+        )
     }
 }

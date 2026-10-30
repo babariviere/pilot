@@ -79,6 +79,7 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct ChatEditor {
+    height: crate::composer_height::State,
     paths: paths::Paths,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
@@ -175,6 +176,7 @@ impl ChatEditor {
             v.path_input_changed(w, cx, false)
         });
         Self {
+            height: Default::default(),
             paths: Default::default(),
             context_entry: None,
             todos_entry: None,
@@ -1360,6 +1362,15 @@ impl Render for ChatEditor {
             );
         #[cfg(any(test, feature = "native-probes"))]
         let input = input.test_support();
+        let input = crate::composer_height::slot(
+            "composer-input-slot",
+            &self.height,
+            Some(key.clone()),
+            Some(input.into_any_element()),
+            0.,
+            window,
+            cx,
+        );
         let stop_slot = div()
             .id("composer-stop-slot")
             .size_6()

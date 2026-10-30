@@ -132,6 +132,9 @@ pub(crate) mod session_todos_probe;
 #[path = "session_todos_tray.rs"]
 mod session_todos_tray;
 #[cfg(feature = "native-probes")]
+#[path = "composer_motion_probe.rs"]
+pub(crate) mod composer_motion_probe;
+#[cfg(feature = "native-probes")]
 #[path = "settings_probe.rs"]
 pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]

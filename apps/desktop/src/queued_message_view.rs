@@ -22,21 +22,38 @@ const QUEUE_EDITING_HEIGHT: f32 = 260.;
 
 /// Stable composer slot; LocalViewer retains the per-chat forms and guarded actions.
 pub(super) struct Entry {
+    height: crate::composer_height::State,
     viewer: gpui_kit::WeakEntity<LocalViewer>,
     _subscription: Subscription,
 }
 pub(super) fn entry(w: &mut Window, cx: &mut Context<LocalViewer>) -> Entity<Entry> {
     let viewer = cx.entity();
     cx.new(|cx| Entry {
+        height: Default::default(),
         viewer: viewer.downgrade(),
         _subscription: cx.observe_in(&viewer, w, |_, _, _, cx| cx.notify()),
     })
 }
 impl Render for Entry {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.viewer
+        let scope = self
+            .viewer
+            .upgrade()
+            .and_then(|v| v.read(cx).selected.clone());
+        let child = self
+            .viewer
             .update(cx, |v, cx| v.queued_message_tray(w, cx))
-            .unwrap_or_else(|_| div().hidden().into_any_element())
+            .ok()
+            .flatten();
+        crate::composer_height::slot(
+            "composer-queue-slot",
+            &self.height,
+            scope,
+            child,
+            f32::from(w.rem_size()) * 0.5,
+            w,
+            cx,
+        )
     }
 }
 pub(super) enum Event {
@@ -740,7 +757,11 @@ impl LocalViewer {
             (f.editing.is_some() || !f.drafts.is_empty()).then(|| f.source.chat.clone())
         })
     }
-    fn queued_message_tray(&self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    fn queued_message_tray(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
         let rows = &self.sending_view.queued;
         // Unresolved sends of a busy chat wait here, where their queue row will be.
         let pending = self.sending_view.pending_rows(self.selected.as_deref());
@@ -778,7 +799,7 @@ impl LocalViewer {
             || self.artifacts_open
             || (rows.is_empty() && pending.is_empty() && retained.is_empty())
         {
-            return div().hidden().into_any_element();
+            return None;
         }
         let disabled = !self.state.loaded || self.state.generation != self.generation;
         let mut list = div()
@@ -990,22 +1011,24 @@ impl LocalViewer {
                 .on_click(cx.listener(move |v, _, w, cx| v.open_queue_row(id, false, w, cx))),
             );
         }
-        div()
-            .id("composer-queue")
-            .test_support()
-            .v_flex()
-            .min_w_0()
-            .px_1()
-            .pt_1()
-            .pb_0p5()
-            .gap_0p5()
-            .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
-                if !v.project_choices_ready(w, cx) {
-                    cx.stop_propagation();
-                }
-            }))
-            .child(list)
-            .into_any_element()
+        Some(
+            div()
+                .id("composer-queue")
+                .test_support()
+                .v_flex()
+                .min_w_0()
+                .px_1()
+                .pt_1()
+                .pb_0p5()
+                .gap_0p5()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(list)
+                .into_any_element(),
+        )
     }
     fn open_queue_row(&mut self, id: u64, remove: bool, w: &mut Window, cx: &mut Context<Self>) {
         // This entry opens the inline editor or its confirmation. It never dispatches.

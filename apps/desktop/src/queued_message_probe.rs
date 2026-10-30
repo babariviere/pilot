@@ -1051,6 +1051,8 @@ fn inline(cx: &mut HeadlessAppContext, width: f32, dark: bool, captures: Option<
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
 }
 pub fn run_queued_message_probe(cx: &mut HeadlessAppContext) {
+    // Endpoint/interaction checks; composer_controls owns motion phases.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let reduced_motion = cx.update(|cx| {
         let previous = cx.reduce_motion();
         cx.set_reduce_motion(true);

@@ -271,6 +271,17 @@ than reflowing; only the conversation narrows. Closing removes the panel at once
 eases between extents, a reversal continues from the extent shown, and resize or
 reduced motion apply immediately. The `side_panel` native target checks these phases.
 
+The composer uses `composer_height` measured, clipped slots for line growth,
+queued rows and the chat task tray, on the same 200ms executor-clock transition.
+The editor entity and full-size child stay mounted; height does not rewrite text,
+selection or preedit. Removal unmounts the child immediately and eases only empty
+space. The slot includes its following gap, so empty trays leave none. Identity,
+viewport/rem changes and reduced motion use natural geometry immediately; other
+parent-width changes snap on the measurement's next redraw, never ease a resize.
+`composer_controls` checks phases, reversal, input retention, wheel-to-bottom
+following and reading anchors in hidden native windows, and reports CPU draw cost.
+These offscreen checks do not qualify visible smoothness or OS IME behavior.
+
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.
 Do not neutralize categorical charts or style user-authored content with chrome
