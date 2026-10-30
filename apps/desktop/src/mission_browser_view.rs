@@ -101,6 +101,9 @@ pub(crate) struct Browser {
     catalog_current: bool,
     /// Sidebar names only: the retained Detail was accepted after the Catalog.
     detail_newer: bool,
+    /// One-use handoff, never a cache across refresh, navigation or reconnect.
+    tasks_detail: Option<Arc<crate::mission_tasks::Snapshot>>,
+    tasks_read_generation: Option<u64>,
     /// A chat's linked mission to open once the Catalog lists it.
     jump: Option<Key>,
     /// Why that mission couldn't be opened from the list.
@@ -212,6 +215,8 @@ impl Browser {
             busy: false,
             catalog_current: false,
             detail_newer: false,
+            tasks_detail: None,
+            tasks_read_generation: None,
             jump: None,
             jump_note: None,
             projects: Arc::new(Vec::new()),
@@ -232,6 +237,14 @@ impl Browser {
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
+        self.tasks_detail = None;
+        self.tasks_read_generation = None;
+        if self.options.is_some() {
+            self.generation = self.generation.saturating_add(1);
+            self.reader = None;
+            self.updates = None;
+            self.busy = false;
+        }
         self.options = Some(options);
     }
     /// Point the task pane at a mission (or none), reopening its list when the
@@ -263,7 +276,21 @@ impl Browser {
         }
         self.tab = tab;
         if tab == Tab::Tasks {
-            self.tasks_browser.update(cx, |p, cx| p.show(focus, w, cx));
+            let loaded = self.tasks_detail.take().filter(|s| {
+                self.online
+                    && self.loaded
+                    && !self.busy
+                    && self.error.is_none()
+                    && self.route == Some(Route::Detail(s.key.clone()))
+                    && self.local_home().as_ref() == Some(&s.key.home)
+            });
+            // Keep the existing canonical-catalog admission from sync_tasks.
+            let key = self.tasks_browser.read(cx).state.key.clone();
+            let options = self.options.clone();
+            self.tasks_browser.update(cx, |p, cx| {
+                p.sync(key, options, w, cx);
+                p.show_loaded(focus, loaded, w, cx);
+            });
         }
         cx.notify();
     }
@@ -483,6 +510,13 @@ impl Browser {
             || self.link_availability_changed(&chats)
             || self.online != online
             || self.loaded != loaded;
+        if self.online != online || self.loaded != loaded {
+            self.tasks_detail = None;
+            // A read that spanned reconnect may still populate the existing
+            // Overview, but cannot seed Tasks as a fresh connection's read.
+            self.tasks_read_generation = None;
+            self.tasks_browser.update(cx, |p, cx| p.disconnected(cx));
+        }
         if self.filter != filter {
             self.catalog_scroll
                 .set_offset(gpui_kit::point(px(0.), px(0.)));
@@ -682,6 +716,7 @@ impl Browser {
         self.busy = false;
         match response.result {
             Err(e) => {
+                self.tasks_detail = None;
                 self.error = Some(e);
                 self.jump = None;
                 if response.route == Route::Catalog {
@@ -696,6 +731,11 @@ impl Browser {
                 self.resolve_jump(cx);
             }
             Ok(Data::Detail(d, m)) if response.route == Route::Detail(d.key.clone()) => {
+                self.tasks_detail = d.task_snapshot.clone().filter(|_| {
+                    self.online
+                        && self.loaded
+                        && self.tasks_read_generation == Some(response.generation)
+                });
                 self.decisions.reconcile(&d);
                 self.comments.reconcile(&d);
                 self.detail = Some(d);
@@ -708,6 +748,8 @@ impl Browser {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.tasks_detail = None;
+        self.tasks_read_generation = None;
         if self.activity_open {
             self.hide_activity(w, cx);
             self.focus(w, cx);
@@ -811,6 +853,7 @@ impl Browser {
             })
         }) {
             self.busy = true;
+            self.tasks_read_generation = Some(self.generation);
         } else {
             self.error = Some("Couldn't request missions. Refresh to try again.");
         }
@@ -821,6 +864,7 @@ impl Browser {
             return;
         }
         self.reader = None;
+        self.tasks_detail = None;
         self.busy = false;
         if self.route.is_some() {
             self.error.get_or_insert(

@@ -178,6 +178,11 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, &host, |_, cx| {
                 pane.read(cx).state.snapshot.is_some() && !pane.read(cx).state.busy
             });
+            assert_eq!(
+                &server.state.lock().unwrap().seen[before..],
+                &[("GET".into(), "/api/hello".into())],
+                "first Tasks open revalidates identity without rereading loaded detail"
+            );
             cx.update(|cx| {
                 assert_eq!(host.read(cx).browser.read(cx).tab, Tab::Tasks);
                 assert_eq!(
@@ -204,6 +209,36 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 ]
             );
             assert_eq!(progress[4].1, 75, "phase-gated tasks count as stored To do");
+            // Disconnect retires the one-use detail and any in-flight task lane.
+            // Reconnect must read fresh, even though the same exact mission remains.
+            let before_reconnect = server.state.lock().unwrap().seen.len();
+            for online in [false, true] {
+                cx.update_window(h, |_, w, cx| {
+                    host.read(cx).browser.clone().update(cx, |b, cx| {
+                        let mut i = input(Some(Route::Detail(f::key("mission-A"))));
+                        i.online = online;
+                        b.sync(i, w, cx);
+                    });
+                })
+                .unwrap();
+                settle(cx, h);
+                cx.update(|cx| {
+                    assert!(!pane.read(cx).state.busy);
+                    assert!(pane.read(cx).state.error.is_some());
+                });
+            }
+            assert_eq!(before_reconnect, server.state.lock().unwrap().seen.len());
+            click(cx, h, "mission-tasks-refresh");
+            until(cx, h, &host, |_, cx| {
+                !pane.read(cx).state.busy && pane.read(cx).state.error.is_none()
+            });
+            assert_eq!(
+                &server.state.lock().unwrap().seen[before_reconnect..],
+                &[
+                    ("GET".into(), "/api/hello".into()),
+                    ("GET".into(), "/api/missions/mission-A".into())
+                ]
+            );
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("mission-tasks-legend-dropped").is_none());
                 let mut last = None;
@@ -403,10 +438,12 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
             }
             // Refresh errors retain the exact selected row, with explicit stale/error presentation.
             server.reply("/api/missions/mission-A", Reply::json(503, json!({})));
+            let before_refresh = server.state.lock().unwrap().seen.len();
             click(cx, h, "mission-tasks-refresh");
             until(cx, h, &host, |_, cx| {
                 pane.read(cx).state.error.is_some() && !pane.read(cx).state.busy
             });
+            assert_eq!(server.state.lock().unwrap().seen.len(), before_refresh + 2);
             cx.update(|cx| {
                 let p = pane.read(cx);
                 assert_eq!(p.state.selected.as_deref(), Some("exact-257"));
@@ -781,6 +818,34 @@ fn phases_journey(
     dir: &Option<std::path::PathBuf>,
     name: &str,
 ) {
+    // Retained detail cannot seed Tasks after reconnect, even before Tasks
+    // was ever opened for this newly selected mission.
+    let reconnected = name.ends_with("dark");
+    if reconnected {
+        let before = server.state.lock().unwrap().seen.len();
+        for online in [false, true] {
+            cx.update_window(h, |_, w, cx| {
+                host.read(cx).browser.clone().update(cx, |b, cx| {
+                    let mut i = input(Some(Route::Detail(f::key("mission-B"))));
+                    i.online = online;
+                    b.sync(i, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+        }
+        assert_eq!(before, server.state.lock().unwrap().seen.len());
+    }
+    // Explicit Overview refresh replaces the handoff with that exact read.
+    if name == "1100-light" {
+        let mut updated = phased();
+        updated["tasks"][4]["body"] = json!("Refreshed mission detail 日本語");
+        server.reply("/api/missions/mission-B", Reply::json(200, updated));
+        let before = server.state.lock().unwrap().seen.len();
+        click(cx, h, "missions-refresh");
+        until(cx, h, host, |b, _| !b.busy);
+        assert_eq!(server.state.lock().unwrap().seen.len(), before + 3);
+    }
     cx.update(|cx| {
         let b = host.read(cx).browser.read(cx);
         let rows: Vec<_> = b
@@ -834,6 +899,7 @@ fn phases_journey(
             .unwrap();
     }
     // Keyboard: Tab to the Ship row and open Tasks with Return.
+    let before_tasks = server.state.lock().unwrap().seen.len();
     cx.update_window(h, |_, w, cx| {
         let row = "mission-phase-1";
         for _ in 0..60 {
@@ -849,9 +915,23 @@ fn phases_journey(
     until(cx, h, host, |b, cx| {
         b.tab == Tab::Tasks && pane.read(cx).state.snapshot.is_some() && !pane.read(cx).state.busy
     });
+    let mut expected = vec![("GET".into(), "/api/hello".into())];
+    if reconnected {
+        expected.push(("GET".into(), "/api/missions/mission-B".into()));
+    }
+    assert_eq!(
+        &server.state.lock().unwrap().seen[before_tasks..],
+        &expected
+    );
     cx.update(|cx| {
         let s = pane.read(cx).state.snapshot.clone().unwrap();
         assert_eq!(s.key.id, "mission-B");
+        if name == "1100-light" {
+            assert_eq!(
+                s.task("b-4").unwrap().body,
+                "Refreshed mission detail 日本語"
+            );
+        }
         let titles: Vec<_> = s
             .sections
             .iter()

@@ -342,6 +342,8 @@ fn first_sentence(s: Option<&str>) -> Option<&str> {
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Detail {
+    /// Full Tasks projection from this exact read, populated off-thread by the reader.
+    pub(crate) task_snapshot: Option<std::sync::Arc<crate::mission_tasks::Snapshot>>,
     pub(crate) decisions: Result<crate::mission_decisions::Snapshot, &'static str>,
     /// Every received comment; None when the response omits them.
     pub(crate) comments: Result<Option<Vec<Comment>>, &'static str>,
@@ -451,6 +453,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     let comments = crate::mission_comments::project(v);
     let coordinator = optional_id(&m["coordinatorSessionId"])?;
     Ok(Detail {
+        task_snapshot: None,
         attention: attention(v, coordinator.is_some(), &comments, &decisions),
         comments,
         decisions,

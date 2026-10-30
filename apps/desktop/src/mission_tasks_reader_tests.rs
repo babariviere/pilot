@@ -10,6 +10,74 @@ fn client() -> reqwest::Client {
         .unwrap()
 }
 #[tokio::test]
+async fn loaded_detail_reuses_every_task_field_but_refresh_and_mutations_read_again() {
+    use crate::mission_reader::{self, Data as MissionData};
+    let s = Server::start();
+    let c = client();
+    let key = f::key("mission-A");
+    let mut value = f::detail("mission-A");
+    value["tasks"][0]["body"] = json!("Exact body 日本語 👩‍💻");
+    value["tasks"][0]["preferredModel"] = json!("provider/model");
+    value["tasks"][0]["preferredThinking"] = json!("medium");
+    value["tasks"][0]["dependsOn"] = json!(["task-A"]);
+    s.reply("/api/missions/mission-A", Reply::json(200, value.clone()));
+    mission_reader::fetch(&c, &s.options, &mission_reader::Route::Catalog)
+        .await
+        .unwrap();
+    let MissionData::Detail(d, _) =
+        mission_reader::fetch(&c, &s.options, &mission_reader::Route::Detail(key.clone()))
+            .await
+            .unwrap()
+    else {
+        panic!("detail")
+    };
+    assert_eq!(s.state.lock().unwrap().seen.len(), 5);
+    let loaded = d.task_snapshot.clone().unwrap();
+    let reused = fetch_loaded(&c, &s.options, &Route(key.clone()), Some(loaded.clone()))
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&loaded, &reused));
+    assert_eq!(s.state.lock().unwrap().seen.len(), 6);
+    assert_eq!(s.state.lock().unwrap().seen.last().unwrap().1, "/api/hello");
+    let t = reused.task("task-B").unwrap();
+    assert_eq!(t.body, "Exact body 日本語 👩‍💻");
+    assert!(t.context.contains("Model: provider/model"));
+    assert!(t.context.contains("Thinking: medium"));
+    assert!(t.context.contains("Depends on IDs: task-A"));
+    // A fresh read after an external mutation must not reuse the initial detail.
+    value["tasks"][0]["body"] = json!("Updated body");
+    value["tasks"][0]["status"] = json!("in_progress");
+    s.reply("/api/missions/mission-A", Reply::json(200, value));
+    let fresh = fetch(&c, &s.options, &Route(key)).await.unwrap();
+    assert_eq!(fresh.task("task-B").unwrap().body, "Updated body");
+    assert_eq!(fresh.task("task-B").unwrap().work_status, "in_progress");
+    assert_eq!(s.state.lock().unwrap().seen.len(), 8);
+    // A different mission never gets the handed-off snapshot.
+    assert!(
+        fetch_loaded(
+            &c,
+            &s.options,
+            &Route(f::key("mission-B")),
+            Some(loaded.clone())
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(s.state.lock().unwrap().seen.len(), 9);
+    // Even an exact snapshot cannot bypass a replaced daemon's hello.
+    s.reply(
+        "/api/hello",
+        Reply::json(200, json!({"daemonId":"other","lineageId":"test-lineage"})),
+    );
+    assert!(
+        fetch_loaded(&c, &s.options, &Route(f::key("mission-A")), Some(loaded))
+            .await
+            .is_err()
+    );
+    assert_eq!(s.state.lock().unwrap().seen.len(), 10);
+    assert!(s.all_gets());
+}
+#[tokio::test]
 async fn exact_local_get_only_no_task_endpoint_paging_redirect_or_identity_fallback() {
     let s = Server::start();
     let c = client();
@@ -116,7 +184,8 @@ async fn superseded_and_closed_reads_are_cancelled_and_cannot_retarget() {
     let (reader, output) = Reader::start(s.options.clone()).unwrap();
     assert!(reader.request(Request {
         generation: 1,
-        route: Some(Route(f::key("mission-A")))
+        route: Some(Route(f::key("mission-A"))),
+        loaded: None
     }));
     let end = std::time::Instant::now() + Duration::from_secs(2);
     while !s
@@ -132,7 +201,8 @@ async fn superseded_and_closed_reads_are_cancelled_and_cannot_retarget() {
     }
     assert!(reader.request(Request {
         generation: 2,
-        route: Some(Route(f::key("mission-B")))
+        route: Some(Route(f::key("mission-B"))),
+        loaded: None
     }));
     let response = tokio::time::timeout(Duration::from_secs(2), output.recv())
         .await
@@ -149,7 +219,8 @@ async fn superseded_and_closed_reads_are_cancelled_and_cannot_retarget() {
     );
     assert!(!reader.request(Request {
         generation: 3,
-        route: None
+        route: None,
+        loaded: None
     }));
     assert!(s.all_gets());
 }

@@ -151,11 +151,11 @@ impl Browser {
         if !self.can_reveal(generation, cx) || self.brief_marked(w, cx) {
             return;
         }
-        self.tab = Tab::Tasks;
-        self.tasks_browser.update(cx, |p, cx| match id {
-            Some(id) => p.reveal(Some(id), w, cx),
-            None => p.show(true, w, cx),
-        });
+        self.choose_tab(Tab::Tasks, id.is_none(), w, cx);
+        if let Some(id) = id {
+            self.tasks_browser
+                .update(cx, |p, cx| p.reveal(Some(id), w, cx));
+        }
         cx.notify();
     }
     /// Progress by phase when the mission has phases, as in Swift's Overview;

@@ -2,6 +2,69 @@ use super::*;
 use crate::{mission_browser as model, mission_browser_fixture as f, mission_reader::Response};
 use gpui_kit::{AppContext, TestAppContext};
 #[gpui_kit::test]
+fn task_handoff_is_retired_by_errors_closed_lanes_and_replaced_connections(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    let pane = cx.new(Browser::new);
+    pane.update(cx, |v, cx| {
+        v.options(LocalOptions::synthetic(1));
+        v.online = true;
+        v.loaded = true;
+        let route = Route::Detail(f::key("mission-A"));
+        v.route = Some(route.clone());
+        let mut detail = model::detail(&f::key("mission-A"), &f::detail("mission-A")).unwrap();
+        detail.task_snapshot = Some(Arc::new(
+            crate::mission_tasks::parse(&detail.key, &f::detail("mission-A")).unwrap(),
+        ));
+        let detail = Arc::new(detail);
+        let accept = |v: &mut Browser, cx: &mut Context<Browser>| {
+            v.tasks_read_generation = Some(v.generation);
+            v.accept(
+                Response {
+                    generation: v.generation,
+                    route: route.clone(),
+                    result: Ok(Data::Detail(detail.clone(), Err("Members unavailable"))),
+                },
+                cx,
+            );
+        };
+        accept(v, cx);
+        assert!(
+            v.tasks_detail.is_some(),
+            "independent member errors do not lose tasks"
+        );
+        v.accept(
+            Response {
+                generation: v.generation,
+                route: route.clone(),
+                result: Err("Unknown response"),
+            },
+            cx,
+        );
+        assert!(v.tasks_detail.is_none());
+        accept(v, cx);
+        v.reader_stopped(v.reader_lane, cx);
+        assert!(v.tasks_detail.is_none());
+        accept(v, cx);
+        let old = v.generation;
+        v.options(LocalOptions::synthetic(2));
+        assert!(v.tasks_detail.is_none());
+        v.accept(
+            Response {
+                generation: old,
+                route,
+                result: Ok(Data::Detail(detail, Err("old"))),
+            },
+            cx,
+        );
+        assert!(
+            v.tasks_detail.is_none(),
+            "old connection cannot repopulate the handoff"
+        );
+    });
+}
+#[gpui_kit::test]
 fn closed_reader_clears_busy_preserves_snapshot_and_ignores_an_old_lane(cx: &mut TestAppContext) {
     cx.update(gpui_kit::init);
     let pane = cx.new(Browser::new);

@@ -149,17 +149,17 @@ pub(crate) async fn fetch(
             .await?,
         )?))),
         Route::Detail(key) => {
-            let d = Arc::new(model::detail(
-                key,
-                &get(
-                    client,
-                    options,
-                    &format!("/api/missions/{}", key.id),
-                    // The detail carries every task: no byte ceiling.
-                    None,
-                )
-                .await?,
-            )?);
+            let value = get(
+                client,
+                options,
+                &format!("/api/missions/{}", key.id),
+                // The detail carries every task: no byte ceiling.
+                None,
+            )
+            .await?;
+            let mut d = model::detail(key, &value)?;
+            d.task_snapshot = crate::mission_tasks::parse(key, &value).ok().map(Arc::new);
+            let d = Arc::new(d);
             let members = match get(
                 client,
                 options,

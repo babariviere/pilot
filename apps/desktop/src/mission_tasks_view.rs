@@ -414,8 +414,17 @@ impl Pane {
         if self.marked(w, cx) {
             return;
         }
+        let same_connection = self
+            .options
+            .as_ref()
+            .zip(options.as_ref())
+            .is_some_and(|(a, b)| a.host() == b.host() && a.loopback() == b.loopback());
+        if !same_connection {
+            self.disconnected(cx);
+            self.state.target(None);
+        }
         self.options = options;
-        if self.state.target(key) {
+        if self.state.target(key) || !same_connection {
             self.hide_status(w, cx);
             if let Some(form) = self.creation.take() {
                 form.update(cx, |f, _| f.visible = false);
@@ -438,6 +447,19 @@ impl Pane {
                 .creation
                 .as_ref()
                 .is_some_and(|f| f.update(cx, |f, cx| f.marked(w, cx)))
+    }
+    pub(crate) fn disconnected(&mut self, cx: &mut Context<Self>) {
+        self.state.generation = self.state.generation.saturating_add(1);
+        self.lane = self.lane.saturating_add(1);
+        self.reader = None;
+        self.updates = None;
+        self.state.busy = false;
+        self.opened = false;
+        self.reveal = None;
+        if self.state.snapshot.is_some() {
+            self.state.error = Some("This may be out of date. Refresh when connected.");
+        }
+        cx.notify();
     }
     /// Open the list and, given an exact task ID, select it once a current
     /// snapshot contains it. A missing ID or failed read selects nothing.
@@ -512,12 +534,21 @@ impl Pane {
     /// Open the list when its tab shows, reading once; later shows keep the
     /// snapshot, selection and forms. `focus` moves focus into the list.
     pub(crate) fn show(&mut self, focus: bool, w: &mut Window, cx: &mut Context<Self>) {
+        self.show_loaded(focus, None, w, cx);
+    }
+    pub(crate) fn show_loaded(
+        &mut self,
+        focus: bool,
+        loaded: Option<Arc<Snapshot>>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.key.is_none() || self.marked(w, cx) {
             return;
         }
         if !self.opened {
             self.opened = true;
-            self.read(w, cx);
+            self.read_loaded(loaded, w, cx);
         }
         if focus {
             match &self.list {
@@ -677,6 +708,15 @@ impl Pane {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.opened = true;
+        self.read_loaded(None, w, cx);
+    }
+    fn read_loaded(
+        &mut self,
+        loaded: Option<Arc<Snapshot>>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.busy || !self.opened || self.marked(w, cx) {
             return;
         }
@@ -709,6 +749,7 @@ impl Pane {
             r.request(Request {
                 generation,
                 route: Some(Route(key)),
+                loaded,
             })
         }) {
             self.state.busy = false;
@@ -937,7 +978,7 @@ impl Render for Pane {
                     crate::app_icon::AppIcon::Retry,
                     Action::Quiet,
                 )
-                .disabled(self.state.busy || !self.opened)
+                .disabled(self.state.busy || self.state.key.is_none())
                 .loading(self.state.busy)
                 .accessibility_label(if self.state.busy {
                     "Refreshing tasks"

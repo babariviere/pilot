@@ -15,6 +15,8 @@ pub(crate) struct Route(pub(crate) Key);
 pub(crate) struct Request {
     pub(crate) generation: u64,
     pub(crate) route: Option<Route>,
+    /// One-use projection from the owning Browser's current detail read.
+    pub(crate) loaded: Option<Data>,
 }
 pub(crate) type Data = Arc<Snapshot>;
 pub(crate) struct Response {
@@ -108,7 +110,7 @@ async fn run(
         };
         let result = tokio::select! {biased;
             r=events.recv()=>{match r {Ok(r)=>next=Some(r),Err(_)=>return};continue;},
-            value=fetch(&client,&options,&route)=>value,
+            value=fetch_loaded(&client,&options,&route,request.loaded)=>value,
         };
         let response = Response {
             generation: request.generation,
@@ -121,10 +123,19 @@ async fn run(
         }
     }
 }
+#[cfg(test)]
 pub(crate) async fn fetch(
     client: &reqwest::Client,
     options: &LocalOptions,
     route: &Route,
+) -> Result<Data, &'static str> {
+    fetch_loaded(client, options, route, None).await
+}
+async fn fetch_loaded(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    route: &Route,
+    loaded: Option<Data>,
 ) -> Result<Data, &'static str> {
     let local = Home::local(&options.host());
     let key = &route.0;
@@ -134,6 +145,13 @@ pub(crate) async fn fetch(
         );
     }
     crate::local_client::gate(client, options).await?;
+    if let Some(snapshot) = loaded {
+        return if &snapshot.key == key {
+            Ok(snapshot)
+        } else {
+            Err("Task snapshot belongs to a different mission.")
+        };
+    }
     let value = get(client, options, &format!("/api/missions/{}", key.id)).await?;
     model::parse(key, &value).map(Arc::new)
 }
