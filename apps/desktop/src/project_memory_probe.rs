@@ -33,13 +33,35 @@ fn until(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, v: &Entity<M
     }
     settle(cx, h);
 }
+fn search(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle, query: &str) {
+    cx.update_window(h, |_, w, cx| {
+        w.click("memory-search", cx);
+        w.press("secondary-a", cx);
+        w.input(query, cx);
+    })
+    .unwrap();
+    settle(cx, h);
+}
+
+fn clear(cx: &mut HeadlessAppContext, h: gpui_kit::AnyWindowHandle) {
+    cx.update_window(h, |_, w, cx| {
+        w.click("memory-search-clear", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert_eq!(w.find("memory-search").focused(), Some(true));
+        assert!(w.try_find("memory-search-clear").is_none());
+    })
+    .unwrap();
+}
 pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let server = Server::start();
             f::install(&server);
             let mut delayed = Reply::json(200, f::root());
-            delayed.delay_ms = 180;
+            delayed.delay_ms = 500;
             server.reply(&path("project-A", None).unwrap(), delayed);
             let (h, v) = cx.update(|cx| {
                 Theme::change(mode, None, cx);
@@ -64,7 +86,7 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                                     path: "/synthetic/project-A".into(),
                                     ..Default::default()
                                 },
-                                cx,
+                                w, cx,
                             )
                         });
                         v.update(cx, |v, cx| {
@@ -82,8 +104,34 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("memory-empty").is_none());
             })
             .unwrap();
+            // Editing during the initial pending read neither restarts it nor claims empty results.
+            search(cx, h, "unmatched [");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-loading").is_some());
+                assert!(w.try_find("memory-no-matches").is_none());
+            })
+            .unwrap();
+            assert_eq!(cx.update(|cx| v.read(cx).state.generation), 1);
+            clear(cx, h);
             until(cx, h, &v);
             assert!(cx.update(|cx| v.read(cx).state.error.is_none()));
+            let reads = server.state.lock().unwrap().seen.len();
+            let generation = cx.update(|cx| v.read(cx).state.generation);
+            search(cx, h, "<source>");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-no-matches").is_some());
+                assert!(w.try_find("memory-node-0-3").is_none());
+                assert!(w.try_find("memory-search-scope").is_some());
+            })
+            .unwrap();
+            search(cx, h, "日本語");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-node-0-3").is_some())
+            })
+            .unwrap();
+            clear(cx, h);
+            assert_eq!(server.state.lock().unwrap().seen.len(), reads);
+            assert_eq!(cx.update(|cx| v.read(cx).state.generation), generation);
             cx.update_window(h, |_, w, cx| {
                 for id in [
                     "memory-title",
@@ -99,6 +147,7 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                 }
                 // Reach and activate the real Kit summary button through keyboard only.
                 w.activate_window();
+                v.update(cx, |v, cx| v.focus(w, cx));
                 w.focus_next(cx);
                 for _ in 0..12 {
                     if w.find("memory-open-0").focused() == Some(true) {
@@ -112,6 +161,26 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             until(cx, h, &v);
             assert!(cx.update(|cx| v.read(cx).state.range.is_some()));
+            let reads = server.state.lock().unwrap().seen.len();
+            let generation = cx.update(|cx| v.read(cx).state.generation);
+            search(cx, h, ".*");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-no-matches").is_some())
+            })
+            .unwrap();
+            search(cx, h, "👩‍💻 café");
+            cx.update_window(h, |_, w, _| assert!(w.try_find("memory-text-3").is_some()))
+                .unwrap();
+            // Keyboard clear uses the normal editor and preserves browser path and generation.
+            cx.update_window(h, |_, w, cx| {
+                w.press("secondary-a", cx);
+                w.press("backspace", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            assert!(cx.update(|cx| v.read(cx).state.range.is_some()));
+            assert_eq!(cx.update(|cx| v.read(cx).state.generation), generation);
+            assert_eq!(server.state.lock().unwrap().seen.len(), reads);
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("memory-text-3").bounds();
                 assert!(b.right() <= px(width));
@@ -162,6 +231,15 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("memory-retained").is_some());
             })
             .unwrap();
+            let reads = server.state.lock().unwrap().seen.len();
+            search(cx, h, "unmatched literal [");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-retained").is_some());
+                assert!(w.try_find("memory-no-matches").is_some());
+            })
+            .unwrap();
+            clear(cx, h);
+            assert_eq!(server.state.lock().unwrap().seen.len(), reads);
             cx.update_window(h, |_, w, cx| w.click("memory-back", cx))
                 .unwrap();
             until(cx, h, &v);
@@ -182,6 +260,15 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             assert!(server.all_gets());
+            let reads = server.state.lock().unwrap().seen.len();
+            search(cx, h, "日本語");
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-empty").is_some());
+                assert!(w.try_find("memory-no-matches").is_some());
+            })
+            .unwrap();
+            clear(cx, h);
+            assert_eq!(server.state.lock().unwrap().seen.len(), reads);
             // Same label/path cannot redirect or disclose another project's rows.
             let (other, other_view) = cx.update(|cx| {
                 gpui_kit::open_window(
@@ -205,6 +292,7 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                                     path: "/synthetic/project-A".into(),
                                     ..Default::default()
                                 },
+                                w,
                                 cx,
                             )
                         });
@@ -215,6 +303,16 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                 .unwrap()
             });
             until(cx, other, &other_view);
+            let reads = server.state.lock().unwrap().seen.len();
+            search(cx, other, "日本語");
+            cx.update_window(other, |_, w, _| {
+                assert!(w.try_find("memory-error").is_some());
+                assert!(w.try_find("memory-no-matches").is_none());
+                assert!(w.try_find("memory-node-0-3").is_none());
+            })
+            .unwrap();
+            clear(cx, other);
+            assert_eq!(server.state.lock().unwrap().seen.len(), reads);
             cx.update_window(other, |_, w, cx| {
                 assert!(w.try_find("memory-error").is_some());
                 assert!(w.try_find("memory-retained").is_none());

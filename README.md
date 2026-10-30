@@ -33,6 +33,8 @@ unchanged; outstanding accounting memory and release verification is documented 
 In Pilot Next, open a project's overview and choose **Memory…** to browse its
 stored notes and summary ranges in a separate read-only window. Text remains
 selectable; forgetting, editing and other memory writes are not offered.
+Its case-sensitive literal filter searches only text loaded in the current range,
+not unopened notes or the full project, and typing never issues reads.
 See the [Local memory browser contract](apps/desktop/docs/project-memory.md).
 
 Settings → **MCP connections** shows Local’s last reported global Pi MCP status,

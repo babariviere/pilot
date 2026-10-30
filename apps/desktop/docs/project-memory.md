@@ -57,6 +57,28 @@ exercises keyboard drill-down, pointer text selection/copy, Details, Back,
 loading, failure/retained rows and empty states. This is synthetic native
 verification, not live memory/provider access, OS IME/AX or product acceptance.
 
-Search, in-place tree expansion, live refresh, source-chat navigation and
-explicit forgetting are not part of this first browsing slice. Forgetting
-remains a separate confirmed-action contract under the parent feature.
+## Loaded-text filter
+
+The native **Filter loaded text (case-sensitive)** field matches literal Unicode
+substrings in the current response's note/summary text only. It does not search
+IDs, provenance, unopened notes or other ranges/projects. Summaries are not the
+full text of their underlying notes. The always-visible scope label and **No
+matches in loaded text** state make this limited coverage explicit. Regex syntax
+has no special meaning; case, combining sequences and whitespace remain exact.
+
+Typing and clearing only filter the already loaded rows. They do not change the
+range, parent stack, Details state or generation, and never queue a read. Clear
+restores the current range's rows and returns focus to the retained Kit editor;
+ordinary SelectableText selection/copy still owns the unchanged source. Explicit
+Open notes, Back and Refresh keep their existing bounded read behavior; the query
+continues to apply to the newly loaded range. Loading does not claim no matches,
+and stale/error labels remain visible when filtering retained content.
+
+Focused tests cover Unicode/literal matching, clear/order restoration, summary
+vs unopened coverage, pending/empty text, and real keyboard/pointer filtering
+with unchanged faux-server request counts and browser generation. Hidden native
+cases cover680/1100 light/dark, keyboard clear, focus restoration and stale/empty
+states. They do not qualify OS IME, live data or full-project search.
+
+In-place tree expansion, global search, live refresh, source-chat navigation and
+explicit forgetting remain separate work under the parent feature.

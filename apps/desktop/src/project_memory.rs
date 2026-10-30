@@ -85,6 +85,17 @@ fn ranges(count: u64, range: Option<Range>) -> Vec<Range> {
     out
 }
 impl Tree {
+    /// Literal, case-sensitive search of this response only, not underlying notes.
+    pub(crate) fn filtered<'a>(&'a self, query: &'a str) -> impl Iterator<Item = &'a Node> {
+        self.nodes.iter().filter(move |node| {
+            query.is_empty()
+                || node
+                    .text
+                    .as_deref()
+                    .is_some_and(|text| text.contains(query))
+        })
+    }
+
     pub(crate) fn parse(
         value: serde_json::Value,
         range: Option<Range>,

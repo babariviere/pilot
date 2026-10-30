@@ -56,7 +56,7 @@ impl LocalViewer {
                 crate::appearance::follow_appearance(w, cx);
                 w.set_window_title("Memory · Local");
                 let pane =
-                    cx.new(|cx| crate::project_memory_view::Memory::new(options, project, cx));
+                    cx.new(|cx| crate::project_memory_view::Memory::new(options, project, w, cx));
                 pane.update(cx, |v, cx| {
                     v.focus(w, cx);
                     v.load(None, w, cx);

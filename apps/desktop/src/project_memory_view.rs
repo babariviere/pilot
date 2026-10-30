@@ -7,10 +7,14 @@ use crate::{
     ui::{self, Action, Notice, Space, Text, Tone},
 };
 use gpui_kit::{
-    App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, TestSupportExt, Window,
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, Styled, Subscription, Task, TestSupportExt, Window,
     base::SelectableText,
-    component::{ActiveTheme, Disableable, StyledExt, scroll::ScrollableElement},
+    component::{
+        ActiveTheme, Disableable, StyledExt,
+        input::{Input, InputEvent, InputState},
+        scroll::ScrollableElement,
+    },
     div, px,
 };
 
@@ -23,13 +27,24 @@ pub(crate) struct Memory {
     parents: Vec<Option<Range>>,
     details: bool,
     focus: FocusHandle,
+    pub(crate) search: Entity<InputState>,
+    _search_change: Subscription,
 }
 impl Memory {
     pub(crate) fn new(
         options: Option<LocalOptions>,
         project: Project,
+        w: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let search =
+            cx.new(|cx| InputState::new(w, cx).placeholder("Filter loaded text (case-sensitive)"));
+        // Presentation only. Query edits never call load or change the browsing path.
+        let search_change = cx.subscribe(&search, |_, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         Self {
             state: State::default(),
             project,
@@ -39,6 +54,8 @@ impl Memory {
             parents: Vec::new(),
             details: false,
             focus: cx.focus_handle().tab_stop(true),
+            search,
+            _search_change: search_change,
         }
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
@@ -168,6 +185,35 @@ impl Render for Memory {
             )),
         );
         page = page.child(controls);
+        let query = self.search.read(cx).value();
+        page = page.child(
+            div()
+                .v_flex()
+                .gap(px(Space::CONTROL))
+                .child(
+                    Input::new(&self.search)
+                        .id("memory-search")
+                        .aria_label("Filter loaded memory text, case-sensitive"),
+                )
+                .child(notice(
+                    "memory-search-scope",
+                    "Loaded text in this range only. Unopened notes are not searched.",
+                    Tone::Quiet,
+                )),
+        );
+        if !query.is_empty() {
+            page = page.child(
+                ui::action("memory-search-clear", "Clear filter", Action::Quiet)
+                    .self_start()
+                    .on_click(cx.listener(|v, _, w, cx| {
+                        v.search.update(cx, |i, cx| {
+                            i.set_value("", w, cx);
+                            i.focus(w, cx);
+                        });
+                        cx.notify();
+                    })),
+            );
+        }
         if let Some(range) = self.state.range {
             page = page.child(ui::heading(
                 "memory-range",
@@ -205,7 +251,14 @@ impl Render for Memory {
                     Tone::Quiet,
                 ));
             }
-            for node in &tree.nodes {
+            if !query.is_empty() && !self.state.busy && tree.filtered(&query).next().is_none() {
+                page = page.child(notice(
+                    "memory-no-matches",
+                    "No matches in loaded text.",
+                    Tone::Quiet,
+                ));
+            }
+            for node in tree.filtered(&query) {
                 let generation = self.state.generation;
                 let range = node.range;
                 let id = SharedString::from(format!("memory-node-{}-{}", range.lo, range.hi));

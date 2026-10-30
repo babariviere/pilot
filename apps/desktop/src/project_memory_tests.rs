@@ -28,6 +28,50 @@ pub(crate) fn install(s: &Server) {
     );
 }
 #[test]
+fn project_memory_filter_is_literal_unicode_loaded_text_only() {
+    let tree = Tree::parse(children(), Some(Range { lo: 0, hi: 3 })).unwrap();
+    let original: Vec<_> = tree.nodes.iter().map(|n| n.range).collect();
+    for query in ["日本語", "👩‍💻", "café", "<source>", " "] {
+        assert_eq!(tree.filtered(query).count(), 4, "{query}");
+    }
+    for query in [".*", "[", "CAfÉ", "cafe\u{301}", "note-3", "original-chat"] {
+        assert_eq!(tree.filtered(query).count(), 0, "{query}");
+    }
+    assert_eq!(
+        tree.filtered("").map(|n| n.range).collect::<Vec<_>>(),
+        original
+    );
+    let root = Tree::parse(root(), None).unwrap();
+    assert_eq!(root.filtered("日本語").count(), 1);
+    assert_eq!(
+        root.filtered("<source>").count(),
+        0,
+        "unopened notes are not searched"
+    );
+    let empty = Tree::parse(json!({"count":0,"nodes":[],"truncated":false}), None).unwrap();
+    assert_eq!(empty.filtered("").count(), 0);
+    let pending = Tree::parse(
+        json!({"count":4,"nodes":[{"lo":0,"hi":3,"pending":true}],"truncated":false}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(pending.filtered("").count(), 1);
+    assert_eq!(pending.filtered("Summary").count(), 0);
+    let mut mixed = children();
+    mixed["nodes"][1]["text"] = "Only this note has 🧪[literal]".into();
+    mixed["nodes"][1]["entry"]["text"] = mixed["nodes"][1]["text"].clone();
+    let mixed = Tree::parse(mixed, Some(Range { lo: 0, hi: 3 })).unwrap();
+    assert_eq!(
+        mixed
+            .filtered("🧪[literal]")
+            .map(|n| n.range.lo)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    assert_eq!(mixed.filtered("").count(), 4);
+}
+
+#[test]
 fn project_memory_validates_complete_exact_ranges_and_origin() {
     let tree = Tree::parse(children(), Some(Range { lo: 0, hi: 3 })).unwrap();
     assert_eq!(
