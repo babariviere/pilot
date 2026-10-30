@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.101.0](https://github.com/babariviere/pilot/compare/v1.100.0...v1.101.0) (2026-10-30)
+
+
+### Features
+
+* **desktop:** add read-only project memory browser ([997ba7c](https://github.com/babariviere/pilot/commit/997ba7c43e368f6227a1ce3acab3316d34591af1))
+* **desktop:** show read-only Local MCP observations ([08270aa](https://github.com/babariviere/pilot/commit/08270aa520e71a81e83807ac46496add8931f9a4))
+
+
+### Bug Fixes
+
+* **desktop:** adopt session lists atomically ([1547378](https://github.com/babariviere/pilot/commit/1547378304284ad8d5fa25a6edebc16abb51b32d))
+* **desktop:** keep draft saves live during receipt recovery ([d62af63](https://github.com/babariviere/pilot/commit/d62af634f021801acb725776ed4f94e7ea0c3168))
+* **desktop:** open task creation in a dialog ([ca01935](https://github.com/babariviere/pilot/commit/ca019359f1f7ba0a05884ae95b0747a2f8dba5de))
+
+
+### Performance Improvements
+
+* **desktop:** avoid repeated selection line-prefix scans ([03d3586](https://github.com/babariviere/pilot/commit/03d358621678bf0f06cb9e4c00d3e50419b97de8))
+* **desktop:** reduce large tool source paint work ([ce7df78](https://github.com/babariviere/pilot/commit/ce7df78e99aa43c2cc266fb74331eb1ad5e0a408))
+* **desktop:** reuse chat header during sidebar scrolling ([37dd4d7](https://github.com/babariviere/pilot/commit/37dd4d7a5579466672c0245e76c7c8ec16ec13d5))
+
 ## [1.100.0](https://github.com/babariviere/pilot/compare/v1.99.0...v1.100.0) (2026-10-30)
 
 
