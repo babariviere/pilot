@@ -71,6 +71,8 @@ async fn diagnostic_creation_and_reply_preserve_role_without_project_reads_or_re
 mod draft_discard;
 #[path = "interaction_retention_tests.rs"]
 mod retention;
+#[path = "interaction_send_tests.rs"]
+mod send_waits;
 
 #[tokio::test]
 async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing_writer() {
@@ -1327,6 +1329,7 @@ enum Behavior {
 #[derive(Default)]
 struct Seen {
     image_coordinator: bool,
+    bad_identity: bool,
     requests: Vec<(String, String)>,
     operations: BTreeMap<String, Value>,
     envelopes: Vec<Value>,
@@ -1339,6 +1342,12 @@ struct Daemon {
     seen: Arc<Mutex<Seen>>,
     task: JoinHandle<()>,
 }
+struct HttpStall {
+    path: &'static str,
+    claimed: std::sync::atomic::AtomicBool,
+    entered: async_channel::Sender<Value>,
+    release: async_channel::Receiver<()>,
+}
 impl Drop for Daemon {
     fn drop(&mut self) {
         self.task.abort();
@@ -1346,6 +1355,9 @@ impl Drop for Daemon {
 }
 impl Daemon {
     async fn start(behavior: Behavior) -> Self {
+        Self::start_with_stall(behavior, None).await
+    }
+    async fn start_with_stall(behavior: Behavior, stall: Option<Arc<HttpStall>>) -> Self {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .unwrap();
@@ -1357,7 +1369,7 @@ impl Daemon {
             loop {
                 tokio::select! {
                     accepted=listener.accept()=>{
-                        let Ok((stream,_))=accepted else{break;};let record=record.clone();
+                        let Ok((stream,_))=accepted else{break;};let record=record.clone();let stall=stall.clone();
                         tasks.spawn(async move {
                             let mut reader=BufReader::new(stream);let mut first=String::new();reader.read_line(&mut first).await.unwrap();
                             let words:Vec<_>=first.split_whitespace().collect();if words.len()<2{return;}
@@ -1391,9 +1403,10 @@ impl Daemon {
                                 return;
                             }
                             if behavior==Behavior::Slow&&path=="/api/operations"{tokio::time::sleep(Duration::from_secs(30)).await;return;}
+                            let mut lose_response = false;
                             let response={
                                 let mut seen=record.lock().unwrap();seen.requests.push((method.clone(),path.clone()));
-                                if method=="GET"&&path=="/api/hello" {json!({"daemonId":if behavior==Behavior::BadIdentity{"wrong"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})}
+                                if method=="GET"&&path=="/api/hello" {json!({"daemonId":if behavior==Behavior::BadIdentity||seen.bad_identity{"wrong"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})}
                                 else if method=="GET"&&path=="/api/projects" {
                                     if behavior==Behavior::ProjectsUnavailable {json!({"error":"Synthetic unavailable"})}
                                     else if behavior==Behavior::ProjectRemoved {json!([{"id":"project-a","name":"Synthetic Atlas","path":"/tmp"}])}
@@ -1410,7 +1423,10 @@ impl Daemon {
                                     if path.ends_with("/receipt") {seen.operations.get(&id).cloned().unwrap_or_else(||json!({"state":"unknown"}))}
                                     else {
                                         seen.envelopes.push(payload.clone());
-                                        if matches!(behavior,Behavior::LostBeforeAdmission|Behavior::AnswerLost|Behavior::AnswerWorkingLost)&&seen.envelopes.len()==1{return;}
+                                        if matches!(behavior,Behavior::LostBeforeAdmission|Behavior::AnswerLost|Behavior::AnswerWorkingLost)&&seen.envelopes.len()==1 {
+                                            lose_response = true;
+                                            json!({"state":"unknown"})
+                                        } else {
                                         let state=if behavior==Behavior::Pending{"pending"}else if matches!(behavior,Behavior::Reject|Behavior::RejectThenLookupRefused){"rejected"}else{"accepted"};
                                         let receipt=json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":state,"result":{"sessionId":payload["targetId"]},"reason":"private provider body /sensitive"});
                                         if !seen.operations.contains_key(&id){
@@ -1420,13 +1436,24 @@ impl Daemon {
                                             }
                                             seen.executions+=1;seen.operations.insert(id.clone(),receipt);
                                         }
-                                        if behavior==Behavior::LostAccepted&&seen.envelopes.len()==1{return;}
+                                        if behavior==Behavior::LostAccepted&&seen.envelopes.len()==1 {lose_response = true;}
                                         let mut receipt=seen.operations[&id].clone();
                                         if behavior==Behavior::WrongReceipt {receipt["targetId"]=json!("another-target");}
                                         receipt
+                                        }
                                     }
                                 } else {panic!("unallowlisted synthetic write route: {method} {path}")}
                             };
+                            // Gate the response after admission, not the request before it.
+                            // Close can therefore leave a truly accepted send locally Unknown.
+                            if let Some(stall) = &stall
+                                && path == stall.path
+                                && !stall.claimed.swap(true, std::sync::atomic::Ordering::SeqCst)
+                            {
+                                stall.entered.send(payload.clone()).await.unwrap();
+                                if stall.release.recv().await.is_err() { return; }
+                            }
+                            if lose_response { return; }
                             // The real daemon answers Stop with 202 Accepted.
                             let status=if method=="POST"&&path.ends_with("/stop"){"202 Accepted"}else{"200 OK"};
                             let body=response.to_string();let headers=format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());

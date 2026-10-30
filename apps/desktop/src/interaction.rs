@@ -399,7 +399,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         updates,
         replace,
         close,
-    } = channels;
+    } = &channels;
     let client = reqwest::Client::builder()
         .no_proxy()
         .retry(reqwest::retry::never())
@@ -413,7 +413,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         Ok(store) => status.book = Some(Arc::new(store.book.clone())),
         Err(error) => status.error = Some(*error),
     }
-    publish(&updates, &replace, status.clone());
+    publish(updates, replace, status.clone());
     let mut autosave = Autosave::default();
     let mut closing = false;
     loop {
@@ -425,17 +425,17 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                     // The last client disappeared, not another explicit Close.
                     // A failed final save must neither acknowledge durability nor
                     // keep this permanently-ready branch spinning/starving exit.
-                    if let Ok(store)=&mut store {let _=flush(store,&edits);}
+                    if let Ok(store)=&mut store {let _=flush(store,edits);}
                     break;
                 }
             },
             command=commands.recv()=>match command {Ok(command)=>Some(command),Err(_)=>{
-                if let Ok(store)=&mut store {let _=flush(store,&edits);}break;
+                if let Ok(store)=&mut store {let _=flush(store,edits);}break;
             }},
             // An expired ceiling wins over even a continuously ready edit wake.
             _=tokio::time::sleep_until(autosave.deadline.unwrap_or_else(||tokio::time::Instant::now()+Duration::from_secs(3600))),if autosave.deadline.is_some()=>None,
             signal=wake.recv()=>{
-                if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,&edits);}break;}
+                if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,edits);}break;}
                 autosave.edited(tokio::time::Instant::now());
                 continue;
             }
@@ -484,7 +484,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         };
         status.checkpoint = None;
         let result = if let Ok(store) = &mut store {
-            match flush(store, &edits) {
+            match flush(store, edits) {
                 Err(error) => {
                     status.error = Some(error);
                     Err(error)
@@ -503,10 +503,10 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 request,
                                 outcome: Outcome::Pending,
                             });
-                            publish(&updates, &replace, status.clone());
+                            publish(updates, replace, status.clone());
                             tokio::select! {
                                 outcome=crate::chat_models::execute(&client,&options,store,action,|store|{
-                                    status.book=Some(Arc::new(store.book.clone()));publish(&updates,&replace,status.clone());
+                                    status.book=Some(Arc::new(store.book.clone()));publish(updates,replace,status.clone());
                                 })=>{
                                     status.model=Some(Reply{session,request,outcome});
                                     if store.is_faulted(){status.error=Some("Private model-switch receipt could not be saved. Keep unsaved text before restarting.");}
@@ -522,12 +522,12 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 result: Ok(Outcome::Pending),
                                 catalog: None,
                             });
-                            publish(&updates, &replace, status.clone());
+                            publish(updates, replace, status.clone());
                             tokio::select! {
                                 reply = async {
                                     let result = if let Some(path) = path {
                                         crate::project_registration::register(&client, &options, store, &id, &path, |store| {
-                                            status.book=Some(Arc::new(store.book.clone())); publish(&updates,&replace,status.clone());
+                                            status.book=Some(Arc::new(store.book.clone())); publish(updates,replace,status.clone());
                                         }).await
                                     } else { Ok(Outcome::Read) };
                                     if let Ok(Outcome::Created(created)) = &result { status.project_receipt = Some((id.clone(),created.clone())); }
@@ -552,11 +552,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 request,
                                 result: Ok(Inspection::Pending),
                             });
-                            publish(&updates, &replace, status.clone());
+                            publish(updates, replace, status.clone());
                             tokio::select! {
                                 result=crate::mission_transport::execute(&client,&options,store,&target,action,|store| {
                                     status.book=Some(Arc::new(store.book.clone()));
-                                    publish(&updates,&replace,status.clone());
+                                    publish(updates,replace,status.clone());
                                 })=>{
                                     if let (Some(id), Ok(Inspection::Created { mission_id })) = (attempt_id, &result)
                                         && let Some(attempt) = store.book.missions.get(&target.source)
@@ -590,7 +590,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             } else {
                                 tokio::select! {
                                     result=submit_answer(&client,&options,store,AnswerSubmission {key:&key,draft:&draft,question:&question},&mut delivery_report,|store| {
-                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Reply saved. Sending…";publish(&updates,&replace,status.clone());
+                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Reply saved. Sending…";publish(updates,replace,status.clone());
                                     })=>result,
                                     _=close.recv()=>{closing=true;Ok("Closing. Any interrupted reply remains unconfirmed.")}
                                 }
@@ -612,10 +612,32 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 .is_some_and(|d| d.pending.is_some())
                             {
                                 Ok("Delivery is already pending. Check its receipt.")
+                            } else if !stop
+                                && crate::session_subagents::Target::from_key(&key).is_none()
+                            {
+                                SendOwner {
+                                    store,
+                                    status: &mut status,
+                                    channels: &channels,
+                                    autosave: &mut autosave,
+                                    closing: &mut closing,
+                                }
+                                .submit(
+                                    &client,
+                                    &options,
+                                    Submission {
+                                        key: &key,
+                                        draft: &draft,
+                                        follow_up,
+                                        stop,
+                                    },
+                                    &mut delivery_report,
+                                )
+                                .await
                             } else {
                                 tokio::select! {
                                     result=submit(&client,&options,store,Submission {key:&key,draft:&draft,follow_up,stop},&mut delivery_report,|store| {
-                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Intent saved. Waiting for Local delivery.";publish(&updates,&replace,status.clone());
+                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Intent saved. Waiting for Local delivery.";publish(updates,replace,status.clone());
                                     })=>result,
                                     _=close.recv()=>{closing=true;Ok("Closing. Any interrupted delivery remains unconfirmed.")}
                                 }
@@ -741,7 +763,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             && !status.flushed
             && let Ok(store) = &mut store
         {
-            match flush(store, &edits) {
+            match flush(store, edits) {
                 Ok(()) => status.flushed = true,
                 Err(error) => status.error = Some(error),
             }
@@ -749,7 +771,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         if let Ok(store) = &store {
             status.book = Some(Arc::new(store.book.clone()));
         }
-        publish(&updates, &replace, status.clone());
+        publish(updates, replace, status.clone());
         if status.flushed {
             break;
         }
@@ -937,23 +959,174 @@ struct Submission<'a> {
     stop: bool,
 }
 
-async fn submit(
+/// The sole private writer services edits while immutable ordinary-Send effects wait.
+/// Commands stay queued: no second mutation, priority Stop, or checkpoint overtakes Send.
+struct SendOwner<'a> {
+    store: &'a mut Store,
+    status: &'a mut WriteState,
+    channels: &'a WorkerChannels,
+    autosave: &'a mut Autosave,
+    closing: &'a mut bool,
+}
+impl SendOwner<'_> {
+    fn save(&mut self) -> Result<(), Failure> {
+        *self.autosave = Autosave::default();
+        if self
+            .channels
+            .edits
+            .lock()
+            .is_ok_and(|edits| !edits.is_empty())
+        {
+            self.status.checkpoint = None;
+        }
+        let result = flush(self.store, &self.channels.edits);
+        self.status.error = result.err();
+        self.status.book = Some(Arc::new(self.store.book.clone()));
+        publish(
+            &self.channels.updates,
+            &self.channels.replace,
+            self.status.clone(),
+        );
+        result
+    }
+
+    /// The future cannot borrow Store. Close drops it, leaving admitted intent Unknown.
+    async fn effect<T>(
+        &mut self,
+        effect: impl std::future::Future<Output = Result<T, Failure>>,
+    ) -> Result<T, Failure> {
+        tokio::pin!(effect);
+        loop {
+            tokio::select! {
+                biased;
+                _ = self.channels.close.recv() => {
+                    *self.closing = true;
+                    return Err("Closing. Any interrupted delivery remains unconfirmed.");
+                },
+                result = &mut effect => return result,
+                _ = tokio::time::sleep_until(self.autosave.deadline.unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(3600))),
+                    if self.autosave.deadline.is_some() => {
+                    // Retain failed edits in the mailbox. An already-dispatched request
+                    // must still be observed, particularly an exact accepted ACK.
+                    let _ = self.save();
+                },
+                signal = self.channels.wake.recv() => {
+                    if signal.is_err() {
+                        *self.closing = true;
+                        return Err("Closing. Any interrupted delivery remains unconfirmed.");
+                    }
+                    self.autosave.edited(tokio::time::Instant::now());
+                }
+            }
+        }
+    }
+
+    async fn submit(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        request: Submission<'_>,
+        report: &mut Option<DeliveryReport>,
+    ) -> Result<&'static str, Failure> {
+        let model_pending = request
+            .key
+            .strip_prefix("chat:")
+            .is_some_and(|target| self.store.book.model_changes.contains_key(target));
+        self.effect(send_preflight(
+            client,
+            options,
+            &request,
+            model_pending,
+            false,
+        ))
+        .await?;
+        // Preflight may have overlapped newer input. Save it without replacing the
+        // captured request. Store::prepare reserves that exact older intent.
+        self.save()?;
+        if self.store.book.host != options.host() {
+            return Err("Local identity changed. Draft retained.");
+        }
+        let intent = self
+            .store
+            .prepare(request.key, request.draft, request.follow_up, false)?;
+        ensure_owned(self.store, options, &intent)?;
+        self.status.book = Some(Arc::new(self.store.book.clone()));
+        self.status.notice = "Intent saved. Waiting for Local delivery.";
+        publish(
+            &self.channels.updates,
+            &self.channels.replace,
+            self.status.clone(),
+        );
+        *report = Some(DeliveryReport::new(&intent, None));
+        let diagnostic = report
+            .as_mut()
+            .unwrap()
+            .delivery
+            .diagnostic
+            .as_mut()
+            .unwrap();
+        let op = intent
+            .operation
+            .as_ref()
+            .ok_or("Missing immutable operation")?;
+
+        self.effect(verify_local(client, options, diagnostic))
+            .await?;
+        let mut receipt = self
+            .effect(operation(client, options, op, true, diagnostic))
+            .await?;
+        if receipt["state"] == "unknown" {
+            // Only the initial explicit Send may execute here. Pending is never
+            // posted again; a lost execute ACK exits without another attempt.
+            if op.kind == "chat-send" {
+                if !crate::delivery_store::token(&op.target_id) {
+                    return Err("Invalid Local chat target");
+                }
+                let summary = self
+                    .effect(observe(
+                        options,
+                        diagnostic,
+                        Stage::Target,
+                        client.get(format!(
+                            "{}/api/sessions/{}",
+                            options.loopback(),
+                            op.target_id
+                        )),
+                    ))
+                    .await?;
+                writable_summary(&summary, &op.target_id)
+                    .inspect_err(|_| diagnostic.category = Category::Refused)?;
+            }
+            self.effect(verify_local(client, options, diagnostic))
+                .await?;
+            // A save failure during preflight/lookup must fence a not-yet-issued POST.
+            self.save()
+                .and_then(|()| ensure_owned(self.store, options, &intent))
+                .inspect_err(|error| adoption_failure(diagnostic, self.store, error))?;
+            receipt = self
+                .effect(operation(client, options, op, false, diagnostic))
+                .await?;
+        }
+        // This may fail after a concurrent autosave failure. Keep the exact ACK
+        // in the existing volatile report, without clearing newer or unsaved text.
+        adopt_receipt(self.store, options, &intent, &receipt, diagnostic)
+    }
+}
+
+/// Immutable preflight only. The caller owns private reservation.
+async fn send_preflight(
     client: &reqwest::Client,
     options: &LocalOptions,
-    store: &mut Store,
-    request: Submission<'_>,
-    report: &mut Option<DeliveryReport>,
-    prepared: impl FnOnce(&Store),
-) -> Result<&'static str, Failure> {
+    request: &Submission<'_>,
+    model_pending: bool,
+    delivery_pending: bool,
+) -> Result<(), Failure> {
     let Submission {
-        key,
-        draft,
-        follow_up,
-        stop,
-    } = request;
+        key, draft, stop, ..
+    } = *request;
     gate(client, options).await?;
     if let Some(target) = key.strip_prefix("chat:") {
-        if !stop && store.book.model_changes.contains_key(target) {
+        if !stop && model_pending {
             return Err(
                 "A model switch is unconfirmed. Inspect and acknowledge it before sending; the draft is retained.",
             );
@@ -978,14 +1151,7 @@ async fn submit(
             );
         }
     }
-    if key.starts_with("new:")
-        && !draft.diagnostics
-        && !store
-            .book
-            .drafts
-            .get(key)
-            .is_some_and(|d| d.pending.is_some())
-    {
+    if key.starts_with("new:") && !draft.diagnostics && !delivery_pending {
         let id = draft
             .project_id
             .as_deref()
@@ -1015,6 +1181,37 @@ async fn submit(
         }
         gate(client, options).await?;
     }
+    Ok(())
+}
+
+async fn submit(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    store: &mut Store,
+    request: Submission<'_>,
+    report: &mut Option<DeliveryReport>,
+    prepared: impl FnOnce(&Store),
+) -> Result<&'static str, Failure> {
+    let Submission {
+        key,
+        draft,
+        follow_up,
+        stop,
+    } = request;
+    send_preflight(
+        client,
+        options,
+        &request,
+        key.strip_prefix("chat:")
+            .is_some_and(|target| store.book.model_changes.contains_key(target)),
+        store
+            .book
+            .drafts
+            .get(key)
+            .is_some_and(|d| d.pending.is_some()),
+    )
+    .await?;
+    let child_target = crate::session_subagents::Target::from_key(key);
     // No mutation is possible before this durable reservation succeeds.
     let intent = store.prepare(key, draft, follow_up, stop)?;
     prepared(store);
@@ -1252,6 +1449,36 @@ async fn reconcile(
         verify_local(client, options, diagnostic).await?;
         receipt = operation(client, options, op, false, diagnostic).await?;
     }
+    adopt_receipt(store, options, &intent, &receipt, diagnostic)
+}
+
+/// Newer editable revisions do not invalidate the reserved immutable operation.
+fn ensure_owned(store: &Store, options: &LocalOptions, intent: &Intent) -> Result<(), Failure> {
+    if store.book.host != options.host()
+        || store.book.pending.get(&intent.id) != Some(intent)
+        || store
+            .book
+            .drafts
+            .get(&intent.key)
+            .and_then(|d| d.pending.as_deref())
+            != Some(intent.id.as_str())
+    {
+        return Err("Delivery ownership changed. Original operation is retained.");
+    }
+    Ok(())
+}
+
+fn adopt_receipt(
+    store: &mut Store,
+    options: &LocalOptions,
+    intent: &Intent,
+    receipt: &Value,
+    diagnostic: &mut Diagnostic,
+) -> Result<&'static str, Failure> {
+    let op = intent
+        .operation
+        .as_ref()
+        .ok_or("Missing immutable operation")?;
     if receipt["state"] == "unknown" {
         diagnostic.category = Category::Unknown;
         return Ok("Couldn't confirm this was sent. Use Resolve to check or send it again.");
@@ -1269,7 +1496,9 @@ async fn reconcile(
         Some("pending") => {
             diagnostic.category = Category::Pending;
             diagnostic.acknowledgment = Acknowledgment::Pending;
-            if let Err(error) = store.pending(id) {
+            if let Err(error) =
+                ensure_owned(store, options, intent).and_then(|()| store.pending(&intent.id))
+            {
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
@@ -1282,7 +1511,9 @@ async fn reconcile(
             }
             diagnostic.category = Category::Accepted;
             diagnostic.acknowledgment = Acknowledgment::Accepted;
-            if let Err(error) = store.finish(id, "accepted", None) {
+            if let Err(error) = ensure_owned(store, options, intent)
+                .and_then(|()| store.finish(&intent.id, "accepted", None))
+            {
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
@@ -1291,7 +1522,9 @@ async fn reconcile(
         Some("rejected") => {
             diagnostic.category = Category::Rejected;
             diagnostic.acknowledgment = Acknowledgment::Rejected;
-            if let Err(error) = store.finish(id, "rejected", None) {
+            if let Err(error) = ensure_owned(store, options, intent)
+                .and_then(|()| store.finish(&intent.id, "rejected", None))
+            {
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
