@@ -483,3 +483,13 @@ mod mcp_status_tests;
 mod mcp_status_view;
 #[cfg(feature = "native-probes")]
 pub use mcp_status_probe::run_mcp_status_probe;
+
+mod scheduled_messages;
+#[cfg(feature = "native-probes")]
+mod scheduled_messages_probe;
+mod scheduled_messages_reader;
+#[cfg(any(test, feature = "native-probes"))]
+mod scheduled_messages_tests;
+mod scheduled_messages_view;
+#[cfg(feature = "native-probes")]
+pub use scheduled_messages_probe::run_scheduled_messages_probe;

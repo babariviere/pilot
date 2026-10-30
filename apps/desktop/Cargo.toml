@@ -554,3 +554,8 @@ required-features = ["native-probes"]
 name = "markdown_fidelity"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "scheduled_messages"
+harness = false
+required-features = ["native-probes"]
