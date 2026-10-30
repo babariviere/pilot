@@ -233,6 +233,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
+	const readCoordinatorSources: import("./coordinator-sources.ts").ReadCoordinatorSources = (signal) =>
+		callDaemon((callId) => ({ type: "source.scope", callId }), signal, false);
 	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
@@ -430,7 +432,8 @@ export function runKernelWorker(): void {
 			command.type === "subscription.limit.result" ||
 			command.type === "usage-history.result" ||
 			command.type === "usage-history.epoch.result" ||
-			command.type === "artifact.reference.result"
+			command.type === "artifact.reference.result" ||
+			command.type === "source.scope.result"
 		) {
 			const call = daemonCalls.get(command.callId);
 			daemonCalls.delete(command.callId);
@@ -530,6 +533,7 @@ export function runKernelWorker(): void {
 					onMcpUsed: (namespaces, failed) => notify({ type: "mcp.used", namespaces, failed }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
+					readCoordinatorSources,
 					callMemory,
 					callDatabase,
 					callSlackStatus,

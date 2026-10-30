@@ -3,8 +3,8 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { lstat, mkdir, open, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
@@ -198,6 +198,8 @@ export interface MissionSpawnAdmission {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Current local membership only; historical task/retirement links are never source grants. */
+	coordinatorSourceMembers?(sessionId: string): { projectId: string; sessionIds: string[] } | undefined;
 	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
 	ownershipScope?(sessionId: string): import("./jj-ownership.ts").JjWorkerScope | undefined;
 	/** Idempotent, atomic ownership move, retaining task links and PR observation tombstones. */
@@ -2384,6 +2386,68 @@ export class SessionManager {
 			throw new Error("Invalid session workspace destination");
 	}
 
+	/** Worker identity is bound by onPacket, never read from a tool argument or title. */
+	private async coordinatorSources(meta: SessionMeta): Promise<import("@pilot/kernel").CoordinatorSources> {
+		const snapshot = () => {
+			const scope = this.missions?.coordinatorSourceMembers?.(meta.id);
+			if (
+				this.closing ||
+				!scope ||
+				scope.projectId !== meta.projectId ||
+				!meta.coordinatorView ||
+				meta.continuedTo ||
+				meta.archivedAt !== undefined
+			)
+				throw new Conflict("Current coordinator source access is unavailable");
+			this.projects.require(scope.projectId);
+			const main = this.mainViews.path(scope.projectId);
+			const scratch = join(this.dir(meta.id), "scratch");
+			if (meta.coordinatorView.path !== main || meta.coordinatorView.scratch !== scratch)
+				throw new Conflict("Coordinator source role is changing");
+			const members: { sessionId: string; path: string }[] = [];
+			for (const id of scope.sessionIds) {
+				const member = this.metas.get(id);
+				if (
+					!member ||
+					id === meta.id ||
+					member.projectId !== scope.projectId ||
+					!member.workspace ||
+					member.coordinatorView ||
+					member.continuedTo
+				)
+					continue;
+				this.assertOwnedWorkspace(member);
+				members.push({ sessionId: id, path: member.cwd });
+			}
+			return { main, scratch, members };
+		};
+		const scope = snapshot();
+		await this.missions?.whenDurable?.();
+		const home = await realpath(this.home);
+		const directory = async (path: string) => {
+			try {
+				return (
+					(await lstat(path)).isDirectory() && (await realpath(path)) === resolve(home, relative(this.home, path))
+				);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+				throw error;
+			}
+		};
+		if (!(await directory(scope.main)) || !(await directory(scope.scratch)))
+			throw new Conflict("Coordinator source or scratch directory is unavailable or aliased");
+		const members: typeof scope.members = [];
+		for (const member of scope.members) if (await directory(member.path)) members.push(member);
+		if (JSON.stringify(scope) !== JSON.stringify(snapshot()))
+			throw new Conflict("Coordinator source membership changed during admission; retry");
+		const canonical = (path: string) => resolve(home, relative(this.home, path));
+		return {
+			main: canonical(scope.main),
+			scratch: canonical(scope.scratch),
+			members: members.map((member) => ({ ...member, path: canonical(member.path) })),
+		};
+	}
+
 	private async restoreWorkspace(meta: SessionMeta): Promise<void> {
 		const releaseWorkspace = this.holdWorkspace(meta.id);
 		try {
@@ -2444,6 +2508,7 @@ export class SessionManager {
 	diagnosticDomainRead?: (request: DiagnosticContextRequest) => Promise<DiagnosticContextResponse>;
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
+	private coordinatorSourceReads = new Set<string>();
 
 	/** Authorization comes only from supervised worker identity, never request fields. */
 	async diagnosticContext(callerId: string, input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
@@ -7897,6 +7962,41 @@ export class SessionManager {
 				(result) => reply({ result }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool artifact") }),
 			);
+			return;
+		}
+		if (packet.type === "source.scope") {
+			const key = `${meta.id}:${packet.callId}`;
+			if (this.coordinatorSourceReads.size >= 8 || this.coordinatorSourceReads.has(key)) {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({
+						type: "source.scope.result",
+						callId: packet.callId,
+						error: "Source admissions are busy; retry",
+					});
+				return;
+			}
+			this.coordinatorSourceReads.add(key);
+			void Promise.resolve()
+				.then(() => {
+					if (this.workers.get(meta.id) !== worker)
+						throw new Conflict("Only the current worker may inspect sources");
+					return this.coordinatorSources(meta);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "source.scope.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({
+								type: "source.scope.result",
+								callId: packet.callId,
+								error: formatFailure(error, "Source admission"),
+							});
+					},
+				)
+				.finally(() => this.coordinatorSourceReads.delete(key));
 			return;
 		}
 		if (packet.type === "subscription.limit") {

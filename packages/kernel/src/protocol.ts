@@ -246,6 +246,12 @@ export type KernelCommand =
 	/** Replaces the mission context; omitted when the chat left its mission. */
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
+	| {
+			type: "source.scope.result";
+			callId: string;
+			result?: import("./coordinator-sources.ts").CoordinatorSources;
+			error?: string;
+	  }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
@@ -347,6 +353,8 @@ export type KernelPacket =
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	/** No caller-supplied identity or roots. Only the supervised coordinator may request its current scope. */
+	| { type: "source.scope"; callId: string }
 	| {
 			type: "memory.call";
 			callId: string;

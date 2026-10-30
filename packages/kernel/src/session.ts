@@ -188,6 +188,7 @@ export interface KernelSessionHooks {
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
 	callMission?: MissionCall;
+	readCoordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
 	callMemory?: MemoryCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
 	callDatabase?: DatabaseCall;
@@ -562,6 +563,15 @@ export class KernelSession {
 				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
 				connectivityPolicy: spec.connectivityPolicy,
 				cwd: spec.cwd,
+				...(pilot.coordinatorView
+					? {
+							coordinatorSources:
+								hooks.readCoordinatorSources ??
+								(async () => {
+									throw new Error("Coordinator source admission is unavailable");
+								}),
+						}
+					: {}),
 				ask: spec.pilot?.ask,
 				diagnostics: spec.role === "diagnostics",
 				diagnosticHistory: spec.role === "diagnostics",

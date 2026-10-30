@@ -95,6 +95,8 @@ export interface MissionContext {
 
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */
 export interface AskContext {
+	/** Host-owned coordinator source reader: deny repository metadata and hardlinked file aliases. */
+	sourceOnly?: true;
 	source: string;
 	gitDir?: string;
 	branch?: string;
@@ -324,7 +326,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	if (coordinator)
 		lines.push(
 			`- You read the daemon-managed, shared read-only view of current main${context.coordinatorView ? ` at ${JSON.stringify(context.coordinatorView.path)}. Your working directory and TMPDIR are persistent scratch at ${JSON.stringify(context.coordinatorView.scratch)}; read source via absolute paths or git -C` : ""}. It updates after project fetches, without a jj working copy or a task bookmark.`,
-			"- Repository writes fail. Read-only git, gh and rg are available; installs, builds and tests are not. Use TMPDIR for temporary files and delegate code changes and verification to member chats. Do not commit, push, create branches or bookmarks, or open pull requests.",
+			"- Native source tools are read-only. Use source_roots for exact main/member paths; each source call rechecks current membership. Metadata and detected symlink/hardlink aliases are refused; path checks are not atomic filesystem isolation. This is not a shell/job/subagent access grant. Use TMPDIR for temporary files and delegate code changes and verification to member chats. Do not install, build, test, commit, push, create branches or bookmarks, or open pull requests.",
 		);
 	if (context.ask) {
 		const ask = context.ask;

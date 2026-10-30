@@ -1,6 +1,7 @@
 export { installBundledAnthropicAuth } from "./bundled-extensions.ts";
 export type { ConnectivityState } from "./connectivity.ts";
 export { probeReachability, providerOrigin } from "./connectivity.ts";
+export type { CoordinatorSources } from "./coordinator-sources.ts";
 export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
 export type { MissionAction } from "./mission-tools.ts";

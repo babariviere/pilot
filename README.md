@@ -807,6 +807,27 @@ Busy chats, dirty workspaces, open PRs, selected non-main bases and unpushed boo
 Routine refreshes do not add timeline messages or wake idle chats. The coordinator is excluded.
 
 Coordinating chats read one shared, read-only main checkout per project, updated by that same watcher.
+Their native `read`, `find`, `grep`, `ls` and code-exploration tools obtain current source scope from
+the daemon on every direct or nested call. `source_roots` lists exact main-view, member-workspace and
+scratch paths. Current same-project mission membership includes explicitly joined and delivered chats
+whose workspaces still exist; leaving or moving the chat revokes fresh admissions. Historical task,
+completion and retirement records alone grant nothing. Already-admitted finite reads may drain their
+original scope, without renewing it. These bounded tools never execute project code. They reject
+repository metadata, observed symlinks and hardlinked source files, and revalidate path/inode identity
+around reads and listings. Search uses Ask's bounded glob/literal readers. These checks are not an
+atomic descriptor-anchored filesystem walk: concurrent ancestor replacement, especially a directory
+swapped during open and restored before revalidation, remains a known limitation. Do not infer hostile
+filesystem-race or content-provenance isolation from the native path scope.
+Scratch, known artifact skill files/pasted images and the installed Pi documentation/examples have
+separate read handling; no session-directory or shared repository-object-store grant is implied.
+
+This native-tool scope is not arbitrary-process or hostile-extension isolation. Shells, background jobs,
+subagents and trusted extension callbacks do not inherit a native source grant. Existing OS write
+protections remain, but do not establish unrelated-source read isolation or atomic live-process
+revocation. In particular, member Git/jj metadata points into a shared object store, and a pathname
+sandbox alone cannot prevent a hardlink in a mutable allowed tree from exposing an unrelated file.
+These are unresolved process-isolation limits, not permissions to bypass the native readers.
+
 They have no task bookmark, PR ownership or Changes pane, and delegate code changes and verification
 to member chats. Their kernels and subprocesses cannot write to the source view. Tools start in a
 per-chat scratch folder (also TMPDIR), retained across turns and removed on archive. Promoting a chat

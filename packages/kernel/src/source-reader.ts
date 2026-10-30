@@ -26,11 +26,26 @@ export function sourcePath(source: string, path: string): string {
 	return relative(source, absolute).split(sep).join("/");
 }
 
-/** No symlinks, including directory symlinks. The final open also uses O_NOFOLLOW. */
-async function checkedPath(root: string, path: string, signal?: AbortSignal): Promise<string> {
+/** Source content only, never control metadata (including case-insensitive filesystem aliases). */
+export function sourceContentPath(root: string, path: string): string {
+	const rel = sourcePath(root, path);
+	if (rel.split("/").some((part) => [".git", ".jj"].includes(part.toLowerCase())))
+		throw new Error("Coordinator source inspection does not grant repository metadata access");
+	return rel;
+}
+
+/** Path preflight, not descriptor-anchored traversal. Final opens use O_NOFOLLOW; ancestors can still race. */
+async function checkedPath(
+	root: string,
+	path: string,
+	signal?: AbortSignal,
+	canonicalRootRequired = false,
+): Promise<string> {
 	signal?.throwIfAborted();
 	const rel = sourcePath(root, path);
 	const canonicalRoot = await realpath(root);
+	if (canonicalRootRequired && canonicalRoot !== resolve(root))
+		throw new Error("Coordinator source root alias denied");
 	let current = canonicalRoot;
 	for (const part of rel.split("/").filter(Boolean)) {
 		signal?.throwIfAborted();
@@ -46,12 +61,17 @@ export async function readLocal(
 	path: string,
 	signal?: AbortSignal,
 	maxBytes = MAX_FILE_BYTES,
+	sourceOnly = false,
 ): Promise<Buffer> {
-	const absolute = await checkedPath(root, path, signal);
+	const absolute = await checkedPath(root, path, signal, sourceOnly);
+	const expected = sourceOnly ? await lstat(absolute) : undefined;
 	const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
 	try {
 		const stat = await file.stat();
 		if (!stat.isFile()) throw new Error("Ask can only read regular files");
+		if (expected && (expected.dev !== stat.dev || expected.ino !== stat.ino))
+			throw new Error("Coordinator source path changed during open; retry");
+		if (sourceOnly && stat.nlink !== 1) throw new Error("Coordinator source hardlink alias denied");
 		if (stat.size > maxBytes)
 			throw new ReadLimitError(`Ask file exceeds the ${maxBytes} byte read limit (default 16 MiB)`);
 		// Bounded reads even if another process grows the file after stat().
@@ -69,6 +89,11 @@ export async function readLocal(
 		const after = await file.stat();
 		if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs)
 			throw new Error("Source changed during read; retry");
+		if (sourceOnly) {
+			const current = await lstat(await checkedPath(root, path, signal, true));
+			if (current.dev !== stat.dev || current.ino !== stat.ino)
+				throw new Error("Coordinator source path changed during read; retry");
+		}
 		return buffer.subarray(0, length);
 	} finally {
 		await file.close();
@@ -147,12 +172,15 @@ export class SourceReader {
 		return entry;
 	}
 	async list(path: string, signal?: AbortSignal): Promise<Entry[]> {
+		this.assertSourceOnly(path);
 		if (this.ask.commit) {
 			const entry = await this.object(path, signal);
 			if (entry.kind !== "directory") throw new Error("Ask ls requires a directory");
 			return this.tree(entry.oid!, signal);
 		}
-		const dir = await opendir(await checkedPath(this.root, path, signal));
+		const absolute = await checkedPath(this.root, path, signal, this.ask.sourceOnly);
+		const expected = this.ask.sourceOnly ? await lstat(absolute) : undefined;
+		const dir = await opendir(absolute);
 		const entries: Entry[] = [];
 		for await (const entry of dir) {
 			signal?.throwIfAborted();
@@ -162,10 +190,16 @@ export class SourceReader {
 				kind: entry.isSymbolicLink() ? "symlink" : entry.isDirectory() ? "directory" : "file",
 			});
 		}
+		if (expected) {
+			const current = await lstat(await checkedPath(this.root, path, signal, true));
+			if (current.dev !== expected.dev || current.ino !== expected.ino)
+				throw new Error("Coordinator source directory changed during listing; retry");
+		}
 		return entries.sort((a, b) => a.name.localeCompare(b.name));
 	}
 	async read(path: string, signal?: AbortSignal, maxBytes = MAX_FILE_BYTES): Promise<Buffer> {
-		if (!this.ask.commit) return readLocal(this.root, path, signal, maxBytes);
+		this.assertSourceOnly(path);
+		if (!this.ask.commit) return readLocal(this.root, path, signal, maxBytes, this.ask.sourceOnly);
 		const entry = await this.object(path, signal);
 		if (entry.kind !== "file") throw new Error("Ask can only read regular blobs, not symlinks or submodules");
 		const size = Number((await this.git(["cat-file", "-s", entry.oid!], signal)).toString());
@@ -190,8 +224,9 @@ export class SourceReader {
 		}
 	}
 	async kind(path: string, signal?: AbortSignal): Promise<Entry["kind"]> {
+		this.assertSourceOnly(path);
 		if (this.ask.commit) return (await this.object(path, signal)).kind;
-		const stat = await lstat(await checkedPath(this.root, path, signal));
+		const stat = await lstat(await checkedPath(this.root, path, signal, this.ask.sourceOnly));
 		if (stat.isFile()) return "file";
 		if (stat.isDirectory()) return "directory";
 		throw new Error("Ask only explores regular files and directories");
@@ -201,5 +236,9 @@ export class SourceReader {
 		const kind = await this.kind(rel, signal);
 		if (kind === "file") yield rel;
 		else yield* this.walk(rel, signal);
+	}
+
+	private assertSourceOnly(path: string): void {
+		if (this.ask.sourceOnly) sourceContentPath(this.root, path);
 	}
 }

@@ -28,10 +28,20 @@ export function bundledResourceLoader(
 	options: ConstructorParameters<typeof DefaultResourceLoader>[0],
 	projectTrusted: boolean,
 	profile = true,
+	coordinator = false,
 ): EmbeddedResourceLoader {
 	return new EmbeddedResourceLoader(options, {
 		projectTrusted,
-		requiredPaths: [...(profile ? PROFILE_PATHS : []), ANTHROPIC_AUTH_PATH],
+		requiredPaths: [
+			...(profile
+				? PROFILE_PATHS.map((path) =>
+						coordinator && path.endsWith("/sandbox/index.ts")
+							? fileURLToPath(new URL("./coordinator-sandbox.ts", import.meta.url))
+							: path,
+					)
+				: []),
+			ANTHROPIC_AUTH_PATH,
+		],
 		ownedPackages: {
 			"@babariviere/pi-extensions": profile
 				? [...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`), "embedding/pilot.ts", "embedding/child.ts"]

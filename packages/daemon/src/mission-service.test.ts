@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +58,104 @@ test("ownership scope is creation-only trusted builder assignment metadata, neve
 	f.store.join(worker.id, legacy.id);
 	f.store.addTask(legacy.id, { title: "Legacy work", sessionId: worker.id });
 	assert.equal(admission(worker.id), undefined);
+});
+
+test("source scope IPC trusts current coordinator membership, retains delivered workspaces and revokes historical roots", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const unrelated = await f.spawn();
+	const wrongProject = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Sources",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise daemon-owned metadata and its real worker IPC boundary.
+	const main = f.sessions["mainViews"].path(f.project.id);
+	const scratch = join(f.home, "data", "sessions", lead.id, "scratch");
+	await mkdir(main, { recursive: true });
+	await mkdir(scratch, { recursive: true });
+	// biome-ignore lint/complexity/useLiteralKeys: The service fixture intentionally has no repository or source preparation.
+	const leadMeta = f.sessions["require"](lead.id);
+	leadMeta.coordinatorView = {
+		originalCwd: f.project.path,
+		path: main,
+		scratch,
+		head: "a".repeat(40),
+		repository: f.project.path,
+	};
+	leadMeta.cwd = main;
+	const workspace = async (id: string) => {
+		// biome-ignore lint/complexity/useLiteralKeys: Set up exact host-created workspace destinations without cloning.
+		const meta = f.sessions["require"](id);
+		meta.cwd = join(f.home, "data", "sessions", id, "workspace");
+		meta.workspace = { source: f.project.path, base: "a".repeat(40), jj: false };
+		await mkdir(meta.cwd, { recursive: true });
+		return meta;
+	};
+	const memberMeta = await workspace(member.id);
+	await workspace(unrelated.id);
+	await workspace(wrongProject.id);
+	f.store.join(member.id, mission.id); // Explicitly joined membership is sufficient.
+	f.store.join(wrongProject.id, mission.id); // Even an inconsistent store row cannot cross the project fence.
+	const task = f.store.addTask(mission.id, { title: "Delivered source", sessionId: member.id });
+	await f.service.call(member.id, "complete", {
+		id: task.id,
+		completion: { commit: "a".repeat(40), checks: "Synthetic", issues: "" },
+	});
+	memberMeta.archivedAt = Date.now(); // Delivered ownership still grants an extant archived workspace.
+	let sequence = 0;
+	const scope = async (id = lead.id, extras: Record<string, unknown> = {}) => {
+		const worker = f.workers.get(id)!;
+		const callId = `source-scope-${sequence++}`;
+		worker.onPacket({ type: "source.scope", callId, ...extras } as KernelPacket);
+		return until(
+			() =>
+				worker.sent.find((command) => command.type === "source.scope.result" && command.callId === callId) as
+					| Extract<KernelCommand, { type: "source.scope.result" }>
+					| undefined,
+		);
+	};
+	const canonicalMember = await realpath(memberMeta.cwd);
+	assert.deepEqual((await scope()).result, {
+		main: await realpath(main),
+		scratch: await realpath(scratch),
+		members: [{ sessionId: member.id, path: canonicalMember }],
+	});
+	assert.ok(
+		(await scope(unrelated.id, { sessionId: lead.id, coordinator: true, projectId: f.project.id, roots: [main] }))
+			.error,
+	);
+	leadMeta.coordinatorView.path = f.other.path;
+	assert.ok((await scope()).error, "a stale view path cannot select another source root");
+	leadMeta.coordinatorView.path = main;
+	await rm(memberMeta.cwd, { recursive: true });
+	assert.deepEqual((await scope()).result!.members, [], "missing delivered workspaces are not recreated or granted");
+	await symlink(f.other.path, memberMeta.cwd);
+	assert.deepEqual((await scope()).result!.members, [], "symlink workspace roots never confer target access");
+	await rm(memberMeta.cwd);
+	await mkdir(memberMeta.cwd);
+	const continuation = await f.spawn();
+	// biome-ignore lint/complexity/useLiteralKeys: Model the existing durable continuation ownership transfer.
+	const next = f.sessions["require"](continuation.id);
+	next.cwd = memberMeta.cwd;
+	next.workspace = memberMeta.workspace;
+	next.workspaceOriginId = member.id;
+	memberMeta.continuedTo = next.id;
+	f.store.continueSession(member.id, next.id);
+	assert.deepEqual((await scope()).result!.members, [{ sessionId: next.id, path: canonicalMember }]);
+	f.store.leave(next.id);
+	assert.deepEqual(
+		(await scope()).result!.members,
+		[],
+		"task/completion/retirement history is not current membership",
+	);
+	f.store.join(next.id, mission.id);
+	assert.equal((await scope()).result!.members.length, 1, "an explicit fresh join grants current access again");
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	assert.ok((await scope()).error, "revoked coordinator cannot renew an old scope");
 });
 
 test("non-code delivery resolves pinned artifacts and cannot accept or retire work", async (t) => {

@@ -71,6 +71,7 @@ import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts"
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { memoryCachePayload } from "./coordinator-memory.ts";
 import { coordinatorMemoryModel } from "./coordinator-memory-model.ts";
+import { coordinatorSourceBridge } from "./coordinator-sources.ts";
 import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { DIAGNOSTIC_CONTEXT_TOOL } from "./diagnostic-context-tool.ts";
 import { DIAGNOSTIC_HISTORY_TOOL } from "./diagnostic-history-tool.ts";
@@ -100,6 +101,8 @@ export interface ExtensionInput {
 }
 
 export interface NativeAdapterOptions {
+	/** Trusted IPC-backed source admission, only for a daemon-managed coordinator worker. */
+	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
 	/** Operational-read-only profile. Personal resources and every tool except diagnostics are unavailable. */
 	diagnostics?: boolean;
 	/** Diagnostics-only grant for one host-admitted target's bounded history tool. */
@@ -409,6 +412,8 @@ export class NativeAdapter {
 		await installCredentialBrokerHooks({ descendants: true });
 		const diagnostics = !!options.diagnostics;
 		const readOnly = !!options.ask || diagnostics;
+		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
+			throw new Error("Coordinator source admission requires its bundled native profile");
 		const allowedTools = diagnostics
 			? [
 					DIAGNOSTICS_TOOL,
@@ -520,12 +525,14 @@ export class NativeAdapter {
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),
 							...(options.hostExtensions ?? []),
+							...(options.coordinatorSources ? [coordinatorSourceBridge(options.coordinatorSources)] : []),
 							...toolActivityFactories,
 							capture,
 						],
 					},
 			projectTrusted,
 			!readOnly && options.bundledExtensions !== false,
+			!!options.coordinatorSources,
 		);
 		const failOpen = async (error: unknown): Promise<never> => {
 			await toolActivity?.close();
@@ -558,7 +565,7 @@ export class NativeAdapter {
 				: {
 						customTools: [
 							...(options.sessionOptions?.customTools ?? []),
-							...createExplorationTools({ source: cwd }),
+							...(!options.coordinatorSources ? createExplorationTools({ source: cwd }) : []),
 						],
 					}),
 			cwd,

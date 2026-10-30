@@ -187,6 +187,14 @@ export class MissionService {
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
 		sessions.setMissionBridge({
+			coordinatorSourceMembers: (sessionId) => {
+				const member = store.membership(sessionId);
+				if (!member?.active || !member.coordinator) return undefined;
+				return {
+					projectId: store.require(member.missionId).projectId,
+					sessionIds: store.members(member.missionId),
+				};
+			},
 			ownershipScope: (sessionId) => {
 				const member = store.membership(sessionId);
 				if (!member?.active || member.coordinator || member.role !== "builder") return undefined;
