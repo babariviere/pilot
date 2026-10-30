@@ -13,6 +13,8 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict } from "./errors.ts";
+import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
+import { optionalReviewSeeds } from "./mission-review-seeds.ts";
 import { draftMessage, MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -350,6 +352,226 @@ test("revision-bound service submissions resolve exact artifacts, not latest, se
 	assert.equal(f.store.retiredMember(worker.id), false);
 });
 
+test("dormant review service admits current project/actor before exact retries and retains only observed provenance", async (t) => {
+	let producer: ReviewProducer = { kind: "unavailable", reason: "No host output observation" };
+	let observerCalls = 0;
+	const f = await fixture(t, undefined, undefined, undefined, async () => {
+		observerCalls++;
+		return producer;
+	});
+	const lead = await f.spawn(),
+		worker = await f.spawn(),
+		other = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Reviews",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.service.join(other.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Sources", criteria: ["Trace evidence"] },
+	});
+	f.store.writeBrief(mission.id, "Approved", 0);
+	const profile = {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	};
+	await assert.rejects(f.service.saveReviewProfile(worker.id, profile), /coordinator/);
+	await f.service.saveReviewProfile(lead.id, profile);
+	const request: ReviewResultWrite = {
+		version: 1,
+		operationId: "review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment!,
+		intent: "research",
+		content: [{ kind: "brief", revision: 1 }],
+		context: [],
+		preferences: { unavailable: "No retained preference version" },
+		output: { state: "completed", outcome: "pass", reason: "No evidenced report concern" },
+		findings: [],
+		resolutions: [],
+		limitations: "No current source or independent verification",
+		confidence: "unavailable",
+	};
+	await assert.rejects(f.service.recordReviewResult(other.id, task.id, request), /current coordinator or task owner/);
+	await assert.rejects(
+		f.service.recordReviewResult(worker.id, task.id, { ...request, producer: { kind: "human" } }),
+		/fields/,
+	);
+	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
+	assert.equal(observerCalls, 1);
+	assert.equal(saved.producer.kind, "unavailable"); // Chat-selected test/model is not observed output.
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
+	producer = {
+		kind: "observed-agent",
+		sessionId: other.id,
+		provider: "fixture",
+		model: "observed-output-model",
+		observationId: "output-1",
+	};
+	const next = await f.service.recordReviewResult(lead.id, task.id, {
+		...request,
+		operationId: "observed",
+		expectedResultId: saved.id,
+	});
+	assert.equal(next.recorderSessionId, lead.id);
+	assert.deepEqual(next.producer, producer);
+	assert.equal(next.independence, "unavailable"); // A different session is not proof.
+	assert.equal(next.humanAuthorship, "unavailable");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "outdated");
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, mission.id); // Deliberately inconsistent store membership.
+	producer = { ...producer, sessionId: foreign.id };
+	await assert.rejects(
+		f.service.recordReviewResult(lead.id, task.id, {
+			...request,
+			operationId: "foreign-producer",
+			expectedResultId: next.id,
+			expectedContextFence: f.store.reviewContextFence(mission.id),
+		}),
+		/project/i,
+	);
+	const originalGet = f.sessions.get.bind(f.sessions);
+	const projectMoved = t.mock.method(f.sessions, "get", (id: string) => {
+		const result = originalGet(id);
+		return result && id === worker.id ? { ...result, projectId: f.other.id } : result;
+	});
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateReviewResult(worker.id, saved.id), /project/i);
+	projectMoved.mock.restore();
+	const profileMoved = t.mock.method(f.sessions, "get", (id: string) => {
+		const result = originalGet(id);
+		return result && id === lead.id ? { ...result, projectId: f.other.id } : result;
+	});
+	await assert.rejects(f.service.saveReviewProfile(lead.id, profile), /project/i);
+	profileMoved.mock.restore();
+	f.store.writeBrief(mission.id, "Changed context", 1);
+	const stale = await f.service.evaluateReviewResult(lead.id, next.id);
+	assert.equal(stale.applicability, "outdated");
+	assert.equal(stale.liveSourceFreshness, "unavailable");
+	assert.equal(stale.acceptance, "unavailable");
+	assert.deepEqual(await f.service.recordReviewResult(worker.id, task.id, request), saved);
+	assert.equal(observerCalls, 3); // Exact retry did not run observer or resolve mutable source.
+	f.store.leave(worker.id);
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /membership/i);
+	assert.equal(f.store.task(mission.id, task.id).status, "todo");
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+	assert.equal(f.store.retiredMember(lead.id), false);
+});
+
+test("review artifact/context reads recheck pin ABA and trusted actor project after asynchronous access", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Review pins",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Sources", criteria: ["Trace evidence"] },
+	});
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	});
+	const artifact = await f.sessions["artifactStore"](worker.id).create({
+		kind: "html",
+		title: "Report",
+		source: "<p>Retained evidence</p>",
+	});
+	const link = { sessionId: worker.id, artifactId: artifact.id, revision: 1, taskId: task.id };
+	await f.service.linkArtifact(mission.id, link);
+	const ref = { kind: "artifact" as const, artifactId: artifact.id, revision: 1 };
+	const request: ReviewResultWrite = {
+		version: 1,
+		operationId: "review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment!,
+		intent: "research",
+		content: [ref],
+		context: [],
+		preferences: { references: [ref] },
+		output: { state: "completed", outcome: "pass", reason: "Report evidence" },
+		findings: [],
+		resolutions: [],
+		limitations: "Retained source only",
+		confidence: "low",
+	};
+	const original = f.sessions.artifact.bind(f.sessions);
+	let changed = false;
+	const churn = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+		const value = await original(...args);
+		if (!changed) {
+			changed = true;
+			f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+			await f.service.linkArtifact(mission.id, link);
+		}
+		return value;
+	});
+	await assert.rejects(f.service.recordReviewResult(worker.id, task.id, request), /source\/context.*(changed|stale)/);
+	churn.mock.restore();
+	request.expectedContextFence = f.store.reviewContextFence(mission.id);
+	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
+	await f.sessions["artifactStore"](worker.id).update(
+		artifact.id,
+		{ kind: "html", title: "Report", source: "<p>New unpinned revision</p>" },
+		1,
+	);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current"); // Exact retained comparison only.
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	await f.service.linkArtifact(mission.id, link);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "outdated");
+	const get = f.sessions.get.bind(f.sessions);
+	let projectChanged = false;
+	const moved = t.mock.method(f.sessions, "get", (id: string) => {
+		const value = get(id);
+		return projectChanged && id === worker.id && value ? { ...value, projectId: f.other.id } : value;
+	});
+	const duringRead = t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+		const value = await original(...args);
+		projectChanged = true;
+		return value;
+	});
+	await assert.rejects(
+		f.service.recordReviewResult(worker.id, task.id, {
+			...request,
+			operationId: "project-race",
+			expectedResultId: saved.id,
+			expectedContextFence: f.store.reviewContextFence(mission.id),
+		}),
+		/project/i,
+	);
+	duringRead.mock.restore();
+	moved.mock.restore();
+	assert.equal(f.store.reviewHistory(mission.id, task.id).length, 1);
+});
+
 test("delivery evidence rechecks earlier artifact pins after later asynchronous reads", async (t) => {
 	const f = await fixture(t),
 		lead = await f.spawn(),
@@ -501,7 +723,16 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 		status: "complete",
 		omissions: [],
 		before: [],
-		after: [],
+		after: [
+			{
+				path: "handler.ts",
+				mode: "100644",
+				gitOid: "e".repeat(40),
+				state: "text",
+				sha256: "f".repeat(64),
+				bytes: 100,
+			},
+		],
 		changes: [],
 		trees: { before: "d".repeat(40), after: "d".repeat(40) },
 		diff: { sha256: createHash("sha256").update("").digest("hex"), bytes: 0 },
@@ -531,10 +762,104 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 	assert.equal(evaluation.verification.taskAtOperation, "unavailable");
 	assert.equal(evaluation.verification.liveSource, "unavailable");
 	assert.equal(evaluation.integration, "unavailable");
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "correctness",
+		expectedRevision: 0,
+		definition: optionalReviewSeeds().correctness,
+	});
+	const citation = {
+		kind: "code" as const,
+		snapshotId: snapshot!.snapshotId,
+		side: "after" as const,
+		path: "handler.ts",
+		sha256: "f".repeat(64),
+		start: 0,
+		end: 50,
+	};
+	const review: ReviewResultWrite = {
+		version: 1,
+		operationId: "code-review",
+		profileId: "correctness",
+		profileRevision: 1,
+		expectedResultId: null,
+		expectedContextFence: f.store.reviewContextFence(mission.id),
+		definitionRevision: request.definitionRevision,
+		assignment: task.assignment!,
+		intent: "code",
+		content: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		context: [],
+		preferences: { unavailable: "No preference versions" },
+		output: { state: "completed", outcome: "fail", reason: "Missing boundary validation" },
+		findings: [
+			{
+				id: "trigger",
+				title: "Missing validation",
+				trigger: "Handler receives untrusted input",
+				cost: "Invalid state reaches persistence",
+				basis: "introduced",
+				severity: "high",
+				evidence: [citation],
+				counterevidence: "No validation is visible on this retained path",
+			},
+		],
+		resolutions: [],
+		limitations: "Static retained path, not runtime verification",
+		confidence: "medium",
+	};
+	for (const change of [
+		{ path: "missing.ts" },
+		{ sha256: "0".repeat(64) },
+		{ end: 101 },
+		{ side: "before" as const },
+	]) {
+		await assert.rejects(
+			f.service.recordReviewResult(worker.id, task.id, {
+				...review,
+				findings: [{ ...review.findings[0], evidence: [{ ...citation, ...change }] }],
+			}),
+			/exact retained text range/,
+		);
+	}
+	const reviewed = await f.service.recordReviewResult(worker.id, task.id, review);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "current");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).liveSourceFreshness, "unavailable");
 	// Same reference with altered retained bytes is not silently accepted as a fresh version.
 	snapshot!.manifest.omissions.push("corrupt manifest");
 	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
 	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "unavailable");
+	manifest.after.push({
+		path: "boundary.ts",
+		mode: "100644",
+		gitOid: "1".repeat(40),
+		state: "text",
+		sha256: "2".repeat(64),
+		bytes: 80,
+	});
+	pin();
+	const resolved = await f.service.recordReviewResult(worker.id, task.id, {
+		...review,
+		operationId: "recheck-path",
+		expectedResultId: reviewed.id,
+		content: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
+		output: { state: "completed", outcome: "pass", reason: "Boundary now rejects the triggering input" },
+		findings: [],
+		resolutions: [
+			{
+				resultId: reviewed.id,
+				findingId: "trigger",
+				assessment: "resolved",
+				triggeringPathReason:
+					"Validation at the boundary prevents the handler trigger; handler lines need not change",
+				evidence: [{ ...citation, snapshotId: snapshot!.snapshotId, path: "boundary.ts", sha256: "2".repeat(64) }],
+			},
+		],
+	});
+	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "outdated");
+	assert.equal((await f.service.evaluateReviewResult(lead.id, resolved.id)).applicability, "current");
+	assert.equal(f.store.reviewResult(mission.id, reviewed.id)!.request.findings[0]!.id, "trigger");
 	for (const status of ["partial", "unavailable"] as const) {
 		manifest.status = status;
 		pin();
@@ -1872,6 +2197,7 @@ async function fixture(
 	},
 	usageSource?: SubscriptionUsageSource,
 	deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
+	reviewProducerObserver?: (sessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
@@ -1922,7 +2248,7 @@ async function fixture(
 		model: model ?? "test/model",
 		thinking: thinking ?? "medium",
 	}));
-	const service = new MissionService(store, sessions, projects, deliverySnapshots);
+	const service = new MissionService(store, sessions, projects, deliverySnapshots, reviewProducerObserver);
 	await sessions.load();
 	t.after(async () => {
 		await service.notices.stop();

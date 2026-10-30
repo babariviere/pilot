@@ -70,6 +70,19 @@ import {
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
+import {
+	assertReviewOutput,
+	type MissionReviewProfile,
+	type MissionReviewRecord,
+	type MissionReviewResult,
+	type ReviewContextFence,
+	type ReviewProducer,
+	type ReviewResultWrite,
+	reviewProducer,
+	reviewProfileWrite,
+	reviewReferences,
+	reviewResultWrite,
+} from "./mission-review-contract.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import type { PullRequestBinding } from "./sessions.ts";
@@ -315,6 +328,18 @@ CREATE TABLE IF NOT EXISTS task_delivery_evidence (
 );
 CREATE INDEX IF NOT EXISTS delivery_evidence_by_task ON task_delivery_evidence(task_id, sequence);
 CREATE INDEX IF NOT EXISTS delivery_evidence_current ON task_delivery_evidence(task_id, record_type, sequence);
+CREATE TABLE IF NOT EXISTS mission_review_records (
+	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+	profile_id TEXT NOT NULL,
+	record_type TEXT NOT NULL,
+	operation_id TEXT NOT NULL,
+	record_id TEXT NOT NULL UNIQUE,
+	record TEXT NOT NULL,
+	UNIQUE(mission_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS mission_review_stream ON mission_review_records(mission_id, record_type, profile_id, task_id, sequence);
 CREATE TABLE IF NOT EXISTS retired_members (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -3406,6 +3431,243 @@ export class MissionStore {
 				request,
 			};
 			this.insertDelivery(record);
+			return record;
+		}, true);
+		await this.durable();
+		return saved;
+	}
+
+	/** Dormant host-only review history. No legacy receipt promotion or active gate consumer. */
+	reviewProfile(id: string, profileId: string, revision?: number): MissionReviewProfile | undefined {
+		this.require(id);
+		const row = this.one(
+			`SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='profile' AND profile_id=?
+			${revision === undefined ? "" : "AND json_extract(record,'$.revision')=?"} ORDER BY sequence DESC LIMIT 1`,
+			id,
+			profileId,
+			...(revision === undefined ? [] : [revision]),
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewProfile) : undefined;
+	}
+	reviewResult(id: string, recordId: string): MissionReviewResult | undefined {
+		this.require(id);
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result' AND record_id=?",
+			id,
+			recordId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewResult) : undefined;
+	}
+	latestReviewResult(id: string, taskId: string, profileId: string): MissionReviewResult | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND record_type='result' AND task_id=? AND profile_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+			profileId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as MissionReviewResult) : undefined;
+	}
+	reviewHistory(id: string, taskId: string, before?: string, limit = 100): MissionReviewResult[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid review history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM mission_review_records WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown review history cursor");
+		return this.all(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((r) => JSON.parse(str(r.record!)) as MissionReviewResult);
+	}
+	/** Existing durable activity sequence fences pin churn even when content/owner changes back (ABA).
+	 * Artifact/decision activity is mission-wide: conservative invalidation, not inferred relevance. */
+	reviewContextFence(id: string): ReviewContextFence {
+		const last = (kind: string) =>
+			Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind=?", id, kind)!.n);
+		return {
+			briefRevision: this.require(id).briefRevision,
+			decisionEventId: last("decision"),
+			artifactEventId: last("artifact"),
+			memberEventId: last("member"),
+		};
+	}
+	private assertReviewActor(id: string, sessionId: string, authorize: () => void, taskId?: string): void {
+		authorize(); // Trusted host project/session admission precedes even retry lookup.
+		this.assertDeliveryMember(id, sessionId);
+		if (this.require(id).coordinatorSessionId === sessionId) return;
+		if (!taskId || this.task(id, taskId).sessionId !== sessionId)
+			throw new Conflict(
+				"Only the current coordinator or task owner may record review claims; profiles require coordinator",
+			);
+	}
+	private reviewRetry(
+		id: string,
+		sessionId: string,
+		type: MissionReviewRecord["type"],
+		taskId: string | null,
+		request: MissionReviewRecord["request"],
+	): MissionReviewRecord | undefined {
+		const row = this.one(
+			"SELECT record FROM mission_review_records WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as MissionReviewRecord;
+		if (
+			prior.type !== type ||
+			prior.recorderSessionId !== sessionId ||
+			(prior.type === "result" ? prior.taskId : null) !== taskId ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Review operation idempotency conflict");
+		return prior;
+	}
+	private insertReview(record: MissionReviewRecord): void {
+		const encoded = JSON.stringify(record);
+		if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Review record exceeds 256 KiB");
+		this.run(
+			"INSERT INTO mission_review_records(mission_id,task_id,profile_id,record_type,operation_id,record_id,record) VALUES(?,?,?,?,?,?,?)",
+			record.missionId,
+			record.type === "result" ? record.taskId : null,
+			record.request.profileId,
+			record.type,
+			record.request.operationId,
+			record.id,
+			encoded,
+		);
+	}
+	async saveReviewProfile(
+		id: string,
+		sessionId: string,
+		value: unknown,
+		authorize: () => void,
+	): Promise<MissionReviewProfile> {
+		this.assertReviewActor(id, sessionId, authorize);
+		const request = reviewProfileWrite(value);
+		const saved = this.transaction(() => {
+			this.assertReviewActor(id, sessionId, authorize);
+			const retry = this.reviewRetry(id, sessionId, "profile", null, request);
+			if (retry) return retry as MissionReviewProfile;
+			if ((this.reviewProfile(id, request.profileId)?.revision ?? 0) !== request.expectedRevision)
+				throw new Conflict("Review profile revision conflict");
+			const record: MissionReviewProfile = {
+				version: 1,
+				type: "profile",
+				id: randomUUID(),
+				missionId: id,
+				recorderSessionId: sessionId,
+				createdAt: Date.now(),
+				revision: request.expectedRevision + 1,
+				request,
+			};
+			this.insertReview(record);
+			return record;
+		}, true);
+		await this.durable();
+		return saved;
+	}
+	async recordReviewResult(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			observeProducer(request: ReviewResultWrite): Promise<ReviewProducer>;
+			validateCitations(request: ReviewResultWrite): Promise<void>;
+		},
+	): Promise<MissionReviewResult> {
+		// Resolve only inside this mission; current authorization still precedes retry/content access.
+		host.authorize();
+		const taskId = this.resolveTask(id, ref).id;
+		this.assertReviewActor(id, sessionId, host.authorize, taskId);
+		const request = reviewResultWrite(value);
+		const retry = this.reviewRetry(id, sessionId, "result", taskId, request);
+		if (retry) {
+			await this.durable();
+			return retry as MissionReviewResult;
+		}
+		const admit = () => {
+			this.assertReviewActor(id, sessionId, host.authorize, taskId);
+			const task = this.task(id, taskId),
+				profile = this.reviewProfile(id, request.profileId);
+			if (!task.sessionId || task.status === "done" || task.status === "dropped")
+				throw new Conflict("Review task is unowned or closed");
+			assertDeliveryAssignment(task, request.assignment);
+			if (this.sharedDefinitionRevision(taskId) !== request.definitionRevision)
+				throw new Conflict("Review task definition is stale");
+			if (deliveryDigest(request.expectedContextFence) !== deliveryDigest(this.reviewContextFence(id)))
+				throw new Conflict("Review source/context fence is stale");
+			if (!profile || profile.revision !== request.profileRevision)
+				throw new Conflict("Review profile superseded or missing");
+			assertReviewOutput(profile.request.definition, request);
+			if ((this.latestReviewResult(id, taskId, request.profileId)?.id ?? null) !== request.expectedResultId)
+				throw new Conflict("Review result revision conflict");
+			for (const resolution of request.resolutions) {
+				const original = this.reviewResult(id, resolution.resultId);
+				if (
+					!original ||
+					original.taskId !== taskId ||
+					original.request.profileId !== request.profileId ||
+					!original.request.findings.some((f) => f.id === resolution.findingId)
+				)
+					throw new Conflict("Review resolution must name a retained finding in this task/profile");
+			}
+			return task.sessionId;
+		};
+		const ownerSessionId = admit(),
+			contextFence = this.reviewContextFence(id);
+		const observations: DeliveryObservation[] = [];
+		for (const reference of reviewReferences(request)) {
+			const observation = await host.resolve(reference);
+			if (
+				deliveryDigest(reference) !== deliveryDigest(observation.reference) ||
+				!/^[a-f0-9]{64}$/.test(observation.sha256) ||
+				!["retained", "partial", "unavailable"].includes(observation.availability)
+			)
+				throw new Conflict("Review retained identity mismatch");
+			observations.push(structuredClone(observation));
+		}
+		await host.validateCitations(request);
+		const producer = reviewProducer(await host.observeProducer(request));
+		const saved = this.transaction(() => {
+			this.assertReviewActor(id, sessionId, host.authorize, taskId);
+			const concurrent = this.reviewRetry(id, sessionId, "result", taskId, request);
+			if (concurrent) return concurrent as MissionReviewResult;
+			if (admit() !== ownerSessionId || deliveryDigest(contextFence) !== deliveryDigest(this.reviewContextFence(id)))
+				throw new Conflict("Review source/context or ownership changed during admission");
+			this.assertDeliveryEvidencePins(id, taskId, observations);
+			const record: MissionReviewResult = {
+				version: 1,
+				type: "result",
+				id: randomUUID(),
+				missionId: id,
+				taskId,
+				recorderSessionId: sessionId,
+				createdAt: Date.now(),
+				ownerSessionId,
+				request,
+				observations,
+				contextFence,
+				producer,
+				independence: "unavailable",
+				humanAuthorship: "unavailable",
+			};
+			this.insertReview(record);
 			return record;
 		}, true);
 		await this.durable();

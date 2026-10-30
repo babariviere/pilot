@@ -31,6 +31,13 @@ import {
 import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import {
+	evaluateMissionReview,
+	type ReviewProducer,
+	type ReviewResultWrite,
+	reviewReferences,
+	unavailableReviewProducer,
+} from "./mission-review-contract.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
@@ -167,6 +174,10 @@ export class MissionService {
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
 	private readonly deliverySnapshots?: Pick<ReviewSnapshotStore, "get">;
+	private readonly reviewProducerObserver?: (
+		recorderSessionId: string,
+		request: ReviewResultWrite,
+	) => Promise<ReviewProducer>;
 	/** Last context sent per member, so unrelated mission changes do not churn kernels or prompts. */
 	private readonly contexts = new Map<string, string>();
 	/** Canonical mission/task keys reserved before any asynchronous start preparation. */
@@ -179,8 +190,10 @@ export class MissionService {
 		sessions: SessionManager,
 		projects: ProjectStore,
 		deliverySnapshots?: Pick<ReviewSnapshotStore, "get">,
+		reviewProducerObserver?: (recorderSessionId: string, request: ReviewResultWrite) => Promise<ReviewProducer>,
 	) {
 		this.deliverySnapshots = deliverySnapshots;
+		this.reviewProducerObserver = reviewProducerObserver;
 		this.store = store;
 		this.sessions = sessions;
 		this.projects = projects;
@@ -516,12 +529,24 @@ export class MissionService {
 				availability: "retained",
 			};
 		}
+		const snapshot = await this.resolveReviewSnapshot(sessionId, missionId, taskId, reference.snapshotId);
+		const provenance = snapshot.manifest.provenance.ledger.ownership;
+		if (provenance.status !== "owned") throw new Conflict("Retained snapshot ownership is unavailable");
+		return {
+			reference,
+			sourceOwnerSessionId: provenance.binding.sessionId,
+			sha256: snapshot.snapshotId,
+			availability: snapshot.manifest.status === "complete" ? "retained" : snapshot.manifest.status,
+		};
+	}
+	private async resolveReviewSnapshot(sessionId: string, missionId: string, taskId: string, snapshotId: string) {
+		this.deliveryAccess(sessionId, taskId);
 		if (!this.deliverySnapshots) throw new Conflict("Retained snapshot resolver is unavailable");
-		const snapshot = await this.deliverySnapshots.get(reference.snapshotId);
+		const snapshot = await this.deliverySnapshots.get(snapshotId);
 		const manifestSha256 = Buffer.from(
 			await webcrypto.subtle.digest("SHA-256", Buffer.from(JSON.stringify(snapshot.manifest))),
 		).toString("hex");
-		if (snapshot.snapshotId !== reference.snapshotId || manifestSha256 !== reference.snapshotId)
+		if (snapshot.snapshotId !== snapshotId || manifestSha256 !== snapshotId)
 			throw new Conflict("Retained snapshot identity mismatch");
 		const provenance = snapshot.manifest.provenance.ledger.ownership;
 		// Frozen worker custody permits this host read. Enrollment tasks never establish exact task attribution.
@@ -532,12 +557,97 @@ export class MissionService {
 		)
 			throw new Conflict("Retained snapshot is not authorized for this worker and mission");
 		this.deliveryAccess(sessionId, taskId);
-		return {
-			reference,
-			sourceOwnerSessionId: provenance.binding.sessionId,
-			sha256: snapshot.snapshotId,
-			availability: snapshot.manifest.status === "complete" ? "retained" : snapshot.manifest.status,
+		return snapshot;
+	}
+
+	/** Dormant internal APIs only. No mission tool, transport, scheduler or execution bridge. */
+	async saveReviewProfile(sessionId: string, value: unknown) {
+		const missionId = this.reviewMissionAccess(sessionId);
+		return this.store.saveReviewProfile(missionId, sessionId, value, () => {
+			if (this.reviewMissionAccess(sessionId) !== missionId) throw new Conflict("Review membership changed");
+		});
+	}
+	async recordReviewResult(sessionId: string, taskRef: string, value: unknown) {
+		const { missionId, taskId } = this.deliveryAccess(sessionId, taskRef);
+		let producer: ReviewProducer | undefined;
+		const authorize = () => {
+			if (this.reviewMissionAccess(sessionId) !== missionId) throw new Conflict("Review membership changed");
+			if (producer?.kind === "observed-agent") {
+				if (this.store.missionOf(producer.sessionId) !== missionId)
+					throw new Conflict("Review producer is outside this mission");
+				this.assertSameProject(producer.sessionId, missionId);
+			}
 		};
+		return this.store.recordReviewResult(missionId, taskId, sessionId, value, {
+			authorize,
+			resolve: (reference) => this.resolveDeliveryEvidence(sessionId, missionId, taskId, reference),
+			observeProducer: async (request) => {
+				// A selected chat model is NOT an observed output producer. Only a host observer can attest.
+				producer = this.reviewProducerObserver
+					? await this.reviewProducerObserver(sessionId, structuredClone(request))
+					: unavailableReviewProducer();
+				authorize();
+				return producer;
+			},
+			validateCitations: (request) => this.validateReviewCitations(sessionId, missionId, taskId, request),
+		});
+	}
+	async evaluateReviewResult(sessionId: string, resultId: string) {
+		const missionId = this.reviewMissionAccess(sessionId);
+		const result = this.store.reviewResult(missionId, resultId);
+		if (!result) throw new NotFound("Unknown retained review result");
+		let observations: DeliveryObservation[] | undefined;
+		try {
+			observations = [];
+			for (const reference of reviewReferences(result.request))
+				observations.push(await this.resolveDeliveryEvidence(sessionId, missionId, result.taskId, reference));
+			this.store.assertDeliveryEvidencePins(missionId, result.taskId, observations);
+			await this.validateReviewCitations(sessionId, missionId, result.taskId, result.request);
+		} catch {
+			observations = undefined;
+		}
+		if (this.reviewMissionAccess(sessionId) !== missionId) throw new Conflict("Review membership changed");
+		return evaluateMissionReview(result, {
+			task: this.store.task(missionId, result.taskId),
+			definitionRevision: this.store.sharedDefinitionRevision(result.taskId),
+			profileRevision: this.store.reviewProfile(missionId, result.request.profileId)?.revision ?? 0,
+			latestResultId: this.store.latestReviewResult(missionId, result.taskId, result.request.profileId)?.id ?? null,
+			contextFence: this.store.reviewContextFence(missionId),
+			observations,
+		});
+	}
+	private reviewMissionAccess(sessionId: string): string {
+		const missionId = this.store.missionOf(sessionId);
+		if (!missionId) throw new Conflict("Review mission membership required");
+		this.assertSameProject(sessionId, missionId);
+		if (this.store.require(missionId).planningVersion !== 1)
+			throw new Conflict("Review records require planningVersion 1");
+		return missionId;
+	}
+	private async validateReviewCitations(
+		sessionId: string,
+		missionId: string,
+		taskId: string,
+		request: ReviewResultWrite,
+	) {
+		// One comparison per code result. Citations use retained logical paths and byte ranges.
+		const code = [
+			...request.findings.flatMap((f) => f.evidence),
+			...request.resolutions.flatMap((r) => r.evidence),
+		].filter((c) => c.kind === "code");
+		for (const snapshotId of new Set(code.map((c) => c.snapshotId))) {
+			const snapshot = await this.resolveReviewSnapshot(sessionId, missionId, taskId, snapshotId);
+			for (const citation of code.filter((c) => c.snapshotId === snapshotId)) {
+				const entry = snapshot.manifest[citation.side].find((e) => e.path === citation.path);
+				if (
+					entry?.state !== "text" ||
+					entry.sha256 !== citation.sha256 ||
+					entry.bytes === null ||
+					citation.end > entry.bytes
+				)
+					throw new Conflict("Code citation is not an exact retained text range");
+			}
+		}
 	}
 
 	context(sessionId: string): MissionContext | undefined {
