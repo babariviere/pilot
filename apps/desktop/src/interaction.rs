@@ -519,7 +519,43 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 _=close.recv()=>{closing=true;Ok("Closing. Any admitted model switch remains unconfirmed and is never resent.")}
                             }
                         }
-                        Some(WriteCommand::Project { id, path }) => {
+                        Some(WriteCommand::Project { id, path: None }) => {
+                            use crate::project_registration::{Outcome, Reply};
+                            status.project = Some(Reply {
+                                id: id.clone(),
+                                result: Ok(Outcome::Pending),
+                                catalog: None,
+                            });
+                            publish(updates, replace, status.clone());
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            }
+                            .effect(async {
+                                Ok(crate::project_registration::catalog(&client, &options).await)
+                            })
+                            .await;
+                            match result {
+                                Ok(catalog) => {
+                                    status.project = Some(Reply {
+                                        id,
+                                        result: Ok(Outcome::Read),
+                                        catalog: Some(catalog),
+                                    });
+                                    Ok("")
+                                }
+                                Err(_) => {
+                                    Ok("Closing. Interrupted project registration is not retried.")
+                                }
+                            }
+                        }
+                        Some(WriteCommand::Project {
+                            id,
+                            path: Some(path),
+                        }) => {
                             use crate::project_registration::{Outcome, Reply};
                             status.project = Some(Reply {
                                 id: id.clone(),
@@ -529,11 +565,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             publish(updates, replace, status.clone());
                             tokio::select! {
                                 reply = async {
-                                    let result = if let Some(path) = path {
-                                        crate::project_registration::register(&client, &options, store, &id, &path, |store| {
+                                    let result = crate::project_registration::register(&client, &options, store, &id, &path, |store| {
                                             status.book=Some(Arc::new(store.book.clone())); publish(updates,replace,status.clone());
-                                        }).await
-                                    } else { Ok(Outcome::Read) };
+                                        }).await;
                                     if let Ok(Outcome::Created(created)) = &result { status.project_receipt = Some((id.clone(),created.clone())); }
                                     let catalog = Some(crate::project_registration::catalog(&client, &options).await);
                                     Reply { id, result, catalog }

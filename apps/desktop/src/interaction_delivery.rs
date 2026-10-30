@@ -41,7 +41,7 @@ impl DeliveryOwner<'_> {
     }
 
     /// The future cannot borrow Store. Close drops it, leaving admitted intent Unknown.
-    async fn effect<T>(
+    pub(super) async fn effect<T>(
         &mut self,
         effect: impl std::future::Future<Output = Result<T, Failure>>,
     ) -> Result<T, Failure> {
