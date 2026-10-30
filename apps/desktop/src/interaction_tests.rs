@@ -69,6 +69,8 @@ async fn diagnostic_creation_and_reply_preserve_role_without_project_reads_or_re
 
 #[path = "interaction_draft_discard_tests.rs"]
 mod draft_discard;
+#[path = "interaction_recovery_tests.rs"]
+mod recovery_waits;
 #[path = "interaction_retention_tests.rs"]
 mod retention;
 #[path = "interaction_send_tests.rs"]

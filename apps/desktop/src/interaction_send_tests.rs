@@ -1,7 +1,7 @@
 //! Ordinary Send uses the real worker, temporary durable state and gated faux HTTP.
 use super::*;
 
-async fn stalled(
+pub(super) async fn stalled(
     behavior: Behavior,
     path: &'static str,
 ) -> (
@@ -24,18 +24,21 @@ async fn stalled(
     )
 }
 
-async fn arrived(receiver: &async_channel::Receiver<Value>) -> Value {
+pub(super) async fn arrived(receiver: &async_channel::Receiver<Value>) -> Value {
     tokio::time::timeout(Duration::from_secs(5), receiver.recv())
         .await
         .expect("Send reached gated HTTP")
         .unwrap()
 }
 
-fn disk(temp: &Temp) -> Book {
+pub(super) fn disk(temp: &Temp) -> Book {
     serde_json::from_slice(&fs::read(temp.0.join("state-v1.json")).unwrap()).unwrap()
 }
 
-async fn disconnected(client: Interaction, updates: async_channel::Receiver<WriteState>) {
+pub(super) async fn disconnected(
+    client: Interaction,
+    updates: async_channel::Receiver<WriteState>,
+) {
     drop(client);
     tokio::time::timeout(Duration::from_secs(5), async {
         while updates.recv().await.is_ok() {}
