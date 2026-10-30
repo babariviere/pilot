@@ -3,9 +3,10 @@ import { defineTool, type ExtensionToolContext, type ToolDefinition } from "@ear
 import { CallPathOutput, type CallPathQuery, CallSymbol } from "./call-path-contract.ts";
 import { ExplorationOutput, type ExplorationQuery } from "./exploration-contract.ts";
 import { runExploration } from "./exploration-runner.ts";
+import { ImpactOutput, type ImpactQuery } from "./impact-contract.ts";
 import type { AskContext } from "./policy.ts";
 
-export const EXPLORATION_TOOL_NAMES = ["code_search", "code_symbols", "code_call_paths"];
+export const EXPLORATION_TOOL_NAMES = ["code_search", "code_symbols", "code_call_paths", "code_impact"];
 const annotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 /** SDK definitions work directly and through codemode, including Ask's explicit allowlist. */
@@ -28,7 +29,7 @@ export function createExplorationTools(
 		),
 	};
 	const execute = async (
-		query: ExplorationQuery | CallPathQuery,
+		query: ExplorationQuery | CallPathQuery | ImpactQuery,
 		signal: AbortSignal | undefined,
 		ctx: ExtensionToolContext,
 	) => {
@@ -41,6 +42,21 @@ export function createExplorationTools(
 		};
 	};
 	return [
+		defineTool({
+			name: "code_impact",
+			label: "Static caller impact",
+			annotations,
+			description:
+				"Investigate possible caller impact of 1–8 exact TS/JS callables in one shared source scan. Returns deduplicated callers with one deterministic shortest source-edge witness to a nearest root, opaque observed-content revision, coverage and unknown call counts. Not general references, types, runtime tracing or complete impact; no callers is not a safety claim. Live reads are non-atomic; no persistent index. Include expectedRevision to reject changed observed content.",
+			parameters: Type.Object({
+				...common,
+				symbols: Type.Array(CallSymbol, { minItems: 1, maxItems: 8 }),
+				depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 6 })),
+				expectedRevision: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
+			}),
+			outputSchema: ImpactOutput,
+			execute: (_id, args, signal, _onUpdate, ctx) => execute({ ...args, tool: "code_impact" }, signal, ctx),
+		}),
 		defineTool({
 			name: "code_call_paths",
 			label: "Source call paths",

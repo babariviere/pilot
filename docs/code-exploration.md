@@ -1,6 +1,6 @@
 # First-party code exploration
 
-Pilot registers `code_search`, `code_symbols` and `code_call_paths` as native Pi custom tools in Build and source Ask.
+Pilot registers `code_search`, `code_symbols`, `code_call_paths` and `code_impact` as native Pi custom tools in Build and source Ask.
 They are callable directly or through codemode, including the investigate/explorer read-only boundary.
 Diagnostics does not gain arbitrary source access. Ordinary `read`, `grep`, `find` and `ls` stay available.
 
@@ -95,6 +95,73 @@ use a narrower scan/depth to continue. Normal scan/exclusion/read/worker bounds 
 `coverage.parsed` counts syntax-parsed files, not necessarily graph-retained files at a graph limit.
 An empty callers result is **never proof of no impact**, even without detected partial coverage.
 
+## Static caller impact, version 1
+
+```ts
+code_impact({
+  symbols: [{path, line, column, contentHash?, frameId?}], // 1–8 exact callables
+  path?, depth?, limit?, cursor?, expectedRevision?
+})
+```
+
+This is a multi-root investigation over **the same** TS/JS parser, lexical binding resolver,
+relative-ESM edges and adjacency graph as `code_call_paths`. One invocation scans/builds the graph
+once, not per root or caller. No extra analysis engine, persistent index or background worker is added.
+`path` bounds the whole source scan; symbols are source-root-relative, not relative to that subdirectory.
+Every root must be a uniquely selected callable in that one scanned source. Invalid, stale-hash,
+unsupported or omitted roots fail the query, never silently narrow the requested set. Duplicate roots
+are selected/validated before deduplication. A coordinator's absolute paths must all belong to its
+freshly authorized single selected source; main, member and scratch roots cannot be combined.
+
+`depth` defaults to 1 (1–6); `limit`/`cursor` follow the existing 1–50/48 KiB page contract.
+`mode` is always `source-inferred-not-runtime`. `roots` are canonicalized by source path, declaration
+offset and frame ID. `results` contain deduplicated **possible-affected callers**, excluding selected
+roots, in multi-source breadth-first discovery order. Each has `frame`, `rootId`, `distance` and a
+`witness` array of existing `CallEdge` records ordered from that caller toward the selected root.
+Every edge has exact byte hashes/spans/citations and resolution provenance; cycles retain SCC flags.
+Distance is a source-hop count, not confidence, likelihood or observed execution.
+
+Each caller receives **one** shortest witness to a nearest root, not every affected root or path.
+Equal distances choose canonical root order, then callsite path/offset order read backward from the
+root toward the caller. Input root order does not affect that choice. Unknown/ambiguous calls have no
+target to reverse-traverse: scan-wide totals remain explicit and **unassigned**, not guessed onto roots.
+`counts.exhaustive` is always false. `callersObserved` is the bounded retained investigation's unique
+non-root callers, not the current page size; `byRoot[].assignedWitnesses` counts those chosen witnesses,
+not all callers reachable from each root. Counts apply to the retained traversal prefix across pages.
+
+At most 1,000 incoming edges are examined, including repeated/already-visited calls. This independently
+bounds work even if thousands of callsites belong to one caller. `traversal.resultLimited`,
+`depthLimited`, coverage failures, unknown counts and `partialReasons` describe detected omissions.
+20,000 graph records, worker/source limits and pagination budgets remain unchanged. Output capabilities
+explicitly mark general value references, type relationships, other-language relationships and runtime
+observation unsupported, and complete impact `not-proven`. An empty result or `partial: false` is
+**never a safety or no-impact claim**. Rust/additional languages, structural/flow comparisons, retained
+Review-source transport and cache/index evaluation are separate work, not implemented here.
+
+### Opaque source-revision receipts
+
+All exploration results add `revision: {id, sourceId, kind, engine, consistency}`. IDs are opaque SHA-256
+digests, not private canonical host paths. They bind canonical workspace/pinned-store identity, exact
+commit when pinned, source-relative scan path, observed source bytes, scanner/graph-engine version and
+coverage/omission states. For the same scan strategy they are independent of search text, roots,
+direction, depth and page size. Different scan scopes/strategies or partial observations need not match.
+`code_call_paths` and `code_impact` use the same graph scan strategy and share receipts.
+
+`kind: observed-content` with `consistency: per-file-read-not-atomic` is a receipt of observed bytes,
+**not a repository revision, atomic working-copy snapshot, freshness lease or retained content store**.
+The observation may already be stale at response time; bytes that were not read (including unsupported
+symbol languages) have no content freshness guarantee. Pinned sources say `pinned-content` and retain
+their exact commit/no-uncommitted-edits semantics, without substituting live files on read failure.
+`sourceId` distinguishes canonical source/store identity without exposing its path in the receipt;
+`code_impact.source` also exposes only the opaque ID, source kind and optional pinned commit. Older
+tools retain their existing source fields for compatibility.
+
+Pass a preceding call-path/impact `revision.id` as `expectedRevision` to `code_impact`. A fresh bounded
+rescan must reproduce the receipt before any root selection/traversal result is admitted. Changes to
+observed non-root files or coverage reject navigation even when the root's contentHash is unchanged.
+Every page still rescans; its cursor binds the full normalized query/root list, expected revision and
+observed receipt. This invalidates stale/cross-source pages without caching or mixing workspace overlays.
+
 ## Source and trust
 
 Shared Ask `SourceReader` supplies path/traversal/symlink checks and regular-file bounded reads. A source
@@ -146,6 +213,15 @@ dirty/pinned/independent sources, mixed read windows, stale navigation, read den
 cancellation and bounded graph/pages. The SDK fixture calls `code_call_paths` through Ask/investigate
 codemode and the relocated permission-limited worker; the explorer integration calls it without Build.
 
+`impact.test.ts` adds hand-labeled multi-package caller sets and exact connected source witnesses,
+single-read-per-file graph reuse, nearest-root/diamond/cycle ties, deduplication, explicit unsupported
+capabilities/unknowns, opaque query-independent receipts, non-root/coverage invalidation, dirty versus
+pinned lower layers, mixed read windows, cancellation, and graph/traversal/page bounds. SDK, explorer,
+coordinator source admission/revocation and relocated read-only worker fixtures also call `code_impact`.
+Offline fixtures must unset inherited `PILOT_*` and `NODE_OPTIONS` so a live credential broker/preload
+does not override faux in-memory providers. Production smoke scripts exercise the shipped impact worker;
+local relocated tests are not a macOS/Linux packaged-release qualification.
+
 Run `node packages/kernel/src/exploration.bench.ts` for a temporary, offline 132-file multi-package fixture.
 It reports five fresh-worker timings, process CPU, sampled RSS increase, parent-loop heartbeat gaps and
 output sizes. Sampling can miss peaks and includes the surrounding process. This is not a token-savings,
@@ -169,3 +245,34 @@ increases of 50.5/56.5 MiB, with heartbeat gaps at most 6.8ms in both. Runs were
 not randomized/cold measurements; small differences are not a speedup claim. Inherited credential
 preload was absent, so the larger production-preload costs above still apply once per query, not once
 per frame. These synthetic resource observations do not certify live-session/GUI responsiveness.
+
+### Batched investigation observations
+
+`node packages/kernel/src/exploration.bench.ts --impact` compares one three-root impact investigation
+against three existing caller queries, including every output page. `--impact --large` expands the
+same 12-package/132-file layout to 36 packages/396 files. The impact fixtures have four linked functions
+per ordinary source file and twelve in the selected file (41,620/123,508 scanned bytes respectively).
+The selected roots overlap: a hand-labeled union has four distinct non-root callers. The baseline
+returns nine edge rows requiring caller/root deduplication; impact returns four callers with connected
+shortest witnesses. Both variants assert that same expected caller set, full file coverage and no graph
+record truncation, not just successful execution. Explicit depth limits still apply.
+
+On 2026-10-30, macOS arm64/Node 24.21.0, five samples per variant with alternating pair order,
+warm filesystem, clean `PILOT_*`/`NODE_OPTIONS` environment and fresh disposable workers:
+
+| Files | Investigation | Worker scans | Median wall / CPU | Peak sampled RSS increase | Largest heartbeat gap | JSON bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 132 | Three caller queries | 3 | 428 / 647 ms | 18.8 MiB | 8.6 ms | 28,744 |
+| 132 | Batched impact | 1 | 152 / 222 ms | 41.8 MiB | 8.4 ms | 24,319 |
+| 396 | Three caller queries | 3 | 725 / 1,155 ms | 19.6 MiB | 6.4 ms | 28,747 |
+| 396 | Batched impact | 1 | 231 / 372 ms | 53.2 MiB | 6.0 ms | 24,320 |
+
+These fixtures demonstrate less repeated scanning and manual source-edge deduplication, not better
+semantic coverage. Witnesses explain why a caller was included; unknown/dynamic dispatch is still
+unattributable. JSON savings are small because connected witnesses repeat source locations. Sampled
+RSS increase was **higher** for impact in these runs, not a memory improvement; process-wide sampling,
+allocator/GC carry-over and first-worker ordering can distort comparisons and miss transient peaks.
+The 132-file batched wall samples ranged 115–304 ms versus 376–502 ms for three queries; 396-file
+ranges were 209–239 / 629–758 ms. These are synthetic observations, not confidence intervals or a
+general speedup, token-savings, production-preload, large-live-session or GUI responsiveness claim.
+They justify sharing one fresh bounded graph per investigation, **not a persistent index/cache**.

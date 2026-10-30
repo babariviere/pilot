@@ -9,7 +9,7 @@ export const CallSymbol = Type.Object({
 	contentHash: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
 	frameId: Type.Optional(Type.String({ maxLength: 4400 })),
 });
-const Frame = Type.Object({
+export const Frame = Type.Object({
 	id: Type.String(),
 	name: Type.String(),
 	nameTruncated: Type.Boolean(),
@@ -26,6 +26,7 @@ export const CallPathOutput = Type.Object({
 		path: Type.String(),
 	}),
 	source: ExplorationOutput.properties.source,
+	revision: ExplorationOutput.properties.revision,
 	freshness: ExplorationOutput.properties.freshness,
 	coverage: Type.Object({
 		parsed: Type.Integer(),

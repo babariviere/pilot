@@ -123,6 +123,19 @@ export async function createCoordinatorSourceTools(
 						if (typeof symbol.path !== "string") throw new Error("Call-path symbol needs a source path");
 						forwarded.symbol = { ...symbol, path: sourceContentPath(selected, symbol.path) };
 					}
+					if (template.name === "code_impact") {
+						if (!Array.isArray(args.symbols)) throw new Error("Impact needs exact callable symbols");
+						forwarded.symbols = args.symbols.map((symbol: unknown) => {
+							if (
+								!symbol ||
+								typeof symbol !== "object" ||
+								!("path" in symbol) ||
+								typeof symbol.path !== "string"
+							)
+								throw new Error("Impact symbol needs a source path");
+							return { ...symbol, path: sourceContentPath(selected, symbol.path) };
+						});
+					}
 					const tools = await createAskTools({ source: selected, ...(sourceOnly ? { sourceOnly: true } : {}) });
 					return tools.find((tool) => tool.name === template.name)!.execute(id, forwarded, signal, update, ctx);
 				},

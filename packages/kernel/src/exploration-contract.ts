@@ -3,8 +3,16 @@ import { type Static, Type } from "@earendil-works/pi-ai";
 
 const Position = Type.Object({ offset: Type.Integer(), line: Type.Integer(), column: Type.Integer() });
 const Span = Type.Object({ start: Position, end: Position });
+export const SourceRevision = Type.Object({
+	id: Type.String(),
+	sourceId: Type.String(),
+	kind: Type.Union([Type.Literal("observed-content"), Type.Literal("pinned-content")]),
+	engine: Type.String(),
+	consistency: Type.Literal("per-file-read-not-atomic"),
+});
 export const ExplorationOutput = Type.Object({
 	version: Type.Literal(1),
+	revision: SourceRevision,
 	query: Type.Object({
 		tool: Type.Union([Type.Literal("code_search"), Type.Literal("code_symbols")]),
 		query: Type.String(),

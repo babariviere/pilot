@@ -328,6 +328,45 @@ text((await tools.code_symbols({query:"entry",exact:true})).results[0].name);
 	assert.ok(!(await f.execute("read", { path: "entry.ts" })).isError, "reload retains IPC-backed source admission");
 });
 
+test("multi-root impact rechecks current membership and never mixes main, member or scratch sources", async (t) => {
+	const f = await fixture(t);
+	const leaf = { path: "entry.ts", line: 2, column: 10 };
+	const good = await f.execute("code_impact", { path: f.member, symbols: [leaf] });
+	assert.ok(!good.isError, JSON.stringify(good));
+	assert.match(JSON.stringify(good.structuredContent), /entry/);
+	assert.doesNotMatch(JSON.stringify(good.structuredContent), new RegExp(f.root));
+	const absolute = await f.execute("code_impact", {
+		path: f.member,
+		symbols: [{ ...leaf, path: join(f.member, "entry.ts") }],
+	});
+	assert.ok(!absolute.isError, JSON.stringify(absolute));
+	for (const path of [
+		join(f.main, "entry.ts"),
+		join(f.other, "secret.ts"),
+		join(f.scratch, "entry.ts"),
+		"../main/entry.ts",
+		".git/config",
+	]) {
+		const bad = await f.execute("code_impact", { path: f.member, symbols: [leaf, { ...leaf, path }] });
+		assert.ok(bad.isError, JSON.stringify(bad));
+		assert.doesNotMatch(JSON.stringify(bad.content), /UNRELATED_SOURCE|private metadata/);
+	}
+	const nested = await f.execute("codemode", {
+		code: `const result = await tools.code_impact({path:${JSON.stringify(f.member)},symbols:[{path:'entry.ts',line:2,column:10}]}); text(result.results[0].frame.name);`,
+	});
+	assert.ok(!nested.isError, JSON.stringify(nested));
+	assert.match(JSON.stringify(nested), /entry/);
+	f.revoke();
+	const revoked = await f.execute("code_impact", { path: f.member, symbols: [leaf] });
+	assert.ok(revoked.isError);
+	const revokedNested = await f.execute("codemode", {
+		code: `try { await tools.code_impact({path:${JSON.stringify(f.member)},symbols:[{path:'entry.ts',line:2,column:10}]}); text('ESCAPED'); } catch { text('REVOKED'); }`,
+	});
+	assert.ok(!revokedNested.isError, JSON.stringify(revokedNested));
+	assert.match(JSON.stringify(revokedNested), /REVOKED/);
+	assert.doesNotMatch(JSON.stringify(revokedNested), /ESCAPED/);
+});
+
 test("coordinator native source admission refuses unrelated roots, traversal, metadata and aliases", async (t) => {
 	const f = await fixture(t);
 	await symlink(f.other, join(f.member, "escape"));
@@ -352,8 +391,8 @@ test("coordinator native source admission refuses unrelated roots, traversal, me
 	}
 	const nested = await f.execute("codemode", {
 		code: `
-for (const name of ['read','ls','find','grep','code_search','code_symbols','code_call_paths']) {
-  try { await tools[name]({path:${JSON.stringify(f.other)},pattern:'*',query:'UNRELATED_SOURCE',symbol:{path:'secret.ts',line:1,column:1},direction:'callees'}); text('ESCAPED:'+name); }
+for (const name of ['read','ls','find','grep','code_search','code_symbols','code_call_paths','code_impact']) {
+  try { await tools[name]({path:${JSON.stringify(f.other)},pattern:'*',query:'UNRELATED_SOURCE',symbols:[{path:'secret.ts',line:1,column:1}],symbol:{path:'secret.ts',line:1,column:1},direction:'callees'}); text('ESCAPED:'+name); }
   catch { text('denied:'+name); }
 }`,
 	});

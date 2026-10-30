@@ -114,7 +114,18 @@ test("explorer uses read-only tools, reports findings, cancels research and rest
 	cleanup.push(() => session.close());
 	await session.watch("explorer", () => {});
 	const registered = native!.session.getAllTools().map((tool) => tool.name);
-	for (const name of ["read", "find", "grep", "ls", "web", "mission", "artifact", "ask_user", "code_call_paths"])
+	for (const name of [
+		"read",
+		"find",
+		"grep",
+		"ls",
+		"web",
+		"mission",
+		"artifact",
+		"ask_user",
+		"code_call_paths",
+		"code_impact",
+	])
 		assert.ok(registered.includes(name), name);
 	for (const name of ["bash", "write", "edit", "jobs", "subagents"]) assert.ok(!registered.includes(name), name);
 	faux.setResponses([
@@ -129,6 +140,8 @@ text(await tools.grep({pattern:'evidence',path:'source.txt'}));
 text(await tools.ls({path:'.'}));
 const calls = await tools.code_call_paths({symbol:{path:'entry.ts',line:1,column:10},direction:'callees'});
 text({mode:calls.mode,target:calls.results[0].to.name});
+const impact = await tools.code_impact({symbols:[{path:'entry.ts',line:calls.results[0].to.location.span.start.line,column:calls.results[0].to.location.span.start.column}],expectedRevision:calls.revision.id});
+text({impactCaller:impact.results[0].frame.name});
 text(await tools.web({}));
 text(await tools.mission({action:'log',text:'Found source.txt, exploration evidence. Coverage limited.'}));
 text(await tools.mission({action:'comment',text:'Propose investigating another source before changing the brief.'}));
@@ -153,6 +166,7 @@ for (const name of ['ba'+'sh','wr'+'ite','edit','jobs','subagents']) {
 	assert.match(JSON.stringify(results), /exploration evidence/);
 	assert.match(JSON.stringify(results), /planning denied/);
 	assert.match(JSON.stringify(results), /source-inferred-not-runtime.*leaf/);
+	assert.match(JSON.stringify(results), /impactCaller.*entry/);
 	assert.doesNotMatch(JSON.stringify(results), /UNSAFE/);
 	assert.deepEqual(reports, ["log", "comment"]);
 	assert.equal(webCalls, 1);

@@ -76,6 +76,7 @@ try {
 		"jobs",
 		"subagent",
 		"code_call_paths",
+		"code_impact",
 		"code_search",
 		"code_symbols",
 	])
@@ -94,6 +95,17 @@ try {
 	);
 	assert.equal(calls.mode, "source-inferred-not-runtime");
 	assert.equal(calls.root.name, "RuntimeFixture");
+	const impact = await runExploration(
+		{ source: isolated },
+		{
+			tool: "code_impact",
+			symbols: [{ path: "fixture.tsx", line: 1, column: 14 }],
+			expectedRevision: calls.revision.id,
+		},
+	);
+	assert.equal(impact.mode, "source-inferred-not-runtime");
+	assert.equal(impact.roots[0].name, "RuntimeFixture");
+	assert.equal(impact.capabilities.completeImpact, "not-proven");
 	const { prepareArtifact, getLibrary } = await import("@pilot/artifacts");
 	const artifact = await prepareArtifact({
 		title: "Linux production smoke",

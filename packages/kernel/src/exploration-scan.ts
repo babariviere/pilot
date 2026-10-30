@@ -62,11 +62,27 @@ export async function scanSource(
 		...(source.commit ? { commit: source.commit } : {}),
 	};
 	const fingerprint = createHash("sha256");
+	const engine = "source-scan-v2/babel-7.28.5";
+	const store = source.gitDir ? await realpath(source.gitDir) : null;
+	const sourceId = sha(JSON.stringify([identity, store]));
+	const observed = createHash("sha256").update(JSON.stringify([engine, sourceId, path, observer?.identity ?? null]));
+	const observe = (value: unknown) => {
+		const encoded = JSON.stringify(value);
+		fingerprint.update(encoded);
+		observed.update(encoded);
+	};
 	// Include the canonical *workspace*, query, engine version, and host-selected snapshot store.
-	fingerprint.update(JSON.stringify([1, identity, source.gitDir ? await realpath(source.gitDir) : null, query]));
+	fingerprint.update(JSON.stringify([2, identity, store, query]));
 	if (observer) fingerprint.update(JSON.stringify(observer.identity));
 	const page: ExplorationPage = {
 		version: 1,
+		revision: {
+			id: "",
+			sourceId,
+			kind: source.commit ? "pinned-content" : "observed-content",
+			engine,
+			consistency: "per-file-read-not-atomic",
+		},
 		query,
 		source: identity,
 		freshness: {
@@ -112,7 +128,7 @@ export async function scanSource(
 		page.failureCount++;
 		if (page.failures.length < 8)
 			page.failures.push({ path: path.length > 512 ? `${path.slice(0, 512)} [path truncated]` : path, reason });
-		fingerprint.update(JSON.stringify(["failure", path, reason]));
+		observe(["failure", path, reason]);
 		partial("read-or-parse-failures");
 	};
 	const hits: SourceHit[] = [];
@@ -160,7 +176,7 @@ export async function scanSource(
 					return;
 				}
 				const name = dir ? `${dir}/${entry.name}` : entry.name;
-				fingerprint.update(JSON.stringify([name, entry.kind]));
+				observe([name, entry.kind]);
 				if (EXCLUDED.includes(entry.name)) exclude(entry.name);
 				else if (entry.kind === "directory") pending.push(name);
 				else if (entry.kind === "file") yield name;
@@ -189,7 +205,7 @@ export async function scanSource(
 			if (error instanceof ReadLimitError) {
 				exclude("oversized");
 				partial("file-size-limit");
-				fingerprint.update(JSON.stringify(["oversized", name]));
+				observe(["oversized", name]);
 			} else fail(name, "unreadable-or-changed-during-read");
 			continue;
 		}
@@ -199,7 +215,7 @@ export async function scanSource(
 		}
 		page.scan.bytes += bytes.length;
 		const hash = sha(bytes);
-		fingerprint.update(JSON.stringify([name, hash]));
+		observe([name, hash]);
 		if (bytes.includes(0)) {
 			exclude("binary");
 			continue;
@@ -297,6 +313,9 @@ export async function scanSource(
 			}
 		}
 	}
+	// Observed contents and scan omissions, not query matches or traversal/page truncation.
+	observed.update(JSON.stringify([page.scan, page.coverage, page.exclusions, page.failureCount, page.partialReasons]));
+	page.revision.id = observed.digest("hex");
 	if (page.page.matchesObserved > MAX_RESULTS) partial("top-1000-results-only: narrow query");
 	page.freshness.fingerprint = fingerprint.digest("hex");
 	page.freshness.finishedAt = new Date().toISOString();
