@@ -336,6 +336,7 @@ pub(crate) enum Command {
 
 #[derive(Clone, Default)]
 pub(crate) struct Presentation {
+    pub(crate) control_connection_generation: u64,
     pub(crate) failure_run_serial: u64,
     pub(crate) todos: crate::session_todos::Feed,
     pub(crate) question: crate::question::Projection,
@@ -1064,7 +1065,10 @@ async fn run(
                         view.status = text.into();
                     }
                 }
-                Ok((_, Incoming::Daemon(version))) => set_daemon(ConnectedDaemon::Connected(version)),
+                Ok((_, Incoming::Daemon(version))) => {
+                    view.control_connection_generation += 1;
+                    set_daemon(ConnectedDaemon::Connected(version));
+                },
                 Ok((_, Incoming::Page { generation,before,revision,result })) => {
                     if generation != view.generation || revision != snapshot_revision { continue; }
                     view.page_busy = false;

@@ -64,6 +64,69 @@ fn source(e: &ChatEditor) -> (Scope, String) {
 }
 
 #[gpui_kit::test]
+fn scope_change_retires_reader_and_preserves_draft(cx: &mut TestAppContext) {
+    let (_, h, e, _) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text
+                .update(cx, |t, cx| t.set_value("retained draft", w, cx));
+            let request = e.models.as_ref().unwrap().request;
+            e.invalidate_models(w, cx);
+            let m = e.models.as_ref().unwrap();
+            assert!(m.request > request);
+            assert!(m.picker.as_ref().unwrap().loading);
+            assert_eq!(e.text.read(cx).value(), "retained draft");
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn stale_catalog_success_and_error_do_not_replace_current_picker(cx: &mut TestAppContext) {
+    let (_, h, e, _) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text
+                .update(cx, |t, cx| t.set_value("unsent draft", w, cx));
+            let m = e.models.as_ref().unwrap();
+            let id = m.request;
+            let p = m.picker.as_ref().unwrap();
+            let scope = p.scope.clone();
+            let catalog = p.catalog.clone();
+            assert!(id > 0);
+            for result in [
+                Err("stale error"),
+                Ok((
+                    serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap(),
+                    None,
+                )),
+            ] {
+                e.accept_models(
+                    Update {
+                        id: id - 1,
+                        scope: scope.clone(),
+                        result,
+                    },
+                    w,
+                    cx,
+                );
+            }
+            e.sync_models(w, cx);
+            let m = e.models.as_ref().unwrap();
+            let p = m.picker.as_ref().unwrap();
+            assert_eq!(
+                m.request, id,
+                "same-chat synchronization must not request again"
+            );
+            assert_eq!(p.catalog, catalog);
+            assert!(p.error.is_none());
+            assert_eq!(e.text.read(cx).value(), "unsent draft");
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn failed_picker_captures_exact_preference_source_without_touching_message(
     cx: &mut TestAppContext,
 ) {

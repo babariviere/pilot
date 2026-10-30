@@ -307,6 +307,7 @@ pub struct LocalViewer {
     title: String,
     generation: u64,
     state: Presentation,
+    model_connection_generation: u64,
     link_epoch: u64,
     link_read: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -1472,6 +1473,7 @@ impl LocalViewer {
                 status: "Connecting to Local…".into(),
                 ..Default::default()
             },
+            model_connection_generation: 0,
             link_epoch: 0,
             link_read: None,
             _subscriptions: vec![
@@ -1661,6 +1663,11 @@ impl LocalViewer {
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
+        if state.control_connection_generation > self.model_connection_generation {
+            self.model_connection_generation = state.control_connection_generation;
+            self.editor
+                .update(cx, |editor, cx| editor.invalidate_models(window, cx));
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(daemon) = self.settings.read(cx).daemon_upgrade.clone() {
             let connected = self
@@ -3207,6 +3214,38 @@ mod refresh_tests {
             assert!(view.writer.is_none());
         });
     }
+    #[gpui_kit::test]
+    fn coalesced_control_reconnect_invalidates_once(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| LocalViewer::synthetic(window, cx)),
+            )
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let mut state = view.state.clone();
+                state.control_connection_generation = 1;
+                view.accept(state.clone(), window, cx);
+                assert_eq!(view.model_connection_generation, 1);
+                // The disconnected state can be coalesced away entirely.
+                state.control_connection_generation = 3;
+                view.accept(state.clone(), window, cx);
+                assert_eq!(view.model_connection_generation, 3);
+                state.control_connection_generation = 2;
+                view.accept(state, window, cx);
+                assert_eq!(view.model_connection_generation, 3);
+            });
+        })
+        .unwrap();
+    }
+
     #[gpui_kit::test]
     fn compaction_status_accepts_only_selected_generation(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);

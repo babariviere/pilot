@@ -1,4 +1,7 @@
 //! One retained read worker, coalesced one-slot mailboxes. No mutation capability.
+#[cfg(test)]
+#[path = "chat_model_reader_tests.rs"]
+mod tests;
 use crate::{
     LocalOptions,
     chat_models::{Catalog, SessionModel, Target},
@@ -14,6 +17,7 @@ pub(crate) struct Request {
     pub(crate) id: u64,
     pub(crate) scope: Scope,
     pub(crate) target: Option<Target>,
+    pub(crate) refresh: bool,
 }
 pub(crate) struct Update {
     pub(crate) id: u64,
@@ -56,21 +60,46 @@ impl Reader {
                     .build();
                 if let (Ok(runtime), Ok(client)) = (runtime, client) {
                     runtime.block_on(async {
-                        while let Ok(r) = input.recv().await {
-                            let result = async {
+                        // This worker belongs to one pinned LocalOptions identity.
+                        let mut catalogs = std::collections::HashMap::<(Option<String>, String), Catalog>::new();
+                        let mut next = None;
+                        loop {
+                            let r = match next.take() {
+                                Some(r) => r,
+                                None => match input.recv().await {
+                                    Ok(r) => r,
+                                    Err(_) => break,
+                                },
+                            };
+                            let key = (r.scope.project.clone(), r.scope.cwd.clone());
+                            if r.refresh { catalogs.remove(&key); }
+                            let result = tokio::select! { biased;
+                                request = input.recv() => {
+                                    match request {
+                                        Ok(request) => next = Some(request),
+                                        Err(_) => break,
+                                    }
+                                    continue;
+                                }
+                                result = async {
                                 let current = match &r.target {
                                     Some(t) => Some(
                                         crate::chat_models::session(&client, &options, t).await?,
                                     ),
                                     None => None,
                                 };
-                                Ok((
-                                    crate::chat_models::catalog(&client, &options, &r.scope.cwd)
-                                        .await?,
-                                    current,
-                                ))
-                            }
-                            .await;
+                                let catalog = if let Some(catalog) = catalogs.get(&key) {
+                                    // A cache hit still validates the pinned daemon identity.
+                                    crate::local_client::gate(&client, &options).await?;
+                                    catalog.clone()
+                                } else {
+                                    let catalog = crate::chat_models::catalog(&client, &options, &r.scope.cwd).await?;
+                                    catalogs.insert(key.clone(), catalog.clone());
+                                    catalog
+                                };
+                                Ok((catalog, current))
+                                } => result,
+                            };
                             let u = Update {
                                 id: r.id,
                                 scope: r.scope,

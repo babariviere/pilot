@@ -373,7 +373,7 @@ impl ChatEditor {
                 _subscriptions: subscriptions,
             });
             if need_read {
-                self.refresh_models(w, cx);
+                self.load_models(false, w, cx);
             }
         }
         self.sync_model_inputs(w, cx);
@@ -394,6 +394,9 @@ impl ChatEditor {
         }
     }
     fn refresh_models(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.load_models(true, w, cx);
+    }
+    fn load_models(&mut self, refresh: bool, w: &mut Window, cx: &mut Context<Self>) {
         if self.marked(w, cx) {
             return;
         }
@@ -443,6 +446,7 @@ impl ChatEditor {
             id: models.request,
             scope: p.scope.clone(),
             target,
+            refresh,
         }) {
             p.loading = false;
             p.error = Some("Models aren't available right now. Refresh to try again.");
@@ -956,9 +960,13 @@ impl ChatEditor {
         })
     }
     pub(crate) fn invalidate_models(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        if let Some(p) = self.models.as_mut().and_then(|m| m.picker.as_mut()) {
-            p.error = Some("Scope changed. Refresh the catalog; current choices are retained.");
-            p.synced = None;
+        if let Some(m) = &mut self.models {
+            m.reader = None;
+            m.task = None;
+            if let Some(p) = &mut m.picker {
+                p.error = Some("Scope changed. Refresh the catalog; current choices are retained.");
+                p.synced = None;
+            }
         }
         self.refresh_models(w, cx);
     }
