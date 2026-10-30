@@ -163,9 +163,14 @@ const DURABLE_WAIT_WARN_MS = 5_000;
  * Mission writes commit without waiting for the disk, which a worker thread syncs. Hold a mutating request's
  * response until they are durable, so no client sees a write acknowledged that a power loss could undo.
  */
-export function acknowledgeWhenDurable(res: ServerResponse, store: Pick<MissionStore, "durable">): void {
+export function acknowledgeWhenDurable(
+	res: ServerResponse,
+	store: Pick<MissionStore, "durable">,
+	skip?: () => boolean,
+): void {
 	const end = res.end.bind(res) as (...args: unknown[]) => ServerResponse;
 	res.end = ((...args: unknown[]) => {
+		if (skip?.()) return end(...args);
 		// A withheld response looks like an unanswered request. Say so instead of failing silently.
 		const timer = setTimeout(() => {
 			console.warn("pilotd: mutation response still waiting for mission durability");
@@ -1979,10 +1984,15 @@ export function createDaemonServer(
 		// Requests still open when the event loop stalls are reported with it. IDs stay local to the log.
 		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
 		res.once("close", done);
-		if (missions && req.method !== "GET" && req.method !== "HEAD") acknowledgeWhenDurable(res, missions.store);
+		let receiptLookup = false;
+		if (missions && req.method !== "GET" && req.method !== "HEAD")
+			acknowledgeWhenDurable(res, missions.store, () => receiptLookup);
 		let release: (() => void) | undefined;
 		const run = async () => {
 			const path = new URL(req.url ?? "/", "http://localhost").pathname;
+			// Match the router's path segments. Only receipt lookup avoids mission durability.
+			const parts = path.split("/").filter(Boolean);
+			receiptLookup = req.method === "POST" && parts.length === 3 && parts.join("/") === "api/operations/receipt";
 			const update = path.startsWith("/api/runtime-update");
 			const control =
 				/\/(stop|cancel|seal)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
