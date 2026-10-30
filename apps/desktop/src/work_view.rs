@@ -43,6 +43,7 @@ use crate::{
     app_icon::AppIcon,
     tool_presentation::{Kind, Status, Step, Tone, Unit, Work},
     transcript_view::TranscriptView,
+    transcript_view::disclosure_motion::Height,
 };
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, EventEmitter, InteractiveElement, IntoElement,
@@ -414,6 +415,7 @@ impl WorkUi {
                         bodies: BTreeMap::new(),
                         subscriptions: Vec::new(),
                         pulse: crate::transition::Pulse::default(),
+                        motion: Height::default(),
                     });
                     let subscription = cx.subscribe(&view, |view, _, change: &Change, cx| {
                         view.work_changed(change, cx)
@@ -457,6 +459,8 @@ impl WorkUi {
                     data: work,
                     children,
                     choices,
+                    motion: Height::default(),
+                    reads_motion: RefCell::new(BTreeMap::new()),
                 });
                 self.subscriptions.insert(
                     format!("group:{id}"),
@@ -509,6 +513,8 @@ pub(crate) struct WorkView {
     data: Arc<Work>,
     children: Vec<Entity<StepView>>,
     choices: Rc<RefCell<Choices>>,
+    motion: Height,
+    reads_motion: RefCell<BTreeMap<String, Height>>,
 }
 impl EventEmitter<Change> for WorkView {}
 impl WorkView {
@@ -522,6 +528,12 @@ impl WorkView {
             .update(cx, |owner, cx| owner.work_changed(&change, cx));
     }
     fn choose(&mut self, open: bool, cx: &mut Context<Self>) {
+        for step in &self.children {
+            step.update(cx, |step, cx| {
+                step.motion.finish();
+                cx.notify();
+            });
+        }
         if !open {
             for step in &self.children {
                 let preview = step.read(cx).preview.clone();
@@ -529,6 +541,7 @@ impl WorkView {
             }
         }
         self.hold(cx);
+        self.motion.start(cx);
         self.choices.borrow_mut().choose(&self.data, open);
         cx.notify();
     }
@@ -577,6 +590,7 @@ impl WorkView {
         let prior = self.selected(cx);
         let open = prior != Some(index);
         self.hold(cx);
+        self.motion.start(cx);
         if let Some(prior) = prior.filter(|prior| *prior != index) {
             self.children[prior].update(cx, |step, cx| step.set_open(false, cx));
         }
@@ -607,6 +621,13 @@ impl WorkView {
     fn toggle_reads(&mut self, items: Vec<usize>, cx: &mut Context<Self>) {
         let open = !self.reads_open(&items, cx);
         self.hold(cx);
+        if let Some(key) = call_key(&self.data, items[0]) {
+            self.reads_motion
+                .borrow_mut()
+                .entry(key)
+                .or_default()
+                .start(cx);
+        }
         let mut choices = self.choices.borrow_mut();
         for key in items
             .iter()
@@ -695,7 +716,12 @@ impl WorkView {
                 view.choose(open, cx);
             }))
     }
-    fn reads_row(&self, items: &[usize], cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn reads_row(
+        &self,
+        items: &[usize],
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let open = self.reads_open(items, cx);
         let first = call_key(&self.data, items[0]).unwrap_or_default();
         let mut names: Vec<&str> = Vec::new();
@@ -739,11 +765,45 @@ impl WorkView {
             }
             row = row.child(list);
         }
-        row
+        let motion = self
+            .reads_motion
+            .borrow_mut()
+            .entry(first.clone())
+            .or_default()
+            .clone();
+        let owner = cx.weak_entity();
+        motion.wrap(
+            SharedString::from(format!("reads-height-{first}")),
+            row,
+            w,
+            cx,
+            move |_, cx| {
+                let _ = owner.update(cx, |v, cx| {
+                    cx.emit(Change::Group(v.data.id));
+                    cx.notify();
+                });
+            },
+        )
+    }
+
+    fn moving(
+        &self,
+        root: impl IntoElement,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let owner = cx.weak_entity();
+        self.motion
+            .wrap(("work-height", self.data.id), root, w, cx, move |_, cx| {
+                let _ = owner.update(cx, |v, cx| {
+                    cx.emit(Change::Group(v.data.id));
+                    cx.notify();
+                });
+            })
     }
 }
 impl Render for WorkView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mode = self.mode();
         let selected = self.selected(cx);
         let (units, hidden) = self.shown(mode);
@@ -794,7 +854,7 @@ impl Render for WorkView {
             .into_iter()
             .collect();
         if units.is_empty() && extra.is_empty() {
-            return root;
+            return self.moving(root, w, cx);
         }
         let mut steps = div()
             .v_flex()
@@ -825,13 +885,13 @@ impl Render for WorkView {
         for unit in &units {
             steps = match unit {
                 Unit::Step(index) => steps.child(self.children[*index].clone()),
-                Unit::Reads(items) => steps.child(self.reads_row(items, cx)),
+                Unit::Reads(items) => steps.child(self.reads_row(items, w, cx)),
             };
         }
         for index in extra {
             steps = steps.child(self.children[index].clone());
         }
-        root.child(steps)
+        self.moving(root.child(steps), w, cx)
     }
 }
 /// What one panel section shows.
@@ -921,6 +981,7 @@ pub(crate) struct StepView {
     subscriptions: Vec<Subscription>,
     /// Clock of the running dots, while this call runs.
     pulse: crate::transition::Pulse,
+    motion: Height,
 }
 impl EventEmitter<Change> for StepView {}
 impl StepView {
@@ -953,10 +1014,13 @@ impl StepView {
         cx.emit(Change::Step(step_id(&self.step)));
     }
     fn set_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        // This path belongs to a parent group/read disclosure. Only a click
+        // on this call itself animates this child independently.
+        self.motion.finish();
         if self.open != open {
             self.open = open;
-            cx.notify();
         }
+        cx.notify();
     }
     fn set(&mut self, step: Step, active: bool, cx: &mut Context<Self>) {
         if self.step != step || self.active != active {
@@ -1215,6 +1279,7 @@ impl Render for StepView {
                             cx,
                         )
                         .on_click(cx.listener(|view, _, _, cx| {
+                            view.motion.start(cx);
                             view.open = !view.open;
                             cx.emit(Change::Disclosure(step_id(&view.step)));
                             cx.notify();
@@ -1349,7 +1414,19 @@ impl Render for StepView {
             }
             root = root.child(details);
         }
-        root
+        let owner = cx.weak_entity();
+        self.motion.wrap(
+            SharedString::from(format!("step-height-{id}")),
+            root,
+            window,
+            cx,
+            move |_, cx| {
+                let _ = owner.update(cx, |v, cx| {
+                    v.changed(cx);
+                    cx.notify();
+                });
+            },
+        )
     }
 }
 

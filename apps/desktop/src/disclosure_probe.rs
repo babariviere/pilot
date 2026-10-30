@@ -12,6 +12,9 @@ use std::time::Duration;
 mod arguments;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
+    // This matrix checks settled presentation, source, focus and scroll. The
+    // message_fold target owns timed disclosure phases on the executor clock.
+    cx.update(|cx| cx.set_reduce_motion(true));
     if std::env::var_os("PILOT_NEXT_TOOL_ARGUMENTS_DIR").is_some() {
         arguments::run(cx);
         return;
@@ -26,6 +29,8 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
     }
+    // This long-history anchor matrix also samples every animated frame.
+    cx.update(|cx| cx.set_reduce_motion(false));
     for width in [620., 1100.] {
         let mut model = LiveTranscript::default();
         let calls:Vec<_>=(0..24).map(|i|json!({"type":"toolCall","id":format!("disclosure-{i}"),"name":"read","arguments":{"path":format!("synthetic-{i}.rs")}})).collect();
@@ -169,6 +174,7 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
             let mut samples = Vec::new();
             for frame in 0..20 {
                 let sample=cx.update_window(handle,|_,window,cx|{
+                    window.simulate_next_frame(cx);
                     window.render_frame(cx);
                     if action=="rapid-burst" && frame<12 {
                         window.click(key.clone(),cx);
@@ -238,6 +244,7 @@ pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
         cx.run_until_parked();
     }
+    cx.update(|cx| cx.set_reduce_motion(true));
     run_thinking_probe(cx, captures.as_deref());
     run_tool_presentation_probe(cx);
 }

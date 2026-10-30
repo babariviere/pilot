@@ -4,6 +4,17 @@ use crate::work_view::{Mode, TAIL};
 use gpui_kit::{ScrollDelta, TestAppContext, point, px, test::TestWindowExt};
 use serde_json::json;
 use std::time::Duration;
+// Interaction checks wait for real disclosure frames before clicking content.
+fn settle_disclosure(cx: &mut TestAppContext, h: gpui_kit::AnyWindowHandle) {
+    for _ in 0..16 {
+        cx.executor().advance_clock(Duration::from_millis(16));
+        cx.update_window(h, |_, w, cx| w.simulate_next_frame(cx))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update_window(h, |_, w, cx| w.draw(cx).clear(cx))
+            .unwrap();
+    }
+}
 fn end(model: &mut LiveTranscript, id: &str, entry: u64, error: bool, text: &str) {
     model.apply(&json!({"type":"tool_execution_end","toolCallId":id,"isError":error,"entry":{"id":entry,"kind":"pi.tool","model":[{"role":"toolResult","toolCallId":id,"isError":error,"content":[{"type":"text","text":text}]}]}}));
 }
@@ -371,7 +382,7 @@ fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mu
         window.click(("work-first-error", id), cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let step = window.find("step-toggle-call:s");
@@ -400,7 +411,7 @@ fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mu
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     // The chosen full list keeps every call on its own row.
     assert_eq!(
         shape(cx, handle, &view, id).1,
@@ -412,7 +423,7 @@ fn a_script_shows_output_first_and_opens_code_separately_with_exact_copy(cx: &mu
         window.click("step-toggle-call:r1", cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find("body-call:r1-Arguments").bounds().size.height > px(0.));
@@ -634,7 +645,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         let button = window.find("step-toggle-call:a").bounds();
@@ -661,7 +672,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         window.click("step-toggle-call:a", cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     let text = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -690,7 +701,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
             text
         })
         .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     let prior = cx.update(|cx| text.read(cx).rendered_text().source().to_string());
     model.apply(&json!({"type":"tool_execution_update","toolCallId":"a","output":{"append":"\nnew output"}}));
     cx.update_window(handle, |_, window, cx| {
@@ -703,7 +714,7 @@ fn tool_details_are_lazy_copyable_and_do_not_parse_hidden_updates(cx: &mut TestA
         window.click(SharedString::from(format!("work-toggle-{id}")), cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     model.apply(&json!({"type":"run_end"}));
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
@@ -734,25 +745,25 @@ fn tool_output_selection_and_expansion_survive_real_unmount_and_prepend_regroup(
         window.click(SharedString::from(format!("work-toggle-{group}")), cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     // Opening retains the header at the viewport bottom. Explicitly navigate
     // to the newly revealed child before interacting with it.
     cx.update_window(handle, |_, _, cx| {
         view.update(cx, |view, cx| view.latest(cx));
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     cx.update_window(handle, |_, window, cx| {
         window.render_frame(cx);
         window.click("step-toggle-call:a", cx);
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     cx.update_window(handle, |_, _, cx| {
         view.update(cx, |view, cx| view.latest(cx))
     })
     .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     let (text, range, copied) = cx
         .update_window(handle, |_, window, cx| {
             window.render_frame(cx);
@@ -774,7 +785,7 @@ fn tool_output_selection_and_expansion_survive_real_unmount_and_prepend_regroup(
             (text, range, copied)
         })
         .unwrap();
-    cx.run_until_parked();
+    settle_disclosure(cx, handle);
     model.apply(&json!({"type":"entry_appended","entry":{"id":10,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"older","name":"read","arguments":{"path":"older.rs"}}]}]}}));
     let mut next: Vec<_> = (80..150)
         .map(|id| Message::live(id, "assistant".into(), crate::model::REPLY.into()))
@@ -951,7 +962,7 @@ fn open_script(
             window.click(key, cx);
         })
         .unwrap();
-        cx.run_until_parked();
+        settle_disclosure(cx, handle);
     }
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |v, cx| {

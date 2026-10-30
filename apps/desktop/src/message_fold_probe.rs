@@ -1,5 +1,7 @@
 //! Actual offscreen production reader, synthetic sources only.
 use super::*;
+#[path = "disclosure_motion_probe.rs"]
+mod motion;
 use gpui_kit::{
     AnyWindowHandle, Bounds, ClipboardItem, EntityInputHandler, HeadlessAppContext, ScrollDelta,
     WindowBounds, WindowOptions, point, size, test::TestWindowExt,
@@ -181,6 +183,10 @@ fn automatic_section(
     settle(cx, h);
 }
 pub fn run_message_fold_probe(cx: &mut HeadlessAppContext) {
+    motion::run(cx);
+    // The existing end-state/IME/copy matrix is deliberately instant. The
+    // separate motion probe above drives real next-frame callbacks and clocks.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let captures = std::env::var_os("PILOT_NEXT_FOLD_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();

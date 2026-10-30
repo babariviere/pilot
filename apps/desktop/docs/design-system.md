@@ -282,6 +282,21 @@ parent-width changes snap on the measurement's next redraw, never ease a resize.
 following and reading anchors in hidden native windows, and reports CPU draw cost.
 These offscreen checks do not qualify visible smoothness or OS IME behavior.
 
+Conversation disclosures use `transcript_view::disclosure_motion::Height` on that same
+executor clock (200ms ease-out). Long-message Show more/less, automatic input, work
+groups, merged reads and individual calls (including inline patch sections) hold a
+full-size child inside a clipped height slot, growing down without moving content
+above. Only explicit intent arms motion; mount and streaming updates stay immediate.
+Collapsed content is removed at once, reversals start from the displayed extent,
+and window resize, typography resize and reduced motion restore natural height.
+Other parent-width changes snap on the measurement's next redraw, never ease a resize.
+Each moving slot remeasures its containing transcript row on the next frame,
+preserving the existing disclosure reading anchor. The separate diff-chip popover
+retains its own focus and overlay contract. `message_fold` checks timed geometry,
+reversal, selection/copy, reduced motion and idle frame scheduling; `disclosure` checks the
+long-history scroll anchor, and the transcript unit scope checks resize and retained
+Markdown selection. Offscreen draw/renderer-readback timings are not visible smoothness.
+
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.
 Do not neutralize categorical charts or style user-authored content with chrome

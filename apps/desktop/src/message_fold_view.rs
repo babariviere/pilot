@@ -15,6 +15,7 @@ use gpui_kit::{
 impl TranscriptView {
     pub(crate) fn fold_scope(&mut self, scope: Option<crate::session_todos::Source>) {
         if self.folds.scope(scope) {
+            self.fold_motion.clear();
             self.fold_retired
                 .extend(std::mem::take(&mut self.fold_focus).into_values());
             self.fold_retired.truncate(1024);
@@ -59,6 +60,7 @@ impl TranscriptView {
             self.find.focus.focus(w, cx);
         }
         self.hold_for_history(cx);
+        self.fold_motion.entry(id).or_default().start(cx);
         self.folds.toggle(&row);
         self.text_subscriptions.remove(&id);
         self.text_states[ix] = self.create_text_state(ix, cx);

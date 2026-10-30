@@ -2,6 +2,8 @@
 pub(crate) mod compaction_event_view;
 #[path = "conversation_images_view.rs"]
 pub(crate) mod conversation_images_view;
+#[path = "disclosure_motion.rs"]
+pub(crate) mod disclosure_motion;
 #[path = "github_event_view.rs"]
 pub(crate) mod github_event_view;
 #[path = "inline_visual_transcript.rs"]
@@ -79,6 +81,7 @@ pub struct TranscriptView {
     transcript: Transcript,
     find: transcript_find_view::Find,
     folds: crate::message_fold::Folds,
+    fold_motion: HashMap<u64, disclosure_motion::Height>,
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
     questions: question_entry_view::Disclosures,
@@ -216,6 +219,7 @@ impl TranscriptView {
         let mut view = Self {
             find,
             folds: Default::default(),
+            fold_motion: Default::default(),
             fold_focus: Default::default(),
             fold_retired: Vec::new(),
             questions: Default::default(),
@@ -273,6 +277,9 @@ impl TranscriptView {
         // User input is not Markdown: a typed image URL cannot trigger a fetch.
         if row.label().starts_with("You") && !self.readonly {
             return None;
+        }
+        if self.folds.long(row) {
+            self.fold_motion.entry(row.id()).or_default();
         }
         // Folded automatic input shows only its line; no parser until expanded.
         if row.automatic().is_some() && self.folds.collapsed(row) {
@@ -357,6 +364,11 @@ impl TranscriptView {
             .collect();
         let old_ids: Vec<_> = old.iter().map(Message::id).collect();
         let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
+        if reset {
+            self.fold_motion.clear();
+        } else {
+            self.fold_motion.retain(|id, _| new_ids.contains(id));
+        }
         let mut retained: HashMap<_, _> = old
             .iter()
             .cloned()
@@ -850,16 +862,44 @@ impl TranscriptView {
     fn render_readable_row(
         &self,
         ix: usize,
+        window: &mut Window,
         cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
         footer: Option<(gpui_kit::FocusHandle, bool)>,
     ) -> impl IntoElement + use<> {
+        let row = self.render_row(ix, cx, owner.clone(), footer);
+        let row = if let Some(motion) = self.fold_motion.get(&self.transcript.messages()[ix].id()) {
+            let id = self.transcript.messages()[ix].id();
+            let scope = self.history_scope;
+            motion.wrap(("message-height", id), row, window, cx, move |_, cx| {
+                let _ = owner.update(cx, |v, cx| {
+                    if v.history_scope == scope {
+                        v.remeasure_disclosure(id, cx);
+                    }
+                });
+            })
+        } else {
+            row.into_any_element()
+        };
         div()
             .w_full()
             .min_w_0()
             .max_w(px(crate::ui::CONVERSATION_MAX_WIDTH))
             .px_3()
-            .child(self.render_row(ix, cx, owner, footer))
+            .child(row)
+    }
+
+    fn remeasure_disclosure(&self, id: u64, cx: &mut Context<Self>) {
+        if let Some(ix) = self
+            .transcript
+            .messages()
+            .iter()
+            .position(|row| row.id() == id)
+        {
+            self.scroller
+                .update(cx, |s, cx| s.remeasure_items(ix..ix + 1, cx));
+        }
+        cx.notify();
     }
 
     /// A text row's parser view, or its plain source before a parser exists.
@@ -1200,7 +1240,13 @@ impl Render for TranscriptView {
                                     .map(|view| {
                                         let footer = Self::footer_focus(&view, ix, window, cx);
                                         view.read(cx)
-                                            .render_readable_row(ix, cx, weak.clone(), footer)
+                                            .render_readable_row(
+                                                ix,
+                                                window,
+                                                cx,
+                                                weak.clone(),
+                                                footer,
+                                            )
                                             .into_any_element()
                                     })
                                     .unwrap_or_else(|| div().into_any_element())
@@ -1297,7 +1343,7 @@ impl Render for TranscriptView {
             .children(self.render_find(cx))
             .child(viewport.child(self.inline_survey(cx)).child(
                 MessageScroller::new("transcript", self.scroller.clone(), move |ix, window, cx| {
-                    weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_readable_row(ix, cx, weak.clone(), footer).into_any_element() })
+                    weak.upgrade().map(|view| { let footer = Self::footer_focus(&view, ix, window, cx); view.read(cx).render_readable_row(ix, window, cx, weak.clone(), footer).into_any_element() })
                         .unwrap_or_else(|| div().into_any_element())
                 }).with_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Scrolling)
                         .with_list_style(list_style)
