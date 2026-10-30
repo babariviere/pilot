@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.100.0](https://github.com/babariviere/pilot/compare/v1.99.0...v1.100.0) (2026-10-30)
+
+
+### Features
+
+* **diagnostics:** expose identity-pinned native transport logs ([eb6bc7a](https://github.com/babariviere/pilot/commit/eb6bc7afe858305d27a13dbd6e7c71ac822a2286))
+
+
+### Bug Fixes
+
+* **daemon:** isolate receipt lookup from mission durability ([aee8a78](https://github.com/babariviere/pilot/commit/aee8a784b523542dc5cdf49cb8f8ea1ac0ebc223))
+* **desktop:** keep draft saves live during send waits ([513dd06](https://github.com/babariviere/pilot/commit/513dd06dc373e3d5b5552d38d130a8edfa1f44b3))
+* **desktop:** settle only newly discovered historical tools ([b1bb710](https://github.com/babariviere/pilot/commit/b1bb710ab06e93ee5f0c0d78cf30824fdebdb022))
+* **kernel:** sanitize handoffs and retain rejection diagnostics ([720fb35](https://github.com/babariviere/pilot/commit/720fb35a9a69df1511f1a115550b63807a6844d7))
+* **updater:** admit bounded completed update retention ([45e9e6e](https://github.com/babariviere/pilot/commit/45e9e6eab650190b206c3df3ce529631b6db77d7))
+
+
+### Performance Improvements
+
+* **daemon:** narrow member context projection during publication ([38ccbbe](https://github.com/babariviere/pilot/commit/38ccbbeae251e4e6d692e83dc9a51b8b42e03a20))
+
 ## [1.99.0](https://github.com/babariviere/pilot/compare/v1.98.0...v1.99.0) (2026-10-30)
 
 
