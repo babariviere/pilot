@@ -63,7 +63,7 @@ import type {
 	UsageAnalyticsQuery,
 	UsageHistoryQuery,
 } from "@pilot/protocol";
-import { nodeTelemetry, traceCarrier } from "@pilot/telemetry";
+import { nodeTelemetry, type TraceCarrier, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentStore } from "./attachment-store.ts";
 import { boundedSender } from "./backpressure.ts";
@@ -530,15 +530,15 @@ export function createDaemonServer(
 				lineageId: hello.lineageId,
 			})
 		: undefined;
-	const admitOperation = async (op: DurableOperation): Promise<unknown> => {
+	const admitOperation = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		const end = mutations.begin({ kind: "operation", id: op.operationId });
 		try {
-			return await admitOperationHeld(op);
+			return await admitOperationHeld(op, trace);
 		} finally {
 			end();
 		}
 	};
-	const admitOperationHeld = async (op: DurableOperation): Promise<unknown> => {
+	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		let payload: unknown;
 		try {
 			payload = JSON.parse(op.payload);
@@ -588,7 +588,10 @@ export function createDaemonServer(
 				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp")
 			)
 				throw new OperationRejected("Invalid message");
-			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, false, true);
+			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, {
+				explicitModelRecovery: true,
+				trace,
+			});
 			return { sessionId: op.targetId };
 		}
 		throw new OperationRejected("Unsupported operation kind");
@@ -784,7 +787,11 @@ export function createDaemonServer(
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const receipt =
-				parts[2] === "receipt" ? await journal.lookup(operation) : await journal.execute(operation, admitOperation);
+				parts[2] === "receipt"
+					? await journal.lookup(operation)
+					: await journal.execute(operation, (op) =>
+							admitOperation(op, traceCarrier({ traceparent: req.headers.traceparent })),
+						);
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, receipt ?? { state: "unknown" });
 		}

@@ -5634,8 +5634,7 @@ export class SessionManager {
 		message: string,
 		mode: DeliveryMode,
 		operationId: string,
-		resumeHeld = false,
-		explicitModelRecovery = false,
+		options: { resumeHeld?: boolean; explicitModelRecovery?: boolean; trace?: TraceCarrier } = {},
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
@@ -5646,9 +5645,9 @@ export class SessionManager {
 				operationId,
 				false,
 				true,
-				undefined,
-				resumeHeld,
-				explicitModelRecovery,
+				options.trace,
+				options.resumeHeld,
+				options.explicitModelRecovery,
 			);
 		} finally {
 			end();
@@ -5676,17 +5675,27 @@ export class SessionManager {
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		// Diagnostics must never decide whether an input is admitted or acknowledged.
+		const observe = <T>(action: () => T): T | undefined => {
+			try {
+				return action();
+			} catch {
+				return undefined;
+			}
+		};
 		const admissionSpan = trace
-			? nodeTelemetry().startSpan(
-					"pilot.message.send",
-					{
-						"pilot.operation": "message.send",
-						"pilot.phase": "admission",
-						"pilot.cold": !this.workers.has(id),
-						"pilot.recovered": meta.inputError !== undefined,
-						"pilot.queue_depth": Math.min(512, meta.pending?.length ?? 0),
-					},
-					{ parent: trace },
+			? observe(() =>
+					nodeTelemetry().startSpan(
+						"pilot.message.send",
+						{
+							"pilot.operation": "message.send",
+							"pilot.phase": "admission",
+							"pilot.cold": !this.workers.has(id),
+							"pilot.recovered": meta.inputError !== undefined,
+							"pilot.queue_depth": Math.min(512, meta.pending?.length ?? 0),
+						},
+						{ parent: trace },
+					),
 				)
 			: undefined;
 		let admissionFinished = false;
@@ -5740,29 +5749,31 @@ export class SessionManager {
 			}
 			await this.save(meta, undefined, undefined, durable);
 			if (resumesStoppedRecovery && !this.workers.has(id)) this.nextWorkerLaunchReason.set(id, "user_resume");
-			admissionSpan?.progress();
-			admissionSpan?.end();
+			observe(() => admissionSpan?.progress());
+			observe(() => admissionSpan?.end());
 			admissionFinished = true;
 			this.emit(meta);
 			const starting = meta.initializing;
 			const startupSpan = trace
-				? nodeTelemetry().startSpan(
-						"pilot.message.send",
-						{
-							"pilot.operation": "message.send",
-							"pilot.phase": "startup_wait",
-							"pilot.cold": !this.workers.has(id),
-							"pilot.recovered": meta.inputError !== undefined,
-						},
-						{ parent: admissionSpan?.carrier() ?? trace },
+				? observe(() =>
+						nodeTelemetry().startSpan(
+							"pilot.message.send",
+							{
+								"pilot.operation": "message.send",
+								"pilot.phase": "startup_wait",
+								"pilot.cold": !this.workers.has(id),
+								"pilot.recovered": meta.inputError !== undefined,
+							},
+							{ parent: observe(() => admissionSpan?.carrier()) ?? trace },
+						),
 					)
 				: undefined;
-			const workerTrace = startupSpan?.carrier() ?? admissionSpan?.carrier() ?? trace;
+			const workerTrace = observe(() => startupSpan?.carrier()) ?? observe(() => admissionSpan?.carrier()) ?? trace;
 			if (workerTrace) this.rememberInputTrace(id, requestId, workerTrace);
 			const admission = this.start(id, true);
 			void admission.then(
-				() => startupSpan?.end(),
-				() => startupSpan?.finish("failed"),
+				() => observe(() => startupSpan?.end()),
+				() => observe(() => startupSpan?.finish("failed")),
 			);
 			if (!starting || report) {
 				const rejected = await admission;
@@ -5770,7 +5781,7 @@ export class SessionManager {
 				if (meta.failure) throw new Error(meta.failure);
 			}
 		} catch (error) {
-			if (!admissionFinished) admissionSpan?.finish("failed");
+			if (!admissionFinished) observe(() => admissionSpan?.finish("failed"));
 			throw error;
 		} finally {
 			const count = (this.sending.get(id) ?? 1) - 1;
