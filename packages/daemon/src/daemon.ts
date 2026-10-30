@@ -39,6 +39,7 @@ import { ProjectStore } from "./projects.ts";
 import { RetiredDevboxes } from "./retired-devboxes.ts";
 import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
+import { shutdownSchedules } from "./schedule-shutdown.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
@@ -364,35 +365,36 @@ async function stop(): Promise<void> {
 	sessions.beginClosing();
 	watchdog.stop();
 	server.close();
-	await schedules.stop();
-	await connectivity.stop();
-	systemEventsDetection?.stop();
-	await scheduleStore.close();
-	stopMemoryProjects();
-	await mcpStatus.close();
-	await missionLinear.stop();
-	await linearPrChecks.stop();
-	await linearSync.stop();
-	await tracking.stop();
-	await tracking.triage?.stop();
-	await tracking
-		.closeDiagnosticEvidence()
-		.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
-	await memory.stop();
-	await missionService.notices.stop();
-	await missionService.compaction.stop();
-	await githubImport.close();
-	await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
-	await telemetry.featureUsage.close();
-	await credentials.close();
-	stopSlackCompletions();
-	await Promise.all(completionWrites);
-	await trackedItems.close();
-	await power?.stop();
-	await untrackedStats.close();
-	await environment?.close();
-	await nodeTelemetry().shutdown();
-	missionStore.close();
+	await shutdownSchedules(
+		{ schedules, connectivity, systemEvents: systemEventsDetection, store: scheduleStore },
+		async () => {
+			stopMemoryProjects();
+			await mcpStatus.close();
+			await missionLinear.stop();
+			await linearPrChecks.stop();
+			await linearSync.stop();
+			await tracking.stop();
+			await tracking.triage?.stop();
+			await tracking
+				.closeDiagnosticEvidence()
+				.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
+			await memory.stop();
+			await missionService.notices.stop();
+			await missionService.compaction.stop();
+			await githubImport.close();
+			await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);
+			await telemetry.featureUsage.close();
+			await credentials.close();
+			stopSlackCompletions();
+			await Promise.all(completionWrites);
+			await trackedItems.close();
+			await power?.stop();
+			await untrackedStats.close();
+			await environment?.close();
+			await nodeTelemetry().shutdown();
+			missionStore.close();
+		},
+	);
 	process.exit(0);
 }
 process.on("SIGINT", () => void stop());

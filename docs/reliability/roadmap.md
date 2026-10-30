@@ -22,6 +22,32 @@ The reader has bounded queues and coalesces projections; feature readers own can
 
 The #20/#21/#23 hashes are ancestors of the inspected baseline; #22 and #24 landed afterward. None proves current runtime, native behavior or exact-head CI. CI triage is deferred.
 
+### Subsequent targeted redesign slices
+
+These later deliveries do not relabel the original closeout or historical inventory. Checks below are the builders' reported focused evidence, not independent re-execution by the documentation maintainer.
+
+| Slice | Actual boundary, source/tests and remaining limits |
+| --- | --- |
+| Catalog ownership (#26, delivered) | `apps/desktop/src/interaction.rs` routes only `WriteCommand::Project { path: None }` through the existing Store-free `DeliveryOwner.effect` seam in `interaction_delivery.rs`. `interaction_catalog_tests.rs` holds faux HTTP while same/other draft edits persist, preserving FIFO, Close, catalog results/errors and disk-fault fencing. Builder reported 68 interaction passes/1 pre-existing ignored, including three catalog tests; production Clippy and changed-file formatting passed. Old-source held-read control failed; restored bytes/rebuild/census checked. Registration and other mutation adapters remain serialized and unqualified; no native/full-suite/CI/deployment evidence. |
+| Typed reader state (#27, delivered) | `apps/desktop/src/local_client.rs` produces typed `SocketEvent` and derives output from `ReaderState`, keeping control/chat lifetimes and full-list adoption separate. `session_list_reader_tests.rs` covers actual faux WS baseline/retention, duplicate/cold/valid-empty/recovery, hello/disconnect, display-only wording and fatal identity fencing; the projection-poisoning control is in `local_client.rs`. Builder reported 48 client and 46 model passes, 0 ignored, production Clippy and changed-file formatting. Old producer-label-only controls failed; restored bytes/rebuild/census checked. Legacy hello fatal/retry substring classification remains unchanged, not fully typed. No native/full-suite/CI/deployment evidence. |
+
+### Schedule shutdown boundary (#28)
+
+The daemon remains the process-local owner. `packages/daemon/src/daemon.ts` wires `schedule-shutdown.ts` around one terminal store close, not a generic supervisor. The preserved dependency order is:
+
+| Owner/resource | Cancellation and awaited boundary |
+| --- | --- |
+| Daemon admission | `sessions.beginClosing()`, watchdog stop and `server.close()` still precede shutdown. `server.close()` is not awaited. |
+| Schedule dispatcher | `ScheduleService.stop()` closes its admission, cancels its timer/subscriptions, disables schedule detection and awaits the dispatch tail, including its final store writes. Failure prevents store close and the remaining tail. |
+| Connectivity and system events | Connectivity clears timers/watcher/subscription, disables agent detection and awaits its write tail; system-event stop then releases its helper/generation. These prerequisites remain fail-fast. This is not a new proof of helper/probe process drainage. |
+| Schedule SQLite worker | `ScheduleStore.close()` awaits its close RPC and, in `finally`, marks closed and awaits worker termination. Only this terminal close failure is deferred until the existing independent tail completes. |
+| Remaining daemon resources | Existing order is unchanged: stop memory-project notifications; MCP/mission Linear/tracking/triage; memory/notices/compaction; import children/writes; setup/GitHub setup/terminals/sessions; feature usage/credentials; completion writes/tracked store; power/stats/environment/telemetry; mission store. Their own producer-before-store awaits remain authoritative. |
+| Final result | One failure is rethrown unchanged, including falsy values. Store-close plus later-tail failures produce an ordered `AggregateError`. Success-only `process.exit(0)` remains after the bracket. A later tail failure still stops its dependent cleanup; this is not all-cleanup-error tolerance. |
+
+Controlled offline evidence in `schedule-shutdown.test.ts`: a healthy actual worker receives an intentionally invalid close request at the IPC boundary, returns an actual RPC error, then exits before the held independent tail starts. This is injected protocol failure, not a demonstrated spontaneous `db.close()` failure. A separate runtime-worker termination and invalid-path bootstrap case exercise different failures. The test also drains an isolated actual Node child to confirmed exit, holds a real dispatcher before its final write and reopens SQLite afterward, fences each failed prerequisite, and preserves single/combined arbitrary errors. Faithful old sequential close/then-tail ordering fails the omitted-tail assertion; restored source and complete focused census pass. None is a reproduced production daemon crash, native terminal/kernel teardown or deployment qualification.
+
+Existing limitation: already-entered async schedule create/update validations are not included in the dispatch tail, and HTTP close is not awaited. This slice neither repairs nor certifies complete HTTP/admission drainage. Broader startup/rollback, contention, remaining closer failures and updater ownership are still unqualified.
+
 ## Historical static inventory, not traffic
 
 Accepted synthesis artifact `83d1bf79-be56-4bd2-868d-dc13f5afd130` revision 1, dated 2026-10-30, reconciles historical client/server source inventories. Its reads were non-atomic and not commit-pinned; these figures and all formulas below are not a re-census of the publication head. The scoped inventory identified 53 normalized core HTTP method/path pairs (25 GET, 20 POST, 2 PUT, 5 PATCH, 1 DELETE), 57 production builder sites and two WebSocket upgrades. Including local updater paths gives 56 unique HTTP pairs and 62 builders; a separate remote updater uses two logical endpoint templates and variable redirects. Kernel unions contained 47 daemon-to-worker and 42 worker-to-daemon discriminants, not invocation counts. This was not an exhaustive server/dynamic-caller inventory or measurement of availability, latency or traffic.
@@ -36,7 +62,7 @@ Established means source evidence, not a quantified incident. Medium confidence 
 
 | Indicator | Evidence and consequence | Smaller alternative and protection |
 | --- | --- | --- |
-| Implicit coupling | Medium: `local_client.rs` compares display connection text while changing freshness; #20 narrowed receipt coupling. Wording can affect state. | Typed connection state with reconnect/freshness tests; preserve real mission barriers. |
+| Implicit coupling | Historical medium-confidence finding: `local_client.rs` compared display connection text while changing freshness; #20 narrowed receipt coupling. #27 subsequently removed that presentation dependency with typed producer/read state. | Preserve #27's actual-reader/projection controls and real mission barriers; legacy hello substring classification is separate and unchanged. |
 | Layer-first folders | Low: harmful change locality not established from layout. | No folder migration; map one real change first. |
 | Duplication | Medium: mission/activity/tasks/changes readers own similar mailbox, cancellation and lifetime code. Redundant artifact application is unproven. | Compare contracts before a latest-read primitive; test cancellation and teardown. |
 | Illegal states | Medium: `delivery_store.rs` validates combinations representable in stored intent fields; IPC result/error optionals allow both/neither. | Internal variants plus boundary validation and compatibility tests, not a wire rewrite. |
@@ -55,17 +81,17 @@ Severity describes potential user harm, not effort; effort and confidence are es
 | 1. High / medium / high | Desktop, #22 delivered | Preserve exact intent and newer text through Check, explicit Retry and answer waits. Retain held-response, disk, FIFO, receipt mismatch, pending/no repost and Close controls; qualify the journey on exact-head native/integration boundaries. |
 | 2. High / small-medium / high | Desktop, #24 delivered | Invalid list must never replace the last coherent list or assert freshness; valid empty remains valid. Preserve snapshot, metadata, reconnect and incremental controls; retained state cannot grant authority. Qualify native behavior separately. |
 | 3. High / medium-unknown / medium | Daemon + desktop; kernel lifecycle owner | Stop is once-only and must reach execution without replay. First specify late Send admission/withdrawal and recovery; inject held Send, Stop, lost ACK and crash across boundaries. |
-| 4. High / unknown / low | Daemon lifecycle; updater owners | Startup, rollback, storage contention and independent shutdown drains remain incompletely reviewed. Trace actual fallible closers and resource ownership; inject failures and verify resource drains and recovery. Conditional fail-fast awaits are not a reproduced crash. `KernelSession.close` waits for exit with kill escalation. |
+| 4. High / unknown / low overall | Daemon lifecycle; updater owners | #28 narrows one schedule terminal-close omission with the contract/controls above. Startup, rollback, HTTP drainage, storage contention and other closer failures remain incompletely reviewed. Conditional fail-fast awaits are not a reproduced crash. `KernelSession.close` waits for exit with kill escalation. |
 | 5. High / medium / medium | Daemon mission authority; no Control cutover | Preserve real mission-write and membership durability. Narrow unrelated waits only with explicit scoped obligations; test dirty replica, persistence failure, revoked permission and exact receipts. |
 | 6. Medium / medium / medium | Desktop history + kernel | Preserve same-stream resume, canonical IDs, selection and history under live paging; test gaps, projection scheduling and native selection. No cache redesign without measurement. |
 | 7. Medium / medium / medium | Desktop + Diagnostics owners | Add bounded correlation only for a concrete missing question. Preserve consent, redaction, overflow, retention and no recovery authority; distinguish native capture, backend spans and receipts. |
-| 8. Medium / unknown / low | Desktop connection owners | Replace wording-dependent freshness only after mapping separate control/chat lifetimes. Test disconnect, generation, stale projections and recovery without relaxing identity fences. |
+| 8. Medium / bounded implementation delivered / high for inspected coupling | Desktop connection owners, #27 | Presentation-driven freshness is replaced; preserve separate control/chat, disconnect/generation/stale/identity controls. Native/exact-head integration qualification and legacy hello error typing remain separate work. |
 
 For lifecycle metadata, `sessions.ts` checks IDs/permissions and skips unreadable records without deleting files; full schema validation is not established. Queued metadata writes use temporary file/rename; only the durable path additionally flushes file and ancestor directories. It is not interchangeable with journal durability. Production recurrence and contention remain unknown.
 
 Effect is optional, not a selected migration. First consider an explicitly owned Promise/AbortSignal interface, controlled teardown and typed errors. A bounded Effect pilot must demonstrate simpler lifetime/error composition and equivalent verification; fibers do not make jobs, receipts or state durable.
 
-Closeout defers further lifecycle and Control deep dives: complete startup/rollback and shutdown dependency analysis, storage contention, Control ownership/facts and the prior documentation handoff remain unverified. These are follow-up questions, not completed research or authorization for more implementation. See [documentation plans](documentation-plan.md) for the preserved handoff blocker.
+The original closeout deferred further lifecycle and Control deep dives. Subsequent #26/#27 and the bounded #28 contract above do not complete startup/rollback or the full shutdown dependency analysis, storage contention, Control ownership/facts or the prior documentation handoff. These remain unverified follow-up questions, not completed research or authorization for broader implementation. See [documentation plans](documentation-plan.md) for the preserved handoff blocker.
 
 ## Diagnostics and other owners
 
