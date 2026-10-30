@@ -1,5 +1,5 @@
 //! The mission's Tasks tab: every received task, grouped by phase, with the
-//! row actions in a "…" menu and the right-click menu. Status, edit and model
+//! row actions in a "…" menu and the right-click menu. Create, status, edit and model
 //! forms open as dialogs. The parent owns mission navigation and tabs.
 use crate::{
     LocalOptions,
@@ -10,8 +10,8 @@ use crate::{
 };
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, StatefulInteractiveElement,
-    Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
+    IntoElement, ParentElement, Render, ScrollStrategy, SharedString, Styled, Subscription, Task,
+    TestSupportExt, WeakEntity, Window,
     component::{
         ActiveTheme, Disableable, IndexPath, Selectable, StyledExt, WindowExt,
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -426,9 +426,6 @@ impl Pane {
         self.options = options;
         if self.state.target(key) || !same_connection {
             self.hide_status(w, cx);
-            if let Some(form) = self.creation.take() {
-                form.update(cx, |f, _| f.visible = false);
-            }
             self.create_error = None;
             self.opened = false;
             self.reveal = None;
@@ -581,32 +578,30 @@ impl Pane {
                 &f,
                 w,
                 |v, source, _: &crate::mission_task_create_view::Close, w, cx| {
-                    if v.creation.as_ref() != Some(source) {
+                    if v.creation.as_ref() != Some(source)
+                        || source.update(cx, |f, cx| f.marked(w, cx))
+                    {
                         return;
                     }
-                    if let Some(form) = v.creation.take() {
-                        form.update(cx, |f, _| f.visible = false);
-                    }
-                    v.trigger.focus(w, cx);
+                    v.hide_creation(w, cx);
+                    v.focus_list(w, cx);
                     cx.notify();
                 },
             );
             self.creations.push((f.clone(), sub));
             f
         };
-        if let Some(previous) = self.creation.take() {
-            previous.update(cx, |f, _| f.visible = false);
-        }
         form.update(cx, |f, cx| {
             f.visible = true;
-            f.focus(w, cx);
             cx.notify();
         });
-        self.creation = Some(form);
+        self.creation = Some(form.clone());
+        crate::mission_task_create_view::Form::open(form, w, cx);
         self.opened = true;
         cx.notify();
     }
     fn hide_status(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.hide_creation(w, cx);
         self.hide_model(w, cx);
         self.hide_edit(w, cx);
         if let Some(f) = self.status_form.take() {
@@ -616,6 +611,23 @@ impl Pane {
             if owned {
                 self.focus_list(w, cx);
             } else if let Some(focus) = moved {
+                focus.focus(w, cx);
+            }
+            f.update(cx, |f, cx| {
+                f.visible = false;
+                cx.notify();
+            });
+        }
+    }
+    fn hide_creation(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.creation.take() {
+            let owned = f.read(cx).owns_focus(w, cx);
+            let moved = w.focused(cx);
+            w.close_dialog(cx);
+            if owned {
+                self.focus_list(w, cx);
+            } else if let Some(focus) = moved {
+                // Navigation may already have focused a different mounted page.
                 focus.focus(w, cx);
             }
             f.update(cx, |f, cx| {
@@ -941,7 +953,7 @@ impl Pane {
     }
 }
 impl Render for Pane {
-    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let snapshot = self.state.snapshot.clone();
         // Progress, then Refresh and New task: the tab's one toolbar.
         let toolbar = div()
@@ -1073,25 +1085,6 @@ impl Render for Pane {
                     .flex_1()
                     .min_h(px(120.))
                     .child(List::new(l)),
-            );
-        }
-        // New task opens below the list, scrolling on its own so the list
-        // keeps its place.
-        if self.creation.is_some() {
-            root = root.child(
-                div()
-                    .id("mission-tasks-details")
-                    .test_support()
-                    .overflow_y_scroll()
-                    .v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .min_h_0()
-                    .flex_shrink_1()
-                    .when(list.is_some(), |d| d.max_h(gpui_kit::relative(0.55)))
-                    .gap(px(Space::CONTROL))
-                    .child(ui::rule(w, cx))
-                    .children(self.creation.clone()),
             );
         }
         root

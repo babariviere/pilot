@@ -19,7 +19,11 @@ selects the exact ID, and Escape clears it; nothing opens below the list. The
 highlighted or hovered row shows a "…" button (a Tab stop on the highlighted
 row), and right-clicking any row opens the same menu: Change status, Edit title
 and description, Preferred model and Copy task, each for that exact row. Status,
-edit and model open as dialogs; only the New task form shows below the list.
+edit, model and New task open as Kit dialogs. No form occupies space below the list.
+New task retains its draft per mission and pinned connection. Close or Escape
+returns focus to the list without clearing text or cancelling a pending creation;
+marked text prevents dismissal. Clicking outside never closes the popup. Only
+Create task (or ⌘Enter) sends a request, and an unconfirmed result cannot be retried.
 Leaving the tab keeps the snapshot, selection and drafts; IME composition fences
 leaving it.
 
@@ -94,6 +98,10 @@ and chunked caps, cancellation and closed-worker refusal. `mission_tasks_probe.r
 mounts the actual production Browser and pane over an owned GET-only faux daemon,
 not a mock UI or a production client. It exercises same-title rows, native
 pointer/keyboard, Unicode copy, stale refresh/retry, close and mission changes.
+Its forms-capacity journey covers 20 creation targets and 40 status targets at
+680/1100 in light/dark, preserving each target's draft and Pending/Unknown state.
+The creation probe additionally checks the real Kit dialog, guarded dismissal,
+unchanged list geometry, focus return, explicit-only POST and late ACK handling.
 
 Run from `apps/desktop` through the shared serial slot and private Cargo output:
 

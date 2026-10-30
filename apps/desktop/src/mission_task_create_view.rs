@@ -11,7 +11,7 @@ use gpui_kit::{
     Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, TestSupportExt, Window,
     component::{
-        Disableable, StyledExt,
+        Disableable, StyledExt, WindowExt,
         input::{InputEvent, Textarea, TextareaState},
     },
     div,
@@ -124,6 +124,23 @@ impl Form {
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         self.title.read(cx).focus_handle(cx).focus(w, cx);
     }
+    /// Show the retained form; all dismissal goes through its IME guard.
+    pub(crate) fn open(form: Entity<Self>, w: &mut Window, cx: &mut App) {
+        w.open_dialog(cx, {
+            let form = form.clone();
+            move |dialog, _, cx| {
+                ui::dialog(dialog, cx)
+                    .title("New task")
+                    .w(gpui_kit::px(520.))
+                    .overlay_closable(false)
+                    .close_button(false)
+                    .keyboard(false)
+                    .on_cancel(|_, _, _| false)
+                    .child(form.clone())
+            }
+        });
+        form.update(cx, |f, cx| f.focus(w, cx));
+    }
     fn close(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.visible && !self.marked(w, cx) {
             cx.emit(Close);
@@ -220,20 +237,7 @@ impl Render for Form {
                 v.close(w, cx);
             }))
             .on_action(cx.listener(|v, _: &SubmitTask, w, cx| v.submit(w, cx)))
-            .on_action(cx.listener(|v, _: &CloseTask, w, cx| v.close(w, cx)))
-            .child(ui::heading(
-                "task-create-heading",
-                "New task",
-                Text::Headline,
-            ))
-            .child(ui::text(
-                Text::Caption,
-                SharedString::from(format!("Mission: {}", self.key.id)),
-            ))
-            .child(ui::text(
-                Text::Caption,
-                "Creating a task doesn't assign it or start a chat.",
-            ));
+            .on_action(cx.listener(|v, _: &CloseTask, w, cx| v.close(w, cx)));
         for (ix, (label, input, id)) in [
             ("Title", self.title.clone(), "task-create-title"),
             ("Description", self.body.clone(), "task-create-body"),

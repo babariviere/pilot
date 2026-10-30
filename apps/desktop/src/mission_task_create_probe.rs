@@ -51,6 +51,11 @@ fn input(route: Option<Route>) -> Input {
     }
 }
 fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
+    if id.starts_with("task-create-") || id == "mission-task-create" {
+        // Creation lives in the root dialog layer, not the page scroller.
+        settle(cx, h);
+        return;
+    }
     cx.update_window(h, |_, w, cx| {
         let viewport = w.find("missions-page").bounds();
         let target = w.find(id).bounds();
@@ -73,6 +78,9 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     }
     reveal(cx, h, id);
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
+    if matches!(id, "mission-task-new" | "task-create-close") {
+        cx.advance_clock(Duration::from_millis(300));
+    }
     settle(cx, h);
 }
 fn paste(
@@ -105,6 +113,9 @@ fn route(cx: &mut HeadlessAppContext, h: AnyWindowHandle, b: &Entity<Browser>, i
         })
     })
     .unwrap();
+    // A route change closes the old source's modal. Wait for its native exit
+    // before clicking the new page through the still-fading backdrop.
+    cx.advance_clock(Duration::from_millis(300));
     settle(cx, h);
 }
 fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, name: String) {
@@ -189,7 +200,20 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
             let pane = cx.update(|cx| browser.read(cx).tasks_browser.clone());
             click(cx, h, "mission-task-new");
             let form = cx.update(|cx| pane.read(cx).creation.clone().unwrap());
+            cx.update_window(h, |_, w, _| {
+                assert!(
+                    w.try_find("dialog").is_some(),
+                    "New task opens a Kit dialog"
+                );
+                assert!(w.try_find("mission-tasks-details").is_none());
+                assert!(w.within("dialog").find("task-create-title").visible());
+            })
+            .unwrap();
             assert_eq!(server.posts(), 0);
+            cx.update_window(h, |_, w, cx| w.click("missions-title", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert!(form.read(cx).visible, "backdrop cannot dismiss creation"));
             paste(cx, h, &form, false, " Task 日本語 👩‍💻 ");
             paste(
                 cx,
@@ -202,6 +226,18 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             settle(cx, h);
             assert_eq!(server.posts(), 0, "ordinary Enter only edits text");
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            cx.advance_clock(Duration::from_millis(300));
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(pane.read(cx).creation.is_none());
+                assert!(w.try_find("dialog").is_none());
+                assert!(pane.read(cx).owns_focus(w, cx));
+            })
+            .unwrap();
+            click(cx, h, "mission-task-new");
+            cx.update(|cx| assert_eq!(pane.read(cx).creation.as_ref(), Some(&form)));
             // Composition refuses submission, close, and navigation before blur.
             cx.update_window(h, |_, w, cx| {
                 let field = form.read(cx).title.clone();
@@ -210,6 +246,7 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
                     i.replace_and_mark_text_in_range(None, "に", Some(1..1), w, cx);
                 });
                 w.press("secondary-enter", cx);
+                w.press("escape", cx);
             })
             .unwrap();
             settle(cx, h);
@@ -268,6 +305,8 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
                         b.left() >= px(0.) && b.right() <= px(width) && b.size.width > px(300.)
                     );
                 }
+                assert!(w.find("task-create-submit").visible());
+                assert!(w.find("task-create-close").visible());
             })
             .unwrap();
             capture(
@@ -285,6 +324,14 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
             server.reply("POST", "/api/missions/mission-A/tasks", delayed);
             click(cx, h, "task-create-submit");
             click(cx, h, "task-create-submit");
+            cx.update(|cx| {
+                assert!(matches!(
+                    form.read(cx).state.attempt.as_ref(),
+                    Some((_, Outcome::Pending))
+                ))
+            });
+            click(cx, h, "task-create-close");
+            cx.update(|cx| assert!(!form.read(cx).visible));
             route(cx, h, &browser, "mission-B");
             until(cx, h, |cx| {
                 matches!(
@@ -344,9 +391,9 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
             });
             assert_eq!(server.posts(), 2);
             click(cx, h, "task-create-close");
-            click(cx, h, "mission-task-new");
             click(cx, h, "mission-tasks-refresh");
             until(cx, h, |cx| !pane.read(cx).state.busy);
+            click(cx, h, "mission-task-new");
             click(cx, h, "task-create-submit");
             cx.update_window(h, |_, w, cx| w.press("secondary-enter", cx))
                 .unwrap();
@@ -377,8 +424,8 @@ pub fn run_mission_task_create_probe(cx: &mut HeadlessAppContext) {
             );
             click(cx, h, "task-create-close");
             cx.update_window(h, |_, w, cx| {
-                let focus = w.focused(cx).unwrap();
-                assert!(focus.is_focused(w));
+                assert!(pane.read(cx).owns_focus(w, cx));
+                assert!(w.try_find("dialog").is_none());
                 w.remove_window();
             })
             .unwrap();
@@ -561,12 +608,15 @@ fn root(cx: &mut HeadlessAppContext) {
     })
     .unwrap();
     settle(cx, h);
+    click(cx, h, "task-create-close");
+    assert!(!cx.update(|cx| form.read(cx).visible));
     cx.update_window(h, |_, w, cx| w.press("secondary-k", cx))
         .unwrap();
     settle(cx, h);
     cx.update(|cx| assert!(view.read(cx).brief_fixture_bits().1));
     cx.update_window(h, |_, w, cx| w.press("escape", cx))
         .unwrap();
+    cx.advance_clock(Duration::from_millis(300));
     settle(cx, h);
     cx.update_window(h, |_, w, cx| w.click("nav-home", cx))
         .unwrap();

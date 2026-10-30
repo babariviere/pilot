@@ -1,17 +1,19 @@
 # Explicit Local task creation
 
-Open a canonical Local mission, choose **New task…**, enter a title and optional
-description, then choose **Create task** (⌘Enter). Ordinary Enter edits text;
+Open a canonical Local mission's Tasks tab, choose **New task…**, enter a title
+and optional description in the Kit dialog, then choose **Create task** (⌘Enter). Ordinary Enter edits text;
 opening, closing, reading and navigating never submit. Creation does not assign
 or start a chat. Editing, deleting, status, ownership, model, phase and dependency
 changes remain separate work.
 
 The production task pane retains one source-immutable form per Local home,
 mission and pinned connection (no lifetime count limit or eviction). Both native text editors
-survive navigation, closing the disclosure and errors. These are in-process
-drafts, **not restart-durable storage**, as stated beside the form. Pending and
+survive navigation, closing the dialog and errors. These are in-process
+drafts, **not restart-durable storage**. Pending and
 unconfirmed submissions retain their original text and identity. Close returns
-focus to the mounted task disclosure. Marked text prevents submission, dismissal
+focus to the task list (or its tab before the list loads). Close and Escape go
+through the form's IME guard; the overlay and Kit shell cannot dismiss it.
+Marked text prevents submission, dismissal
 and navigation; a paint-scoped capture fence blocks outside mouse-down before
 preedit can blur, while the marked editor itself remains interactive.
 

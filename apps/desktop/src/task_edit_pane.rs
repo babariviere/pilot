@@ -77,15 +77,6 @@ impl Pane {
             f
         };
         self.hide_status(w, cx);
-        if let Some(f) = self.creation.take() {
-            if f.read(cx).owns_focus(w, cx) {
-                self.trigger.focus(w, cx);
-            }
-            f.update(cx, |f, cx| {
-                f.visible = false;
-                cx.notify();
-            });
-        }
         form.update(cx, |f, cx| {
             f.visible = true;
             f.load(w, cx);

@@ -99,7 +99,6 @@ fn until(
     settle(cx, h);
 }
 pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
-    crate::mission_tasks_view::capacity_probe::run(cx);
     let dir = std::env::var_os("PILOT_NEXT_TASKS_DIR").map(std::path::PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();
@@ -125,6 +124,8 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                 continue;
             }
             cases += 1;
+            cx.update(|cx| Theme::change(mode, None, cx));
+            crate::mission_tasks_view::capacity_probe::run(cx, width, mode);
             let server = Server::start();
             let mut detail = f::detail("mission-A");
             detail["tasks"]=json!((0..TASKS).map(|n|{let s=STATUSES[n%STATUSES.len()];let mut t=json!({"id":format!("exact-{n}"),"number":n+1,"title":"Same title 日本語 👩‍💻","status":s,"body":format!("Exact description {n}\n\nUnicode 👩‍💻 é 日本語\nLiteral ![image](https://invalid.example) <script>no execution</script>"),"order":n,"completion":{"checks":"x".repeat(7500)}});if s=="gated"{t["status"]=json!("blocked");t["storedStatus"]=json!("todo");}t}).collect::<Vec<_>>());
@@ -519,6 +520,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
 
 fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
+    if id == "task-create-close" {
+        cx.advance_clock(Duration::from_millis(300));
+    }
     settle(cx, h);
 }
 /// Choose a command from a task row's "…" menu, waiting out any dialog
@@ -1006,27 +1010,54 @@ fn phases_journey(
                 .contains("Phase: Ship it")
         )
     });
-    // An open New task form and the selection survive Overview and back.
+    // Creation is a popup; opening it never shrinks the retained task list.
+    let list_bounds = cx
+        .update_window(h, |_, w, _| w.find("mission-tasks-list").bounds())
+        .unwrap();
     click(cx, h, "mission-task-new");
+    cx.advance_clock(Duration::from_millis(300));
+    settle(cx, h);
     let form = cx.update(|cx| pane.read(cx).creation.clone().unwrap());
+    cx.update_window(h, |_, w, _| {
+        assert_eq!(w.find("mission-tasks-list").bounds(), list_bounds);
+        assert!(w.try_find("mission-tasks-details").is_none());
+        assert!(w.within("dialog").find("task-create-title").visible());
+        assert!(w.find("task-create-submit").visible());
+    })
+    .unwrap();
     if let Some(d) = dir {
         cx.capture_screenshot(h)
             .unwrap()
             .save(d.join(format!("{name}-phases-tasks.png")))
             .unwrap();
     }
+    click(cx, h, "task-create-close");
+    cx.update_window(h, |_, w, cx| {
+        assert!(pane.read(cx).owns_focus(w, cx));
+        // Down/Return must reach the list, not the closed form or tab trigger.
+        w.press("down", cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert_eq!(pane.read(cx).state.selected.as_deref(), Some("b-5")));
+    // Closing and changing tabs retains the same source-owned draft.
     click(cx, h, "mission-tab-overview");
     cx.update_window(h, |_, w, _| {
         assert!(w.try_find("mission-tasks-browser").is_none())
     })
     .unwrap();
     click(cx, h, "mission-tab-tasks");
+    click(cx, h, "mission-task-new");
+    cx.advance_clock(Duration::from_millis(300));
+    settle(cx, h);
     cx.update(|cx| {
         let p = pane.read(cx);
         assert_eq!(p.creation.as_ref(), Some(&form));
         assert!(form.read(cx).visible);
-        assert_eq!(p.state.selected.as_deref(), Some("b-4"));
+        assert_eq!(p.state.selected.as_deref(), Some("b-5"));
     });
+    click(cx, h, "task-create-close");
     // Right-click runs a row's commands on that exact task, not the selection.
     let menu = |cx: &mut HeadlessAppContext, row: &'static str, label: &str| {
         cx.update_window(h, |_, w, cx| w.right_click(row, cx))
