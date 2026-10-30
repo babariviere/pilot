@@ -48,6 +48,27 @@ pub(super) async fn disconnected(
 }
 
 #[tokio::test]
+async fn closed_update_lane_releases_private_store_before_immediate_reopen() {
+    let options = LocalOptions::synthetic(1); // No HTTP commands or real state.
+    for _ in 0..32 {
+        let temp = Temp::new();
+        let (client, updates) = Interaction::start(options.clone(), Ok(temp.0.clone()));
+        until(&updates, |s| s.book.is_some()).await;
+        assert!(client.edit("chat:a".into(), draft(1, "exact saved input 日本語")));
+        assert!(client.command(WriteCommand::Close));
+        let final_state = until(&updates, |s| s.flushed).await;
+        disconnected(client, updates).await;
+        // No sleep/retry, lock unlink or weaker readonly fallback is allowed.
+        let reopened = Store::open(temp.0.clone(), options.host()).unwrap();
+        assert!(reopened.book == *final_state.book.unwrap());
+        assert_eq!(
+            reopened.book.drafts["chat:a"].text,
+            "exact saved input 日本語"
+        );
+    }
+}
+
+#[tokio::test]
 async fn ordinary_send_autosaves_exact_newer_input_before_preflight_and_delivery_resume() {
     for (key, path, behavior) in [
         ("chat:a", "/api/hello", Behavior::Accept),

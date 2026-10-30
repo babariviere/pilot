@@ -179,17 +179,19 @@ async fn recovery_retry_and_check_receipts_keep_exact_owners_while_autosaving() 
         assert!(book.drafts["chat:a"].answer == captured.answer);
         assert_eq!(book.drafts["chat:a"].cwd, captured.cwd);
         let posted = retry && state == "unknown" && behavior != Behavior::Readonly;
-        let seen = daemon.seen.lock().unwrap();
-        assert_eq!(
-            seen.envelopes.len(),
-            usize::from(posted),
-            "{retry} {state} {behavior:?}"
-        );
-        if posted {
+        {
+            let seen = daemon.seen.lock().unwrap();
             assert_eq!(
-                seen.envelopes[0],
-                serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()
+                seen.envelopes.len(),
+                usize::from(posted),
+                "{retry} {state} {behavior:?}"
             );
+            if posted {
+                assert_eq!(
+                    seen.envelopes[0],
+                    serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()
+                );
+            }
         }
         let settled = matches!(state, "accepted" | "rejected")
             || posted && matches!(behavior, Behavior::Accept | Behavior::Reject);
@@ -198,7 +200,6 @@ async fn recovery_retry_and_check_receipts_keep_exact_owners_while_autosaving() 
             settled,
             "{retry} {state} {behavior:?}"
         );
-        drop(seen);
         assert!(client.command(WriteCommand::Close));
         until(&updates, |s| s.flushed).await;
         disconnected(client, updates).await;
@@ -304,12 +305,13 @@ async fn recovery_retry_answer_autosaves_during_identity_target_lookup_and_execu
         let saved = &done.book.as_ref().unwrap().drafts["chat:a"];
         assert_eq!(saved.text, newer.text);
         assert!(saved.answer == captured.answer);
-        let seen = daemon.seen.lock().unwrap();
-        assert_eq!(
-            seen.envelopes.as_slice(),
-            &[serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()]
-        );
-        drop(seen);
+        {
+            let seen = daemon.seen.lock().unwrap();
+            assert_eq!(
+                seen.envelopes.as_slice(),
+                &[serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()]
+            );
+        }
         assert!(client.command(WriteCommand::Close));
         until(&updates, |s| s.flushed).await;
         disconnected(client, updates).await;
@@ -409,12 +411,13 @@ async fn recovery_second_mutation_and_checkpoint_stay_fifo_while_edits_save() {
         release.send(()).await.unwrap();
         let done = until(&updates, |s| s.checkpoint == Some(91)).await;
         assert_eq!(done.handled.get("chat:b"), Some(&2));
-        let seen = daemon.seen.lock().unwrap();
-        assert_eq!(seen.envelopes.len(), 2);
-        assert_eq!(seen.envelopes[0]["sequence"], 1);
-        assert_eq!(seen.envelopes[1]["sequence"], 2);
-        assert_eq!(seen.envelopes[1]["targetId"], "b");
-        drop(seen);
+        {
+            let seen = daemon.seen.lock().unwrap();
+            assert_eq!(seen.envelopes.len(), 2);
+            assert_eq!(seen.envelopes[0]["sequence"], 1);
+            assert_eq!(seen.envelopes[1]["sequence"], 2);
+            assert_eq!(seen.envelopes[1]["targetId"], "b");
+        }
         assert!(client.command(WriteCommand::Close));
         until(&updates, |s| s.flushed).await;
         disconnected(client, updates).await;

@@ -1,6 +1,6 @@
 /** Bounded read projection. The caller is the Local app, not an authenticated session. */
 import { TextDecoder } from "node:util";
-import type { NativeReviewSnapshot } from "@pilot/protocol";
+import type { NativeReviewCaptureStatus, NativeReviewSnapshot } from "@pilot/protocol";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
 import { bindingRecord, identifier, type JjOwnershipBinding, repositoryIdPattern } from "./jj-ownership-contract.ts";
 import { deliveryDigest } from "./mission-delivery-evidence.ts";
@@ -12,11 +12,11 @@ export class NoRetainedBinding extends Error {}
 
 export class NativeReviewReader {
 	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read">;
-	private readonly ledger: Pick<JjOwnershipStore, "get">;
+	private readonly ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
 	constructor(
 		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read">,
-		ledger: Pick<JjOwnershipStore, "get">,
+		ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>,
 		admit: () => Promise<JjOwnershipBinding>,
 	) {
 		this.snapshots = snapshots;
@@ -32,7 +32,12 @@ export class NativeReviewReader {
 		if (deliveryDigest(binding) !== deliveryDigest(await this.scope()))
 			throw new Error("Retained scope changed during read");
 	}
-	async list(after: number) {
+	async list(after: number): Promise<
+		| (Awaited<ReturnType<ReviewSnapshotStore["list"]>> & {
+				capture?: NativeReviewCaptureStatus;
+		  })
+		| { comparisons: never[]; next: null; unavailable: string }
+	> {
 		let binding: JjOwnershipBinding;
 		try {
 			binding = await this.scope();
@@ -46,10 +51,11 @@ export class NativeReviewReader {
 			};
 		}
 		const page = await this.snapshots.list(binding, after);
+		const capture = await this.ledger.deliveryStatus?.(binding);
 		// Frozen provenance alone cannot override a current collision/unknown creator.
 		for (const c of page.comparisons) await this.owner(binding, c.request.repositoryId, c.request.changeId);
 		await this.check(binding);
-		return page;
+		return { comparisons: page.comparisons, next: page.next, ...(capture ? { capture } : {}) };
 	}
 	private async owner(binding: JjOwnershipBinding, repositoryId: string, changeId: string) {
 		if (repositoryId !== binding.repositoryId) throw new Error("Cross-repository comparison");

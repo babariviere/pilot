@@ -21,6 +21,17 @@ export interface JjRevision {
 	parents: string[];
 }
 
+export const deliveryFailureKinds = [
+	"custody-unavailable",
+	"store-busy",
+	"retention-quota",
+	"interrupted",
+	"pinned-source-unavailable",
+	"conflicted",
+	"capture-failed",
+] as const;
+export type JjDeliveryFailure = (typeof deliveryFailureKinds)[number];
+
 export interface JjCreation {
 	changeId: string;
 	commitId: string;

@@ -71,6 +71,8 @@ pub(crate) struct Pane {
     error: Option<&'static str>,
     patch_error: Option<&'static str>,
     more_workers: bool,
+    capture_notice: Option<&'static str>,
+    capture_limits: Vec<&'static str>,
     focus: FocusHandle,
     summary_scroll: gpui_kit::ScrollHandle,
     source_scroll: gpui_kit::ScrollHandle,
@@ -78,6 +80,10 @@ pub(crate) struct Pane {
 }
 impl EventEmitter<Close> for Pane {}
 impl Pane {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_capture_notice(&self) -> Option<&'static str> {
+        self.capture_notice
+    }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe(
         &self,
@@ -198,6 +204,8 @@ impl Pane {
             error: None,
             patch_error: None,
             more_workers: false,
+            capture_notice: None,
+            capture_limits: vec![],
             focus: cx.focus_handle().tab_stop(true),
             summary_scroll: Default::default(),
             source_scroll: Default::default(),
@@ -229,6 +237,8 @@ impl Pane {
             self.options = options;
             self.error = None;
             self.next = None;
+            self.capture_notice = None;
+            self.capture_limits.clear();
             self.after = 0;
             Self::items(&self.worker_picker, vec![], None, w, cx);
             Self::items(&self.comparison_picker, vec![], None, w, cx);
@@ -275,6 +285,8 @@ impl Pane {
             self.worker = None;
             self.selected = None;
             self.comparisons.clear();
+            self.capture_notice = None;
+            self.capture_limits.clear();
             self.error = Some(
                 "Worker mission/project scope changed. Previous retained content was cleared.",
             );
@@ -386,6 +398,8 @@ impl Pane {
         self.worker = Some(id.into());
         self.comparisons.clear();
         self.after = 0;
+        self.capture_notice = None;
+        self.capture_limits.clear();
         self.next = None;
         Self::items(&self.comparison_picker, vec![], None, w, cx);
         if let Some(k) = self.key.clone() {
@@ -449,6 +463,12 @@ impl Pane {
                 }
             }
             Ok(Data::Comparisons(v)) => {
+                self.capture_notice = v.capture.as_ref().and_then(model::CaptureStatus::notice);
+                self.capture_limits = v
+                    .capture
+                    .as_ref()
+                    .map(model::CaptureStatus::limitations)
+                    .unwrap_or_default();
                 self.comparisons = v.comparisons;
                 self.next = v.next;
                 self.error = if v.unavailable.is_some() {

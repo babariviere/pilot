@@ -151,8 +151,9 @@ the daemon report; check, sign-in and setup actions are not included. See the
   they report findings and propose planning changes, never write product code. Reviewer is metadata only.
   Existing missions are unchanged and are not adopted automatically. See [role admission](docs/mission-roles.md).
   Pilot Next's mission **Review** tab can browse already retained worker comparisons with exact layer/stack
-  revisions, native unified/split diffs and retained source. It never captures live work or submits approvals;
-  empty stores stay empty. See [native Review](docs/mission-native-review.md) for read admission and limits.
+  revisions, native unified/split diffs and retained source. New eligible mission builders save exact committed
+  layers at worker checkpoints, separately from task acceptance. Opening Review never captures live work or
+  submits approvals. Existing legacy work isn't enrolled or backfilled. See [native Review](docs/mission-native-review.md).
   Members deliver with one structured `mission complete` record (landed commit, checks with rationale,
   open issues), readable through `mission get` with the task ID. Members may self-claim two additional
   tasks over a chat lifetime, excluding starting assignments. Completion, release and deletion do not
@@ -578,7 +579,9 @@ rewrites and pushes scoped to their own task. Git-only projects use private clon
 is also available, but edits there affect your checkout.
 
 New opted-in mission builder workspaces also record internal durable jj creator attribution.
-This does not adopt existing work or retain review content. See the [ledger contract](docs/jj-ownership.md).
+This does not adopt existing work. New eligible builder bindings also queue exact committed layers for
+retained Review at quiescent worker checkpoints, without claiming checks, landing or acceptance.
+See the [ledger contract](docs/jj-ownership.md) and [capture limits](docs/review-snapshots.md).
 
 Project policy controls delivery. With **Require PR** enabled, agents deliver on a task branch for review.
 Disabling it permits direct default-branch delivery. Pilot never auto-merges pull requests.

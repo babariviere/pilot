@@ -1,12 +1,56 @@
 # Retained comparison snapshots (internal)
 
-`packages/daemon/src/review-snapshots.ts` retains a dormant, host-only capture API.
-Nothing starts captures automatically or exposes capture over HTTP, IPC or agent tools.
+`packages/daemon/src/review-snapshots.ts` retains a host-only capture API.
+The eligible-worker lifecycle checkpoint below starts bounded committed-layer captures.
+HTTP, IPC and agent tools expose no capture write API; opening Review never captures.
 The [native Review read slice](mission-native-review.md) exposes only admitted, bounded reads,
 with current mission/project/worker custody, strict required manifests and exact retained references.
 The host must authorize the exact comparison **before** calling `capture`. Ownership
 is evidence about the creator, not authorization from an agent's payload. A future
 transport needs its own authorization and read-access checks.
+
+## Eligible-worker checkpoint
+
+Only newly created, managed `planningVersion: 1` builder bindings are capture-enabled.
+The creation transaction records activation; observing, reopening or re-registering an older
+binding cannot activate it. Legacy missions, existing unenrolled workers, direct checkouts,
+Ask/explorer/reviewer/coordinator work and continued custody are not adopted. Existing legacy
+mission work remains unavailable without proven enrollment; no legacy custody bridge or backfill
+is installed.
+
+On current-worker ready or a quiescent turn end (no background work), the host checks current
+durable mission membership/role, mission project, session metadata, the project source and
+the exact managed workspace binding. It observes ownership without snapshotting files. At
+that pinned observation operation, a proven owned change with one visible revision and one
+non-root parent, other than the bound workspace's checkout, defines a **committed layer**.
+Merge/divergent/absent/unproven subjects are not reduced to guessed comparisons. A closed
+jj object is committed source; this checkpoint does not claim who authored its latest rewrite,
+that it was explicitly submitted, that checks passed, or that it landed. Stacks are not inferred.
+
+The normalized request pins physical repository, worker custody, change, operation, exact
+parent/base and head, committed source and layer scope. Requests commit in the ownership
+worker's FULL SQLite transaction with claims, observations and cursor advancement. The
+request key deduplicates the same worker/base/head pair across later observations, retaining
+the **first exact operation**. A newer revision creates a separate request, never rebinding one.
+The outbox is capped at 10,000 records; quota failure rolls back the observation, not its evidence.
+
+`WorkerReviewDelivery` coalesces lifecycle notifications (including another event during a
+drain), admits at most eight queued workers and serializes captures. A pass tries at most four
+requests, with least-attempted ordering so repeated failures cannot starve newer revisions.
+Pending/failed requests survive crash and are retried at the next admitted worker checkpoint,
+including ready after worker recovery, not on a Review GET or a polling timer. Current custody
+is rechecked before each capture and after it. Revocation during a capture can leave retained
+bytes, but they remain unreadable without current custody. Both current membership/binding and
+change ownership are rechecked before settling the retained result. Shutdown joins the owned drain.
+
+The retained store's exact retry/lookup resolves lost ACKs; only its durable result settles an
+outbox row. A crash between these commits reuses the same request. Missing pinned objects fail
+without substituting newer content. Pending, failed and capture-ineligible observations appear
+in the scoped read projection; logs include worker/request/snapshot IDs and bounded failure
+classes, never source or raw paths. Scoped status also identifies divergent, multi-parent, root,
+absent, unknown-custody/discovery and conflicted cases, with explanations in native Details.
+Existing saved comparisons remain independently readable.
+No task purpose, task completion, allocation, review, acceptance or integration record is created.
 
 ## Capture contract
 

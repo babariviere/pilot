@@ -239,7 +239,9 @@ test("paged operation discovery exceeds the old memory window and malformed scan
 				? "Changed commits:\n+ x shortened"
 				: `Changed commits:\n+ ${discovered} ${newCommit}\n\nChanged working copy ${workspace}@:\n+ ${discovered} ${newCommit}`;
 		if (args.includes("log"))
-			return `${initial}\t${initialCommit}\t${"a".repeat(40)}\n${discovered}\t${newCommit}\t${initialCommit}`;
+			return args.includes("commit_id")
+				? newCommit
+				: `${initial}\t${initialCommit}\t${"a".repeat(40)}\t${"k".repeat(32)}\n${discovered}\t${newCommit}\t${initialCommit}\t${initial}`;
 		throw new Error("Unexpected observer command");
 	};
 	const f = fixture(runner);

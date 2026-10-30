@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
+import type { NativeReviewCaptureStatus } from "@pilot/protocol";
 import {
 	identifier,
 	type JjCreation,
+	type JjDeliveryFailure,
 	type JjOwnedChange,
 	type JjOwnershipBinding,
 	type JjRevision,
@@ -12,6 +14,7 @@ import {
 	repositoryIdPattern,
 	revisionRecord,
 } from "./jj-ownership-contract.ts";
+import type { ReviewCaptureRequest } from "./review-snapshot-contract.ts";
 import { type Runner, run } from "./workspaces.ts";
 
 export type { JjOwnedChange, JjOwnershipBinding, JjWorkerScope } from "./jj-ownership-contract.ts";
@@ -28,6 +31,7 @@ interface Checkpoint {
 	cursor: string;
 	problem: string | null;
 	coverage: "complete" | "unknown";
+	deliveryEnabled: boolean;
 }
 interface Operation {
 	id: string;
@@ -126,6 +130,24 @@ export class JjOwnershipStore {
 
 	async get(repositoryId: string, changeId: string): Promise<JjOwnedChange> {
 		return this.rpc("get", { repositoryId, changeId });
+	}
+
+	/** Scoped durable outbox. Reads never enroll or observe a workspace. */
+	async deliveries(binding: JjOwnershipBinding): Promise<ReviewCaptureRequest[]> {
+		if (!(await this.available())) return [];
+		return this.rpc("deliveries", { binding });
+	}
+	async deliveryStatus(binding: JjOwnershipBinding): Promise<NativeReviewCaptureStatus> {
+		if (!(await this.available())) return { pending: 0, failed: 0 };
+		return this.rpc("deliveryStatus", { binding });
+	}
+	settleDelivery(
+		binding: JjOwnershipBinding,
+		request: ReviewCaptureRequest,
+		failed: boolean,
+		failure: JjDeliveryFailure | null = null,
+	): Promise<void> {
+		return this.rpc("settleDelivery", { binding, request, failed, failure });
 	}
 
 	/** Keyset pagination covers all claims, including abandoned changes and collisions. */
@@ -290,6 +312,7 @@ export class JjOwnershipStore {
 				after = page.at(-1)!.changeId;
 			}
 			const changes: { changeId: string; revisions: JjRevision[] }[] = [];
+			const parentChanges = new Map<string, string>();
 			const all = [...ids];
 			for (let start = 0; start < all.length; start += 64) {
 				const batch = all.slice(start, start + 64);
@@ -299,18 +322,46 @@ export class JjOwnershipStore {
 					"-r",
 					batch.map((id) => `change_id(${id})`).join(" | "),
 					"-T",
-					'change_id ++ "\\t" ++ commit_id ++ "\\t" ++ parents.map(|p| p.commit_id()).join(",") ++ "\\n"',
+					'change_id ++ "\\t" ++ commit_id ++ "\\t" ++ parents.map(|p| p.commit_id()).join(",") ++ "\\t" ++ parents.map(|p| p.change_id()).join(",") ++ "\\n"',
 				]);
 				const revisions = new Map(batch.map((id) => [id, [] as JjRevision[]]));
 				for (const line of output ? output.split("\n") : []) {
-					const [changeId, commitId, parents, extra] = line.split("\t");
-					if (extra !== undefined || parents === undefined) throw new Error("Malformed observed revision");
+					const [changeId, commitId, parents, parentIds, extra] = line.split("\t");
+					if (extra !== undefined || parents === undefined || parentIds === undefined)
+						throw new Error("Malformed observed revision");
 					const revision = { changeId, commitId, parents: parents ? parents.split(",") : [] };
 					revisionRecord(revision);
+					if (revision.parents.length === 1) parentChanges.set(revision.commitId, parentIds);
 					if (!revisions.has(revision.changeId)) throw new Error("Unexpected observed change");
 					revisions.get(revision.changeId)!.push(revision);
 				}
 				for (const [changeId, current] of revisions) changes.push({ changeId, revisions: current });
+			}
+			const checkpoints: ReviewCaptureRequest[] = [];
+			if (checkpoint.deliveryEnabled) {
+				// A lifecycle checkpoint closes committed layers, never the live checkout. All
+				// identities come from this exact operation, not HEAD or filesystem contents.
+				const checkout = await this.jj(cwd, head, ["log", "--no-graph", "-r", `${workspace}@`, "-T", "commit_id"]);
+				identifier(checkout, /^[a-f0-9]{40}$/);
+				for (const change of changes) {
+					const r = change.revisions.length === 1 ? change.revisions[0] : undefined;
+					if (!r || r.commitId === checkout || r.parents.length !== 1) continue;
+					const baseId = r.parents[0]!;
+					const baseChange = parentChanges.get(r.commitId)!;
+					// Root comparisons are unsupported. A merge is not silently reduced to one parent.
+					if (/^0+$/.test(baseId)) continue;
+					const pair = { repositoryId, workspace, changeId: r.changeId, baseId, headId: r.commitId };
+					checkpoints.push({
+						requestId: `delivery-${createHash("sha256").update(JSON.stringify(pair)).digest("hex")}`,
+						repositoryId,
+						changeId: r.changeId,
+						operationId: head,
+						base: { changeId: baseChange, commitId: baseId },
+						head: { changeId: r.changeId, commitId: r.commitId },
+						scope: { kind: "layer" },
+						source: "committed",
+					});
+				}
 			}
 			await this.rpc("apply", {
 				repositoryId,
@@ -319,6 +370,7 @@ export class JjOwnershipStore {
 				operationId: head,
 				creations,
 				changes,
+				checkpoints,
 				problem: null,
 				coverage,
 			});

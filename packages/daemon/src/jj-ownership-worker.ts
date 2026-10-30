@@ -7,6 +7,7 @@ import {
 	bindingRecord,
 	changeIdPattern,
 	creationRecord,
+	deliveryFailureKinds,
 	exact,
 	identifier,
 	type JjOwnedChange,
@@ -16,6 +17,7 @@ import {
 	repositoryIdPattern,
 	revisionRecord,
 } from "./jj-ownership-contract.ts";
+import { captureRequest, type ReviewCaptureRequest } from "./review-snapshot-contract.ts";
 
 mkdirSync(dirname(workerData.file), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(workerData.file);
@@ -38,12 +40,25 @@ db.exec(`
  CREATE TABLE IF NOT EXISTS revisions(repository TEXT NOT NULL, change_id TEXT NOT NULL, commit_id TEXT NOT NULL,
  operation TEXT NOT NULL, observed_at INTEGER NOT NULL, revision TEXT NOT NULL,
  PRIMARY KEY(repository,change_id,commit_id));
+ CREATE TABLE IF NOT EXISTS delivery_workers(repository TEXT NOT NULL, workspace TEXT NOT NULL,
+ PRIMARY KEY(repository,workspace));
+ CREATE TABLE IF NOT EXISTS delivery_checkpoints(request_id TEXT PRIMARY KEY, repository TEXT NOT NULL,
+ workspace TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL, attempt INTEGER NOT NULL DEFAULT 0, failure TEXT);
+ CREATE INDEX IF NOT EXISTS delivery_by_worker ON delivery_checkpoints(repository,workspace,state);
 `);
 
 function binding(
 	repository: unknown,
 	workspace: unknown,
-): { binding: JjOwnershipBinding; cursor: string; problem: unknown; coverage: "complete" | "unknown" } | undefined {
+):
+	| {
+			binding: JjOwnershipBinding;
+			cursor: string;
+			problem: unknown;
+			coverage: "complete" | "unknown";
+			deliveryEnabled: boolean;
+	  }
+	| undefined {
 	identifier(repository, repositoryIdPattern);
 	identifier(workspace, /^pilot-[a-zA-Z0-9_-]+-[a-f0-9]{16}$/);
 	const row = db.prepare("SELECT * FROM bindings WHERE repository=? AND workspace=?").get(repository, workspace);
@@ -55,7 +70,15 @@ function binding(
 	if (row.problem !== null && row.problem !== "unobserved" && row.problem !== "history-unknown")
 		throw new Error("Corrupt ownership checkpoint");
 	if (row.coverage !== "complete" && row.coverage !== "unknown") throw new Error("Corrupt ownership coverage");
-	return { binding: value, cursor: row.cursor, problem: row.problem, coverage: row.coverage };
+	return {
+		binding: value,
+		cursor: row.cursor,
+		problem: row.problem,
+		coverage: row.coverage,
+		deliveryEnabled: !!db
+			.prepare("SELECT 1 FROM delivery_workers WHERE repository=? AND workspace=?")
+			.get(repository, workspace),
+	};
 }
 
 function claim(scope: JjOwnershipBinding, proof: unknown) {
@@ -152,7 +175,89 @@ function dispatch(method: string, input: unknown): unknown {
 				scope.startOperation,
 			);
 			claim(scope, input.creation);
+			// Creation-only activation. Re-registering or reading an old binding cannot adopt it.
+			if (!prior) db.prepare("INSERT INTO delivery_workers VALUES(?,?)").run(scope.repositoryId, scope.workspace);
 		});
+	}
+	if (["deliveries", "deliveryStatus", "settleDelivery"].includes(method)) {
+		exact(input, method === "settleDelivery" ? ["binding", "request", "failed", "failure"] : ["binding"]);
+		bindingRecord(input.binding);
+		const b = input.binding;
+		const scope = binding(b.repositoryId, b.workspace);
+		if (JSON.stringify(scope?.binding) !== JSON.stringify(b)) throw new Error("Delivery custody changed");
+		if (method === "deliveryStatus") {
+			const rows = db
+				.prepare(
+					"SELECT state,count(*) AS count FROM delivery_checkpoints WHERE repository=? AND workspace=? AND state!='done' GROUP BY state",
+				)
+				.all(b.repositoryId, b.workspace);
+			// Aggregate this worker's observed claims, never live/global history.
+			const observed = db
+				.prepare(`SELECT
+			 max(json_array_length(o.revisions)>1) AS divergent,
+			 max(json_array_length(o.revisions)=0) AS missing,
+			 max(json_array_length(o.revisions)=1 AND json_array_length(json_extract(o.revisions,'$[0].parents'))>1) AS merge,
+			 max(json_array_length(o.revisions)=1 AND json_extract(o.revisions,'$[0].parents[0]')=?) AS root
+			 FROM observations o JOIN (SELECT DISTINCT change_id FROM claims WHERE repository=? AND workspace=?) c ON c.change_id=o.change_id
+			 WHERE o.repository=? AND o.operation=?`)
+				.get("0".repeat(40), b.repositoryId, b.workspace, b.repositoryId, scope!.cursor);
+			const collision = db
+				.prepare(`SELECT 1 FROM claims c WHERE c.repository=? AND c.workspace=? AND EXISTS
+			 (SELECT 1 FROM claims other WHERE other.repository=c.repository AND other.change_id=c.change_id AND other.rowid!=c.rowid) LIMIT 1`)
+				.get(b.repositoryId, b.workspace);
+			const conflicted = db
+				.prepare(
+					"SELECT 1 FROM delivery_checkpoints WHERE repository=? AND workspace=? AND state='failed' AND failure='conflicted' LIMIT 1",
+				)
+				.get(b.repositoryId, b.workspace);
+			const unsupported = [
+				...(observed?.divergent ? ["divergent"] : []),
+				...(observed?.merge ? ["multiple-parents"] : []),
+				...(observed?.root ? ["root-base"] : []),
+				...(observed?.missing ? ["missing"] : []),
+				...(collision ? ["unknown-custody"] : []),
+				...(scope?.coverage === "unknown" ? ["unknown-discovery"] : []),
+				...(conflicted ? ["conflicted"] : []),
+			];
+			return {
+				pending: Number(rows.find((r) => r.state === "pending")?.count ?? 0),
+				failed: Number(rows.find((r) => r.state === "failed")?.count ?? 0),
+				...(unsupported.length ? { unsupported } : {}),
+				...(!scope?.deliveryEnabled
+					? { unavailable: "not-enabled" }
+					: scope.problem === "history-unknown"
+						? { unavailable: "observation-failed" }
+						: {}),
+			};
+		}
+		if (method === "deliveries")
+			return db
+				.prepare(
+					"SELECT request FROM delivery_checkpoints WHERE repository=? AND workspace=? AND state!='done' ORDER BY attempt,rowid LIMIT 4",
+				)
+				.all(b.repositoryId, b.workspace)
+				.map((r) => captureRequest(JSON.parse(String(r.request))));
+		const request = captureRequest(input.request);
+		if (typeof input.failed !== "boolean") throw new Error("Invalid delivery settlement");
+		if (input.failure !== null && !(deliveryFailureKinds as readonly unknown[]).includes(input.failure))
+			throw new Error("Invalid delivery failure");
+		const row = db
+			.prepare("SELECT * FROM delivery_checkpoints WHERE request_id=? AND repository=? AND workspace=?")
+			.get(request.requestId, b.repositoryId, b.workspace);
+		if (!row || row.request !== JSON.stringify(request)) throw new Error("Unknown delivery checkpoint");
+		return transact(() =>
+			db
+				.prepare(
+					"UPDATE delivery_checkpoints SET state=?,failure=?,attempt=(SELECT coalesce(max(attempt),0)+1 FROM delivery_checkpoints WHERE repository=? AND workspace=?) WHERE request_id=? AND state!='done'",
+				)
+				.run(
+					input.failed ? "failed" : "done",
+					input.failed ? (input.failure as string | null) : null,
+					b.repositoryId,
+					b.workspace,
+					request.requestId,
+				),
+		);
 	}
 	if (method === "binding") {
 		exact(input, ["repositoryId", "workspace"]);
@@ -199,7 +304,11 @@ function dispatch(method: string, input: unknown): unknown {
 			"changes",
 			"problem",
 			"coverage",
+			...(input && typeof input === "object" && "checkpoints" in input ? ["checkpoints"] : []),
 		]);
+		const checkpoints = "checkpoints" in input ? input.checkpoints : [];
+		if (!Array.isArray(checkpoints) || checkpoints.length > 10_000) throw new Error("Invalid delivery checkpoints");
+		const requests: ReviewCaptureRequest[] = checkpoints.map(captureRequest);
 		identifier(input.expectedCursor, operationIdPattern);
 		identifier(input.operationId, operationIdPattern);
 		const operationId = input.operationId;
@@ -253,6 +362,47 @@ function dispatch(method: string, input: unknown): unknown {
 						now,
 						JSON.stringify(revision),
 					);
+			}
+			const observedChanges = new Map(
+				(changes as { changeId: string; revisions: JjRevision[] }[]).map((c) => [c.changeId, c.revisions]),
+			);
+			for (const request of requests) {
+				if (
+					!owner.deliveryEnabled ||
+					request.operationId !== operationId ||
+					request.repositoryId !== owner.binding.repositoryId ||
+					request.source !== "committed" ||
+					request.scope.kind !== "layer"
+				)
+					throw new Error("Invalid delivery checkpoint scope");
+				const record = get(request.repositoryId, request.changeId);
+				if (
+					record.ownership.status !== "owned" ||
+					JSON.stringify(record.ownership.binding) !== JSON.stringify(owner.binding)
+				)
+					continue;
+				const observed = observedChanges.get(request.changeId);
+				if (
+					observed?.length !== 1 ||
+					observed[0]?.commitId !== request.head.commitId ||
+					observed[0].parents.length !== 1 ||
+					observed[0].parents[0] !== request.base.commitId
+				)
+					throw new Error("Unobserved delivery revision");
+				const prior = db
+					.prepare("SELECT request FROM delivery_checkpoints WHERE request_id=?")
+					.get(request.requestId);
+				if (prior) {
+					const original = captureRequest(JSON.parse(String(prior.request)));
+					if (JSON.stringify({ ...original, operationId: request.operationId }) !== JSON.stringify(request))
+						throw new Error("Delivery checkpoint identity conflict");
+					continue; // Keep the first exact operation, including after lost ACK or a newer observation.
+				}
+				if (Number(db.prepare("SELECT count(*) AS n FROM delivery_checkpoints").get()!.n) >= 10_000)
+					throw new Error("Delivery checkpoint quota reached");
+				db.prepare(
+					"INSERT INTO delivery_checkpoints(request_id,repository,workspace,request,state) VALUES(?,?,?,?,'pending')",
+				).run(request.requestId, request.repositoryId, owner.binding.workspace, JSON.stringify(request));
 			}
 			db.prepare(
 				"UPDATE bindings SET cursor=?,problem=?,coverage=CASE WHEN ?='unknown' THEN 'unknown' ELSE coverage END WHERE repository=? AND workspace=?",

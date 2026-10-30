@@ -4,7 +4,7 @@ use crate::{
     path_completion::{Capture, valid_prefix},
 };
 use serde_json::Value;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 #[cfg(test)]
 #[path = "path_completion_reader_tests.rs"]
 mod tests;
@@ -166,49 +166,41 @@ pub(crate) struct Response {
     pub(crate) result: Result<Candidates, String>,
 }
 pub(crate) struct Reader {
-    commands: async_channel::Sender<Request>,
-    replace: async_channel::Receiver<Request>,
+    commands: tokio::sync::watch::Sender<Option<Arc<Request>>>,
 }
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
     ) -> Result<(Self, async_channel::Receiver<Response>), &'static str> {
-        let (commands, events) = async_channel::bounded(1);
-        let replace = events.clone();
+        // This is a latest-value lane, not a work queue. A capacity-one try_send/
+        // try_recv/try_send sequence can lose the replacement while the worker
+        // holds the queue's slot lock, even when no value remains queued.
+        // Only an Arc is cloned under the watch lock; large captured editor text
+        // is cloned on the worker after releasing that lock, never blocking Send.
+        let (commands, mut events) = tokio::sync::watch::channel::<Option<Arc<Request>>>(None);
         let (updates, output) = async_channel::bounded(1);
         let stale = output.clone();
         std::thread::Builder::new().name("local-path-candidates".into()).spawn(move||{
-            struct Close(async_channel::Receiver<Request>);impl Drop for Close{fn drop(&mut self){self.0.close();}}
-            let _close=Close(events.clone());
             if let Ok(rt)=tokio::runtime::Builder::new_current_thread().enable_all().build(){rt.block_on(async move {
                 let Ok(client)=reqwest::Client::builder().no_proxy().retry(reqwest::retry::never()).redirect(reqwest::redirect::Policy::none()).pool_max_idle_per_host(1).connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(3)).build() else{return;};
                 let mut next=None;
                 loop {
-                    let r=match next.take(){Some(r)=>r,None=>match events.recv().await{Ok(r)=>r,Err(_)=>return}};
-                    let Some(capture)=r.capture else{continue;};
+                    let r=match next.take(){Some(r)=>r,None=>{
+                        if events.changed().await.is_err(){return;}
+                        let Some(r)=events.borrow_and_update().clone() else{continue;};r
+                    }};
+                    let Some(capture)=r.capture.clone() else{continue;};
                     let result=tokio::select!{biased;
-                        r=events.recv()=>{next=r.ok();if next.is_none(){return;}continue;},
+                        changed=events.changed()=>{if changed.is_err(){return;}next=events.borrow_and_update().clone();continue;},
                         result=async{tokio::time::sleep(Duration::from_millis(120)).await;fetch(&client,&options,&capture).await}=>result,
                     };
                     if let Err(async_channel::TrySendError::Full(r))=updates.try_send(Response{serial:r.serial,capture,result}){let _=stale.try_recv();let _=updates.try_send(r);}
                 }
             });}
         }).map_err(|_|"Path reader unavailable.")?;
-        Ok((Self { commands, replace }, output))
+        Ok((Self { commands }, output))
     }
     pub(crate) fn request(&self, r: Request) -> bool {
-        match self.commands.try_send(r) {
-            Ok(()) => true,
-            Err(async_channel::TrySendError::Closed(_)) => false,
-            Err(async_channel::TrySendError::Full(r)) => {
-                let _ = self.replace.try_recv();
-                self.commands.try_send(r).is_ok()
-            }
-        }
-    }
-}
-impl Drop for Reader {
-    fn drop(&mut self) {
-        self.commands.close();
+        self.commands.send(Some(Arc::new(r))).is_ok()
     }
 }

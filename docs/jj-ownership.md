@@ -1,7 +1,9 @@
 # Internal jj attribution ledger
 
 This is attribution metadata, not retained review content, review approval, delivery evidence or
-completion acceptance. No agent/HTTP write API is added. Native mission Review now consumes
+completion acceptance. The creation-only [worker checkpoint](review-snapshots.md#eligible-worker-checkpoint)
+atomically queues exact committed layers alongside observations, separately from acceptance.
+No agent/HTTP write API is added. Native mission Review now consumes
 bounded, admitted ledger reads; see [native Review](mission-native-review.md).
 
 ## Enrollment and identity
@@ -27,7 +29,7 @@ That trusted creation fact is different from discovering a change in the current
 
 `SharedWorkspaceStore.ownership` exposes internal `binding`, keyset-paginated `list`, and exact-key
 `get` reads. `observeOwnership` checks the managed binding and observes without enrollment. Sessions
-request observation on worker ready and when a turn finishes. Duplicate observations coalesce; at
+request admitted observation on current-worker ready and when a quiescent turn finishes. Duplicate observations coalesce; at
 most two run concurrently. Busy/failing observation is not a fresh result, and a later observation
 can catch up from the durable cursor.
 

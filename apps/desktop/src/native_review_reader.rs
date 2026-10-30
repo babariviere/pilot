@@ -188,6 +188,7 @@ pub(crate) async fn fetch(
             let v: model::Comparisons =
                 get(client, url(&format!("/{worker}?after={after}"))?).await?;
             if v.comparisons.len() > 20
+                || v.capture.as_ref().is_some_and(|c| !c.valid())
                 || v.comparisons
                     .iter()
                     .any(|c| !c.valid() || c.sequence <= *after)

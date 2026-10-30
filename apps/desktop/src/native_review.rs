@@ -57,7 +57,7 @@ pub(crate) struct Comparison {
 impl Comparison {
     pub fn label(&self) -> String {
         format!(
-            "{} · Capture {}",
+            "{} · Saved revision {}",
             if self.request.scope.kind == "layer" {
                 "This change"
             } else {
@@ -93,6 +93,88 @@ pub(crate) struct Comparisons {
     pub comparisons: Vec<Comparison>,
     pub next: Option<u64>,
     pub unavailable: Option<String>,
+    pub capture: Option<CaptureStatus>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CaptureStatus {
+    pub pending: u64,
+    pub failed: u64,
+    pub unavailable: Option<String>,
+    pub unsupported: Option<Vec<String>>,
+}
+impl CaptureStatus {
+    pub fn valid(&self) -> bool {
+        self.pending.saturating_add(self.failed) <= 10_000
+            && self
+                .unavailable
+                .as_deref()
+                .is_none_or(|s| matches!(s, "not-enabled" | "observation-failed"))
+            && self.unsupported.as_ref().is_none_or(|reasons| {
+                reasons.len() <= 7
+                    && reasons.iter().all(|s| {
+                        matches!(
+                            s.as_str(),
+                            "divergent"
+                                | "multiple-parents"
+                                | "root-base"
+                                | "missing"
+                                | "unknown-custody"
+                                | "unknown-discovery"
+                                | "conflicted"
+                        )
+                    })
+            })
+    }
+    pub fn notice(&self) -> Option<&'static str> {
+        match self.unavailable.as_deref() {
+            Some("not-enabled") => {
+                return Some(
+                    "Automatic capture isn't enabled for this existing workspace. Reading Review doesn't enroll or migrate it.",
+                );
+            }
+            Some("observation-failed") => {
+                return Some(
+                    "Worker ownership couldn't be observed. No new revision was saved; existing saved revisions are unchanged.",
+                );
+            }
+            _ => {}
+        }
+        let reasons = self.unsupported.as_deref().unwrap_or_default();
+        if reasons.iter().any(|s| s == "conflicted") {
+            return Some(
+                "Conflicted revisions couldn't be saved for Review. No conflict-free or newer content was substituted.",
+            );
+        }
+        if self.failed > 0 {
+            return Some(
+                "Saving some committed revisions couldn't be confirmed. They remain queued for exact recovery at the next worker checkpoint; existing saved revisions are unchanged.",
+            );
+        }
+        if !reasons.is_empty() {
+            return Some(
+                "Some revisions aren't supported by this checkpoint. Details explains what couldn't be proven or saved; existing saved revisions are unchanged.",
+            );
+        }
+        if self.pending > 0 {
+            return Some(
+                "Committed revisions are waiting to be saved at a worker checkpoint. Refresh later to read saved revisions.",
+            );
+        }
+        None
+    }
+    pub fn limitations(&self) -> Vec<&'static str> {
+        self.unsupported.as_deref().unwrap_or_default().iter().map(|s| match s.as_str() {
+            "divergent" => "Divergent change revisions aren't captured. No revision was chosen as a winner.",
+            "multiple-parents" => "Multi-parent revisions aren't supported by the single-layer checkpoint.",
+            "root-base" => "Comparisons against the virtual root aren't supported.",
+            "missing" => "Some previously owned changes are absent at the observed operation.",
+            "unknown-custody" => "Some creation claims have unknown or colliding custody and weren't captured.",
+            "unknown-discovery" => "Ownership discovery skipped an unprovable interval. Missing changes aren't inferred.",
+            "conflicted" => "Conflicted revisions aren't supported for retained capture.",
+            _ => "Unsupported capture status.",
+        }).collect()
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

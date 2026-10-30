@@ -143,8 +143,27 @@ pub fn run_task_status_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            // Creation is now a modal. End composition and close it through
+            // its real button before another row action can be reached.
+            cx.update_window(h, |_, w, cx| w.click("task-create-close", cx))
+                .unwrap();
+            cx.advance_clock(Duration::from_millis(300));
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(pane.read(cx).creation.is_none());
+                assert!(pane.read(cx).status_form.is_none());
+                assert_eq!(creation.read(cx).title.read(cx).value(), "に");
+                assert!(w.try_find("task-create-title").is_none());
+            })
+            .unwrap();
+            assert_eq!(server.writes(), 0, "closing a draft never creates a task");
         }
-        crate::mission_tasks_probe::task_action(cx, h, "task-A", "Change status…");
+        assert!(crate::mission_tasks_probe::task_action(
+            cx,
+            h,
+            "task-A",
+            "Change status…"
+        ));
         let form = cx.update(|cx| pane.read(cx).status_form.clone().unwrap());
         assert_eq!(server.writes(), 0);
         click(cx, h, "task-status-todo");

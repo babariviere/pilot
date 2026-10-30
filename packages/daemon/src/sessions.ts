@@ -156,6 +156,7 @@ import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { UsageHistoryStore } from "./usage-history.ts";
 import { WorkerActivity } from "./worker-activity.ts";
+import { WorkerReviewDelivery } from "./worker-review-delivery.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 import { workspaceCommandEnvironment } from "./workspace-environment.ts";
 import {
@@ -203,6 +204,8 @@ export interface SessionMissionBridge {
 	coordinatorSourceMembers?(sessionId: string): { projectId: string; sessionIds: string[] } | undefined;
 	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
 	ownershipScope?(sessionId: string): import("./jj-ownership.ts").JjWorkerScope | undefined;
+	/** Current durable capture admission, independent of task completion/acceptance. */
+	reviewCaptureScope?(sessionId: string): Promise<{ missionId: string; projectId: string } | undefined>;
 	/** Idempotent, atomic ownership move, retaining task links and PR observation tombstones. */
 	continueSession?(from: string, to: string): void;
 	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
@@ -1446,6 +1449,7 @@ export class SessionManager {
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
 	private readonly reviewSnapshots: import("./review-snapshots.ts").ReviewSnapshotStore;
+	private readonly workerReviewDelivery: WorkerReviewDelivery;
 	private readonly mainViews: MainViewStore;
 	private readonly roleTransitions = new Map<string, Promise<void>>();
 	private readonly coordinatorUnbindings = new Map<string, Promise<void>>();
@@ -1568,6 +1572,7 @@ export class SessionManager {
 			join(home, "review-snapshots.sqlite"),
 			this.sharedWorkspaces.ownership,
 		);
+		this.workerReviewDelivery = new WorkerReviewDelivery(this.sharedWorkspaces.ownership, this.reviewSnapshots);
 		this.mainViews = new MainViewStore(home);
 		this.onMainMoved((event) => this.refreshMainViews(event));
 		if (!factories.worker) this.pool = new WorkerPool();
@@ -3909,31 +3914,66 @@ export class SessionManager {
 
 	/** Native retained reads derive custody only from durable host metadata, never a request path. */
 	nativeReviewReader(id: string, missionId: string, projectId: string, authorize: () => void) {
-		return new NativeReviewReader(this.reviewSnapshots, this.sharedWorkspaces.ownership, async () => {
-			const scope = () => {
-				authorize();
-				const meta = this.metas.get(id);
-				if (this.closing || !meta || meta.projectId !== projectId)
-					throw new Error("Retained workspace custody unavailable");
-				if (!meta.workspace?.shared || meta.coordinatorView)
-					throw new NoRetainedBinding("No retained worker enrollment");
-				if (this.projects.require(projectId).path !== meta.workspace.source)
-					throw new Error("Retained repository is outside the current project source");
-				this.assertOwnedWorkspace(meta);
-				return { ...meta.workspace.shared, path: meta.cwd };
-			};
-			const before = scope();
-			const binding = await this.sharedWorkspaces.ownership.sessionBinding(
-				id,
-				missionId,
-				before.repository,
-				before.name,
-			);
-			if (JSON.stringify(scope()) !== JSON.stringify(before)) throw new Error("Retained workspace custody changed");
-			if (!binding) throw new NoRetainedBinding("No retained worker enrollment");
-			if (binding.path !== before.path) throw new Error("Retained workspace custody unavailable or changed");
-			return binding;
-		});
+		return new NativeReviewReader(this.reviewSnapshots, this.sharedWorkspaces.ownership, () =>
+			this.retainedWorkerBinding(id, missionId, projectId, authorize),
+		);
+	}
+	private async retainedWorkerBinding(id: string, missionId: string, projectId: string, authorize: () => void) {
+		const scope = () => {
+			authorize();
+			const meta = this.metas.get(id);
+			if (this.closing || !meta || meta.projectId !== projectId)
+				throw new Error("Retained workspace custody unavailable");
+			if (!meta.workspace?.shared || meta.coordinatorView)
+				throw new NoRetainedBinding("No retained worker enrollment");
+			if (this.projects.require(projectId).path !== meta.workspace.source)
+				throw new Error("Retained repository is outside the current project source");
+			this.assertOwnedWorkspace(meta);
+			return { ...meta.workspace.shared, path: meta.cwd };
+		};
+		const before = scope();
+		const binding = await this.sharedWorkspaces.ownership.sessionBinding(
+			id,
+			missionId,
+			before.repository,
+			before.name,
+		);
+		if (JSON.stringify(scope()) !== JSON.stringify(before)) throw new Error("Retained workspace custody changed");
+		if (!binding) throw new NoRetainedBinding("No retained worker enrollment");
+		if (binding.path !== before.path) throw new Error("Retained workspace custody unavailable or changed");
+		return binding;
+	}
+	private checkpointWorkerReview(meta: SessionMeta): Promise<void> {
+		const shared = meta.workspace?.shared;
+		if (!shared) return Promise.resolve();
+		const cwd = meta.cwd;
+		const workspace = JSON.stringify(shared);
+		return this.workerReviewDelivery.checkpoint(
+			meta.id,
+			async () => {
+				const scope = await this.missions?.reviewCaptureScope?.(meta.id);
+				if (!scope) return undefined;
+				try {
+					return await this.retainedWorkerBinding(meta.id, scope.missionId, scope.projectId, () => {
+						const member = this.missions?.membership(meta.id);
+						if (
+							this.metas.get(meta.id) !== meta ||
+							meta.cwd !== cwd ||
+							JSON.stringify(meta.workspace?.shared) !== workspace ||
+							!member?.active ||
+							member.coordinator ||
+							member.role !== "builder" ||
+							member.missionId !== scope.missionId
+						)
+							throw new Error("Worker review membership changed");
+					});
+				} catch (error) {
+					if (error instanceof NoRetainedBinding) return undefined;
+					throw error;
+				}
+			},
+			() => this.sharedWorkspaces.observeOwnership(cwd, shared),
+		);
 	}
 
 	/** Task starts use the same agent directory/catalog as other session model operations. */
@@ -6530,7 +6570,8 @@ export class SessionManager {
 			throw new Conflict("Only a diagnostics specialist or a confirmed repair may read Pilot logs");
 		if (!this.diagnosticHost) throw new Conflict("Diagnostic host identity is unavailable");
 		if (specialist.role === "diagnostics") this.diagnosticExecutionHost(specialist);
-		const pinned = specialist.diagnosticScope === "app" ? specialist.diagnosticHost : specialist.diagnosticTarget?.host;
+		const pinned =
+			specialist.diagnosticScope === "app" ? specialist.diagnosticHost : specialist.diagnosticTarget?.host;
 		const nextAllowed =
 			specialist.role === "diagnostics" &&
 			!!pinned &&
@@ -7411,6 +7452,7 @@ export class SessionManager {
 		await this.modelCatalog.closeBackgroundUsage?.();
 		await this.usageHistory.close();
 		await this.lifecycle.close();
+		await this.workerReviewDelivery.close();
 		await this.reviewSnapshots.close();
 		await this.sharedWorkspaces.close();
 	}
@@ -8654,10 +8696,16 @@ export class SessionManager {
 				void this.save(meta);
 			}
 			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
-			if (!packet.working && (wasWorking || packet.type === "ready") && meta.workspace?.shared)
-				void this.sharedWorkspaces
-					.observeOwnership(meta.cwd, meta.workspace.shared)
-					.catch((error: unknown) => console.warn(`pilotd: ownership observation failed: ${error}`));
+			if (
+				this.workers.get(meta.id) === worker &&
+				!packet.working &&
+				!this.backgroundWorking(meta, worker) &&
+				(wasWorking || packet.type === "ready") &&
+				meta.workspace?.shared
+			)
+				void this.checkpointWorkerReview(meta).catch((error: unknown) =>
+					console.warn(`pilotd: ownership observation failed: ${error}`),
+				);
 			if (!packet.working && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				void this.prepareCoordinatorRole(meta.id)
 					.then(() => this.resumeRoleWork(meta.id))

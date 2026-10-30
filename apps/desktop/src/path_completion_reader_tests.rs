@@ -171,6 +171,53 @@ fn cancellation_replaces_debounce_and_closes_command_lane() {
 }
 
 #[test]
+fn replacement_burst_never_reports_full_and_closed_reader_refuses() {
+    let s = setup();
+    let (reader, output) = Reader::start(s.options.clone()).unwrap();
+    // Exercise the producer/consumer slot handoff repeatedly. Every admitted
+    // request replaces the pending token without exposing transient queue locks.
+    for serial in 1..=20_000 {
+        assert!(reader.request(Request {
+            serial,
+            capture: Some(capture())
+        }));
+    }
+    assert!(reader.request(Request {
+        serial: 20_001,
+        capture: None
+    }));
+    assert!(reader.request(Request {
+        serial: 20_002,
+        capture: Some(capture())
+    }));
+    let response = rt().block_on(async {
+        tokio::time::timeout(Duration::from_secs(3), output.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    assert_eq!(response.serial, 20_002);
+    assert!(response.result.is_ok());
+    assert_eq!(s.state.lock().unwrap().seen.len(), 3);
+    drop(reader);
+    rt().block_on(async {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), output.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+    });
+    let (commands, receiver) = tokio::sync::watch::channel(None);
+    let closed = Reader { commands };
+    drop(receiver);
+    assert!(!closed.request(Request {
+        serial: 1,
+        capture: Some(capture())
+    }));
+}
+
+#[test]
 fn refusal_keeps_http_status_and_existing_daemon_reason() {
     for (status, reason) in [
         (

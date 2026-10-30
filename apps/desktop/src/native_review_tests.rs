@@ -13,6 +13,38 @@ fn client() -> reqwest::Client {
         .build()
         .unwrap()
 }
+
+#[test]
+fn capture_status_is_bounded_and_unsupported_is_not_empty_or_success() {
+    let status: model::CaptureStatus =
+        serde_json::from_value(json!({"pending":0,"failed":1,"unsupported":["conflicted"]}))
+            .unwrap();
+    assert!(status.valid());
+    assert!(status.notice().unwrap().contains("Conflicted"));
+    assert_eq!(status.limitations().len(), 1);
+    for reason in [
+        "divergent",
+        "multiple-parents",
+        "root-base",
+        "missing",
+        "unknown-custody",
+        "unknown-discovery",
+    ] {
+        let status: model::CaptureStatus =
+            serde_json::from_value(json!({"pending":0,"failed":0,"unsupported":[reason]})).unwrap();
+        assert!(status.valid());
+        assert!(status.notice().unwrap().contains("aren't supported"));
+        assert_eq!(status.limitations().len(), 1);
+    }
+    for invalid in [
+        json!({"pending":10001,"failed":0}),
+        json!({"pending":u64::MAX,"failed":1}),
+        json!({"pending":0,"failed":0,"unsupported":["guessed"]}),
+    ] {
+        let status: model::CaptureStatus = serde_json::from_value(invalid).unwrap();
+        assert!(!status.valid());
+    }
+}
 #[tokio::test]
 async fn exact_layer_stack_source_and_corruption_are_not_live_fallbacks() {
     let s = Server::start();

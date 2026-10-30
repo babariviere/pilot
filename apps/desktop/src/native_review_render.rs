@@ -20,7 +20,7 @@ impl Render for Pane {
                     ),
             );
         }
-        if self.worker.is_some() {
+        if self.worker.is_some() && (!self.comparisons.is_empty() || self.selected.is_some()) {
             choices = choices.child(
                 div()
                     .id("review-comparison")
@@ -29,7 +29,8 @@ impl Render for Pane {
                     .min_w_0()
                     .child(
                         Select::new(&self.comparison_picker)
-                            .placeholder("Choose exact retained comparison")
+                            .placeholder("Choose saved revision")
+                            .disabled(self.error.is_some())
                             .accessibility_label("Exact retained comparison, layer or stack")
                             .menu_max_h(rems(18.))
                             .w_full(),
@@ -49,7 +50,7 @@ impl Render for Pane {
                 .on_click(cx.listener(|p, _, w, cx| p.back(w, cx))),
             );
         }
-        if self.snapshot.is_some() {
+        if self.snapshot.is_some() || !self.capture_limits.is_empty() {
             tools = tools.child(
                 ui::action("review-details", "Details", Action::Quiet)
                     .selected(self.details)
@@ -101,12 +102,33 @@ impl Render for Pane {
         if let Some(e) = self.error {
             header = header.child(Notice::new(e).tone(Tone::Warning));
         }
+        if let Some(notice) = self.capture_notice {
+            header = header.child(
+                div()
+                    .id("review-capture-notice")
+                    .test_support()
+                    .child(Notice::new(notice).tone(Tone::Warning)),
+            );
+        }
+        if self.details && !self.capture_limits.is_empty() {
+            header = header.child(
+                div()
+                    .id("review-capture-limitations")
+                    .test_support()
+                    .v_flex()
+                    .children(
+                        self.capture_limits
+                            .iter()
+                            .map(|reason| Notice::new(*reason)),
+                    ),
+            );
+        }
         if self.more_workers {
             header=header.child(Notice::new("Only the first 100 current members are shown. This is not a complete mission inventory."));
         }
         if !self.busy && self.workers.is_empty() && self.error.is_none() {
             header = header.child(Notice::new(
-                "No retained worker changes yet. This view doesn't capture workspace changes.",
+                "No current workers are available in this mission. Saved comparisons are separate from live code changes.",
             ));
         }
         if !self.busy
@@ -115,7 +137,7 @@ impl Render for Pane {
             && self.error.is_none()
         {
             header = header.child(Notice::new(
-                "No retained comparisons for this worker. Live changes aren't captured here.",
+                "No saved comparison yet. Eligible workers save committed layers at worker checkpoints, not when Review opens. This doesn't mean there are no code changes.",
             ));
         }
         if let Some(s) = &self.snapshot {

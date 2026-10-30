@@ -220,6 +220,15 @@ export class MissionService {
 					.map((task) => task.id);
 				return taskIds.length ? { version: 1, sessionId, missionId: member.missionId, taskIds } : undefined;
 			},
+			reviewCaptureScope: async (sessionId) => {
+				await store.durable();
+				const member = store.membership(sessionId);
+				if (!member?.active || member.coordinator || member.role !== "builder") return undefined;
+				const mission = store.require(member.missionId);
+				return mission.planningVersion === 1
+					? { missionId: member.missionId, projectId: mission.projectId }
+					: undefined;
+			},
 			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
 			spawnProject: (missionId) => {

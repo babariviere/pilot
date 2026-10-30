@@ -60,6 +60,10 @@ impl Probe {
                             (chat.id, chat.writable, chat.busy) = ("synthetic".into(), true, true);
                             chat.state = "working".into();
                             v.state.chats = Arc::new(vec![chat]);
+                            // The fixture seeds a complete control list. Later chat
+                            // snapshots must preserve, not manufacture, its freshness.
+                            v.state.list_loaded = true;
+                            v.state.summary_fresh = true;
                             v
                         })
                     },
@@ -88,6 +92,8 @@ impl Probe {
                     Presentation {
                         generation,
                         loaded: true,
+                        list_loaded: v.state.list_loaded,
+                        summary_fresh: v.state.summary_fresh,
                         rows,
                         chats: self.chats.clone(),
                         user_queue: queue,
@@ -202,6 +208,24 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
             p.close(cx);
         }
     }
+    // A chat-only snapshot cannot revive stale control-list authority.
+    let mut stale = Probe::open(cx, 900.);
+    cx.update(|cx| stale.v.update(cx, |v, _| v.state.summary_fresh = false));
+    stale.publish(
+        cx,
+        json!({"type":"snapshot","entries":[ask(4,false,true)],"run":{"startedAt":1}}),
+    );
+    cx.update(|cx| {
+        let v = stale.v.read(cx);
+        assert!(!v.state.summary_fresh);
+        assert_eq!(
+            v.state.chats[0].signal,
+            Some(crate::state_mark::Signal::Working)
+        );
+    });
+    assert!(stale.answer().is_none());
+    stale.close(cx);
+
     // 1. Single choice: pointer pick, then click Reply while the chat is Working.
     let mut p = Probe::open(cx, 900.);
     p.publish(

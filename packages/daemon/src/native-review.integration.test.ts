@@ -30,7 +30,7 @@ test("native retained reads are exact, scoped, paged, revocable and survive work
 		return binding;
 	});
 	try {
-		assert.deepEqual(await reader.list(0), { comparisons: [], next: null });
+		assert.deepEqual(await reader.list(0), { comparisons: [], next: null, capture: { pending: 0, failed: 0 } });
 		writeFileSync(join(w.path, "a.txt"), "retained lower\n");
 		jj(w.path, "commit", "-m", "lower");
 		writeFileSync(join(w.path, "a.txt"), "tip\n");
@@ -100,7 +100,7 @@ test("native retained reads are exact, scoped, paged, revocable and survive work
 			missionId: "other",
 		}));
 		await assert.rejects(other.get(s.snapshotId), /Cross-scope/);
-		assert.deepEqual(await other.list(0), { comparisons: [], next: null });
+		await assert.rejects(other.list(0), /custody changed/);
 		admitted = false;
 		await assert.rejects(reader.diff(s.snapshotId), /revoked/);
 		admitted = true;

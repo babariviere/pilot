@@ -1,8 +1,8 @@
 # Proposed native Review and durable diff annotations
 
 **The read-only slice described below is implemented for apps/desktop (D33). The remaining
-review/annotation/request contracts are design proposals, not active behavior.** The coordinator owns planning and adoption. Nothing here starts
-captures, creates Inbox attention, records reviews, consumes gates, merges, cleans up or migrates
+review/annotation/request contracts are design proposals, not active behavior.** The coordinator owns planning and adoption. Review reads never start
+captures, create Inbox attention, record reviews, consume gates, merge, clean up or migrate
 missions. Swift is out of scope (D2). D33 authorizes the bounded Sol/Terra read-only implementation;
 later Opus refinement remains separate.
 
@@ -10,7 +10,7 @@ later Opus refinement remains separate.
 
 Mission detail has **Overview / Tasks / Review**. Review is mission-scoped browsing, not a required
 queue or an Inbox attention source. Choose a current worker, then one exact retained comparison.
-The choice includes the full jj subject, immutable head/base revisions and `layer` versus `stack`;
+Choices use readable worker titles and saved-revision/layer/stack labels; full jj subjects and immutable head/base revisions live in Details;
 Exact revision details exposes repository, snapshot, operation and creation IDs. A refresh keeps the
 chosen comparison, including when a newer comparison is listed. Switching worker, mission or host
 clears previously admitted content and fences/cancels obsolete reads. Escape returns from
@@ -66,7 +66,11 @@ at most256 KiB before hydration. This first reader supports single-comparison re
 allocations. Multi-source or additional context/preference custody is explicitly Unavailable rather
 than inferred; it does not block initial diff loading. Results have no current-review/gate authority.
 The underlying `review-snapshots.sqlite` and `jj-ownership.sqlite` live in daemon home, outside workspaces.
-Capture and record-write APIs remain host-only/dormant, with no new trigger or agent tool.
+Capture and record-write APIs remain host-only. The [creation-only lifecycle checkpoint](review-snapshots.md#eligible-worker-checkpoint)
+saves exact committed layers for eligible new workers, separately from this read-only transport.
+Empty/loading/failed/ineligible states distinguish missing saved comparisons from actual code changes.
+An empty unusable revision selector is hidden; a retained selection stays pinned on refresh.
+Failed/pending capture notices remain visible even when older saved comparisons exist.
 
 These endpoints use existing daemon loopback and browser-origin admission. They do **not** authenticate
 an OS user or a particular agent session. Same-UID processes and agents with unrestricted shell/REST
@@ -82,7 +86,9 @@ byte caps and cancelled obsolete reads. The hidden `native_review` target mounts
 LocalViewer and real Kit controls at680/1100 light/dark, testing mission entry, exact layer/stack,
 new-revision pinning, source/back, keyboard, resize and empty/refused states against owned faux HTTP.
 These probes are not OS IME, performance, screen-reader or accessibility acceptance, and install
-nothing. Human review writes, capture policy, attention, active gates, cleanup and Opus refinement
+nothing. The hidden journey also consumes real jj/SQLite lifecycle-captured comparisons over owned
+fixture HTTP, preserving selection across newer captures and exercising saved source, failed capture
+and missing custody. Human review writes, attention, active gates, cleanup and Opus refinement
 remain separate work.
 
 ## Remaining design proposal

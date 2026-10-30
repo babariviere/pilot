@@ -843,6 +843,10 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             break;
         }
     }
+    // `channels` otherwise drops before the earlier store argument. Release
+    // the private owner before closing its update lane, so a consumer that
+    // observes disconnection cannot race a still-held draft-store lock.
+    drop(store);
 }
 
 async fn read_json(request: reqwest::RequestBuilder) -> Result<Value, Failure> {

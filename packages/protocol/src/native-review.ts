@@ -19,6 +19,20 @@ export interface NativeReviewComparison {
 	};
 	status: "complete" | "partial" | "unavailable";
 }
+export interface NativeReviewCaptureStatus {
+	pending: number;
+	failed: number;
+	unavailable?: "not-enabled" | "observation-failed";
+	unsupported?: (
+		| "divergent"
+		| "multiple-parents"
+		| "root-base"
+		| "missing"
+		| "unknown-custody"
+		| "unknown-discovery"
+		| "conflicted"
+	)[];
+}
 export interface NativeReviewSource {
 	path: string;
 	mode: string;

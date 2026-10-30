@@ -54,6 +54,28 @@ fn idle(cx: &mut HeadlessAppContext, h: AnyWindowHandle, p: &Entity<Pane>) {
 }
 pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
     cx.update(|cx| cx.set_reduce_motion(true));
+    // Real managed jj -> durable lifecycle outbox -> capture -> admitted list/patch/source.
+    // Only the final transport is the owned faux HTTP server below, never production data.
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../packages/daemon/src/testing/retained-review.ts"),
+        )
+        .output()
+        .expect("real retained capture fixture must run");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let retained: serde_json::Value = serde_json::from_str(
+        stdout
+            .lines()
+            .find(|line| line.starts_with("{\"first\":"))
+            .expect("real retained capture response, separate from Node test-runner diagnostics"),
+    )
+    .unwrap();
     let dir = std::env::var_os("PILOT_NEXT_REVIEW_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();
@@ -229,6 +251,131 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
             cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 1));
+            // Consume actual retained bytes, not the hand-authored demo manifest above.
+            for (path, response) in retained["routes"].as_object().unwrap() {
+                s.reply(path, Reply::json(200, response.clone()));
+            }
+            s.reply(
+                &format!("{}/chat-B?after=0", r::ROOT),
+                Reply::json(200, retained["first"].clone()),
+            );
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            // Clear the earlier pinned fixture by returning through a different worker scope.
+            let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
+            cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            choose(cx, h, "review-worker", 1);
+            idle(cx, h, &pane);
+            choose(cx, h, "review-comparison", 1);
+            idle(cx, h, &pane);
+            let real_id = retained["first"]["comparisons"][0]["snapshotId"]
+                .as_str()
+                .unwrap();
+            cx.update(|cx| {
+                assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id));
+                assert_eq!(pane.read(cx).probe(cx).3, 1);
+            });
+            s.reply(
+                &format!("{}/chat-B?after=0", r::ROOT),
+                Reply::json(200, retained["latest"].clone()),
+            );
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id)));
+            // Details may already be open from the preceding journey.
+            cx.update_window(h, |_, w, cx| {
+                if w.try_find("review-after").is_none() {
+                    w.click("review-details", cx);
+                }
+            })
+            .unwrap();
+            settle(cx, h);
+            click(cx, h, "review-after");
+            idle(cx, h, &pane);
+            cx.update(|cx| {
+                assert!(
+                    pane.read(cx)
+                        .probe(cx)
+                        .2
+                        .as_deref()
+                        .unwrap()
+                        .contains("retained lower")
+                )
+            });
+            click(cx, h, "review-back");
+            // Failed capture is distinct from an empty inventory; selector is absent when unusable.
+            let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
+            cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
+            s.reply(
+                &format!("{}/chat-B?after=0", r::ROOT),
+                Reply::json(
+                    200,
+                    json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":1}}),
+                ),
+            );
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            choose(cx, h, "review-worker", 1);
+            idle(cx, h, &pane);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("review-comparison").is_none())
+            })
+            .unwrap();
+            cx.update(|cx| assert_eq!(pane.read(cx).probe_capture_notice(),Some("Saving some committed revisions couldn't be confirmed. They remain queued for exact recovery at the next worker checkpoint; existing saved revisions are unchanged.")));
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-capture-notice").bounds().size.height > px(0.))
+            })
+            .unwrap();
+            s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":1,"unsupported":["conflicted"]}})));
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            cx.update(|cx| {
+                assert!(
+                    pane.read(cx)
+                        .probe_capture_notice()
+                        .unwrap()
+                        .contains("Conflicted")
+                )
+            });
+            s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":0,"unsupported":["divergent","multiple-parents","root-base","missing","unknown-custody","unknown-discovery"]}})));
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            cx.update_window(h, |_, w, cx| {
+                if w.try_find("review-capture-limitations").is_none() {
+                    w.click("review-details", cx);
+                }
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("review-comparison").is_none());
+                assert!(w.find("review-capture-limitations").bounds().size.height > px(0.));
+            })
+            .unwrap();
+            s.reply(
+                &format!("{}/chat-B?after=0", r::ROOT),
+                Reply::json(
+                    200,
+                    json!({"comparisons":[],"next":null,"unavailable":"missing custody"}),
+                ),
+            );
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            cx.update(|cx| {
+                assert!(
+                    pane.read(cx)
+                        .probe(cx)
+                        .4
+                        .unwrap()
+                        .contains("ownership binding")
+                )
+            });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("review-comparison").is_none())
+            })
+            .unwrap();
             let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
             cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
             cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 0));
