@@ -35,6 +35,9 @@ commit hashes. No runtime tests/builds or live actions were run for this audit.
   schedule creation (#148), MCP roster (#149) and energy status (#153) slices.
   Do not bundle their write/setup/sign-in flows. Add project default-model editing
   as a small residual of #144, not a repeat of General/Workspace Settings.
+  The [energy read audit](energy-status.md) found only a cached report without
+  observation freshness or structured platform/unknown metadata. Do not add a
+  current-state page or infer inhibition from configuration under that contract.
   The [default-model audit](project-settings.md#default-model-contract-audit) found
   a non-atomic GET/PATCH overwrite race; safe editing is blocked on an approved
   captured-model precondition, not on another catalogue or chat-model picker.
@@ -120,7 +123,7 @@ not an absence proof. Swift links are historical capability references only.
 | #150 account inventory | **I** for resolving the inventory question: no standalone provider-login Settings category in the checked Swift inventory. Propose retire the unknown, not invent a login feature. Import's GitHub setup remains #157. | Swift [SettingsTab.general](../../macos/Sources/Pilot/Settings.swift); Next Category above. |
 | #151 diagnostics controls/export | **P.** Local reviewed export and current-host macOS `next_app` reader delivered. Telemetry/reporting controls, actual clear and repair-checkout binding remain absent. Clear preview is not retained-evidence erasure. | [Diagnostics::review/clear/export](../src/diagnostics_view.rs), [closed reader/control scope](diagnostic-coverage.md); #324, #482, #483. |
 | #152 diagnostic chat/repair | **P.** Help → Ask about Pilot creates an explicit read-only diagnostic draft; no start before Send. Repair proposal/configured-checkout approval flow is missing, not granted by diagnostic role. | [menus](../src/app_menu.rs), [ChatEditor::new_diagnostics](../src/chat_editor.rs), [new_chat_setup](../src/new_chat_view.rs); #478. |
-| #153 energy | **P/B.** Daemon-owned Rust helper source delivered, native Settings controls absent. Preserve opt-in macOS lid policy; hardware sleep/lid and Linux KDE semantics remain separate qualification. | Category above; [power crate](../../power/Cargo.toml), Swift [EnergySettings](../../macos/Sources/Pilot/EnergySettings.swift); #402, #405, blocked #347/#406. |
+| #153 energy | **P/B.** Daemon-owned Rust helper source delivered, native Settings controls absent. Passive GET is cached and lacks observation freshness/structured platform unknowns; current-state UI awaits a narrowly approved read contract. Preserve opt-in macOS lid policy; hardware qualification remains separate. | [Read audit and isolated regression](energy-status.md), [power crate](../../power/Cargo.toml), Swift [EnergySettings](../../macos/Sources/Pilot/EnergySettings.swift); #402, #405, #493, blocked #347/#406. |
 | #154 environment/setup | **M/B.** No toolchain/setup/local-file/database-plan editor. Scope existing discovery first; execution/setup authority is not General Settings authority. | Project Fields above; Swift [EnvironmentSettingsSection](../../macos/Sources/Pilot/EnvironmentSettings.swift). |
 | #155 tracking configuration | **M.** No Linear mapping or Slack channels/labels/guides editor. Read-only service links and mission attention do not implement configuration. | Project Fields above; Swift [TrackingSettingsSection](../../macos/Sources/Pilot/TrackingSettings.swift). |
 | #156 databases | **M/B.** No connection/policy editor. Do not use ordinary question answers as grants; audit credential-owner and exact approval contract first. | Project Fields and Question above; Swift [ProjectDatabaseSettingsSection](../../macos/Sources/Pilot/DatabaseSettings.swift). |
