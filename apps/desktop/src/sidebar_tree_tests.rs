@@ -119,6 +119,42 @@ fn missions_nest_one_level_under_their_coordinator_in_your_order() {
 }
 
 #[test]
+fn usage_paused_members_remain_unfinished_and_roll_up_until_release() {
+    let mut held = member("held", "m", 2.);
+    held["subscriptionPause"] = json!({"windows":[]});
+    let mut solo = plain("solo", 5.);
+    solo["subscriptionPause"] = json!({"windows":[]});
+    let mut f = Fixture::new(vec![
+        coord("coord", "m", 1.),
+        held.clone(),
+        member("done", "m", 3.),
+        solo,
+    ]);
+    assert_eq!(f.rows(), ["solo", "> coord", "  held", "  +1"]);
+    let tree = f.tree();
+    assert_eq!(tree.threads[0].finished, 1);
+    assert_eq!(tree.threads[0].rollup.words(), "1 paused");
+    f.collapsed.insert("m".into());
+    assert_eq!(f.rows(), ["solo", "> coord"]);
+    assert_eq!(f.tree().threads[0].rollup.words(), "1 paused");
+    for chat in &mut f.chats {
+        chat.project_id = Some(if chat.id == "solo" { "other" } else { "work" }.into());
+    }
+    f.grouped = true;
+    let grouped = f.tree();
+    assert_eq!(grouped.groups.len(), 2);
+    for group in &grouped.groups {
+        assert_eq!(group.mark(), Some(Mark::Paused));
+        assert_eq!(group.rollup.words(), "1 paused");
+    }
+    held["subscriptionPause"] = Value::Null;
+    held["projectId"] = json!("work");
+    f.set(held);
+    assert!(f.tree().threads[0].rollup.counts().is_empty());
+    assert_eq!(f.tree().threads[0].finished, 2);
+}
+
+#[test]
 fn finished_members_fold_unless_unread_or_open_and_parents_collapse() {
     let mut values = vec![coord("coord", "m", 1.)];
     for i in 0..120 {

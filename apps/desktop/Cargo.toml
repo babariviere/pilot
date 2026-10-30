@@ -278,6 +278,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "subscription_limits"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "missions"
 harness = false
 test = false

@@ -202,7 +202,12 @@ impl ChatEditor {
         let pause = self.subscription_pause()?;
         let now = subscription_pause::now();
         let notice: SharedString = pause.notice(now).into();
-        let help: SharedString = pause.help(now).into();
+        let help: SharedString = if pause.forced {
+            pause.help(now)
+        } else {
+            format!("Usage limit reached\n{}", pause.help(now))
+        }
+        .into();
         let forced = pause.forced;
         let busy = self.models.as_ref().is_some_and(|m| m.busy);
         let open = self.continuation();
@@ -215,15 +220,16 @@ impl ChatEditor {
             .child(
                 div()
                     .flex_none()
-                    .text_color(cx.theme().warning)
-                    .child(ui::icon(
-                        if forced {
-                            ui::IconRole::Error
-                        } else {
-                            ui::IconRole::Info
-                        },
-                        ui::IconSize::Inline,
-                    )),
+                    .text_color(if forced {
+                        cx.theme().warning
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(if forced {
+                        crate::app_icon::AppIcon::Error.inline()
+                    } else {
+                        crate::app_icon::AppIcon::Paused.inline()
+                    }),
             )
             .child(ui::text(ui::Text::Caption, notice.clone()).min_w_0())
             .aria_label(notice)

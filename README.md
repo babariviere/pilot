@@ -448,6 +448,10 @@ Work resumes automatically when the blocked windows reset or a fresh usage readi
 Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
 additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.
 
+Pilot Next labels a usage-held chat **Paused**, with **Usage limit reached** in its details.
+It stays unfinished, outside finished-member folding and automatic archiving. Manual archive and Stop
+remain available where ordinarily allowed; a pending question still takes Needs you precedence.
+
 In Pilot Next, **Refresh limits** on Home or Usage explicitly asks Local to refresh Claude and Codex
 subscription reports, without starting an agent or reading credentials in the GUI. It uses canonical Pi
 OAuth only and shares Pi's one-minute usage cache, request lock and provider backoff. A cache hit keeps

@@ -1278,6 +1278,21 @@ mod tests {
             raw.for_display(Some("a")).chats[0].signal,
             Some(Signal::NeedsYou)
         );
+        // The same exact pending question outranks a usage hold, without
+        // mutating busy/admission or making the hold sticky after the answer.
+        raw.chats = Arc::new(vec![
+            local_model::chat(&json!({"id":"a","state":"working","working":false,"subscriptionPause":{"windows":[]}})).unwrap(),
+        ]);
+        raw.question_awaited = true;
+        let pending = raw.for_display(Some("a"));
+        assert_eq!(Mark::of(&pending.chats[0]), Some(Mark::Question));
+        assert_eq!(raw.chats[0].signal, Some(Signal::Paused));
+        assert_eq!(raw.chats[0].busy, pending.chats[0].busy);
+        raw.question = Projection::Unavailable;
+        assert_eq!(
+            raw.for_display(Some("a")).chats[0].signal,
+            Some(Signal::Paused)
+        );
     }
     #[test]
     fn identity_protocol_and_allowlist_fail_closed() {

@@ -8,6 +8,7 @@ pub(crate) enum Kind {
     Question,
     ScheduledFailure,
     Other,
+    Paused,
     Ready,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +50,12 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
     let reason = value["attentionReason"]["kind"].as_str().unwrap_or("");
     // `asks` in a summary: the live run awaits ask_user (pilotd sets it only then).
     let live = matches!(reason, "long_job" | "mcp" | "tool_stall" | "asks");
+    if !live && signal == Some(Signal::Paused) {
+        return Some(Attention {
+            kind: Kind::Paused,
+            label: "Paused".into(),
+        });
+    }
     // Follow SessionSignal precedence. A job, pause or scheduled reply must not
     // resurrect a previous question/failure. Live public attention wins first.
     if !live

@@ -2295,6 +2295,7 @@ impl LocalViewer {
 
 impl Render for LocalViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::StatefulInteractiveElement as _;
         let menu_ready = self.menu_navigation_ready(window, cx);
         let menu_jump = self.menu_jump_ready(window, cx);
         let menu_new_chat = menu_ready && self.editor.read(cx).ready();
@@ -2368,6 +2369,11 @@ impl Render for LocalViewer {
             )
             .collect::<Vec<_>>()
             .join(" · ");
+        let paused = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
+            .and_then(Chat::pause_reason);
         div().map(menu_routing::window_commands).id("desktop-root").track_focus(&self.root_focus).test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             // Over glass the sidebar and page are separate tints, never stacked.
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
@@ -2475,6 +2481,14 @@ impl Render for LocalViewer {
                                 .when(!cwd.is_empty(),|d|{let cwd=SharedString::from(cwd.clone());gpui_kit::StatefulInteractiveElement::tooltip(d,move|w,cx|gpui_kit::component::tooltip::Tooltip::new(cwd.clone()).build(w,cx))})
                                 .child(SharedString::from(self.title.clone())).test_support())
                             .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().max_w_full().truncate().text_size(px(crate::ui::TextRole::CAPTION)).line_height(px(crate::ui::TextRole::CAPTION*1.3)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
+                        .when_some(paused, |d, reason| d.child(
+                            div().id("chat-paused-status").h_flex().items_center().gap_1().flex_none()
+                                .text_color(cx.theme().muted_foreground)
+                                .aria_label(SharedString::from(format!("Paused, {reason}")))
+                                .tooltip(move |w,cx| gpui_kit::component::tooltip::Tooltip::new(reason).build(w,cx))
+                                .test_support()
+                                .child(crate::state_mark::slot(Some(crate::state_mark::Mark::Paused.into()),None,1.,cx))
+                                .child(crate::ui::text(crate::ui::Text::Caption,"Paused"))))
                         .child(div().h_flex().items_center().gap_0p5().flex_none()
                             .children(self.conversation_links_action(cx))
                             .children(self.workspace_changes_action(cx))

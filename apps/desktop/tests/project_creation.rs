@@ -15,5 +15,4 @@ fn main() {
     });
     pilot_desktop::run_project_creation_probe(&mut cx);
     pilot_desktop::run_chat_model_probe(&mut cx);
-    pilot_desktop::run_subscription_limit_probe(&mut cx);
 }

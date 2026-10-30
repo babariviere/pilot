@@ -115,6 +115,20 @@ fn settled_pull_requests_follow_swift_terminal_rule() {
 }
 
 #[test]
+fn usage_pause_is_unfinished_even_with_a_previous_settled_pull_request() {
+    let mut raw = json!({"id":"held","state":"idle","working":false,
+        "pullRequest":{"state":"merged"},"outcome":"done","outcomeAt":50,
+        "subscriptionPause":{"windows":[]}});
+    let held = c(raw.clone());
+    assert!(!held.order.settled);
+    assert!(held.order.reply.is_none());
+    raw["subscriptionPause"]["forced"] = json!(true);
+    assert!(c(raw.clone()).order.settled);
+    raw["subscriptionPause"] = serde_json::Value::Null;
+    assert!(c(raw).order.settled);
+}
+
+#[test]
 fn sidebar_sections_ignore_state_and_seed_stamps_never_use_updated_at() {
     let section = |v: Value| Section::of(&c(v));
     assert_eq!(section(json!({"id":"w","state":"working"})), Section::Chats);

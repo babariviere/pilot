@@ -17,6 +17,7 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Signal {
     Working,
+    Paused,
     NeedsYou,
     Failed,
     Ready,
@@ -26,6 +27,10 @@ impl Signal {
         match self {
             Self::Working if dark => 0x818cf8,
             Self::Working => 0x6366f1,
+            // Same metadata neutrals as appearance::palette. Row paint uses
+            // the active theme directly (Mark::color).
+            Self::Paused if dark => 0xa3acba,
+            Self::Paused => 0x5f6b7d,
             Self::NeedsYou => 0xf59e0b,
             Self::Failed => 0xef4444,
             Self::Ready => 0x10b981,
@@ -37,6 +42,7 @@ impl Signal {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
     Working,
+    Paused,
     /// Only background jobs are running.
     Background,
     NeedsYou,
@@ -49,6 +55,7 @@ impl Mark {
         Some(match chat.signal? {
             Signal::Working if chat.background_work => Self::Background,
             Signal::Working => Self::Working,
+            Signal::Paused => Self::Paused,
             Signal::NeedsYou if chat.order.question => Self::Question,
             Signal::NeedsYou => Self::NeedsYou,
             Signal::Failed => Self::Failed,
@@ -59,6 +66,7 @@ impl Mark {
     pub(crate) fn word(self) -> &'static str {
         match self {
             Self::Working => "Working",
+            Self::Paused => "Paused",
             Self::Background => "Background",
             Self::NeedsYou => "Needs you",
             Self::Question => "Question",
@@ -70,7 +78,7 @@ impl Mark {
     pub(crate) fn color(self, cx: &App) -> Hsla {
         let dark = cx.theme().is_dark();
         match self {
-            Self::Working | Self::Background => cx.theme().muted_foreground,
+            Self::Working | Self::Background | Self::Paused => cx.theme().muted_foreground,
             Self::NeedsYou | Self::Question => rgb(Signal::NeedsYou.rgb(dark)).into(),
             Self::Failed => rgb(Signal::Failed.rgb(dark)).into(),
             Self::Ready => rgb(Signal::Ready.rgb(dark)).into(),
@@ -87,7 +95,7 @@ impl Mark {
     /// Needs you, Failed and Ready already ask for a look, so their rows show
     /// no separate "new reply" state.
     pub(crate) fn asks_for_look(self) -> bool {
-        self.bucket() != Self::Working
+        !matches!(self.bucket(), Self::Working | Self::Paused)
     }
 }
 
@@ -176,6 +184,12 @@ pub(crate) fn glyph(glyph: Glyph, cx: &App) -> AnyElement {
             .size_3()
             .text_color(color)
             .into_any_element(),
+        Mark::Paused => div()
+            .id("state-paused")
+            .test_support()
+            .text_color(color)
+            .child(AppIcon::Paused.icon().size_3())
+            .into_any_element(),
     }
 }
 
@@ -244,6 +258,83 @@ impl Fade {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_pause_is_current_per_chat_presentation_not_run_state() {
+        use serde_json::json;
+        for state in ["idle", "working", "starting", "parked", "failed"] {
+            let mut v = json!({"id":"held","state":state,"working":false,
+                "outcome":"done","subscriptionPause":{"windows":[]}});
+            let held = crate::local_model::chat(&v).unwrap();
+            assert_eq!(Mark::of(&held).map(Mark::word), Some("Paused"), "{state}");
+            assert_eq!(held.signal_label(), "Paused");
+            assert_eq!(held.row_reason(), Some("Paused"));
+            assert_eq!(held.busy, state == "working" || state == "starting");
+            assert_eq!(held.state, state);
+            assert!(held.writable);
+            // Actual tools/jobs still drain under the current hold. The daemon's
+            // working:true remains Working, even though a durable run can be
+            // busy (state:working) while its admission is paused.
+            let mut draining = v.clone();
+            draining["working"] = json!(true);
+            assert_eq!(
+                Mark::of(&crate::local_model::chat(&draining).unwrap())
+                    .unwrap()
+                    .bucket(),
+                Mark::Working
+            );
+            v["subscriptionPause"]["forced"] = json!(true);
+            let forced = crate::local_model::chat(&v).unwrap();
+            assert_ne!(Mark::of(&forced).map(Mark::word), Some("Paused"));
+            v["subscriptionPause"] = serde_json::Value::Null;
+            let released = crate::local_model::chat(&v).unwrap();
+            assert_eq!(Mark::of(&forced), Mark::of(&released));
+        }
+        for (state, expected) in [("failed", Some(Mark::Failed)), ("idle", Some(Mark::Ready))] {
+            let mut raw = json!({"id":"ordinary","state":state,
+                "usage":{"subscription":{"fetchedAt":1,"windows":[{"usedPercent":100}]}},
+                "pullRequest":{"state":"open","readiness":{"state":"ready"}}});
+            assert_eq!(Mark::of(&crate::local_model::chat(&raw).unwrap()), expected);
+            raw["subscriptionPause"] = json!({"windows":[]});
+            raw["usage"]["subscription"]["error"] = json!("unavailable");
+            assert_eq!(
+                Mark::of(&crate::local_model::chat(&raw).unwrap()),
+                Some(Mark::Paused)
+            );
+        }
+        for extra in [
+            json!({"usage":{"subscription":{"windows":[{"usedPercent":100}]}}}),
+            json!({"usage":{"subscription":{"error":"unavailable","fetchedAt":1}}}),
+            json!({"subscriptionPause":null}),
+            json!({"subscriptionPause":false}),
+            json!({"subscriptionPause":"unknown"}),
+        ] {
+            let mut v = json!({"id":"ordinary","state":"idle","outcome":"done"});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(Mark::of(&crate::local_model::chat(&v).unwrap()).is_none());
+        }
+        let failed =
+            crate::local_model::chat(&json!({"id":"failed","state":"failed","outcome":"question"}))
+                .unwrap();
+        assert_eq!(
+            Mark::of(&failed),
+            Some(Mark::Failed),
+            "An unrelated idle failure keeps its original precedence"
+        );
+        for extra in [
+            json!({"state":"working","attentionReason":{"kind":"asks","detail":"Which?"}}),
+            json!({"state":"idle","outcome":"question","runningJobs":[{"name":"j"}]}),
+        ] {
+            let mut v = json!({"id":"question","subscriptionPause":{"windows":[]}});
+            v.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let c = crate::local_model::chat(&v).unwrap();
+            assert_eq!(Mark::of(&c).map(Mark::word), Some("Question"));
+            assert_eq!(c.attention.unwrap().kind, crate::attention::Kind::Question);
+        }
+    }
     use super::*;
     use serde_json::json;
 

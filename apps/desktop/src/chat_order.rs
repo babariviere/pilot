@@ -69,12 +69,8 @@ fn terminal(pr: &Value) -> bool {
 pub(crate) fn read(value: &Value, working: bool) -> Order {
     let created = stamp(&value["createdAt"]).unwrap_or(0.);
     let updated = stamp(&value["updatedAt"]).unwrap_or(created);
-    let state = value["state"].as_str().unwrap_or("");
     let paused = value["sleepPaused"] == true || value["offlinePaused"] == true;
-    let usage_held = value["subscriptionPause"].is_object()
-        && value["subscriptionPause"]["forced"] != true
-        && !working
-        && matches!(state, "working" | "starting");
+    let usage_held = crate::subscription_pause::blocked(value);
     let outcome = value["outcome"]
         .as_str()
         .filter(|o| matches!(*o, "done" | "question" | "failed" | "stopped"));
@@ -109,6 +105,7 @@ pub(crate) fn read(value: &Value, working: bool) -> Order {
     Order {
         pinned: value["pinned"] == true,
         settled: !active_coordinator
+            && !usage_held
             && value["unpublishedWork"] != true
             && terminal(&value["pullRequest"])
             && linked.into_iter().all(terminal),

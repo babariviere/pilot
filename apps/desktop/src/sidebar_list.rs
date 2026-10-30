@@ -510,6 +510,11 @@ impl ChatList {
             self.opened.is_some() && chat.is_some_and(|c| self.opened.as_ref() == Some(&c.id));
         div()
             .id(SharedString::from(format!("chat-row-{key}")))
+            .when_some(chat.and_then(Chat::pause_reason), |d, reason| {
+                d.tooltip(move |w, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(reason).build(w, cx)
+                })
+            })
             // Keys don't end the pointer's hover: the button under it stays.
             .hover_listener_mode(gpui_kit::HoverListenerMode::InputModalityIndependent)
             .on_hover(move |hovered, _, cx| {
@@ -640,7 +645,8 @@ impl ChatList {
             self.project_name(Some(&chat), Section::Pinned as usize)
                 .into_iter()
                 .chain((!state.is_empty()).then(|| state.clone()))
-                .chain(mark.as_ref().map(|m| m.label.clone())),
+                .chain(mark.as_ref().map(|m| m.label.clone()))
+                .chain(chat.pause_reason().map(str::to_owned)),
             unread,
         );
         let state_color = mark_state
@@ -806,6 +812,12 @@ impl ChatList {
         if t.collapsed && !rollup.words().is_empty() {
             spoken.push(rollup.words());
         }
+        spoken.extend(
+            coordinator
+                .as_ref()
+                .and_then(Chat::pause_reason)
+                .map(str::to_owned),
+        );
         let spoken = label(&title, spoken.into_iter(), unread);
         let word = mark.map(|m| (m.word(), m));
         let accent_color = appearance::accent_mark(cx);
@@ -1054,6 +1066,7 @@ impl ChatList {
                 .then_some(state)
                 .into_iter()
                 .chain(elsewhere.clone())
+                .chain(chat.pause_reason().map(str::to_owned))
                 .chain([mission]),
             unread,
         );

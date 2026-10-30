@@ -254,11 +254,16 @@ impl Chat {
         match self.signal {
             Some(Signal::Working) if self.background_work => "Working in background",
             Some(Signal::Working) => "Working",
+            Some(Signal::Paused) => "Paused",
             Some(Signal::NeedsYou) => "Needs you",
             Some(Signal::Failed) => "Failed",
             Some(Signal::Ready) => "Ready to merge",
             None => &self.state,
         }
+    }
+    /// Secondary reason, disclosed without crowding the visible status word.
+    pub(crate) fn pause_reason(&self) -> Option<&'static str> {
+        (self.signal == Some(crate::state_mark::Signal::Paused)).then_some("Usage limit reached")
     }
 }
 pub(crate) fn interactive_local(value: &Value) -> bool {
@@ -345,6 +350,7 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
         .as_array()
         .is_some_and(|jobs| !jobs.is_empty());
     let paused = value["sleepPaused"] == true || value["offlinePaused"] == true;
+    let usage_blocked = crate::subscription_pause::blocked(value);
     let working = working(value);
     let background = working && !matches!(state, "working" | "starting") && jobs;
     let reason = value["attentionReason"]["kind"].as_str().unwrap_or("");
@@ -379,11 +385,13 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
             .iter()
             .all(|field| value[*field].as_array().is_none_or(Vec::is_empty));
     let signal = if matches!(reason, "long_job" | "mcp" | "tool_stall" | "asks")
-        || (working && question_outranks_work(value))
+        || ((working || usage_blocked) && question_outranks_work(value))
     {
         Some(Signal::NeedsYou)
     } else if working {
         Some(Signal::Working)
+    } else if usage_blocked {
+        Some(Signal::Paused)
     } else if value["scheduledMessage"] == true {
         ready.then_some(Signal::Ready)
     } else if !paused && !terminal && (value["outcome"] == "failed" || state == "failed") {

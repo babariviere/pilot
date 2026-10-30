@@ -64,6 +64,7 @@ impl SelectItem for Choice {
 struct Rows {
     needs: Vec<usize>,
     ready: Vec<usize>,
+    paused: Vec<usize>,
 }
 impl Rows {
     fn new(chats: &[Chat], filter: Option<&str>) -> Self {
@@ -78,6 +79,8 @@ impl Rows {
             if let Some(a) = &c.attention {
                 if a.kind == Kind::Ready {
                     rows.ready.push(ix);
+                } else if a.kind == Kind::Paused {
+                    rows.paused.push(ix);
                 } else {
                     rows.needs.push(ix);
                 }
@@ -89,10 +92,10 @@ impl Rows {
         rows
     }
     fn section(&self, section: usize) -> &[usize] {
-        if section == 0 {
-            &self.needs
-        } else {
-            &self.ready
+        match section {
+            0 => &self.needs,
+            1 => &self.ready,
+            _ => &self.paused,
         }
     }
 }
@@ -114,7 +117,7 @@ impl InboxList {
             .and_then(|ix| self.all.get(*ix))
     }
     fn index(&self, id: &str) -> Option<IndexPath> {
-        (0..2).find_map(|section| {
+        (0..3).find_map(|section| {
             self.rows
                 .section(section)
                 .iter()
@@ -126,7 +129,7 @@ impl InboxList {
 impl ListDelegate for InboxList {
     type Item = ListItem;
     fn sections_count(&self, _: &App) -> usize {
-        2
+        3
     }
     fn items_count(&self, section: usize, _: &App) -> usize {
         self.rows.section(section).len()
@@ -146,11 +149,12 @@ impl ListDelegate for InboxList {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
         let count = self.rows.section(section).len();
-        if count == 0 {
-            return None;
-        }
+        // Kit measures section zero even when it is empty. Empty sections
+        // are not mounted, but must still supply the common header height.
         Some(
             div()
+                .id(SharedString::from(format!("inbox-section-{section}")))
+                .test_support()
                 .h_flex()
                 .items_center()
                 .gap(px(Space::CONTROL))
@@ -159,10 +163,10 @@ impl ListDelegate for InboxList {
                 .child(
                     ui::text(
                         Text::Label,
-                        if section == 0 {
-                            "Needs you"
-                        } else {
-                            "Ready to merge"
+                        match section {
+                            0 => "Needs you",
+                            1 => "Ready to merge",
+                            _ => "Paused",
                         },
                     )
                     .font_medium()
@@ -215,7 +219,10 @@ impl ListDelegate for InboxList {
             })
             .unwrap_or("No project");
         let context = format!("{project} · {}", attention.label);
-        let tooltip = SharedString::from(format!("{}\n{context}", chat.title));
+        let detail = chat
+            .pause_reason()
+            .map_or(context.clone(), |reason| format!("{context} · {reason}"));
+        let tooltip = SharedString::from(format!("{}\n{detail}", chat.title));
         // The same still mark as the sidebar, never a dither corner.
         let mark = match attention.kind {
             crate::attention::Kind::Failed | crate::attention::Kind::ScheduledFailure => {
@@ -224,6 +231,7 @@ impl ListDelegate for InboxList {
             crate::attention::Kind::Question => crate::state_mark::Mark::Question,
             crate::attention::Kind::Other => crate::state_mark::Mark::NeedsYou,
             crate::attention::Kind::Ready => crate::state_mark::Mark::Ready,
+            crate::attention::Kind::Paused => crate::state_mark::Mark::Paused,
         };
         let (shown, previous, t) =
             self.marks
@@ -234,7 +242,7 @@ impl ListDelegate for InboxList {
         let id = chat.id.clone();
         Some(
             ListItem::new(SharedString::from(format!("inbox-{}", chat.id)))
-                .accessibility_label(SharedString::from(format!("{}, {context}", chat.title)))
+                .accessibility_label(SharedString::from(format!("{}, {detail}", chat.title)))
                 // Pin pointer activation to the rendered ID, never a live urgency index.
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -474,6 +482,7 @@ impl Inbox {
                 .needs
                 .iter()
                 .chain(&d.rows.ready)
+                .chain(&d.rows.paused)
                 .map(|ix| d.all[*ix].id.as_str())
                 .collect();
             d.marks.retain(|id, _| eligible.contains(id.as_str()));
@@ -520,6 +529,20 @@ impl Render for Inbox {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_pause_has_its_own_quiet_section_and_question_still_needs_you() {
+        use serde_json::json;
+        let mut raw = json!({"id":"held","state":"idle","subscriptionPause":{"windows":[]}});
+        let c = crate::local_model::chat(&raw).unwrap();
+        let rows = super::Rows::new(&[c], None);
+        assert!(rows.needs.is_empty() && rows.ready.is_empty());
+        assert_eq!(rows.paused, [0]);
+        raw["attentionReason"] = json!({"kind":"asks","detail":"Which?"});
+        let c = crate::local_model::chat(&raw).unwrap();
+        let rows = super::Rows::new(&[c], None);
+        assert_eq!(rows.needs, [0]);
+        assert!(rows.paused.is_empty());
+    }
     use super::*;
     use serde_json::json;
     #[test]

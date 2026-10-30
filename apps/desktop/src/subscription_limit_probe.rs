@@ -74,6 +74,7 @@ fn choose(cx: &mut HeadlessAppContext, h: AnyWindowHandle, trigger: &str, id: &s
     }
 }
 pub fn run_subscription_limit_probe(cx: &mut HeadlessAppContext) {
+    run_paused_status_probe(cx);
     let dir = std::env::var_os("PILOT_NEXT_SUBSCRIPTION_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();
@@ -406,6 +407,135 @@ pub fn run_subscription_limit_probe(cx: &mut HeadlessAppContext) {
                 "{}",
                 serde_json::json!({"probe":"subscription-limit","width":width,"mode":mode.name(),"tray":76,"input":34,"continue_same":true,"continue_new":true,"force_toggle":true,"preedit_guard":true,"posts":server.posts()})
             );
+        }
+    }
+}
+
+/// Production sidebar, Inbox and header. No transport or user profile.
+fn run_paused_status_probe(cx: &mut HeadlessAppContext) {
+    use serde_json::json;
+    let captures = std::env::var_os("PILOT_NEXT_PAUSED_DIR").map(PathBuf::from);
+    if let Some(dir) = &captures {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| gpui_kit::component::Theme::change(mode, None, cx));
+            let (h, view) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(Default::default(), size(px(width), px(760.))))),
+                        show: false, focus: false, ..Default::default()
+                    },
+                    cx,
+                    |w, cx| cx.new(|cx| {
+                        let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                        let values = [
+                            json!({"id":"coord","title":"Coordinator","state":"idle","missionId":"m","missionCoordinator":true,"createdAt":1}),
+                            json!({"id":"held","title":"Held work 日本語 👩‍💻","state":"working","working":false,"missionId":"m","subscriptionPause":{"windows":[]},"createdAt":2}),
+                            json!({"id":"done","title":"Finished","state":"idle","missionId":"m","createdAt":3}),
+                            json!({"id":"solo","title":"A paused standalone conversation","state":"idle","subscriptionPause":{"windows":[]},"createdAt":4}),
+                        ];
+                        v.state.chats = Arc::new(values.iter().map(|v| crate::local_model::chat(v).unwrap()).collect());
+                        v.state.mission_titles = Some(Arc::new([("m".into(),"Synthetic work".into())].into_iter().collect()));
+                        v.chats.update(cx, |l, _| l.delegate_mut().memory = crate::sidebar_memory::Memory::ephemeral(0.));
+                        v.selected = Some("solo".into());
+                        v.title = "A paused standalone conversation".into();
+                        v.editor.update(cx, |e,cx|e.select("chat:solo".into(),true,false,w,cx));
+                        v.rebuild_nav(w,cx);
+                        v
+                    }),
+                ).unwrap()
+            });
+            settle(cx, h);
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}-sidebar.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                let header = w.find("chat-paused-status");
+                assert_eq!(header.label(), Some("Paused, Usage limit reached"));
+                assert!(header.visible());
+                assert!(header.bounds().right() <= w.find("chat-header").bounds().right());
+                for id in ["held", "solo"] {
+                    let label = w
+                        .find(SharedString::from(id.to_owned()))
+                        .label()
+                        .unwrap()
+                        .to_owned();
+                    assert!(
+                        label.contains("Paused") && label.contains("Usage limit reached"),
+                        "{label}"
+                    );
+                    let row = w.within(SharedString::from(format!("chat-row-{id}")));
+                    assert!(row.find("state-paused").visible());
+                }
+                assert!(
+                    w.within("chat-row-held")
+                        .find("sidebar-state-word")
+                        .visible()
+                );
+                let tree = &view.read(cx).chats.read(cx).delegate().tree;
+                assert_eq!(tree.threads[0].finished, 1);
+                assert_eq!(tree.threads[0].rollup.words(), "1 paused");
+                view.update(cx, |v, cx| {
+                    v.chats.update(cx, |l, cx| {
+                        let index = l.delegate().index("coord").unwrap();
+                        l.set_selected_index(Some(index), w, cx);
+                        l.focus(w, cx);
+                    });
+                });
+                w.press("left", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.try_find("chat-row-held").is_none());
+                assert!(w.find("coord").label().unwrap().contains("1 paused"));
+                assert!(w.find("mission-rollup-Paused").visible());
+                w.press("right", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                assert!(w.find("chat-row-held").visible());
+                view.update(cx, |v, cx| v.show_inbox(None, w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            if let Some(dir) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{}-{}-inbox.png", width as u32, mode.name())))
+                    .unwrap();
+            }
+            cx.update_window(h, |_,w,cx| {
+                let header = w.find("inbox-section-2").bounds();
+                for id in ["held","solo"] {
+                    let row = w.find(SharedString::from(format!("inbox-{id}")));
+                    assert!(row.visible());
+                    assert!(header.bottom() <= row.bounds().top(), "Paused heading must reserve its height even with empty Needs you/Ready sections");
+                    assert!(row.label().unwrap().contains("Paused · Usage limit reached"));
+                    assert!(w.within(SharedString::from(format!("attention-{id}"))).find("state-paused").visible());
+                }
+                // Policy release replaces the summary, it never triggers a client-side resume.
+                view.update(cx, |v,cx| {
+                    let raw=json!({"id":"solo","title":"A paused standalone conversation","state":"idle","subscriptionPause":null});
+                    let mut chats=(*v.state.chats).clone();
+                    *chats.iter_mut().find(|c|c.id=="solo").unwrap()=crate::local_model::chat(&raw).unwrap();
+                    v.state.chats=Arc::new(chats);
+                    v.rebuild_nav(w,cx);
+                });
+            }).unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("inbox-solo").is_none());
+                assert!(w.find("inbox-held").visible());
+                w.remove_window();
+            })
+            .unwrap();
         }
     }
 }

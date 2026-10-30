@@ -82,6 +82,7 @@ fn chat(value: Value, signal: Option<Signal>) -> Chat {
     if let Some(signal) = signal {
         chat.state = match signal {
             Signal::Working => "Working",
+            Signal::Paused => "Paused",
             Signal::NeedsYou => "Needs you",
             Signal::Failed => "Failed",
             Signal::Ready => "Ready to merge",

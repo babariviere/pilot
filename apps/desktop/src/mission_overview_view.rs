@@ -642,6 +642,9 @@ impl Browser {
         let key = d.key.clone();
         let id = c.id.clone();
         let reason = c.row_reason().map(capitalized).unwrap_or_default();
+        let detail = c
+            .pause_reason()
+            .map_or(reason.clone(), |why| format!("{reason} · {why}"));
         ui::action(
             SharedString::from(format!("mission-needs-chat-{}", c.id)),
             "",
@@ -651,9 +654,10 @@ impl Browser {
         .justify_start()
         .disabled(!self.can_link(&key, &id, generation))
         .accessibility_label(SharedString::from(format!(
-            "{}, {reason}. Open chat",
+            "{}, {detail}. Open chat",
             c.title
         )))
+        .when_some(c.pause_reason(), |b, why| b.tooltip(why))
         .child(
             div()
                 .h_flex()

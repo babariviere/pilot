@@ -42,6 +42,7 @@ pub(crate) struct Rollup {
     pub(crate) failed: usize,
     pub(crate) ready: usize,
     pub(crate) working: usize,
+    pub(crate) paused: usize,
     pub(crate) unread: bool,
 }
 impl Rollup {
@@ -51,6 +52,7 @@ impl Rollup {
             Some(Mark::Failed) => self.failed += 1,
             Some(Mark::Ready) => self.ready += 1,
             Some(Mark::Working) => self.working += 1,
+            Some(Mark::Paused) => self.paused += 1,
             _ => {}
         }
     }
@@ -61,6 +63,7 @@ impl Rollup {
             (Mark::Failed, self.failed),
             (Mark::Ready, self.ready),
             (Mark::Working, self.working),
+            (Mark::Paused, self.paused),
         ]
         .into_iter()
         .filter(|(_, n)| *n > 0)
@@ -74,6 +77,7 @@ impl Rollup {
                 Mark::NeedsYou => format!("{n} need you"),
                 Mark::Failed => format!("{n} failed"),
                 Mark::Ready => format!("{n} ready"),
+                Mark::Paused => format!("{n} paused"),
                 _ => format!("{n} working"),
             })
             .chain(self.unread.then(|| "new replies".to_owned()))

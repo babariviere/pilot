@@ -2048,6 +2048,7 @@ export class SessionManager {
 			if (
 				meta.pinned ||
 				meta.archivedAt !== undefined ||
+				this.subscriptionPaused(meta.id) ||
 				// Chats of an active mission wait for their mission, not a week of inactivity.
 				this.missions?.membership(meta.id)?.active ||
 				this.missions?.passiveMissionLifecycle?.(this.missions.membership(meta.id)?.missionId ?? "") ||
@@ -3684,6 +3685,7 @@ export class SessionManager {
 			!this.closing &&
 			!this.sleepPause &&
 			!this.updateGate.paused &&
+			!this.subscriptionPaused(meta.id) &&
 			meta.archivedAt === undefined &&
 			!meta.working &&
 			!meta.kernelRestartPending &&
@@ -3760,6 +3762,16 @@ export class SessionManager {
 				)
 					return this.summary(meta);
 				// Activity or restoration may have arrived after the sweep selected this chat.
+				// Usage-paused chats are unfinished. Recheck after async inspection;
+				// explicit manual archive retains its existing semantics.
+				if (
+					archived &&
+					(staleBefore !== undefined ||
+						autoArchivedPullRequest !== undefined ||
+						coordinatorMissionId !== undefined) &&
+					this.subscriptionPaused(id)
+				)
+					return this.summary(meta);
 				if (meta.pinned && (staleBefore !== undefined || autoArchivedPullRequest !== undefined))
 					return this.summary(meta);
 				if (staleBefore !== undefined && Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore)
@@ -9015,7 +9027,7 @@ export class SessionManager {
 	 * latest known merge time decides the deadline. Persisted merge times avoid polling terminal PRs.
 	 */
 	private mergeArchiveTarget(meta: SessionMeta): { url: string; mergedAt: number } | undefined {
-		if (this.isActiveMissionCoordinator(meta.id)) return undefined;
+		if (this.isActiveMissionCoordinator(meta.id) || this.subscriptionPaused(meta.id)) return undefined;
 		const prs = sessionPullRequests(meta);
 		if (meta.pullRequestError || !prs.every(isTerminalPullRequest)) return undefined;
 		let target: { url: string; mergedAt: number } | undefined;

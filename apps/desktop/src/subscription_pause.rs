@@ -7,6 +7,12 @@ use serde_json::Value;
 /// pilotd holds work once a window reaches this share.
 const LIMIT_PERCENT: u32 = 99;
 
+/// The daemon's current per-chat gate, not a prediction from cached usage.
+/// It clears on policy release/reset; Force work is explicitly not held.
+pub(crate) fn blocked(v: &Value) -> bool {
+    v["subscriptionPause"].is_object() && v["subscriptionPause"]["forced"] != true
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Window {
     provider: &'static str,

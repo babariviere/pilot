@@ -48,6 +48,22 @@ fn policy_matches_swift_working_retained_history_and_guarded_conversion() {
             .can_convert
     );
 }
+
+#[test]
+fn usage_pause_does_not_remove_manual_archive_or_implicitly_stop_a_run() {
+    let options = LocalOptions::synthetic(1);
+    let mut raw = source();
+    raw["subscriptionPause"] = json!({"windows":[]});
+    let e = Evidence::read(&target(&options, &raw), &raw, true).unwrap();
+    assert!(e.archive && e.can_archive);
+    raw["state"] = json!("working");
+    let e = Evidence::read(&target(&options, &raw), &raw, true).unwrap();
+    // Authoritative working:false remains idle for archive admission.
+    assert_eq!(e.can_archive, raw["working"] == false);
+    raw["working"] = json!(true);
+    let e = Evidence::read(&target(&options, &raw), &raw, true).unwrap();
+    assert!(!e.can_archive);
+}
 #[test]
 fn original_identity_metadata_and_case_are_not_row_indices_or_titles() {
     let options = LocalOptions::synthetic(1);

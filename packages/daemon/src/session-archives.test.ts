@@ -245,7 +245,7 @@ test("coordinator archival waits for children, tools, compaction and background-
 	assert.ok(f.sessions.get(f.id)?.archivedAt);
 });
 
-for (const change of ["restore", "leave", "coordinator", "work"] as const) {
+for (const change of ["restore", "leave", "coordinator", "work", "usage"] as const) {
 	test(`queued coordinator archival rechecks ${change} after mission durability`, async (t) => {
 		const f = await coordinatorFixture(t);
 		const gate = deferred();
@@ -262,7 +262,13 @@ for (const change of ["restore", "leave", "coordinator", "work"] as const) {
 			if (change === "restore") f.store.update(f.mission.id, { status: "active" });
 			else if (change === "leave") f.store.leave(f.id);
 			else if (change === "coordinator") f.store.update(f.mission.id, { coordinatorSessionId: null });
-			else f.meta.working = true;
+			else if (change === "usage") {
+				f.meta.model = "openai-codex/synthetic";
+				f.meta.subscriptionPolicy = {
+					version: 1,
+					windows: [{ provider: "openai", label: "5h", usedPercent: 99 }],
+				};
+			} else f.meta.working = true;
 			gate.resolve();
 			await pending;
 			assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
@@ -424,6 +430,127 @@ test("pins prevent inactivity and merged PR automatic archival across restarts u
 	} finally {
 		await cleanup();
 	}
+});
+
+test("usage-paused idle chats resist inactive and merged PR archival but allow manual archive", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const { sessions, ids, cleanup } = await fixture();
+	try {
+		for (const id of ids) {
+			const meta = sessions["metas"].get(id)!;
+			meta.model = "openai-codex/synthetic";
+			meta.subscriptionPolicy = {
+				version: 1,
+				windows: [
+					{ provider: "openai", label: "5h", usedPercent: 99, resetsAt: new Date(now + 86_400_000).toISOString() },
+				],
+			};
+			meta.updatedAt = now - 8 * 86_400_000;
+		}
+		const merged = sessions["metas"].get(ids[1]!)!;
+		merged.pullRequest!.state = "merged";
+		merged.pullRequest!.mergedAt = now - 2 * 86_400_000;
+		merged.pullRequestMergedAt = merged.pullRequest!.mergedAt;
+		delete merged.pullRequestError;
+		await sessions["archiveInactiveSessions"]();
+		for (const id of ids) {
+			assert.equal(sessions.subscriptionPaused(id), true);
+			assert.equal(sessions.get(id)?.archivedAt, undefined, "paused is unfinished");
+		}
+		assert.ok((await sessions.archive(ids[2]!)).archivedAt, "explicit manual archive stays available");
+		// The existing policy owner decides reset/fresh-reading release. Archival just follows it.
+		sessions["metas"].get(ids[0]!)!.subscriptionPolicy = { version: 1, windows: [] };
+		merged.subscriptionPolicy!.force = ["openai"];
+		await sessions["archiveInactiveSessions"]();
+		assert.equal(sessions.get(ids[0]!)?.archivedAt, now, "released idle chat");
+		assert.equal(sessions.get(ids[1]!)?.archivedAt, now, "forced chat follows ordinary merge rules");
+		assert.equal(merged.autoArchivedPullRequest, merged.pullRequest!.url);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("queued automatic archival rechecks usage pause after workspace inspection", async (t) => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const meta = sessions["metas"].get(id)!;
+	const gate = deferred();
+	const entered = deferred();
+	t.mock.method(
+		sessions as unknown as { unpublishedWork(meta: Meta): Promise<boolean> },
+		"unpublishedWork",
+		async () => {
+			entered.resolve();
+			await gate.promise;
+			return false;
+		},
+	);
+	try {
+		const archiving = sessions["setArchived"](id, true, undefined, Date.now());
+		await entered.promise;
+		meta.model = "openai-codex/synthetic";
+		meta.subscriptionPolicy = {
+			version: 1,
+			windows: [
+				{
+					provider: "openai",
+					label: "5h",
+					usedPercent: 99,
+					resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+				},
+			],
+		};
+		gate.resolve();
+		await archiving;
+		assert.equal(meta.archivedAt, undefined);
+	} finally {
+		gate.resolve();
+		await cleanup();
+	}
+});
+
+test("a reset usage window no longer excludes an inactive chat from automatic archive", async () => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	try {
+		const meta = sessions["metas"].get(id)!;
+		meta.model = "openai-codex/synthetic";
+		meta.subscriptionPolicy = {
+			version: 1,
+			windows: [
+				{ provider: "openai", label: "5h", usedPercent: 99, resetsAt: new Date(Date.now() - 1).toISOString() },
+			],
+		};
+		assert.equal(sessions.subscriptionPaused(id), false);
+		await sessions["archiveInactiveSessions"]();
+		assert.ok(sessions.get(id)?.archivedAt);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("closed-mission coordinator stays unfinished while usage-paused", async (t) => {
+	const f = await coordinatorFixture(t);
+	f.meta.model = "openai-codex/synthetic";
+	f.meta.subscriptionPolicy = {
+		version: 1,
+		windows: [
+			{
+				provider: "openai",
+				label: "5h",
+				usedPercent: 99,
+				resetsAt: new Date(Date.now() + 86_400_000).toISOString(),
+			},
+		],
+	};
+	f.store.update(f.mission.id, { status: "done" });
+	await f.sessions["archiveTransitions"].get(f.id)?.promise;
+	assert.equal(f.sessions.get(f.id)?.archivedAt, undefined);
+	assert.equal(f.sessions.subscriptionPaused(f.id), true);
+	f.meta.subscriptionPolicy = { version: 1, windows: [] };
+	await f.sessions["archiveMissionCoordinator"](f.meta);
+	assert.ok(f.sessions.get(f.id)?.archivedAt);
 });
 
 for (const release of ["done", "archived", "role", "leave"] as const) {

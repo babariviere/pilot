@@ -506,7 +506,10 @@ impl Overview {
         let chat = &self.chats[ix];
         let id = chat.id.clone();
         let detail = chat_row_detail(chat, &self.projects, self.project.is_none());
-        let label = SharedString::from(format!("{} · {detail}", chat.title));
+        let label = SharedString::from(match chat.pause_reason() {
+            Some(reason) => format!("{} · {detail} · {reason}", chat.title),
+            None => format!("{} · {detail}", chat.title),
+        });
         Button::new(SharedString::from(format!("{prefix}-{id}")))
             .ghost()
             .small()

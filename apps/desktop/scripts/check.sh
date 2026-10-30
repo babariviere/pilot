@@ -67,6 +67,8 @@ bash scripts/cargo.sh test --locked --features native-probes --test mission
 
 # Actual project choice and durable create over an owned faux daemon.
 bash scripts/cargo.sh test --locked --features native-probes --test project_creation
+# Subscription recovery/status independently of project/model picker journeys.
+bash scripts/cargo.sh test --locked --features native-probes --test subscription_limits
 # Read-only global mission discovery and existing-chat navigation, owned faux HTTP only.
 bash scripts/cargo.sh test --locked --features native-probes --test missions
 bash scripts/cargo.sh test --locked --features native-probes --test project_add

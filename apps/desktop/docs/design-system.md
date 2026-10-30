@@ -364,6 +364,18 @@ Usage, Settings and connection/recovery state keep their existing owners.
 
 The sidebar list (`sidebar_list.rs`, rows built by `sidebar_tree.rs`) has
 four sections: Drafts, Pinned, Chats and, with the Archived filter, Archived.
+An unforced `SessionSummary.subscriptionPause` projects to `Signal::Paused`
+and `Mark::Paused`: a still Lucide Pause in the existing 12pt slot with
+theme `muted_foreground`, and the word Paused. Its tooltip and accessible
+name disclose Usage limit reached. Sidebar mission/project roll-ups count it
+separately, unfinished members never fold away, and Inbox has a quiet Paused
+section. The chat header shares that mark and word; the existing composer
+recovery row retains Force work and continuation. Live pending questions keep
+Needs you precedence. Actual draining tools/jobs remain Working until the daemon
+reports no effective work. No aggregate-usage inference, polling or run-state change.
+The `subscription_limits` hidden native target exercises status, keyboard
+folding, accessible names and existing Force/continuation/draft/Stop reachability
+at680/1100 in light/dark; it runs separately from model/project creation.
 Chats holds mission threads and standalone chats in the user's own order
 (below). Across all projects, once two or more projects (or project-less
 folders, labelled `~/path` with a folder glyph) have chats, Chats splits into
