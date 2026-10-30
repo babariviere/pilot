@@ -12,6 +12,8 @@ target/message, latches, reported state and reported error. New-chat requests ar
 inert JSON, not executable controls. Refresh is the only read action after opening.
 No create/edit/cancel/dispatch/pause/enable, activity promotion, service, credential,
 provider or account action is exposed. Management remains separate work.
+One-time creation was separately audited: the existing POST lacks a mutation-time
+daemon/lineage precondition. See the [creation blocker and isolated evidence](schedule-creation.md).
 
 ## Existing passive contract
 
