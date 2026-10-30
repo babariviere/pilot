@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs, { link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -577,4 +579,64 @@ test("native-only source scope does not disable or grant sources to existing bas
 	const finished = await f.execute("jobs", { action: "wait", id, waitMs: 5000 });
 	assert.equal((finished.structuredContent as { state: string }).state, "done");
 	assert.equal(f.admissions(), before, "no new source permission is attached to arbitrary process calls");
+});
+
+// homedir() is captured when the native reader is loaded. Keep this fixture in a
+// child with a private HOME, never writing to the user's actual attachment store.
+test("coordinator pasted images use the existing read-only attachment contract", async (t) => {
+	if (process.env.PILOT_TEST_PASTED_IMAGE_CHILD !== "1") {
+		const home = await mkdtemp(join(tmpdir(), "coordinator-image-home-"));
+		try {
+			const env = Object.fromEntries(
+				Object.entries(process.env).filter(
+					([key]) => !key.startsWith("PILOT_") && key !== "NODE_OPTIONS" && key !== "NODE_TEST_CONTEXT",
+				),
+			);
+			const child = spawnSync(
+				process.execPath,
+				["--test", "--test-name-pattern=^coordinator pasted images use", import.meta.filename],
+				{ env: { ...env, HOME: home, PILOT_TEST_PASTED_IMAGE_CHILD: "1" }, encoding: "utf8", timeout: 90000 },
+			);
+			assert.equal(child.status, 0, child.stdout + child.stderr);
+			assert.match(child.stdout, /tests 1/);
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+		return;
+	}
+	const f = await fixture(t, "workspace-write");
+	const { ASK_ATTACHMENTS } = await import("./ask-tools.ts");
+	await mkdir(ASK_ATTACHMENTS, { recursive: true });
+	const image = join(ASK_ATTACHMENTS, `${randomUUID()}.png`);
+	const png = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+		"base64",
+	);
+	await writeFile(image, png);
+	for (const nested of [false, true]) {
+		const result = await f.execute(
+			nested ? "codemode" : "read",
+			nested ? { code: `image(await tools.read({path:${JSON.stringify(image)}}));` } : { path: image },
+		);
+		assert.ok(!result.isError, JSON.stringify(result));
+		assert.match(JSON.stringify(result), /image\/png/);
+		assert.ok(
+			result.content.some((block) => block.type === "image"),
+			JSON.stringify(result),
+		);
+	}
+	for (const path of [join(ASK_ATTACHMENTS, "not-a-uuid.png"), join(f.other, `${randomUUID()}.png`)]) {
+		await writeFile(path, png);
+		assert.ok((await f.execute("read", { path })).isError, path);
+	}
+	const alias = join(ASK_ATTACHMENTS, `${randomUUID()}.png`);
+	await symlink(image, alias);
+	assert.ok((await f.execute("read", { path: alias })).isError);
+	assert.ok(
+		(await f.execute("read", { path: `${join(ASK_ATTACHMENTS, "nested")}/../${image.split("/").at(-1)}` })).isError,
+	);
+	assert.ok((await f.execute("ls", { path: ASK_ATTACHMENTS })).isError);
+	assert.ok((await f.execute("find", { path: ASK_ATTACHMENTS, pattern: "*" })).isError);
+	assert.ok((await f.execute("write", { path: image, content: "overwrite" })).isError);
+	assert.deepEqual(await readFile(image), png);
 });

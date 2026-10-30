@@ -421,6 +421,8 @@ impl ChatEditor {
         }
         self.cache.entry(key.clone()).or_default();
         self.selected = Some(key);
+        self.attachments.choosing = None;
+        self.attachment_coordinator(false, cx);
         self.writable = writable;
         self.busy = busy;
         self.thinking = false;
@@ -1486,6 +1488,16 @@ impl Render for ChatEditor {
                     // Reserve the same small slot while idle. Work transitions
                     // neither move Send nor mount an irrelevant disabled action.
                     .children((!is_new && !is_subagent).then(|| self.context_entry.clone()).flatten())
+                    .children(self.attachments.coordinator.then(|| {
+                        Button::new("attach-images")
+                            .ghost()
+                            .small()
+                            .icon(AppIcon::AttachImage.asset())
+                            .accessibility_label("Attach images")
+                            .tooltip("Attach images. You can also paste or drop an image.")
+                            .disabled(blocked || settled || !draft.editable() || self.questions.current.is_some() || self.attachments.importing.is_some() || self.attachments.choosing.is_some())
+                            .on_click(cx.listener(|v, _, w, cx| v.pick_images(w, cx)))
+                    }))
                     .child(stop_slot)
                     .child({
                         let label = if settled && !draft.text.is_empty() {

@@ -1,8 +1,6 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 #[path = "archived_composer.rs"]
 mod archived_composer;
-#[path = "chat_attention_hint.rs"]
-mod chat_attention_hint;
 #[cfg(feature = "native-probes")]
 #[path = "awaited_question_probe.rs"]
 pub(crate) mod awaited_question_probe;
@@ -11,6 +9,8 @@ mod chat_actions_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "chat_actions_probe.rs"]
 pub(crate) mod chat_actions_probe;
+#[path = "chat_attention_hint.rs"]
+mod chat_attention_hint;
 #[path = "chat_link_navigation.rs"]
 mod chat_link_navigation;
 #[cfg(feature = "native-probes")]
@@ -1621,7 +1621,8 @@ impl LocalViewer {
         self.refreshing = false;
         let key = format!("chat:{}", chat.id);
         self.editor.update(cx, |editor, cx| {
-            editor.select(key, chat.writable, chat.busy, window, cx)
+            editor.select(key, chat.writable, chat.busy, window, cx);
+            editor.attachment_coordinator(chat.mission_coordinator, cx);
         });
         self.selected = Some(chat.id);
         self.pending_reader = self.selected.as_ref().and_then(|id| {
@@ -1749,6 +1750,7 @@ impl LocalViewer {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
+                editor.attachment_coordinator(chat.mission_coordinator, cx);
                 editor.background(chat.background_work, cx);
                 // Only jobs run: their strip above the composer says so instead.
                 editor.jobs_only(chat.background_work && !chat.running_jobs.is_empty(), cx);

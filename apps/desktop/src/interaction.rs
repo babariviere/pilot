@@ -160,6 +160,7 @@ pub(crate) enum WriteCommand {
 #[derive(Clone)]
 pub(crate) struct Interaction {
     pub(crate) attachment_root: Option<PathBuf>,
+    pub(crate) pasted_attachment_directory: Option<PathBuf>,
     commands: async_channel::Sender<WriteCommand>,
     edits: Arc<Mutex<BTreeMap<String, Draft>>>,
     wake: async_channel::Sender<()>,
@@ -185,6 +186,7 @@ impl Interaction {
                 commands,
                 edits: Arc::new(Mutex::new(BTreeMap::new())),
                 attachment_root: None,
+                pasted_attachment_directory: None,
                 wake,
                 close,
             },
@@ -205,6 +207,7 @@ impl Interaction {
                 commands,
                 edits: Arc::new(Mutex::new(BTreeMap::new())),
                 attachment_root: None,
+                pasted_attachment_directory: None,
                 wake,
                 close,
             },
@@ -252,6 +255,7 @@ impl Interaction {
                 commands,
                 edits,
                 attachment_root,
+                pasted_attachment_directory: crate::image_attachments::pasted_directory(),
                 wake,
                 close,
             },
@@ -956,11 +960,19 @@ async fn submit(
         }
         let summary = writable(client, options, target).await?;
         if !stop && !draft.attachments.is_empty() && summary["missionCoordinator"] == true {
-            return Err(
-                "Image attachments are not supported in coordinator chats yet. This draft was not sent.",
-            );
+            let directory = crate::image_attachments::pasted_directory()
+                .ok_or("Attachment storage is unavailable. This draft was not sent.")?;
+            if !crate::image_attachments::coordinator_readable(&draft.attachments, &directory) {
+                return Err(
+                    "These images are outside coordinator attachment storage. Remove and reattach them; this draft was not sent.",
+                );
+            }
         }
-        if !stop && !draft.attachments.is_empty() && summary["mode"] != "build" {
+        if !stop
+            && !draft.attachments.is_empty()
+            && summary["missionCoordinator"] != true
+            && summary["mode"] != "build"
+        {
             return Err(
                 "Image attachments require a Build chat. Ask cannot read this attachment store; the draft was not sent.",
             );

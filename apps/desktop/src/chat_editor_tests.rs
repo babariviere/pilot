@@ -1,6 +1,58 @@
 use super::*;
 
 #[gpui_kit::test]
+fn coordinator_picker_uses_pasted_storage_and_rejects_stale_selection(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let root = std::env::temp_dir().join(format!("picker-images-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let source = root.join("picked.png");
+    let directory = root.join("Library/Application Support/Pilot/Attachments");
+    image::RgbaImage::from_pixel(48, 32, image::Rgba([40, 66, 219, 255]))
+        .save(&source)
+        .unwrap();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.client.as_mut().unwrap().pasted_attachment_directory = Some(directory.clone());
+            e.attachment_coordinator(true, cx);
+            e.pick_images(w, cx);
+        })
+    })
+    .unwrap();
+    assert!(cx.did_prompt_for_paths());
+    cx.simulate_path_prompt_response(|options| {
+        assert!(options.files && options.multiple && !options.directories);
+        Some(vec![source.clone()])
+    });
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let images = &view.read(cx).cache["chat:a"].attachments;
+        assert_eq!(images.len(), 1);
+        assert!(crate::image_attachments::coordinator_readable(
+            images, &directory
+        ));
+    });
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.pick_images(w, cx);
+            e.select("chat:b".into(), true, false, w, cx);
+        })
+    })
+    .unwrap();
+    cx.simulate_path_prompt_response(|_| Some(vec![source]));
+    cx.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(view.read(cx).cache["chat:a"].attachments.len(), 1);
+        assert!(view.read(cx).cache["chat:b"].attachments.is_empty());
+        assert!(!view.read(cx).attachments.coordinator);
+    });
+    assert!(commands.try_recv().is_err(), "Picking never submits");
+    cx.update_window(handle, |_, w, _| w.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui_kit::test]
 fn update_checkpoint_empty_composer_retains_unknown_without_replaying(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     let root = std::env::temp_dir().join(format!("empty-update-{}", uuid::Uuid::new_v4()));

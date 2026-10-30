@@ -5,6 +5,8 @@ use gpui_kit::{AnyElement, ObjectFit, StyledImage, Task, img};
 
 #[derive(Default)]
 pub(super) struct Previews {
+    pub(super) coordinator: bool,
+    pub(super) choosing: Option<Task<()>>,
     key: Option<String>,
     sources: Vec<Attachment>,
     pixels: Vec<Result<crate::artifact_image::Raster, &'static str>>,
@@ -14,6 +16,70 @@ pub(super) struct Previews {
     error: Option<(String, &'static str)>,
 }
 impl ChatEditor {
+    pub(crate) fn attachment_coordinator(&mut self, coordinator: bool, cx: &mut Context<Self>) {
+        if self.attachments.coordinator != coordinator {
+            self.attachments.coordinator = coordinator;
+            if !coordinator {
+                self.attachments.choosing = None;
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn pick_images(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.attachments.coordinator
+            || !self.can_attach(w, cx)
+            || self.attachments.choosing.is_some()
+        {
+            return;
+        }
+        self.changed(cx);
+        let key = self.selected.clone();
+        let revision = self.draft().map(|d| d.revision);
+        let response = cx.prompt_for_paths(gpui_kit::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach images".into()),
+        });
+        self.attachments.choosing = Some(cx.spawn_in(w, async move |editor, cx| {
+            let result = response.await;
+            let _ = editor.update_in(cx, |v, w, cx| {
+                v.attachments.choosing = None;
+                if v.selected != key
+                    || v.draft().map(|d| d.revision) != revision
+                    || !v.attachments.coordinator
+                {
+                    return;
+                }
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        v.attach_images(paths.into_iter().map(Incoming::File).collect(), w, cx)
+                    }
+                    Ok(Ok(None)) => {}
+                    _ => {
+                        v.attachments.error =
+                            key.map(|key| (key, "Could not choose images. Try again."));
+                        cx.notify();
+                    }
+                }
+                v.focus(w, cx);
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn can_attach(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.ready()
+            && self.writable
+            && !self.waiting()
+            && !self.marked(w, cx)
+            && self.questions.current.is_none()
+            && self.attachments.importing.is_none()
+            && self.draft().is_some_and(Draft::editable)
+    }
+
     pub(super) fn attachment_paste(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some(item) = cx.read_from_clipboard() else {
             return false;
@@ -30,20 +96,20 @@ impl ChatEditor {
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if incoming.is_empty()
-            || !self.ready()
-            || !self.writable
-            || self.waiting()
-            || self.marked(w, cx)
-            || self.questions.current.is_some()
-            || self.attachments.importing.is_some()
-            || !self.draft().is_some_and(Draft::editable)
-        {
+        if incoming.is_empty() || !self.can_attach(w, cx) {
             return;
         }
         self.changed(cx);
         let key = self.selected.clone().unwrap();
-        let Some(root) = self.client.as_ref().and_then(|c| c.attachment_root.clone()) else {
+        let Some(directory) = self.client.as_ref().and_then(|c| {
+            if self.attachments.coordinator {
+                c.pasted_attachment_directory.clone()
+            } else {
+                c.attachment_root
+                    .as_ref()
+                    .map(|root| root.join("attachments"))
+            }
+        }) else {
             return;
         };
         self.attachments.error = None;
@@ -53,7 +119,7 @@ impl ChatEditor {
                 .background_executor()
                 .spawn(async move {
                     let _permit = crate::artifact_image::Permit::queued().await;
-                    crate::image_attachments::save(&root, incoming)
+                    crate::image_attachments::save_to(&directory, incoming)
                 })
                 .await;
             let _ = editor.update(cx, |v, cx| {

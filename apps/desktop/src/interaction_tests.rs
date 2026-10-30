@@ -1084,11 +1084,12 @@ impl Drop for Temp {
     }
 }
 #[tokio::test]
-async fn image_attachment_send_requires_fresh_build_mode_before_any_operation() {
-    for (behavior, allowed) in [
-        (Behavior::ImageBuild, true),
-        (Behavior::Accept, false),
-        (Behavior::ImageCoordinator, false),
+async fn image_attachment_send_requires_fresh_role_and_coordinator_readable_storage() {
+    for (behavior, allowed, pasted) in [
+        (Behavior::ImageBuild, true, false),
+        (Behavior::Accept, false, true),
+        (Behavior::ImageCoordinator, true, true),
+        (Behavior::ImageCoordinator, false, false),
     ] {
         let daemon = Daemon::start(behavior).await;
         let temp = Temp::new();
@@ -1097,7 +1098,13 @@ async fn image_attachment_send_requires_fresh_build_mode_before_any_operation() 
         let captured = Draft {
             revision: 1,
             attachments: vec![crate::image_attachments::Attachment {
-                path: temp.0.join("attachments").join(format!("{id}.png")),
+                path: if pasted {
+                    crate::image_attachments::pasted_directory()
+                        .unwrap()
+                        .join(format!("{id}.png"))
+                } else {
+                    temp.0.join("attachments").join(format!("{id}.png"))
+                },
                 id,
                 hash: "a".repeat(64),
             }],
@@ -1141,6 +1148,85 @@ async fn image_attachment_send_requires_fresh_build_mode_before_any_operation() 
         }
     }
 }
+#[tokio::test]
+async fn coordinator_images_keep_exact_delivery_and_drafts_on_refusal_or_unknown() {
+    for text in ["", "Review this layout 👩‍💻"] {
+        for behavior in [
+            Behavior::Accept,
+            Behavior::Reject,
+            Behavior::LostBeforeAdmission,
+            Behavior::Readonly,
+            Behavior::BadIdentity,
+        ] {
+            let daemon = Daemon::start(behavior).await;
+            daemon.seen.lock().unwrap().image_coordinator = true;
+            let temp = Temp::new();
+            let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let draft = Draft {
+                revision: 1,
+                text: text.into(),
+                attachments: vec![crate::image_attachments::Attachment {
+                    path: crate::image_attachments::pasted_directory()
+                        .unwrap()
+                        .join(format!("{id}.png")),
+                    id,
+                    hash: "a".repeat(64),
+                }],
+                ..Default::default()
+            };
+            store
+                .save_edits(BTreeMap::from([("chat:a".into(), draft.clone())]))
+                .unwrap();
+            let result = super::submit(
+                &reqwest::Client::new(),
+                &daemon.options,
+                &mut store,
+                Submission {
+                    key: "chat:a",
+                    draft: &draft,
+                    follow_up: false,
+                    stop: false,
+                },
+                &mut None,
+                |_| {},
+            )
+            .await;
+            if behavior == Behavior::Accept {
+                assert!(result.is_ok(), "{result:?}");
+                assert!(store.book.drafts["chat:a"].attachments.is_empty());
+            } else {
+                assert_eq!(store.book.drafts["chat:a"].attachments, draft.attachments);
+                assert_eq!(store.book.drafts["chat:a"].text, text);
+            }
+            if matches!(behavior, Behavior::Readonly | Behavior::BadIdentity) {
+                assert!(result.is_err());
+                assert!(daemon.seen.lock().unwrap().envelopes.is_empty());
+            } else {
+                let seen = daemon.seen.lock().unwrap();
+                assert_eq!(seen.envelopes.len(), 1);
+                let payload: Value =
+                    serde_json::from_str(seen.envelopes[0]["payload"].as_str().unwrap()).unwrap();
+                assert_eq!(
+                    payload["message"],
+                    crate::image_attachments::message(text, &draft.attachments)
+                );
+            }
+            if behavior == Behavior::LostBeforeAdmission {
+                drop(store);
+                let store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+                assert_eq!(store.book.drafts["chat:a"].attachments, draft.attachments);
+                assert_eq!(store.book.pending.values().next().unwrap().state, "unknown");
+                assert_eq!(
+                    daemon.seen.lock().unwrap().envelopes.len(),
+                    1,
+                    "No replay on reopen"
+                );
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Behavior {
     ImageBuild,
@@ -1173,6 +1259,7 @@ enum Behavior {
 }
 #[derive(Default)]
 struct Seen {
+    image_coordinator: bool,
     requests: Vec<(String, String)>,
     operations: BTreeMap<String, Value>,
     envelopes: Vec<Value>,
@@ -1247,7 +1334,7 @@ impl Daemon {
                                 }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
                                     let id=path.rsplit('/').next().unwrap();
-                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
+                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {
@@ -2018,6 +2105,7 @@ async fn sustained_edits_autosave_before_idle_and_close_flushes_the_latest() {
     let client = Interaction {
         commands,
         attachment_root: None,
+        pasted_attachment_directory: None,
         edits: edits.clone(),
         wake,
         close,

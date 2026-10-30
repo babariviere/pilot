@@ -12,11 +12,21 @@ immutable private PNG. The durable draft stores each attachment's UUID, exact
 path and content hash. Parent, named subagent and new-chat drafts stay separate.
 The existing immutable send operation carries read-tool file instructions. The
 model can read those files, just as it does for Swift attachments. No image upload,
-backend contract or new host capability is added. Sends with these attachments
-require a freshly confirmed ordinary Build session (or a new Build chat).
-Legacy Ask and scoped coordinators admit only Swift's separate attachment
-folder, not Next's private store. Next retains the draft and refuses those
-unsupported sends; it does not expand their access or share Swift-owned files.
+backend contract or new host capability is added. Ordinary Build sessions (and
+new Build chats) keep Next's private store.
+
+Coordinator chats also offer **Attach images**, using the native file picker.
+Pick, paste and drop normalize to new, exclusively created UUID.png files in
+`~/Library/Application Support/Pilot/Attachments`, the existing pasted-image
+read exception. Only newly imported coordinator images use that directory;
+Next never rewrites or removes Swift-owned files. The fresh send check requires
+that exact location for coordinator images. Previously parked private images
+must be removed and reattached. Normal previews, drafts, history and read-tool
+image results use the existing paths. The coordinator's source membership,
+configured read denials, no-alias checks and scratch-only write rules remain
+unchanged; attachment directories are not new list/search/source roots.
+Ordinary Ask/explorer attachment sends and coordinator subagent attachment
+sends stay refused. No Ask-mode read-admission policy is expanded.
 
 Selected previews share the existing queued image-decoder lane, compressed input,
 axis and pixel limits. Only small thumbnail rasters stay in the composer. There
@@ -43,3 +53,9 @@ themes. Their clipboard is GPUI's test-platform clipboard, not the OS service.
 These checks do not qualify copying from a particular external application,
 OS clipboard negotiation/Wayland asynchronous paste, or OS IME. No live app,
 daemon, profile or installation is used.
+
+Coordinator checks use a private synthetic HOME and the actual native adapter,
+including nested codemode reads, to verify real image output and refusal of
+outside-root/non-UUID/traversal/symlink paths, search and writes. Native hidden
+composer probes run Build and coordinator imports at both sizes/themes;
+picker tests exercise the real prompt response and stale-target cancellation.

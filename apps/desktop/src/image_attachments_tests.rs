@@ -83,6 +83,64 @@ fn invalid_and_oversized_inputs_do_not_decode() {
     assert!(decode(&vec![0; crate::artifact_image::ENCODED_CAP + 1]).is_err());
     assert!(clipboard(ClipboardItem::new_string("ordinary text".into())).is_none());
 }
+
+#[test]
+fn coordinator_storage_is_exact_uuid_png_not_private_or_arbitrary_paths() {
+    let root = std::env::temp_dir().join(format!("pasted-image-{}", uuid::Uuid::new_v4()));
+    let directory = root.join("Library/Application Support/Pilot/Attachments");
+    let images = save_to(
+        &directory,
+        vec![Incoming::Bytes(image(image::ImageFormat::Png))],
+    )
+    .unwrap();
+    assert!(coordinator_readable(&images, &directory));
+    assert_eq!(images[0].preview().unwrap().width, 48);
+    assert!(!coordinator_readable(&images, &root.join("attachments")));
+    for path in [
+        directory.join("bad.png"),
+        directory
+            .join("nested")
+            .join(format!("{}.png", images[0].id)),
+        directory
+            .join("nested/..")
+            .join(format!("{}.png", images[0].id)),
+        directory.join(format!("{}.jpg", images[0].id)),
+    ] {
+        let mut malformed = images[0].clone();
+        malformed.path = path;
+        assert!(!coordinator_readable(&[malformed], &directory));
+    }
+    let mut store = Store::open(
+        root.join("drafts"),
+        crate::LocalOptions::synthetic(1).host(),
+    )
+    .unwrap();
+    store
+        .save_edits(std::collections::BTreeMap::from([(
+            "chat:coordinator".into(),
+            Draft {
+                revision: 1,
+                text: "Review this image".into(),
+                attachments: images.clone(),
+                ..Default::default()
+            },
+        )]))
+        .unwrap();
+    drop(store);
+    let store = Store::open(
+        root.join("drafts"),
+        crate::LocalOptions::synthetic(1).host(),
+    )
+    .unwrap();
+    assert_eq!(store.book.drafts["chat:coordinator"].attachments, images);
+    assert!(
+        store.book.drafts["chat:coordinator"].attachments[0]
+            .preview()
+            .is_ok()
+    );
+    drop(store);
+    fs::remove_dir_all(root).unwrap();
+}
 #[test]
 fn attachments_are_exact_durable_draft_content_and_unknown_is_not_replayed() {
     let root = std::env::temp_dir().join(format!("image-delivery-{}", uuid::Uuid::new_v4()));

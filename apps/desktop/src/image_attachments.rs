@@ -135,10 +135,30 @@ fn decode(bytes: &[u8]) -> Result<crate::artifact_image::Raster, &'static str> {
         || false,
     )
 }
+#[cfg(test)]
 pub(crate) fn save(root: &Path, incoming: Vec<Incoming>) -> Result<Vec<Attachment>, &'static str> {
-    let directory = root.join("attachments");
-    fs::create_dir_all(&directory).map_err(|_| "Could not create attachment storage.")?;
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+    save_to(&root.join("attachments"), incoming)
+}
+
+/// Existing native coordinator read exception, also used by Swift.
+pub(crate) fn pasted_directory() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join("Library/Application Support/Pilot/Attachments"))
+}
+
+pub(crate) fn coordinator_readable(images: &[Attachment], directory: &Path) -> bool {
+    images.iter().all(|image| {
+        image.validate()
+            && image.path.as_os_str() == directory.join(format!("{}.png", image.id)).as_os_str()
+    })
+}
+
+pub(crate) fn save_to(
+    directory: &Path,
+    incoming: Vec<Incoming>,
+) -> Result<Vec<Attachment>, &'static str> {
+    fs::create_dir_all(directory).map_err(|_| "Could not create attachment storage.")?;
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
         .map_err(|_| "Could not protect attachment storage.")?;
     let mut saved = Vec::new();
     for input in incoming {
@@ -162,7 +182,7 @@ pub(crate) fn save(root: &Path, incoming: Vec<Incoming>) -> Result<Vec<Attachmen
         file.write_all(&png)
             .and_then(|_| file.sync_all())
             .map_err(|_| "Could not save attached image.")?;
-        fs::File::open(&directory)
+        fs::File::open(directory)
             .and_then(|f| f.sync_all())
             .map_err(|_| "Could not retain attached image.")?;
         saved.push(Attachment {

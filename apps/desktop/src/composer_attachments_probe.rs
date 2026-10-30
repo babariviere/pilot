@@ -51,7 +51,7 @@ fn incoming() -> ClipboardItem {
 }
 pub(super) fn run(cx: &mut HeadlessAppContext) {
     for width in [680., 1100.] {
-        for dark in [false, true] {
+        for (dark, coordinator) in [(false, false), (true, false), (false, true), (true, true)] {
             let root =
                 std::env::temp_dir().join(format!("native-attachments-{}", uuid::Uuid::new_v4()));
             let mut store = crate::delivery_store::Store::open(
@@ -61,6 +61,8 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             .unwrap();
             let (mut writer, commands) = Interaction::recording();
             writer.attachment_root = Some(root.clone());
+            let pasted = root.join("Library/Application Support/Pilot/Attachments");
+            writer.pasted_attachment_directory = Some(pasted.clone());
             let state = WriteState {
                 book: Some(Arc::new(store.book.clone())),
                 ..Default::default()
@@ -92,6 +94,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                             let mut e = ChatEditor::new(Some(writer), w, cx);
                             e.accept(state, w, cx);
                             e.select("chat:a".into(), true, false, w, cx);
+                            e.attachment_coordinator(coordinator, cx);
                             e
                         });
                         editor = Some(e.clone());
@@ -126,9 +129,16 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             wait(cx, h, &editor);
             assert!(cx.update(|cx| editor.read(cx).cache[&early_child].attachments.is_empty()));
             let images = cx.update(|cx| editor.read(cx).cache["chat:a"].attachments.clone());
+            assert_eq!(
+                crate::image_attachments::coordinator_readable(&images, &pasted),
+                coordinator
+            );
             assert_eq!(images.len(), 1, "real Paste action imports a native image");
             cx.update_window(h, |_, w, cx| {
-                editor.update(cx, |e, cx| e.select("chat:a".into(), true, false, w, cx))
+                editor.update(cx, |e, cx| {
+                    e.select("chat:a".into(), true, false, w, cx);
+                    e.attachment_coordinator(coordinator, cx);
+                })
             })
             .unwrap();
             wait(cx, h, &editor);
@@ -177,7 +187,10 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 "Child draft 日本語 👩‍💻"
             );
             cx.update_window(h, |_, w, cx| {
-                editor.update(cx, |e, cx| e.select("chat:a".into(), true, false, w, cx))
+                editor.update(cx, |e, cx| {
+                    e.select("chat:a".into(), true, false, w, cx);
+                    e.attachment_coordinator(coordinator, cx);
+                })
             })
             .unwrap();
             wait(cx, h, &editor);
@@ -225,10 +238,9 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 std::fs::create_dir_all(&dir).unwrap();
                 cx.capture_screenshot(h)
                     .unwrap()
-                    .save(
-                        std::path::PathBuf::from(dir)
-                            .join(format!("attachments-{width}-{dark}.png")),
-                    )
+                    .save(std::path::PathBuf::from(dir).join(format!(
+                        "attachments-{width}-{dark}-coordinator-{coordinator}.png"
+                    )))
                     .unwrap();
             }
             cx.update_window(h, |_, w, cx| {
@@ -335,7 +347,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             drop(store);
             std::fs::remove_dir_all(root).unwrap();
             println!(
-                "composer_attachments {width} {dark} passed: TIFF paste/preview/hover/opaque discard/Tab-Enter remove/pointer remove/send/parent-child draft identity"
+                "composer_attachments {width} {dark} coordinator={coordinator} passed: TIFF paste/preview/hover/opaque discard/Tab-Enter remove/pointer remove/send/parent-child draft identity"
             );
         }
     }
